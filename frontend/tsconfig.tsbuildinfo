@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/api.ts","./src/main.tsx","./src/types.ts","./src/useWebSocket.ts","./src/components/AlertsPanel.tsx","./src/components/Dashboard.tsx","./src/components/DroneStatusCard.tsx","./src/components/EventLog.tsx","./src/components/LiveVideo.tsx","./src/components/LoginForm.tsx"],"version":"5.9.3"}
