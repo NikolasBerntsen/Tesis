@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Detección (mock) — visor</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #10151b; color: #d7e0ea; margin: 0; padding: 24px; }
+    h1 { font-size: 18px; }
+    .note { color: #7d8b9a; max-width: 640px; }
+    img { width: 640px; max-width: 100%; background: #000; border-radius: 8px; display: block; margin: 16px 0; aspect-ratio: 16/9; object-fit: contain; }
+    button { font: inherit; padding: 10px 18px; margin-right: 10px; border-radius: 6px; border: 1px solid #26303c; background: #223041; color: #d7e0ea; cursor: pointer; }
+    button:hover { filter: brightness(1.2); }
+    #status { margin-left: 10px; }
+    .ok { color: #3ecf8e; } .bad { color: #ff5d5d; }
+  </style>
+</head>
+<body>
+  <h1>Software de detección — PLACEHOLDER</h1>
+  <p class="note">Este visor simula el software de análisis de imágenes que correrá en la laptop.
+    Recibe el video del celular y los botones envían una detección con el mismo formato
+    que usará el algoritmo real (ver <code>docs/PROTOCOLS.md</code>).</p>
+  <div>Celular: <span id="status" class="bad">desconectado</span></div>
+  <img id="feed" alt="Video del dron" />
+  <div>
+    <button onclick="detect('PERSON')">Detectar PERSONA</button>
+    <button onclick="detect('VEHICLE')">Detectar VEHÍCULO</button>
+  </div>
+  <script>
+    const ws = new WebSocket(`ws://${location.host}/viewer`);
+    ws.onmessage = (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'video_frame') {
+        document.getElementById('feed').src = 'data:image/jpeg;base64,' + msg.jpegBase64;
+      } else if (msg.type === 'phone_status') {
+        const el = document.getElementById('status');
+        el.textContent = msg.connected ? 'conectado' : 'desconectado';
+        el.className = msg.connected ? 'ok' : 'bad';
+      }
+    };
+    function detect(cls) {
+      ws.send(JSON.stringify({ type: 'detection', detected: true, classes: [cls], confidence: 0.9, ts: Date.now() }));
+    }
+  </script>
+</body>
+</html>
