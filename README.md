@@ -41,30 +41,37 @@ valida o descarta la alerta.
 | `android-app/` | App de control que corre en el celular del RC-N2 | Kotlin, coroutines, OkHttp |
 | `docs/PROTOCOLS.md` | Contratos de mensajes entre los cuatro procesos | — |
 
-## Cómo levantar todo (demo local)
+## Cómo levantar todo
 
-Requisitos: Node 20+, Android Studio (para la app).
+Un solo comando levanta los tres servicios (la app Android va aparte, desde
+Android Studio):
 
 ```bash
-# 1. Comando Central (puerto 4000)
-cd backend
-npm install
-npm run seed        # crea usuarios y rutas de demo
-npm run dev
-
-# 2. Consola del operador (puerto 5173, proxy a :4000)
-cd frontend
-npm install
-npm run dev         # abrir http://localhost:5173
-
-# 3. Software de detección placeholder (puerto 8765)
-cd detection-mock
-npm install
-npm start           # abrir http://localhost:8765
-
-# 4. App Android: abrir android-app/ en Android Studio,
-#    variante mockDebug, correr en emulador.
+./start.sh
 ```
+
+Usa **Docker** si el daemon está corriendo y, si no, cae a **modo nativo**
+(npm local). Al terminar imprime las URLs, los usuarios de demo y las
+direcciones que hay que cargar en la app Android. **Ctrl+C** baja todo.
+
+| Comando | Qué hace |
+|---|---|
+| `./start.sh` | Docker si está disponible; si no, nativo |
+| `./start.sh docker` | Fuerza Docker Compose |
+| `./start.sh native` | Fuerza npm local (requiere Node 20+) |
+| `./start.sh stop` | Detiene y **elimina** los contenedores (los datos se conservan) |
+| `./start.sh reset` | Borra la base de datos (se resiembra sola) |
+| `./start.sh stop reset` | Elimina los contenedores y también sus volúmenes |
+
+Requisitos: **Docker Desktop** *o* **Node 20+**, más Android Studio para la app.
+En Windows, correr el script desde Git Bash o WSL. Los logs de cada servicio
+quedan en `logs/` (modo nativo) o en `docker compose logs` (modo Docker).
+
+| Servicio | URL |
+|---|---|
+| Consola del operador | http://localhost:5173 |
+| Comando Central (API) | http://localhost:4000 |
+| Visor de detección | http://localhost:8765 |
 
 Credenciales de demo (creadas por el seed):
 
@@ -72,6 +79,20 @@ Credenciales de demo (creadas por el seed):
 |---|---|---|
 | `operador` | `operador123` | Operador del Comando Central (web) |
 | `drone1` | `drone123` | App de control (celular) |
+
+### App Android
+
+Abrir `android-app/` en Android Studio, elegir la variante **`mockDebug`** y
+correr. En la pantalla de la app, cargar:
+
+- **Emulador**: `http://10.0.2.2:4000` y `ws://10.0.2.2:8765`
+- **Teléfono físico**: la IP de LAN que imprime `start.sh` al arrancar.
+
+### Levantar los servicios a mano
+
+Si preferís correr cada uno por separado: `npm install && npm run seed &&
+npm run dev` en `backend/`, `npm install && npm run dev` en `frontend/`, y
+`npm install && npm start` en `detection-mock/`.
 
 ## Guion de demo (mapea cada requisito)
 
