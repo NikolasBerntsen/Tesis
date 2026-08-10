@@ -8,29 +8,24 @@
 # La app Android se corre aparte desde Android Studio.
 #
 # Uso:
-#   ./start.sh              Docker si el daemon está corriendo; si no, modo nativo
-#   ./start.sh docker       Fuerza Docker Compose
-#   ./start.sh native       Fuerza npm local (requiere Node 20+)
+#   ./start.sh              Levanta todo (Docker si el daemon corre; si no, npm local)
 #   ./start.sh stop         Detiene y elimina los contenedores
-#   ./start.sh reset        Borra la base de datos (usuarios y rutas se resiembran)
-#   ./start.sh stop reset   Elimina los contenedores y también sus volúmenes
+#   ./start.sh stop reset   Además borra los volúmenes y la base de datos
 
 set -euo pipefail
 cd "$(dirname "$0")"
 
-MODE="auto"
 RESET_DB="no"
 
-for arg in "$@"; do
-  case "$arg" in
-    docker) MODE="docker" ;;
-    native) MODE="native" ;;
-    stop)   MODE="stop" ;;
-    reset)  RESET_DB="yes" ;;
-    help) awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"; exit 0 ;;
-    *) echo "Opción desconocida: $arg (usá: ./start.sh help)" >&2; exit 1 ;;
-  esac
-done
+case "${*:-}" in
+  "")           MODE="run" ;;
+  "stop")       MODE="stop" ;;
+  "stop reset") MODE="stop"; RESET_DB="yes" ;;
+  *)
+    echo "Uso: ./start.sh [stop [reset]]" >&2
+    exit 1
+    ;;
+esac
 
 # ---------- utilidades ----------
 
@@ -144,28 +139,16 @@ fi
 
 # ---------- elección de modo ----------
 
-if [ "$MODE" = "auto" ]; then
-  if docker_available; then
-    MODE="docker"
-  else
-    MODE="native"
-    info "Docker no disponible: se usa modo nativo"
-  fi
+if docker_available; then
+  MODE="docker"
+else
+  MODE="native"
+  info "Docker no disponible: se usa modo nativo"
 fi
 
 # ---------- Docker ----------
 
 run_docker() {
-  docker_available || {
-    fail "Docker no está disponible. Iniciá Docker Desktop, o usá: ./start.sh native"
-    exit 1
-  }
-
-  if [ "$RESET_DB" = "yes" ]; then
-    info "Borrando la base de datos…"
-    docker compose down --remove-orphans --volumes >/dev/null 2>&1 || true
-  fi
-
   info "Construyendo e iniciando contenedores (la primera vez tarda unos minutos)…"
   docker compose up -d --build
 
@@ -187,20 +170,16 @@ PIDS=()
 
 cleanup_native() {
   trap - INT TERM EXIT
-  # Sin job control el shell no imprime avisos de "Terminated" al bajar los jobs
-  set +m
   echo
   info "Deteniendo servicios…"
-  # Se apunta primero al grupo de procesos (alcanza a los hijos que deja el
-  # supervisor de recarga de tsx) y, si no aplica, al proceso suelto.
+  # Con Ctrl+C la terminal ya señalizó a todo el grupo; esto cubre el caso de
+  # un SIGTERM dirigido solo al script, y remata a los que no hayan salido.
   for pid in "${PIDS[@]:-}"; do
-    [ -n "$pid" ] || continue
-    kill -TERM "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+    [ -n "$pid" ] && kill -TERM "$pid" 2>/dev/null || true
   done
   sleep 2
   for pid in "${PIDS[@]:-}"; do
-    [ -n "$pid" ] || continue
-    kill -KILL "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+    [ -n "$pid" ] && kill -KILL "$pid" 2>/dev/null || true
   done
   ok "Listo"
   exit 0
@@ -219,7 +198,7 @@ start_service() {
   local name="$1" dir="$2" logfile="$3"; shift 3
   # exec reemplaza la subshell por el proceso real, así $! es el PID que hay
   # que matar y no el de un shell intermedio que dejaría al servicio huérfano.
-  (cd "$dir" && exec "$@" >"../$logfile" 2>&1) &
+  (cd "$dir" && exec "$@" </dev/null >"../$logfile" 2>&1) &
   PIDS+=("$!")
   info "$name iniciado (log: $logfile)"
 }
@@ -236,11 +215,6 @@ run_native() {
   mkdir -p logs
   [ -f backend/.env ] || cp backend/.env.example backend/.env
 
-  if [ "$RESET_DB" = "yes" ]; then
-    info "Borrando la base de datos…"
-    rm -rf backend/data
-  fi
-
   ensure_deps backend
   ensure_deps frontend
   ensure_deps detection-mock
@@ -249,10 +223,6 @@ run_native() {
   (cd backend && npm run seed >../logs/seed.log 2>&1) || { fail "Falló el seed (ver logs/seed.log)"; exit 1; }
 
   trap cleanup_native INT TERM EXIT
-
-  # Job control: cada servicio queda en su propio grupo de procesos, para
-  # poder bajarlo junto con sus hijos.
-  set -m
 
   # Se invocan los binarios directamente (no vía npm) para que Ctrl+C no deje
   # procesos hijos huérfanos.
