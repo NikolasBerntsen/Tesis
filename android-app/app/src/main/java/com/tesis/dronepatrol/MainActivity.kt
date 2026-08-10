@@ -69,9 +69,9 @@ class MainActivity : AppCompatActivity() {
                 routes = commandCenter.fetchRoutes()
                 binding.spinnerRoutes.adapter = ArrayAdapter(
                     this@MainActivity,
-                    android.R.layout.simple_spinner_dropdown_item,
+                    android.R.layout.simple_spinner_item,
                     routes.map { it.name },
-                )
+                ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
                 controller.connect()
                 manager.start()
                 binding.txtConnStatus.text = "Conectado como $DRONE_USERNAME (${routes.size} rutas)"
