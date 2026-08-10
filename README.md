@@ -57,10 +57,11 @@ direcciones que hay que cargar en la app Android. **Ctrl+C** baja todo.
 | Comando | Qué hace |
 |---|---|
 | `./start.sh` | Docker si está disponible; si no, nativo |
-| `./start.sh --docker` | Fuerza Docker Compose |
-| `./start.sh --native` | Fuerza npm local (requiere Node 20+) |
-| `./start.sh --stop` | Baja los contenedores de Docker |
-| `./start.sh --reset` | Borra la base de datos (se resiembra sola) |
+| `./start.sh docker` | Fuerza Docker Compose |
+| `./start.sh native` | Fuerza npm local (requiere Node 20+) |
+| `./start.sh stop` | Detiene y **elimina** los contenedores (los datos se conservan) |
+| `./start.sh reset` | Borra la base de datos (se resiembra sola) |
+| `./start.sh stop reset` | Elimina los contenedores y también sus volúmenes |
 
 Requisitos: **Docker Desktop** *o* **Node 20+**, más Android Studio para la app.
 En Windows, correr el script desde Git Bash o WSL. Los logs de cada servicio

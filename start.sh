@@ -8,11 +8,12 @@
 # La app Android se corre aparte desde Android Studio.
 #
 # Uso:
-#   ./start.sh            Docker si el daemon está corriendo; si no, modo nativo
-#   ./start.sh --docker   Fuerza Docker Compose
-#   ./start.sh --native   Fuerza npm local (requiere Node 20+)
-#   ./start.sh --stop     Detiene y limpia los contenedores de Docker
-#   ./start.sh --reset    Borra la base de datos (usuarios y rutas se resiembran)
+#   ./start.sh              Docker si el daemon está corriendo; si no, modo nativo
+#   ./start.sh docker       Fuerza Docker Compose
+#   ./start.sh native       Fuerza npm local (requiere Node 20+)
+#   ./start.sh stop         Detiene y elimina los contenedores
+#   ./start.sh reset        Borra la base de datos (usuarios y rutas se resiembran)
+#   ./start.sh stop reset   Elimina los contenedores y también sus volúmenes
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -22,12 +23,12 @@ RESET_DB="no"
 
 for arg in "$@"; do
   case "$arg" in
-    --docker) MODE="docker" ;;
-    --native) MODE="native" ;;
-    --stop)   MODE="stop" ;;
-    --reset)  RESET_DB="yes" ;;
-    -h|--help) awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"; exit 0 ;;
-    *) echo "Opción desconocida: $arg (usá --help)" >&2; exit 1 ;;
+    docker) MODE="docker" ;;
+    native) MODE="native" ;;
+    stop)   MODE="stop" ;;
+    reset)  RESET_DB="yes" ;;
+    help) awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"; exit 0 ;;
+    *) echo "Opción desconocida: $arg (usá: ./start.sh help)" >&2; exit 1 ;;
   esac
 done
 
@@ -105,6 +106,12 @@ banner() {
   echo
 }
 
+# down detiene Y elimina los contenedores y la red; --remove-orphans barre
+# además los que hayan quedado de una configuración anterior.
+docker_down() {
+  docker compose down --remove-orphans
+}
+
 docker_available() {
   command -v docker >/dev/null 2>&1 || return 1
   docker compose version >/dev/null 2>&1 || return 1
@@ -116,11 +123,21 @@ docker_available() {
 
 if [ "$MODE" = "stop" ]; then
   if docker_available; then
-    info "Deteniendo contenedores…"
-    docker compose down
-    ok "Contenedores detenidos"
+    info "Deteniendo y eliminando contenedores…"
+    if [ "$RESET_DB" = "yes" ]; then
+      docker compose down --remove-orphans --volumes
+      ok "Contenedores y volúmenes eliminados"
+    else
+      docker_down
+      ok "Contenedores eliminados (los datos se conservan)"
+    fi
   else
     warn "Docker no está disponible; en modo nativo alcanza con Ctrl+C"
+  fi
+  # En modo nativo la base no vive en un volumen sino en disco
+  if [ "$RESET_DB" = "yes" ] && [ -d backend/data ]; then
+    rm -rf backend/data
+    info "Base de datos local borrada"
   fi
   exit 0
 fi
@@ -140,20 +157,20 @@ fi
 
 run_docker() {
   docker_available || {
-    fail "Docker no está disponible. Iniciá Docker Desktop, o usá: ./start.sh --native"
+    fail "Docker no está disponible. Iniciá Docker Desktop, o usá: ./start.sh native"
     exit 1
   }
 
   if [ "$RESET_DB" = "yes" ]; then
     info "Borrando la base de datos…"
-    docker compose down -v >/dev/null 2>&1 || true
+    docker compose down --remove-orphans --volumes >/dev/null 2>&1 || true
   fi
 
   info "Construyendo e iniciando contenedores (la primera vez tarda unos minutos)…"
   docker compose up -d --build
 
   # Al salir, bajar los contenedores para no dejar nada corriendo
-  trap 'echo; info "Deteniendo contenedores…"; docker compose down; exit 0' INT TERM
+  trap 'echo; info "Deteniendo contenedores…"; docker_down; exit 0' INT TERM
 
   wait_for "http://localhost:4000/api/health" "Comando Central" 90 || { docker compose logs backend; exit 1; }
   wait_for "http://localhost:8765/"           "Detección"       60 || { docker compose logs detection; exit 1; }
