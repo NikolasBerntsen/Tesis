@@ -17,6 +17,13 @@ entrega es la lógica (`patrol/PatrolManager.kt`).
 > emulador la app se cerraba al instante (el SDK de DJI se inicializa en la clase
 > `Application` y no puede registrarse sin API key ni hardware).
 > Para compilarlo cuando tengas la key y el dron: `./gradlew assembleDjiDebug -PenableDji`.
+>
+> **El flavor `dji` necesita un dispositivo ARM.** El MSDK v5 no publica todas sus
+> librerías nativas para `x86_64`: en ese ABI falta `libSdkyclx_clx.so`, que es la
+> que carga `Helper.install()`. En un emulador x86_64 eso da `UnsatisfiedLinkError`
+> durante `attachBaseContext`, o sea antes de que exista la Activity. Hoy queda
+> atrapado y solo se registra en el log, pero el SDK no va a funcionar ahí:
+> las pruebas del flavor `dji` van sobre el teléfono real conectado al RC-N2.
 
 La lógica (máquina de estados, watchdogs, comunicación) es la misma en ambos:
 solo cambia la implementación de `DroneController` que inyecta `ControllerFactory`.
