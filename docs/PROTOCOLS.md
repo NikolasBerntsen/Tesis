@@ -18,6 +18,12 @@ Cada cuenta de dron lleva asociados:
 | `displayName` | Nombre visible. **Editable desde la app y desde el Comando Central**, y el cambio se propaga al otro lado |
 | `base` | `{ name, lat, lon }`: la base a la que vuelve. Se dibuja como cuadrado azul en los mapas |
 
+Cada waypoint de una ruta es `{ lat, lon, alt, label? }`. `label` es un apodo
+opcional que pone el operador para identificar zonas puntuales; se muestra al
+hacer clic sobre el nodo en el mapa de la vista de detalle. En ese mapa los
+nodos se pintan **rojos** mientras están pendientes y **verdes** una vez que el
+dron pasó por ellos (índice ≤ `waypointIndex` del `status`).
+
 ## 1. App de control (celular) → Comando Central
 
 Conexión: `ws://<backend>:4000/ws?token=<JWT>` (el rol `drone` sale del token).
@@ -71,6 +77,7 @@ Conexión: `ws://<backend>:4000/ws?token=<JWT>` (rol `operator`).
 | `alert_updated` | Alerta con decisión tomada |
 | `drone_online` / `drone_offline` | `drone` (ficha completa del dron) |
 | `drone_renamed` | `droneId, displayName` |
+| `route_updated` | `route` (ruta completa); se emite al cambiar el apodo de un nodo |
 
 Al conectarse, el operador recibe un `status` por cada dron que esté online, para
 poder pintar el dashboard sin esperar al próximo tick.
@@ -96,6 +103,7 @@ La app solo actúa ante `detected: true` y solo mientras está en estado
 | POST | `/api/auth/login` | — | `{username, password}` → `{token, user}` (JWT HS256, 12 h). Lo usan el operador y la app del dron |
 | GET | `/api/me` | JWT | Ficha del usuario autenticado. Para un dron incluye `displayName` y `base` |
 | GET | `/api/routes` | JWT | Rutas de patrullaje disponibles (waypoints incluidos) |
+| PATCH | `/api/routes/:routeId/waypoints/:index` | JWT operador | `{label}`; pone el apodo de un nodo (vacío lo borra). Emite `route_updated` |
 | GET | `/api/drones` | JWT operador | Todos los drones: `droneId, displayName, base, online, lastStatus` |
 | PATCH | `/api/drones/:droneId` | JWT operador | `{displayName}`; renombra y avisa al dron con `renamed` |
 | GET | `/api/alerts?status=` | JWT operador | Lista de alertas |

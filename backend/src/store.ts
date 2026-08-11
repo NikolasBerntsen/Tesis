@@ -18,11 +18,19 @@ export interface DroneIdentity {
   base: { name: string; lat: number; lon: number } | null;
 }
 
+/** `label` es el apodo opcional del nodo, para identificar zonas puntuales. */
+export interface Waypoint {
+  lat: number;
+  lon: number;
+  alt: number;
+  label?: string;
+}
+
 export interface PatrolRoute {
   id: number;
   name: string;
   description: string;
-  waypoints: { lat: number; lon: number; alt: number }[];
+  waypoints: Waypoint[];
 }
 
 export interface Alert {
@@ -87,6 +95,27 @@ export function getRoutes(): PatrolRoute[] {
     id: number; name: string; description: string; waypoints: string;
   }[];
   return rows.map((r) => ({ ...r, waypoints: JSON.parse(r.waypoints) }));
+}
+
+export function getRoute(id: number): PatrolRoute | undefined {
+  const r = db.prepare('SELECT * FROM patrol_routes WHERE id = ?').get(id) as
+    | { id: number; name: string; description: string; waypoints: string }
+    | undefined;
+  return r ? { ...r, waypoints: JSON.parse(r.waypoints) } : undefined;
+}
+
+/** Pone (o borra, con label vacío) el apodo de un nodo de la ruta. */
+export function setWaypointLabel(routeId: number, index: number, label: string): PatrolRoute | undefined {
+  const route = getRoute(routeId);
+  if (!route) return undefined;
+  const wp = route.waypoints[index];
+  if (!wp) return undefined;
+
+  if (label) wp.label = label;
+  else delete wp.label;
+
+  db.prepare('UPDATE patrol_routes SET waypoints = ? WHERE id = ?').run(JSON.stringify(route.waypoints), routeId);
+  return route;
 }
 
 export function createEvent(

@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import { requireAuth, type AuthedRequest } from '../auth';
-import { createEvent, decideAlert, getAlert, getDroneIdentity, getRoutes, listAlerts, listEvents } from '../store';
+import {
+  createEvent, decideAlert, getAlert, getDroneIdentity, getRoute, getRoutes,
+  listAlerts, listEvents, setWaypointLabel,
+} from '../store';
 import { applyRename, broadcastOperators, droneCard, listDroneCards, sendToDrone } from '../ws';
 
 export const apiRouter = Router();
@@ -19,6 +22,21 @@ apiRouter.get('/me', requireAuth(), (req: AuthedRequest, res) => {
 
 apiRouter.get('/routes', requireAuth(), (_req, res) => {
   res.json(getRoutes());
+});
+
+// Apodo de un nodo de patrullaje, para identificar zonas puntuales en el mapa.
+apiRouter.patch('/routes/:routeId/waypoints/:index', requireAuth('operator'), (req: AuthedRequest, res) => {
+  const routeId = Number(req.params.routeId);
+  const index = Number(req.params.index);
+  const label = String(req.body?.label ?? '').trim();
+  if (label.length > 40) return res.status(400).json({ error: 'El apodo no puede superar 40 caracteres' });
+
+  if (!getRoute(routeId)) return res.status(404).json({ error: 'Ruta inexistente' });
+  const route = setWaypointLabel(routeId, index, label);
+  if (!route) return res.status(404).json({ error: 'Nodo inexistente en esa ruta' });
+
+  broadcastOperators({ type: 'route_updated', route });
+  res.json(route);
 });
 
 apiRouter.get('/drones', requireAuth('operator'), (_req, res) => {
