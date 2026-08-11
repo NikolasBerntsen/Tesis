@@ -1,14 +1,30 @@
 import { db } from './db';
 
+export type Role = 'drone' | 'operator' | 'supervisor' | 'admin';
+
 export interface UserRow {
   id: number;
   username: string;
   password_hash: string;
-  role: 'operator' | 'drone';
+  role: Role;
   display_name: string | null;
   base_name: string | null;
   base_lat: number | null;
   base_lon: number | null;
+  active: number;
+  can_control: number;
+}
+
+/** Vista pública de un usuario humano (sin hash de contraseña). */
+export interface UserView {
+  username: string;
+  role: Role;
+  active: boolean;
+  canControl: boolean;
+}
+
+export function toUserView(u: UserRow): UserView {
+  return { username: u.username, role: u.role, active: !!u.active, canControl: !!u.can_control };
 }
 
 /** Identidad persistente de un dron: lo que no cambia de una conexión a otra. */
@@ -46,6 +62,8 @@ export interface Alert {
   decided_at: string | null;
 }
 
+export type LogCategory = 'drone' | 'usuarios' | 'sistema';
+
 export interface EventRow {
   id: number;
   ts: string;
@@ -54,10 +72,64 @@ export interface EventRow {
   message: string;
   drone_id: string | null;
   alert_id: number | null;
+  category: LogCategory;
+  meta: string | null;
 }
 
 export function getUser(username: string): UserRow | undefined {
   return db.prepare('SELECT * FROM users WHERE username = ?').get(username) as UserRow | undefined;
+}
+
+/** Usuarios humanos (sin cuentas de dron). Con maxRole se filtra por rango. */
+export function listUsers(roles: Role[]): UserView[] {
+  const marks = roles.map(() => '?').join(',');
+  const rows = db
+    .prepare(`SELECT * FROM users WHERE role IN (${marks}) ORDER BY role, username`)
+    .all(...roles) as UserRow[];
+  return rows.map(toUserView);
+}
+
+export function createUser(username: string, passwordHash: string, role: Role, canControl: boolean): UserView {
+  db.prepare('INSERT INTO users (username, password_hash, role, can_control) VALUES (?, ?, ?, ?)').run(
+    username,
+    passwordHash,
+    role,
+    canControl ? 1 : 0,
+  );
+  return toUserView(getUser(username)!);
+}
+
+export interface UserPatch {
+  active?: boolean;
+  canControl?: boolean;
+  passwordHash?: string;
+}
+
+/** Aplica el cambio y devuelve el antes y el después, para el log. */
+export function updateUser(username: string, patch: UserPatch): { before: UserView; after: UserView } | undefined {
+  const row = getUser(username);
+  if (!row) return undefined;
+  const before = toUserView(row);
+  db.prepare(
+    `UPDATE users SET
+       active = COALESCE(?, active),
+       can_control = COALESCE(?, can_control),
+       password_hash = COALESCE(?, password_hash)
+     WHERE username = ?`,
+  ).run(
+    patch.active === undefined ? null : patch.active ? 1 : 0,
+    patch.canControl === undefined ? null : patch.canControl ? 1 : 0,
+    patch.passwordHash ?? null,
+    username,
+  );
+  return { before, after: toUserView(getUser(username)!) };
+}
+
+export function deleteUser(username: string): UserView | undefined {
+  const row = getUser(username);
+  if (!row) return undefined;
+  db.prepare('DELETE FROM users WHERE username = ?').run(username);
+  return toUserView(row);
 }
 
 function toDroneIdentity(u: UserRow): DroneIdentity {
@@ -118,6 +190,36 @@ export function setWaypointLabel(routeId: number, index: number, label: string):
   return route;
 }
 
+/**
+ * Registro central del sistema: TODA acción pasa por acá. `category` separa el
+ * log de drones del de usuarios/sistema; `meta` guarda detalles estructurados
+ * (p. ej. el antes y el después de un cambio de usuario).
+ */
+export function createLog(
+  category: LogCategory,
+  type: string,
+  source: string,
+  message: string,
+  opts: { droneId?: string | null; alertId?: number | null; meta?: object } = {},
+): EventRow {
+  const ts = new Date().toISOString();
+  const meta = opts.meta ? JSON.stringify(opts.meta) : null;
+  const info = db
+    .prepare('INSERT INTO events (ts, type, source, message, drone_id, alert_id, category, meta) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(ts, type, source, message, opts.droneId ?? null, opts.alertId ?? null, category, meta);
+  return {
+    id: Number(info.lastInsertRowid),
+    ts,
+    type,
+    source,
+    message,
+    drone_id: opts.droneId ?? null,
+    alert_id: opts.alertId ?? null,
+    category,
+    meta,
+  };
+}
+
 export function createEvent(
   type: string,
   source: string,
@@ -125,18 +227,23 @@ export function createEvent(
   droneId: string | null = null,
   alertId: number | null = null,
 ): EventRow {
-  const ts = new Date().toISOString();
-  const info = db
-    .prepare('INSERT INTO events (ts, type, source, message, drone_id, alert_id) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(ts, type, source, message, droneId, alertId);
-  return { id: Number(info.lastInsertRowid), ts, type, source, message, drone_id: droneId, alert_id: alertId };
+  return createLog('drone', type, source, message, { droneId, alertId });
 }
 
+/** Log de drones: lo que ven los operadores. */
 export function listEvents(limit = 200, droneId?: string): EventRow[] {
   if (droneId) {
     return db
-      .prepare('SELECT * FROM events WHERE drone_id = ? ORDER BY id DESC LIMIT ?')
+      .prepare("SELECT * FROM events WHERE category = 'drone' AND drone_id = ? ORDER BY id DESC LIMIT ?")
       .all(droneId, limit) as EventRow[];
+  }
+  return db.prepare("SELECT * FROM events WHERE category = 'drone' ORDER BY id DESC LIMIT ?").all(limit) as EventRow[];
+}
+
+/** Log general del sistema (todas las categorías juntas), para el admin. */
+export function listLogs(limit = 200, category?: LogCategory): EventRow[] {
+  if (category) {
+    return db.prepare('SELECT * FROM events WHERE category = ? ORDER BY id DESC LIMIT ?').all(category, limit) as EventRow[];
   }
   return db.prepare('SELECT * FROM events ORDER BY id DESC LIMIT ?').all(limit) as EventRow[];
 }
