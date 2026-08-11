@@ -308,14 +308,22 @@ button.icon:hover { color: var(--text); }
 .distance-tooltip::before { display: none; }
 
 /* Nodos de patrullaje en el mapa de detalle */
-.wp-form {
-  display: flex;
-  gap: 6px;
-  margin-top: 8px;
+.wp-popup {
+  position: relative;
+  /* Ancho fijo para los dos modos: Leaflet mide la burbuja al fijar el
+     contenido y no la recalcula al pasar a edición. */
+  min-width: 215px;
+  padding-bottom: 4px;
+  padding-right: 20px;
 }
+.wp-nombre { margin-top: 4px; }
+/* El formulario solo se ve tras apretar el lápiz */
+.wp-form { display: none; }
+.wp-popup.editando .wp-form { display: flex; gap: 6px; margin-top: 6px; }
+.wp-popup.editando .wp-nombre { display: none; }
 .wp-form .wp-alias {
   font: inherit;
-  width: 150px;
+  width: 130px;
   padding: 4px 6px;
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -324,6 +332,20 @@ button.icon:hover { color: var(--text); }
   padding: 4px 10px;
   font-size: 12px;
 }
+.wp-edit {
+  position: absolute;
+  right: -6px;
+  bottom: -4px;
+  padding: 2px 4px;
+  border: none;
+  background: none;
+  color: #868e96;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.wp-edit:hover { color: var(--text); }
+.wp-popup.editando .wp-edit { color: var(--accent); }
 
 /* Alertas pendientes: visibles desde cualquier vista del dashboard */
 .alert-strip {

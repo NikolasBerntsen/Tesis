@@ -80,11 +80,24 @@ function basePopup(item: MapItem): string {
     <div>Nodo: ${s ? waypointLabel(s) : 'sin datos'}</div>`;
 }
 
+/** Lo que se ve al pasar el mouse por encima del nodo. */
+function waypointTooltip(index: number, label?: string): string {
+  return esc(label || `Nodo ${index + 1}`);
+}
+
+/**
+ * El popup arranca mostrando el apodo; el lápiz de la esquina alterna al modo
+ * edición. `data-label` guarda el valor original para poder descartar cambios.
+ */
 function waypointPopup(index: number, total: number, label?: string): string {
-  return `<strong>Nodo ${index + 1} de ${total}</strong>
-    <div class="wp-form">
-      <input class="wp-alias" maxlength="40" placeholder="Apodo del nodo" value="${esc(label ?? '')}">
-      <button class="wp-save" type="button">Guardar</button>
+  return `<div class="wp-popup" data-label="${esc(label ?? '')}">
+      <strong>Nodo ${index + 1} de ${total}</strong>
+      <div class="wp-nombre">${label ? esc(label) : '<span class="muted">Sin apodo</span>'}</div>
+      <div class="wp-form">
+        <input class="wp-alias" maxlength="40" placeholder="Apodo del nodo" value="${esc(label ?? '')}">
+        <button class="wp-save" type="button">Guardar</button>
+      </div>
+      <button class="wp-edit" type="button" title="Editar apodo" aria-label="Editar apodo">✎</button>
     </div>`;
 }
 
@@ -264,6 +277,7 @@ export default function DronesMap({
       wpMarkersRef.current = wps.map((wp, i) => {
         const marker = L.circleMarker([wp.lat, wp.lon], WP_STYLE).addTo(map);
         marker.bindPopup('', { autoPan: false });
+        marker.bindTooltip('', { direction: 'top', offset: [0, -8] });
         marker.on('popupopen', () => wireWaypointForm(marker, i));
         return marker;
       });
@@ -275,6 +289,7 @@ export default function DronesMap({
       if (!marker) return;
       marker.setLatLng([wp.lat, wp.lon]);
       marker.setStyle({ fillColor: i <= (waypoints?.visitedIndex ?? -1) ? WP_VISITADO : WP_PENDIENTE });
+      marker.setTooltipContent(waypointTooltip(i, wp.label));
       // Si está abierto no se toca: reemplazar el HTML borraría lo que se esté tipeando
       if (!marker.isPopupOpen()) marker.setPopupContent(waypointPopup(i, wps.length, wp.label));
     });
@@ -282,16 +297,40 @@ export default function DronesMap({
 
   function wireWaypointForm(marker: L.CircleMarker, index: number) {
     const el = marker.getPopup()?.getElement();
+    const root = el?.querySelector<HTMLElement>('.wp-popup');
     const input = el?.querySelector<HTMLInputElement>('.wp-alias');
-    const boton = el?.querySelector<HTMLButtonElement>('.wp-save');
-    if (!input || !boton) return;
+    const guardarBtn = el?.querySelector<HTMLButtonElement>('.wp-save');
+    const lapiz = el?.querySelector<HTMLButtonElement>('.wp-edit');
+    if (!root || !input || !guardarBtn || !lapiz) return;
+
+    // El popup siempre se abre en modo lectura, aunque quede reutilizado.
+    // (Ojo: no llamar a popup.update() acá; re-renderiza el HTML y se pierden
+    // estos handlers. El ancho lo fija .wp-popup por CSS para los dos modos.)
+    const descartar = () => {
+      root.classList.remove('editando');
+      input.value = root.dataset.label ?? '';
+    };
+    descartar();
+
+    // El lápiz abre la edición y, apretado de nuevo, la cancela
+    lapiz.onclick = () => {
+      if (root.classList.contains('editando')) {
+        descartar();
+        return;
+      }
+      root.classList.add('editando');
+      input.focus();
+      input.select();
+    };
+
     const guardar = () => {
       onLabelRef.current?.(index, input.value.trim());
       marker.closePopup();
     };
-    boton.onclick = guardar;
+    guardarBtn.onclick = guardar;
     input.onkeydown = (ev) => {
       if (ev.key === 'Enter') guardar();
+      if (ev.key === 'Escape') descartar();
     };
   }
 
