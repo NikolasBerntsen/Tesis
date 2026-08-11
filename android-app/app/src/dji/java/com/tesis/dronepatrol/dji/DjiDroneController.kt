@@ -43,6 +43,7 @@ class DjiDroneController : DroneController {
     private var lastLon = Double.NaN
     private var lastAlt = 0.0
     private var lastBattery = 0.0
+    private var lastHeading = 0.0
 
     override fun connect() {
         val km = KeyManager.getInstance()
@@ -93,8 +94,41 @@ class DjiDroneController : DroneController {
                 val speed = SPEED_MS.coerceAtMost(dist / 2)
                 val vNorth = speed * dy / dist
                 val vEast = speed * dx / dist
+                lastHeading = (Math.toDegrees(atan2(vEast, vNorth)) + 360.0) % 360.0
                 sendVelocity(vNorth, vEast, yawDeg = Math.toDegrees(atan2(vEast, vNorth)))
             }
+        }
+    }
+
+    override fun hold() {
+        navigationJob?.cancel()
+        // TODO(hardware): mantener Virtual Stick activo enviando velocidad cero
+        // a ~10 Hz para que el dron quede en vuelo estacionario donde está.
+    }
+
+    override fun gotoPoint(lat: Double, lon: Double) {
+        navigationJob?.cancel()
+        navigationJob = scope.launch {
+            // TODO(hardware): habilitar Virtual Stick (modo avanzado) antes de
+            // comandar velocidades, igual que en startRoute.
+            while (true) {
+                delay(100)
+                if (lastLat.isNaN()) continue
+                val dy = (lat - lastLat) * METERS_PER_DEG_LAT
+                val dx = (lon - lastLon) * METERS_PER_DEG_LAT * cos(Math.toRadians(lastLat))
+                val dist = hypot(dx, dy)
+                if (dist < ARRIVE_THRESHOLD_M) {
+                    flightEvents.tryEmit(FlightEvent.GotoArrived)
+                    break
+                }
+                val speed = SPEED_MS.coerceAtMost(dist / 2)
+                val vNorth = speed * dy / dist
+                val vEast = speed * dx / dist
+                lastHeading = (Math.toDegrees(atan2(vEast, vNorth)) + 360.0) % 360.0
+                sendVelocity(vNorth, vEast, yawDeg = Math.toDegrees(atan2(vEast, vNorth)))
+            }
+            // Llegó: queda en vuelo estacionario.
+            // TODO(hardware): sostener velocidad cero como en hold().
         }
     }
 
@@ -138,7 +172,9 @@ class DjiDroneController : DroneController {
         if (!lastLat.isNaN()) {
             // TODO(hardware): leer la intensidad real del enlace con
             // KeyLinkQuality / KeySignalQuality en lugar de asumir 100.
-            telemetry.tryEmit(Telemetry(lastLat, lastLon, lastAlt, lastBattery, 100, System.currentTimeMillis()))
+            // TODO(hardware): leer el rumbo real de la brújula con
+            // FlightControllerKey.KeyCompassHeading en vez del rumbo comandado.
+            telemetry.tryEmit(Telemetry(lastLat, lastLon, lastAlt, lastBattery, 100, lastHeading, System.currentTimeMillis()))
         }
     }
 

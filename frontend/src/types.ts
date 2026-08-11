@@ -17,6 +17,26 @@ export interface DroneStatus {
   signal: 'OK' | 'LOST';
   signalPct: number;
   mode: 'TEST' | 'DEPLOY';
+  /** Rumbo 0..360° hacia donde mira la cámara */
+  heading?: number;
+  /** Usuario que tiene el control manual, si alguien lo tomó */
+  controlledBy?: string | null;
+}
+
+export type Role = 'operator' | 'supervisor' | 'admin';
+
+/** Quién soy: rol y si estoy autorizado a controlar drones. */
+export interface Me {
+  username: string;
+  role: Role;
+  canControl: boolean;
+}
+
+export interface UserView {
+  username: string;
+  role: Role;
+  active: boolean;
+  canControl: boolean;
 }
 
 /** Ficha de dron que devuelve GET /api/drones y los mensajes drone_online/offline. */
@@ -26,6 +46,7 @@ export interface Drone {
   base: Base | null;
   online: boolean;
   lastStatus: DroneStatus | null;
+  controlledBy: string | null;
 }
 
 /** `label` es el apodo opcional que le pone el operador para identificar la zona. */
@@ -64,4 +85,6 @@ export interface EventRow {
   message: string;
   drone_id: string | null;
   alert_id: number | null;
+  category: 'drone' | 'usuarios' | 'sistema';
+  meta: string | null;
 }

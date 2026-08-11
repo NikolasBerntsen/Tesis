@@ -49,6 +49,9 @@ class MainActivity : AppCompatActivity() {
             PatrolState.RETURNING_HOME_SIGNAL to "Volviendo a base (pérdida de señal)",
             PatrolState.RETURNING_HOME_BATTERY to "Volviendo a base (batería baja)",
             PatrolState.LANDED to "Aterrizado",
+            PatrolState.PAUSED to "Patrulla interrumpida",
+            PatrolState.MANUAL to "Control manual",
+            PatrolState.FORCED to "Desvío a nodo",
         )
     }
 
@@ -156,6 +159,7 @@ class MainActivity : AppCompatActivity() {
                 commandCenter.login(backendUrl, username, password)
                 commandCenter.connect()
                 routes = commandCenter.fetchRoutes()
+                manager.availableRoutes = routes
                 mostrarRutas()
                 controller.connect()
                 manager.start()

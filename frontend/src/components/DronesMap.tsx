@@ -20,6 +20,12 @@ export interface WaypointsLayer {
   route: PatrolRoute;
   visitedIndex: number;
   onLabel: (index: number, label: string) => void;
+  /** Mostrar "Forzar ruta" en el popup (requiere autorización de control). */
+  canForce?: boolean;
+  /** Mostrar "Continuar desde acá" (solo con el patrullaje interrumpido). */
+  canContinue?: boolean;
+  onForce?: (index: number) => void;
+  onContinue?: (index: number) => void;
 }
 
 const WP_PENDIENTE = '#e03131';
@@ -30,8 +36,29 @@ interface Layers {
   base?: L.Marker;
   drone?: L.Marker;
   line?: L.Polyline;
+  cone?: L.Polygon;
   iconName?: string;
 }
+
+// Cono semitransparente que muestra hacia dónde mira la cámara del dron
+const CONE_RADIUS_M = 90;
+const CONE_APERTURE = 40; // grados
+const METERS_LAT = 111_320;
+
+function coneLatLngs(lat: number, lon: number, heading: number): L.LatLngTuple[] {
+  const points: L.LatLngTuple[] = [[lat, lon]];
+  for (let a = heading - CONE_APERTURE / 2; a <= heading + CONE_APERTURE / 2; a += 5) {
+    const rad = (a * Math.PI) / 180;
+    points.push([
+      lat + (CONE_RADIUS_M * Math.cos(rad)) / METERS_LAT,
+      lon + (CONE_RADIUS_M * Math.sin(rad)) / (METERS_LAT * Math.cos((lat * Math.PI) / 180)),
+    ]);
+  }
+  return points;
+}
+
+// En tierra no hay cámara que mostrar
+const EN_TIERRA = ['IDLE', 'LANDED'];
 
 const CENTER: L.LatLngTuple = [-34.8575, -56.2045];
 const LINE_STYLE: L.PolylineOptions = {
@@ -89,7 +116,16 @@ function waypointTooltip(index: number, label?: string): string {
  * El popup arranca mostrando el apodo; el lápiz de la esquina alterna al modo
  * edición. `data-label` guarda el valor original para poder descartar cambios.
  */
-function waypointPopup(index: number, total: number, label?: string): string {
+function waypointPopup(
+  index: number,
+  total: number,
+  label: string | undefined,
+  canForce: boolean,
+  canContinue: boolean,
+): string {
+  const acciones =
+    (canForce ? '<button class="wp-force" type="button">Forzar ruta</button>' : '') +
+    (canContinue ? '<button class="wp-continue" type="button">Continuar desde acá</button>' : '');
   return `<div class="wp-popup" data-label="${esc(label ?? '')}">
       <strong>Nodo ${index + 1} de ${total}</strong>
       <div class="wp-nombre">${label ? esc(label) : '<span class="muted">Sin apodo</span>'}</div>
@@ -97,6 +133,7 @@ function waypointPopup(index: number, total: number, label?: string): string {
         <input class="wp-alias" maxlength="40" placeholder="Apodo del nodo" value="${esc(label ?? '')}">
         <button class="wp-save" type="button">Guardar</button>
       </div>
+      ${acciones ? `<div class="wp-acciones">${acciones}</div>` : ''}
       <button class="wp-edit" type="button" title="Editar apodo" aria-label="Editar apodo">✎</button>
     </div>`;
 }
@@ -132,6 +169,8 @@ export default function DronesMap({
   // En una ref para que los handlers de leaflet no queden con una versión vieja
   const onLabelRef = useRef(waypoints?.onLabel);
   onLabelRef.current = waypoints?.onLabel;
+  const wpActionsRef = useRef({ onForce: waypoints?.onForce, onContinue: waypoints?.onContinue });
+  wpActionsRef.current = { onForce: waypoints?.onForce, onContinue: waypoints?.onContinue };
 
   // Solo lee refs, así los handlers de leaflet pueden llamarla sin recrearse.
   const applyLines = () => {
@@ -201,12 +240,35 @@ export default function DronesMap({
       if (!item.status) {
         l.drone?.remove();
         l.line?.remove();
+        l.cone?.remove();
         l.drone = undefined;
         l.line = undefined;
+        l.cone = undefined;
         continue;
       }
 
       const dronePos: L.LatLngTuple = [item.status.lat, item.status.lon];
+
+      // Cono de visión de la cámara
+      const heading = item.status.heading;
+      if (typeof heading === 'number' && !EN_TIERRA.includes(item.status.state)) {
+        const pts = coneLatLngs(item.status.lat, item.status.lon, heading);
+        if (!l.cone) {
+          l.cone = L.polygon(pts, {
+            color: '#4da3ff',
+            weight: 1,
+            opacity: 0.4,
+            fillColor: '#4da3ff',
+            fillOpacity: 0.15,
+            interactive: false,
+          }).addTo(map);
+        } else {
+          l.cone.setLatLngs(pts);
+        }
+      } else if (l.cone) {
+        l.cone.remove();
+        l.cone = undefined;
+      }
       if (!l.drone) {
         l.drone = L.marker(dronePos, { icon: droneIcon(item.displayName) }).addTo(map);
         l.iconName = item.displayName;
@@ -243,6 +305,7 @@ export default function DronesMap({
       l.base?.remove();
       l.drone?.remove();
       l.line?.remove();
+      l.cone?.remove();
       layers.delete(id);
     }
 
@@ -291,7 +354,9 @@ export default function DronesMap({
       marker.setStyle({ fillColor: i <= (waypoints?.visitedIndex ?? -1) ? WP_VISITADO : WP_PENDIENTE });
       marker.setTooltipContent(waypointTooltip(i, wp.label));
       // Si está abierto no se toca: reemplazar el HTML borraría lo que se esté tipeando
-      if (!marker.isPopupOpen()) marker.setPopupContent(waypointPopup(i, wps.length, wp.label));
+      if (!marker.isPopupOpen()) {
+        marker.setPopupContent(waypointPopup(i, wps.length, wp.label, !!waypoints?.canForce, !!waypoints?.canContinue));
+      }
     });
   }, [waypoints]);
 
@@ -332,6 +397,12 @@ export default function DronesMap({
       if (ev.key === 'Enter') guardar();
       if (ev.key === 'Escape') descartar();
     };
+
+    // Acciones de vuelo sobre el nodo
+    const force = el?.querySelector<HTMLButtonElement>('.wp-force');
+    if (force) force.onclick = () => { wpActionsRef.current.onForce?.(index); marker.closePopup(); };
+    const cont = el?.querySelector<HTMLButtonElement>('.wp-continue');
+    if (cont) cont.onclick = () => { wpActionsRef.current.onContinue?.(index); marker.closePopup(); };
   }
 
   return <div className="map" ref={containerRef} />;
