@@ -5,6 +5,17 @@ export interface UserRow {
   username: string;
   password_hash: string;
   role: 'operator' | 'drone';
+  display_name: string | null;
+  base_name: string | null;
+  base_lat: number | null;
+  base_lon: number | null;
+}
+
+/** Identidad persistente de un dron: lo que no cambia de una conexión a otra. */
+export interface DroneIdentity {
+  droneId: string;
+  displayName: string;
+  base: { name: string; lat: number; lon: number } | null;
 }
 
 export interface PatrolRoute {
@@ -41,6 +52,36 @@ export function getUser(username: string): UserRow | undefined {
   return db.prepare('SELECT * FROM users WHERE username = ?').get(username) as UserRow | undefined;
 }
 
+function toDroneIdentity(u: UserRow): DroneIdentity {
+  return {
+    droneId: u.username,
+    displayName: u.display_name ?? u.username,
+    base:
+      u.base_lat != null && u.base_lon != null
+        ? { name: u.base_name ?? 'Base', lat: u.base_lat, lon: u.base_lon }
+        : null,
+  };
+}
+
+export function getDroneIdentity(droneId: string): DroneIdentity | undefined {
+  const u = db.prepare("SELECT * FROM users WHERE username = ? AND role = 'drone'").get(droneId) as UserRow | undefined;
+  return u ? toDroneIdentity(u) : undefined;
+}
+
+export function listDroneIdentities(): DroneIdentity[] {
+  const rows = db.prepare("SELECT * FROM users WHERE role = 'drone' ORDER BY username").all() as UserRow[];
+  return rows.map(toDroneIdentity);
+}
+
+/** Renombra un dron. Devuelve la identidad ya actualizada, o undefined si no existe. */
+export function renameDrone(droneId: string, displayName: string): DroneIdentity | undefined {
+  const info = db
+    .prepare("UPDATE users SET display_name = ? WHERE username = ? AND role = 'drone'")
+    .run(displayName, droneId);
+  if (info.changes === 0) return undefined;
+  return getDroneIdentity(droneId);
+}
+
 export function getRoutes(): PatrolRoute[] {
   const rows = db.prepare('SELECT * FROM patrol_routes ORDER BY id').all() as {
     id: number; name: string; description: string; waypoints: string;
@@ -62,7 +103,12 @@ export function createEvent(
   return { id: Number(info.lastInsertRowid), ts, type, source, message, drone_id: droneId, alert_id: alertId };
 }
 
-export function listEvents(limit = 200): EventRow[] {
+export function listEvents(limit = 200, droneId?: string): EventRow[] {
+  if (droneId) {
+    return db
+      .prepare('SELECT * FROM events WHERE drone_id = ? ORDER BY id DESC LIMIT ?')
+      .all(droneId, limit) as EventRow[];
+  }
   return db.prepare('SELECT * FROM events ORDER BY id DESC LIMIT ?').all(limit) as EventRow[];
 }
 

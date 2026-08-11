@@ -73,12 +73,18 @@ quedan en `logs/` (modo nativo) o en `docker compose logs` (modo Docker).
 | Comando Central (API) | http://localhost:4000 |
 | Visor de detección | http://localhost:8765 |
 
-Credenciales de demo (creadas por el seed):
+Credenciales de demo (creadas por el seed). **Cada dron tiene su propia cuenta**:
+es con ella que la app inicia sesión y se identifica ante el Comando Central.
 
-| Usuario | Contraseña | Rol |
-|---|---|---|
-| `operador` | `operador123` | Operador del Comando Central (web) |
-| `drone1` | `drone123` | App de control (celular) |
+| Usuario | Contraseña | Rol | Nombre visible | Base |
+|---|---|---|---|---|
+| `operador` | `operador123` | Operador del Comando Central (web) | — | — |
+| `drone1` | `drone123` | App de control | Alfa | Base Norte |
+| `drone2` | `drone123` | App de control | Bravo | Base Sur |
+| `drone3` | `drone123` | App de control | Charlie | Base Este |
+
+El nombre visible se puede cambiar desde la app **y** desde el Comando Central;
+el cambio se propaga al otro lado.
 
 ### App Android
 

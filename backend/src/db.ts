@@ -13,7 +13,12 @@ db.exec(`
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     username      TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
-    role          TEXT NOT NULL CHECK (role IN ('operator', 'drone'))
+    role          TEXT NOT NULL CHECK (role IN ('operator', 'drone')),
+    -- Solo para role='drone': nombre visible (editable desde ambos lados) y base
+    display_name  TEXT,
+    base_name     TEXT,
+    base_lat      REAL,
+    base_lon      REAL
   );
 
   CREATE TABLE IF NOT EXISTS patrol_routes (
@@ -46,3 +51,9 @@ db.exec(`
     alert_id INTEGER
   );
 `);
+
+// Bases de datos creadas antes de que existieran estas columnas: se agregan al vuelo
+const userColumns = (db.prepare('PRAGMA table_info(users)').all() as { name: string }[]).map((c) => c.name);
+for (const [col, type] of [['display_name', 'TEXT'], ['base_name', 'TEXT'], ['base_lat', 'REAL'], ['base_lon', 'REAL']]) {
+  if (!userColumns.includes(col)) db.exec(`ALTER TABLE users ADD COLUMN ${col} ${type}`);
+}
