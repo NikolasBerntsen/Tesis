@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, getUsername } from '../api';
-import type { Alert, Drone, DroneStatus, EventRow, PatrolRoute } from '../types';
+import type { Alert, Drone, DroneStatus, EventRow, Me, PatrolRoute } from '../types';
 import { useWebSocket } from '../useWebSocket';
 import Dashboard from './Dashboard';
 import DroneDetail from './DroneDetail';
+import LogsView from './LogsView';
+import UsersView from './UsersView';
 
 const MAX_EVENTS = 300;
 const TICK_MS = 1000;
@@ -16,6 +18,9 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
   const [liveEvents, setLiveEvents] = useState<EventRow[]>([]);
   const [routes, setRoutes] = useState<PatrolRoute[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [me, setMe] = useState<Me | null>(null);
+  // 'drones' | 'usuarios' | 'registro'
+  const [seccion, setSeccion] = useState<'drones' | 'usuarios' | 'registro'>('drones');
   // Los status de cada dron llegan a destiempo: se acumulan acá y se vuelcan
   // al estado en un único tick, así todos los marcadores se mueven a la vez.
   const statusBuffer = useRef<Record<string, DroneStatus>>({});
@@ -57,6 +62,11 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
       case 'route_updated':
         setRoutes((prev) => prev.map((r) => (r.id === msg.route.id ? msg.route : r)));
         break;
+      case 'control_changed':
+        setDrones((prev) =>
+          prev.map((d) => (d.droneId === msg.droneId ? { ...d, controlledBy: msg.controlledBy } : d)),
+        );
+        break;
       case 'drone_renamed':
         setDrones((prev) =>
           prev.map((d) => (d.droneId === msg.droneId ? { ...d, displayName: msg.displayName } : d)),
@@ -78,6 +88,7 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
       .catch(console.error);
     api<Alert[]>('/alerts').then(setAlerts).catch(console.error);
     api<PatrolRoute[]>('/routes').then(setRoutes).catch(console.error);
+    api<Me>('/me').then(setMe).catch(console.error);
   }, [connected]);
 
   // Apodo de un nodo de patrullaje. El backend responde con la ruta completa y
@@ -118,12 +129,28 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
     return count;
   }, [alerts]);
 
-  const selected = drones.find((d) => d.droneId === selectedId) ?? null;
+  const selected = seccion === 'drones' ? (drones.find((d) => d.droneId === selectedId) ?? null) : null;
+  const rol = me?.role ?? 'operator';
 
   return (
     <div className="dashboard">
       <header className="topbar">
         <h1>Comando Central</h1>
+        <nav className="topnav">
+          <button className={seccion === 'drones' ? 'active' : ''} onClick={() => setSeccion('drones')}>
+            Drones
+          </button>
+          {(rol === 'supervisor' || rol === 'admin') && (
+            <button className={seccion === 'usuarios' ? 'active' : ''} onClick={() => setSeccion('usuarios')}>
+              Usuarios
+            </button>
+          )}
+          {rol === 'admin' && (
+            <button className={seccion === 'registro' ? 'active' : ''} onClick={() => setSeccion('registro')}>
+              Registro
+            </button>
+          )}
+        </nav>
         <div className="topbar-right">
           <span className={connected ? 'conn ok' : 'conn bad'}>
             {connected ? '● conectado' : '● sin conexión'}
@@ -134,8 +161,13 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
           </button>
         </div>
       </header>
-      {selected ? (
+      {seccion === 'usuarios' && me ? (
+        <UsersView me={me} />
+      ) : seccion === 'registro' ? (
+        <LogsView />
+      ) : selected ? (
         <DroneDetail
+          me={me}
           drone={selected}
           status={statuses[selected.droneId] ?? null}
           frame={frames[selected.droneId] ?? null}

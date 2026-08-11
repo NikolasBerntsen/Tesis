@@ -1,0 +1,83 @@
+name: Deploy a Oracle Cloud
+
+# Mismo mecanismo que el otro proyecto que vive en esta VM: el runner copia el
+# código por rsync y la VM construye y levanta los contenedores. No hay registry
+# de imágenes ni agente en el servidor.
+#
+# Se dispara cuando el CI de main termina bien: un commit que rompe los tests
+# nunca llega a la VM.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: {}
+
+# Los despliegues se encolan en vez de pisarse: cortar un "compose up" a la
+# mitad dejaría el stack a medio levantar.
+concurrency:
+  group: deploy-oracle
+  cancel-in-progress: false
+
+env:
+  # La VM es la misma que la del otro proyecto (comparten Caddy y red).
+  VM_HOST: 144.22.138.149
+  VM_USER: ubuntu
+  DEST: /home/ubuntu/tesis
+
+jobs:
+  deploy:
+    name: Desplegar en la VM de Oracle
+    runs-on: ubuntu-latest
+    # Sólo si el CI pasó, o si se dispara a mano desde la pestaña Actions.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Con workflow_run, checkout traería la punta de la rama por defecto.
+          # Fijamos el commit exacto que pasó el CI para desplegar eso mismo.
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+
+      # Un secret vacío da un "Permission denied (publickey)" sin explicación:
+      # mejor fallar acá con un mensaje claro.
+      - name: Verificar la clave SSH
+        env:
+          SSH_KEY: ${{ secrets.ORACLE_SSH_KEY || secrets.VM_SSH_KEY }}
+        run: |
+          if [ -z "$SSH_KEY" ]; then
+            echo "::error::Falta el secret ORACLE_SSH_KEY (o VM_SSH_KEY) con la clave privada de la VM."
+            exit 1
+          fi
+
+      - name: Preparar la clave y el host conocido
+        env:
+          SSH_KEY: ${{ secrets.ORACLE_SSH_KEY || secrets.VM_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      # --delete deja la VM igual al repo. Se excluye el .env (los secretos de
+      # producción viven sólo en la VM) y lo que se construye o no hace falta
+      # allá (la app Android no se despliega).
+      - name: Copiar el código a la VM
+        run: |
+          rsync -az --delete \
+            -e "ssh -i ~/.ssh/id_deploy" \
+            --exclude '.git/' \
+            --exclude '.env' \
+            --exclude 'node_modules/' \
+            --exclude 'dist/' \
+            --exclude 'coverage/' \
+            --exclude 'android-app/' \
+            --exclude '*.db' \
+            ./ "$VM_USER@$VM_HOST:$DEST/"
+
+      - name: Construir y levantar los contenedores
+        run: |
+          ssh -i ~/.ssh/id_deploy "$VM_USER@$VM_HOST" bash -s <<EOF
+          set -e
+          cd "$DEST"
+          bash deploy/deploy.sh update
+          EOF

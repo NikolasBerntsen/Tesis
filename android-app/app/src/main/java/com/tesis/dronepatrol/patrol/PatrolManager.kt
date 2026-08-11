@@ -8,6 +8,8 @@ import com.tesis.dronepatrol.model.FlightEvent
 import com.tesis.dronepatrol.model.PatrolRoute
 import com.tesis.dronepatrol.model.PatrolState
 import com.tesis.dronepatrol.model.Telemetry
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -37,6 +39,25 @@ class PatrolManager(
         // Umbral de batería para ordenar el regreso a base
         const val LOW_BATTERY_PCT = 25.0
         const val ORBIT_RADIUS_M = 30.0
+        const val METERS_PER_DEG_LAT = 111_320.0
+
+        // PAUSED/MANUAL/FORCED también son vuelo: batería baja y pérdida de
+        // señal disparan el RTH igual que patrullando
+        val ESTADOS_EN_VUELO = setOf(
+            PatrolState.PATROLLING,
+            PatrolState.ORBITING,
+            PatrolState.PAUSED,
+            PatrolState.MANUAL,
+            PatrolState.FORCED,
+        )
+        // Estados desde los que un resume_patrol retoma la ruta activa
+        val ESTADOS_REANUDABLES = setOf(
+            PatrolState.ORBITING,
+            PatrolState.RETURNING_HOME_SIGNAL,
+            PatrolState.PAUSED,
+            PatrolState.MANUAL,
+            PatrolState.FORCED,
+        )
     }
 
     private val _state = MutableStateFlow(PatrolState.IDLE)
@@ -52,9 +73,14 @@ class PatrolManager(
     private val _localLog = MutableSharedFlow<String>(replay = 20, extraBufferCapacity = 16)
     val localLog: SharedFlow<String> = _localLog
 
+    /** Rutas descargadas del Comando Central (para resolver start_route/force_goto por id). */
+    var availableRoutes: List<PatrolRoute> = emptyList()
+
     private var route: PatrolRoute? = null
     private var lastReachedWaypoint = 0
     private var resumeWaypoint = 0
+    /** Nodo del desvío forzado en curso (solo para el mensaje de llegada). */
+    private var forcedIndex = 0
     private var lastTelemetry: Telemetry? = null
     private var lastTelemetryAt = 0L
     private var lastFrame: ByteArray? = null
@@ -78,7 +104,21 @@ class PatrolManager(
         commandCenter.onAlertDecision = { decision, decidedBy ->
             scope.launch { onAlertDecision(decision, decidedBy) }
         }
-        commandCenter.onResumePatrol = { scope.launch { resumePatrol("orden del operador") } }
+        commandCenter.onResumePatrol = { fromIndex ->
+            scope.launch { resumePatrol("orden del operador", fromIndex) }
+        }
+        commandCenter.onStartRoute = { routeId, fromIndex, orderedBy ->
+            scope.launch { onStartRoute(routeId, fromIndex, orderedBy) }
+        }
+        commandCenter.onStopPatrol = { orderedBy -> scope.launch { onStopPatrol(orderedBy) } }
+        commandCenter.onForceGoto = { routeId, index, orderedBy ->
+            scope.launch { onForceGoto(routeId, index, orderedBy) }
+        }
+        commandCenter.onControlTaken = { by -> scope.launch { onControlTaken(by) } }
+        commandCenter.onManualMove = { bearing, distanceM, by ->
+            scope.launch { onManualMove(bearing, distanceM, by) }
+        }
+        commandCenter.onControlReleased = { by -> scope.launch { onControlReleased(by) } }
         scope.launch { signalWatchdog() }
         scope.launch { statusTicker() }
     }
@@ -92,6 +132,76 @@ class PatrolManager(
         report("PATROL_STARTED", "Patrullaje iniciado en ruta \"${route.name}\"")
     }
 
+    // ---- Órdenes del Comando Central ----
+
+    /** Busca la ruta entre las descargadas; si no está, re-consulta al Comando Central. */
+    private suspend fun buscarRuta(routeId: Int): PatrolRoute? {
+        availableRoutes.firstOrNull { it.id == routeId }?.let { return it }
+        runCatching { commandCenter.fetchRoutes() }.getOrNull()?.let { availableRoutes = it }
+        return availableRoutes.firstOrNull { it.id == routeId }
+    }
+
+    private suspend fun onStartRoute(routeId: Int, fromIndex: Int, orderedBy: String) {
+        val r = buscarRuta(routeId) ?: run {
+            log("Se ordenó patrullar la ruta $routeId pero no existe: se ignora")
+            return
+        }
+        val desde = fromIndex.coerceIn(0, r.waypoints.size - 1)
+        route = r
+        lastReachedWaypoint = desde
+        resumeWaypoint = desde
+        controller.startRoute(r, desde)
+        _state.value = PatrolState.PATROLLING
+        report("PATROL_STARTED", "Patrullaje iniciado en ruta \"${r.name}\" desde el nodo ${desde + 1} (orden de $orderedBy)")
+    }
+
+    private fun onStopPatrol(orderedBy: String) {
+        if (_state.value !in ESTADOS_EN_VUELO || _state.value == PatrolState.PAUSED) return
+        if (_state.value == PatrolState.PATROLLING) resumeWaypoint = lastReachedWaypoint
+        controller.hold()
+        _state.value = PatrolState.PAUSED
+        report("PATROL_STOPPED", "Patrullaje interrumpido por $orderedBy: el dron queda en vuelo estacionario")
+    }
+
+    private suspend fun onForceGoto(routeId: Int, index: Int, orderedBy: String) {
+        val wp = buscarRuta(routeId)?.waypoints?.getOrNull(index) ?: run {
+            log("Se ordenó desviar al nodo ${index + 1} de la ruta $routeId pero no existe: se ignora")
+            return
+        }
+        // Ojo: no se pisa resumeWaypoint, así un resume posterior retoma el
+        // patrullaje normal desde el último nodo recorrido
+        forcedIndex = index
+        controller.gotoPoint(wp.lat, wp.lon)
+        _state.value = PatrolState.FORCED
+        report("FORCED_GOTO", "Desvío forzado hacia el nodo ${index + 1} (orden de $orderedBy)")
+    }
+
+    private fun onControlTaken(by: String) {
+        if (_state.value == PatrolState.PATROLLING) resumeWaypoint = lastReachedWaypoint
+        controller.hold()
+        _state.value = PatrolState.MANUAL
+        // Solo log local: el Comando Central ya registra su propio CONTROL_TAKEN
+        log("$by tomó el control manual del dron")
+    }
+
+    private fun onManualMove(bearing: Double, distanceM: Double, by: String) {
+        if (_state.value != PatrolState.MANUAL) return
+        val t = lastTelemetry ?: return
+        val rad = Math.toRadians(bearing)
+        val dLat = distanceM * cos(rad) / METERS_PER_DEG_LAT
+        val dLon = distanceM * sin(rad) / (METERS_PER_DEG_LAT * cos(Math.toRadians(t.lat)))
+        controller.gotoPoint(t.lat + dLat, t.lon + dLon)
+        log("Movimiento manual de $by: ${distanceM.toInt()} m con rumbo ${bearing.toInt()}°")
+    }
+
+    private fun onControlReleased(by: String) {
+        if (_state.value != PatrolState.MANUAL) return
+        controller.hold()
+        // Si a continuación llega un resume_patrol, ese handler lo pone a patrullar
+        _state.value = PatrolState.PAUSED
+        log("$by liberó el control manual del dron")
+    }
+
     // ---- Detección de pérdida de señal ----
     // El enlace dron↔RC se considera perdido cuando la telemetría deja de llegar
     // por más de SIGNAL_TIMEOUT_MS. El dron real inicia su RTH failsafe por su
@@ -100,7 +210,7 @@ class PatrolManager(
     private suspend fun signalWatchdog() {
         while (true) {
             delay(1_000)
-            val flying = _state.value == PatrolState.PATROLLING || _state.value == PatrolState.ORBITING
+            val flying = _state.value in ESTADOS_EN_VUELO
             val silent = lastTelemetryAt > 0 && System.currentTimeMillis() - lastTelemetryAt > SIGNAL_TIMEOUT_MS
             if (flying && silent) {
                 _signalOk.value = false
@@ -133,7 +243,7 @@ class PatrolManager(
     // Si la batería cae del umbral en pleno vuelo, se ordena RTH y se avisa al
     // Comando Central. No hay reanudación automática: hace falta cambiar batería.
     private suspend fun checkLowBattery(t: Telemetry) {
-        val flying = _state.value == PatrolState.PATROLLING || _state.value == PatrolState.ORBITING
+        val flying = _state.value in ESTADOS_EN_VUELO
         if (flying && t.batteryPct <= LOW_BATTERY_PCT) {
             _state.value = PatrolState.RETURNING_HOME_BATTERY
             controller.returnHome()
@@ -157,6 +267,11 @@ class PatrolManager(
                 if (_state.value == PatrolState.RETURNING_HOME_BATTERY) {
                     _state.value = PatrolState.LANDED
                     report("LANDED", "Dron aterrizado en base (batería baja)")
+                }
+            }
+            is FlightEvent.GotoArrived -> {
+                if (_state.value == PatrolState.FORCED) {
+                    report("GOTO_ARRIVED", "El dron llegó al nodo ${forcedIndex + 1} y queda en vuelo estacionario")
                 }
             }
         }
@@ -192,12 +307,15 @@ class PatrolManager(
         }
     }
 
-    private suspend fun resumePatrol(reason: String) {
+    private suspend fun resumePatrol(reason: String, fromIndex: Int? = null) {
         val r = route ?: return
-        if (_state.value != PatrolState.ORBITING && _state.value != PatrolState.RETURNING_HOME_SIGNAL) return
-        controller.startRoute(r, resumeWaypoint)
+        if (_state.value !in ESTADOS_REANUDABLES) return
+        val desde = (fromIndex ?: resumeWaypoint).coerceIn(0, r.waypoints.size - 1)
+        resumeWaypoint = desde
+        lastReachedWaypoint = desde
+        controller.startRoute(r, desde)
         _state.value = PatrolState.PATROLLING
-        report("PATROL_RESUMED", "Patrullaje reanudado desde waypoint $resumeWaypoint ($reason)")
+        report("PATROL_RESUMED", "Patrullaje reanudado desde el nodo ${desde + 1} ($reason)")
     }
 
     private suspend fun statusTicker() {
@@ -214,6 +332,7 @@ class PatrolManager(
                 waypointTotal = route?.waypoints?.size ?: 0,
                 signalOk = _signalOk.value,
                 signalPct = _signalPct.value,
+                heading = t.heading,
                 mode = mode,
             )
         }

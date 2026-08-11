@@ -365,3 +365,89 @@ button.icon:hover { color: var(--text); }
   font-size: 12px;
   border-radius: 999px;
 }
+
+/* Navegación por secciones */
+.topnav { display: flex; gap: 8px; }
+.topnav button.active { border-color: var(--accent); color: var(--accent); }
+.page-main { padding: 16px 20px; display: flex; flex-direction: column; gap: 16px; }
+
+/* Overlays de la vista de cámaras */
+.tile-video { position: relative; }
+.tile-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(90, 90, 90, 0.65);
+  border-radius: 6px;
+}
+.tile-overlay span {
+  color: #ff3b3b;
+  font-weight: 900;
+  font-size: 20px;
+  letter-spacing: 1px;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+.tile-esquina {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+}
+.esquina-verde { color: #3ecf8e; }
+.esquina-gris { color: #cfd8e0; }
+
+/* Patrullaje y control del dron */
+.ruta-controles { display: flex; gap: 8px; flex-wrap: wrap; }
+.ruta-controles select {
+  flex: 1;
+  min-width: 160px;
+  font: inherit;
+  padding: 7px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: #0f151c;
+  color: var(--text);
+}
+.control-panel { display: flex; flex-direction: column; gap: 10px; }
+.pad { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.pad > div { display: flex; gap: 44px; }
+.pad button { width: 44px; height: 38px; font-size: 16px; }
+.mapa-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.mapa-head h2 { margin: 0; }
+
+/* Acciones de vuelo en el popup del nodo */
+.wp-acciones { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.wp-acciones button { padding: 4px 10px; font-size: 12px; }
+.wp-acciones .wp-force { background: #3a2626; border-color: var(--bad); }
+.wp-acciones .wp-continue { background: #1d3a2c; border-color: var(--ok); }
+
+/* Usuarios y registro */
+.tabla { width: 100%; border-collapse: collapse; }
+.tabla th, .tabla td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.tabla th { color: var(--muted); font-weight: 600; font-size: 12px; }
+button.chico { padding: 3px 9px; font-size: 12px; }
+.form-crear { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+.form-crear label { display: flex; flex-direction: column; gap: 5px; color: var(--muted); font-size: 12px; }
+.form-crear label.fila { flex-direction: row; align-items: center; gap: 6px; }
+.form-crear input, .form-crear select {
+  font: inherit;
+  padding: 7px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: #0f151c;
+  color: var(--text);
+}
+.log-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
+.log-row-general { grid-template-columns: 80px 76px 170px 1fr; }
+.cat-badge { font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; }
+.cat-drone { background: #16283c; color: var(--accent); }
+.cat-usuarios { background: #2c2338; color: #c792ea; }
+.cat-sistema { background: #253026; color: var(--ok); }
+details.meta summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+details.meta pre { font-size: 11px; background: #0f151c; padding: 8px; border-radius: 6px; overflow-x: auto; }

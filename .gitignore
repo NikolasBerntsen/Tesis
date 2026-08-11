@@ -26,3 +26,6 @@ logs/
 
 # Cache incremental de TypeScript
 *.tsbuildinfo
+
+# Build del frontend copiado para produccion local
+backend/public/

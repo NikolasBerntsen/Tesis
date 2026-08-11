@@ -28,7 +28,14 @@ import org.json.JSONObject
 class CommandCenterClient(private val scope: CoroutineScope) {
 
     var onAlertDecision: ((decision: String, decidedBy: String) -> Unit)? = null
-    var onResumePatrol: (() -> Unit)? = null
+    /** Reanudar el patrullaje; [fromIndex] nulo = desde el último nodo alcanzado. */
+    var onResumePatrol: ((fromIndex: Int?) -> Unit)? = null
+    var onStartRoute: ((routeId: Int, fromIndex: Int, orderedBy: String) -> Unit)? = null
+    var onStopPatrol: ((orderedBy: String) -> Unit)? = null
+    var onForceGoto: ((routeId: Int, index: Int, orderedBy: String) -> Unit)? = null
+    var onControlTaken: ((by: String) -> Unit)? = null
+    var onManualMove: ((bearing: Double, distanceM: Double, by: String) -> Unit)? = null
+    var onControlReleased: ((by: String) -> Unit)? = null
     /** El Comando Central renombró al dron. */
     var onRenamed: ((displayName: String) -> Unit)? = null
     val connected = MutableStateFlow(false)
@@ -137,7 +144,27 @@ class CommandCenterClient(private val scope: CoroutineScope) {
                             msg.optString("decision"),
                             msg.optString("decidedBy"),
                         )
-                        "resume_patrol" -> onResumePatrol?.invoke()
+                        "resume_patrol" -> onResumePatrol?.invoke(
+                            if (msg.isNull("fromIndex")) null else msg.optInt("fromIndex"),
+                        )
+                        "start_route" -> onStartRoute?.invoke(
+                            msg.optInt("routeId"),
+                            msg.optInt("fromIndex"),
+                            msg.optString("orderedBy"),
+                        )
+                        "stop_patrol" -> onStopPatrol?.invoke(msg.optString("orderedBy"))
+                        "force_goto" -> onForceGoto?.invoke(
+                            msg.optInt("routeId"),
+                            msg.optInt("index"),
+                            msg.optString("orderedBy"),
+                        )
+                        "control_taken" -> onControlTaken?.invoke(msg.optString("by"))
+                        "manual_move" -> onManualMove?.invoke(
+                            msg.optDouble("bearing"),
+                            msg.optDouble("distanceM"),
+                            msg.optString("by"),
+                        )
+                        "control_released" -> onControlReleased?.invoke(msg.optString("by"))
                         "renamed" -> onRenamed?.invoke(msg.optString("displayName"))
                     }
                 }
@@ -177,6 +204,7 @@ class CommandCenterClient(private val scope: CoroutineScope) {
         waypointTotal: Int,
         signalOk: Boolean,
         signalPct: Int,
+        heading: Double,
         mode: String,
     ) = send(
         JSONObject()
@@ -190,6 +218,7 @@ class CommandCenterClient(private val scope: CoroutineScope) {
             .put("waypointTotal", waypointTotal)
             .put("signal", if (signalOk) "OK" else "LOST")
             .put("signalPct", signalPct)
+            .put("heading", heading)
             .put("mode", mode),
     )
 

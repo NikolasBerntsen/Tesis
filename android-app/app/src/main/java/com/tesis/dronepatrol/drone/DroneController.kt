@@ -27,6 +27,12 @@ interface DroneController {
     /** Orbita alrededor del punto dado (modo seguimiento de objetivo). */
     fun startOrbit(centerLat: Double, centerLon: Double, radiusM: Double)
 
+    /** Queda en vuelo estacionario donde está. */
+    fun hold()
+
+    /** Vuela hasta el punto dado y queda en vuelo estacionario al llegar (emite [FlightEvent.GotoArrived]). */
+    fun gotoPoint(lat: Double, lon: Double)
+
     fun returnHome()
 
     fun disconnect()

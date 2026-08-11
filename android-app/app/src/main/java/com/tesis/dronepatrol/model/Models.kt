@@ -15,6 +15,8 @@ data class Telemetry(
     val batteryPct: Double,
     /** Intensidad del enlace RC 0..100 (baja con la distancia a la base). */
     val signalPct: Int,
+    /** Rumbo 0..360° hacia donde mira la cámara. */
+    val heading: Double,
     val ts: Long,
 )
 
@@ -34,10 +36,18 @@ enum class PatrolState {
     RETURNING_HOME_SIGNAL,
     RETURNING_HOME_BATTERY,
     LANDED,
+    /** Patrulla interrumpida por el operador: vuelo estacionario. */
+    PAUSED,
+    /** Control manual desde el Comando Central. */
+    MANUAL,
+    /** Desvío forzado hacia un nodo puntual. */
+    FORCED,
 }
 
 sealed class FlightEvent {
     /** El dron pasó por el waypoint [index] de la ruta activa. */
     data class WaypointReached(val index: Int) : FlightEvent()
     object ArrivedHome : FlightEvent()
+    /** Llegó al punto pedido con gotoPoint y quedó en vuelo estacionario. */
+    object GotoArrived : FlightEvent()
 }

@@ -8,6 +8,41 @@ El sistema soporta **varios drones simultáneos**. Cada dron se identifica con s
 propia cuenta (usuario/contraseña) y su `droneId` es el `username` de esa cuenta,
 tomado del JWT: nunca lo declara el cliente.
 
+## Roles
+
+| Rol | Permisos |
+|---|---|
+| `drone` | Cuenta de máquina de la app de control |
+| `operator` | Consola: alertas, rutas, eventos de drones. **Controla drones solo si tiene el flag `canControl`** |
+| `supervisor` | Todo lo del operador + quitar el control manual a otro usuario + ver operadores y suspender/restaurar su flag `canControl` |
+| `admin` | Todo lo anterior + crear/eliminar/desactivar/reactivar usuarios + ver el registro general del sistema |
+
+Los permisos son jerárquicos (un rol incluye a los de menor rango). Los flags
+`active` y `canControl` se evalúan **en vivo** en cada request, no desde el JWT:
+suspender a un usuario surte efecto inmediato.
+
+## Control manual — bloqueo exclusivo
+
+Un dron puede estar controlado por **un solo usuario a la vez**. El backend
+mantiene el lock (`controlledBy`) y lo incluye en la ficha del dron y en cada
+`status`. Tomar un dron controlado por otro da `409`; un supervisor puede
+forzar la liberación. Si el usuario que controla cierra todas sus conexiones,
+el backend libera el lock y reanuda el patrullaje automáticamente.
+
+## Registro (logs)
+
+Toda acción que involucre al sistema queda registrada en la tabla `events`, con
+una `category`:
+
+| Categoría | Contenido |
+|---|---|
+| `drone` | Conexión/desconexión, patrullaje, alertas, batería, señal, control manual, cambios de ruta, renombres de dron y de nodos |
+| `usuarios` | Alta, baja, activación, suspensión y modificación de usuarios (con **antes y después** en `meta`) |
+| `sistema` | Inicios de sesión (exitosos y fallidos) |
+
+El **log general** (`GET /api/logs`, solo admin) devuelve todas las categorías
+juntas; el log de drones (`GET /api/events`, operador+) devuelve solo `drone`.
+
 ## 0. Modelo de datos
 
 Cada cuenta de dron lleva asociados:
@@ -40,13 +75,14 @@ Conexión: `ws://<backend>:4000/ws?token=<JWT>` (el rol `drone` sale del token).
 
 | Campo | Tipo | Notas |
 |---|---|---|
-| `state` | string | `IDLE`, `PATROLLING`, `ORBITING`, `RETURNING_HOME_SIGNAL`, `RETURNING_HOME_BATTERY`, `LANDED` |
+| `state` | string | `IDLE`, `PATROLLING`, `ORBITING`, `RETURNING_HOME_SIGNAL`, `RETURNING_HOME_BATTERY`, `LANDED`, `PAUSED` (patrulla interrumpida), `MANUAL` (control manual), `FORCED` (desvío forzado a un nodo) |
 | `battery` | number | Porcentaje 0..100 |
 | `lat`, `lon` | number | Posición actual |
 | `routeId` | number \| null | Ruta que está patrullando |
 | `waypointIndex` | number | Índice 0-based del último waypoint alcanzado |
 | `waypointTotal` | number | Cantidad de waypoints de la ruta. La UI muestra `waypointIndex + 1` de `waypointTotal` |
 | `signal` | `OK` \| `LOST` | Estado del enlace RC |
+| `heading` | number | Rumbo 0..360° hacia donde mira la cámara (el mapa dibuja el cono) |
 | `signalPct` | number | Intensidad de señal 0..100 (0 cuando `signal` es `LOST`) |
 | `mode` | `TEST` \| `DEPLOY` | Modo elegido en la app tras iniciar sesión |
 
@@ -61,7 +97,13 @@ Los mensajes se dirigen **solo al dron correspondiente**, salvo que se indique.
 | Mensaje | Campos | Efecto en el celular |
 |---|---|---|
 | `alert_decision` | `alertId, decision (VALIDATED\|DISMISSED), decidedBy` | Si fue descartada, deja la órbita y reanuda el patrullaje desde el waypoint guardado |
-| `resume_patrol` | `orderedBy` | Sale de la órbita y reanuda el patrullaje |
+| `resume_patrol` | `orderedBy, fromIndex?` | Reanuda el patrullaje; con `fromIndex` continúa desde ese nodo, sin él desde el último alcanzado |
+| `start_route` | `routeId, fromIndex, orderedBy` | Comienza a patrullar esa ruta |
+| `stop_patrol` | `orderedBy` | Interrumpe el patrullaje: el dron queda en vuelo estacionario (`PAUSED`) |
+| `force_goto` | `routeId, index, orderedBy` | Vuela forzado hacia ese nodo y queda estacionario sobre él (`FORCED`) |
+| `control_taken` | `by` | Entra en control manual (`MANUAL`): vuelo estacionario a la espera de movimientos |
+| `manual_move` | `bearing, distanceM, by` | Se desplaza esa distancia en ese rumbo (solo en `MANUAL`) |
+| `control_released` | `by` | Sale del control manual; si no llega un `resume_patrol` a continuación queda `PAUSED` |
 | `renamed` | `displayName` | El operador renombró al dron: la app actualiza el nombre que muestra |
 
 ## 3. Comando Central → Consola del operador (web)
@@ -78,6 +120,7 @@ Conexión: `ws://<backend>:4000/ws?token=<JWT>` (rol `operator`).
 | `drone_online` / `drone_offline` | `drone` (ficha completa del dron) |
 | `drone_renamed` | `droneId, displayName` |
 | `route_updated` | `route` (ruta completa); se emite al cambiar el apodo de un nodo |
+| `control_changed` | `droneId, controlledBy` (username o `null`) |
 
 Al conectarse, el operador recibe un `status` por cada dron que esté online, para
 poder pintar el dashboard sin esperar al próximo tick.
@@ -108,7 +151,18 @@ La app solo actúa ante `detected: true` y solo mientras está en estado
 | PATCH | `/api/drones/:droneId` | JWT operador | `{displayName}`; renombra y avisa al dron con `renamed` |
 | GET | `/api/alerts?status=` | JWT operador | Lista de alertas |
 | POST | `/api/alerts/:id/decision` | JWT operador | `{decision: VALIDATED\|DISMISSED}`; registra quién decidió y notifica al dron |
-| POST | `/api/drones/:droneId/resume` | JWT operador | Saca al dron de la órbita y lo devuelve a su ruta |
+| POST | `/api/drones/:droneId/resume` | JWT operador+ | `{fromIndex?}`: reanuda el patrullaje (desde ese nodo, o desde el último alcanzado). Libera el control manual si estaba tomado |
+| POST | `/api/drones/:droneId/route/start` | JWT operador+ | `{routeId, fromIndex?}`: comienza esa ruta |
+| POST | `/api/drones/:droneId/route/stop` | JWT operador+ | Interrumpe el patrullaje (el dron queda estacionario) |
+| POST | `/api/drones/:droneId/goto` | JWT con `canControl` | `{routeId, index}`: fuerza el vuelo hacia ese nodo |
+| POST | `/api/drones/:droneId/control` | JWT con `canControl` | Toma el control manual (409 si otro lo tiene) |
+| DELETE | `/api/drones/:droneId/control` | titular o supervisor+ | `{resume: 'last'\|'none'\|número}`: libera el control (default `last`) |
+| POST | `/api/drones/:droneId/manual_move` | titular del control | `{bearing, distanceM}` |
+| GET | `/api/users` | JWT supervisor+ | Supervisor: operadores; admin: todos los usuarios humanos |
+| POST | `/api/users` | JWT admin | `{username, password, role (operator\|supervisor), canControl}` |
+| PATCH | `/api/users/:username` | supervisor+ (solo `canControl` de operadores) / admin (todo) | `{canControl?, active?, password?}`. Registra antes y después |
+| DELETE | `/api/users/:username` | JWT admin | Elimina el usuario |
+| GET | `/api/logs?category=&limit=` | JWT admin | Log general del sistema (todas las categorías) |
 | GET | `/api/events?limit=&droneId=` | JWT operador | Log de eventos (más reciente primero) |
 | GET | `/api/health` | — | Ping |
 

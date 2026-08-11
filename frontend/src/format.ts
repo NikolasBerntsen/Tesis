@@ -7,6 +7,9 @@ export const STATE_LABELS: Record<string, string> = {
   RETURNING_HOME_SIGNAL: 'Volviendo a base (pérdida de señal)',
   RETURNING_HOME_BATTERY: 'Volviendo a base (batería baja)',
   LANDED: 'Aterrizado',
+  PAUSED: 'Patrulla interrumpida',
+  MANUAL: 'Control manual',
+  FORCED: 'Desvío a nodo',
 };
 
 export function stateLabel(state: string): string {

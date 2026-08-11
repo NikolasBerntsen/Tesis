@@ -11,6 +11,7 @@ import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.sin
@@ -48,7 +49,7 @@ class SimulatedDroneController : DroneController {
         const val SIGNAL_MIN_PCT = 10
     }
 
-    private enum class Mode { IDLE, FLY_ROUTE, ORBIT, RTH }
+    private enum class Mode { IDLE, FLY_ROUTE, ORBIT, RTH, HOLD, GOTO }
 
     override val telemetry = MutableSharedFlow<Telemetry>(replay = 1, extraBufferCapacity = 8)
     override val videoFrames = MutableSharedFlow<ByteArray>(extraBufferCapacity = 4)
@@ -57,6 +58,9 @@ class SimulatedDroneController : DroneController {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var loops: Job? = null
 
+    // El modo lo escribe el hilo que comanda (hold/gotoPoint/...) y lo lee el
+    // lazo de vuelo: volátil para que el cambio se vea enseguida.
+    @Volatile
     private var mode = Mode.IDLE
     private var homeLat = HOME_LAT
     private var homeLon = HOME_LON
@@ -69,6 +73,10 @@ class SimulatedDroneController : DroneController {
     private var orbitCenterLon = 0.0
     private var orbitRadiusM = 30.0
     private var orbitAngle = 0.0
+    private var gotoLat = 0.0
+    private var gotoLon = 0.0
+    // Rumbo hacia el objetivo mientras se mueve; estacionario conserva el último
+    private var heading = 0.0
 
     /** Mientras es true no llega telemetría ni video a la app (enlace RC cortado). */
     @Volatile
@@ -125,6 +133,16 @@ class SimulatedDroneController : DroneController {
         mode = Mode.ORBIT
     }
 
+    override fun hold() {
+        mode = Mode.HOLD
+    }
+
+    override fun gotoPoint(lat: Double, lon: Double) {
+        gotoLat = lat
+        gotoLon = lon
+        mode = Mode.GOTO
+    }
+
     override fun returnHome() {
         mode = Mode.RTH
     }
@@ -161,8 +179,18 @@ class SimulatedDroneController : DroneController {
                     orbitAngle += (SPEED_MS / orbitRadiusM) * dt * 0.5
                     lat = orbitCenterLat + (orbitRadiusM * cos(orbitAngle)) / METERS_PER_DEG_LAT
                     lon = orbitCenterLon + (orbitRadiusM * sin(orbitAngle)) / metersPerDegLon()
+                    // En órbita la cámara mira al objetivo
+                    heading = bearingTo(orbitCenterLat, orbitCenterLon)
                     drainBattery()
                 }
+                Mode.GOTO -> {
+                    if (moveToward(gotoLat, gotoLon, dt)) {
+                        mode = Mode.HOLD
+                        emitEvent(FlightEvent.GotoArrived)
+                    }
+                    drainBattery()
+                }
+                Mode.HOLD -> drainBattery() // vuelo estacionario: gasta batería igual
                 Mode.RTH -> {
                     if (moveToward(homeLat, homeLon, dt)) {
                         mode = Mode.IDLE
@@ -174,7 +202,7 @@ class SimulatedDroneController : DroneController {
             }
 
             if (!signalLost) {
-                telemetry.tryEmit(Telemetry(lat, lon, 40.0, battery, signalPct(), System.currentTimeMillis()))
+                telemetry.tryEmit(Telemetry(lat, lon, 40.0, battery, signalPct(), heading, System.currentTimeMillis()))
             }
         }
     }
@@ -185,10 +213,18 @@ class SimulatedDroneController : DroneController {
         val dx = (tLon - lon) * metersPerDegLon()
         val dist = hypot(dx, dy)
         if (dist < ARRIVE_THRESHOLD_M) return true
+        heading = bearingTo(tLat, tLon)
         val step = (SPEED_MS * dt).coerceAtMost(dist)
         lat += (dy / dist) * step / METERS_PER_DEG_LAT
         lon += (dx / dist) * step / metersPerDegLon()
         return false
+    }
+
+    /** Rumbo 0..360° desde la posición actual hacia el punto dado (norte = 0, este = 90). */
+    private fun bearingTo(tLat: Double, tLon: Double): Double {
+        val dy = (tLat - lat) * METERS_PER_DEG_LAT
+        val dx = (tLon - lon) * metersPerDegLon()
+        return (Math.toDegrees(atan2(dx, dy)) + 360.0) % 360.0
     }
 
     private fun metersPerDegLon() = METERS_PER_DEG_LAT * cos(Math.toRadians(lat))

@@ -2,7 +2,11 @@ import bcrypt from 'bcryptjs';
 import { db } from './db';
 
 // Usuarios y rutas de demostración. Ejecutar con: npm run seed
-const operators = [{ username: 'operador', password: 'operador123' }];
+const humans = [
+  { username: 'operador', password: 'operador123', role: 'operator' },
+  { username: 'supervisor', password: 'supervisor123', role: 'supervisor' },
+  { username: 'admin', password: 'admin123', role: 'admin' },
+];
 
 // Cada dron tiene su propia cuenta (con ella inicia sesión la app) y su base.
 const drones = [
@@ -45,15 +49,15 @@ const routes = [
   },
 ];
 
-for (const o of operators) {
-  const exists = db.prepare('SELECT 1 FROM users WHERE username = ?').get(o.username);
+for (const h of humans) {
+  const exists = db.prepare('SELECT 1 FROM users WHERE username = ?').get(h.username);
   if (!exists) {
     db.prepare('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)').run(
-      o.username,
-      bcrypt.hashSync(o.password, 10),
-      'operator',
+      h.username,
+      bcrypt.hashSync(h.password, 10),
+      h.role,
     );
-    console.log(`Operador creado: ${o.username}`);
+    console.log(`Usuario creado: ${h.username} (${h.role})`);
   }
 }
 

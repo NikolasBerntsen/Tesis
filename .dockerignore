@@ -1,0 +1,12 @@
+**/node_modules
+**/dist
+**/build
+**/data
+**/.gradle
+**/*.log
+android-app
+detection-mock
+.git
+frontend/tsconfig.tsbuildinfo
+**/coverage
+**/tests
