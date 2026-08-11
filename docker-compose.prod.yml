@@ -1,0 +1,18 @@
+# Despliegue de producción: un solo contenedor sirve API + WebSocket + web.
+# La VM de Oracle lo levanta y el workflow de CD lo actualiza en cada push a main.
+services:
+  comando-central:
+    image: ${IMAGE:-ghcr.io/nikolasberntsen/tesis:latest}
+    container_name: comando-central
+    restart: unless-stopped
+    ports:
+      - "80:4000"
+    environment:
+      # El secreto JWT lo pone la VM en un archivo .env junto a este compose
+      JWT_SECRET: ${JWT_SECRET:?definí JWT_SECRET en el .env de la VM}
+      DB_FILE: /data/comando-central.db
+    volumes:
+      - cc-data:/data
+
+volumes:
+  cc-data:

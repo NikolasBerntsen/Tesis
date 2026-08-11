@@ -78,7 +78,9 @@ es con ella que la app inicia sesión y se identifica ante el Comando Central.
 
 | Usuario | Contraseña | Rol | Nombre visible | Base |
 |---|---|---|---|---|
-| `operador` | `operador123` | Operador del Comando Central (web) | — | — |
+| `operador` | `operador123` | Operador: ve y decide alertas, controla drones | — | — |
+| `supervisor` | `supervisor123` | Supervisor: gestiona operadores y su permiso de control | — | — |
+| `admin` | `admin123` | Administrador: usuarios y registro del sistema | — | — |
 | `drone1` | `drone123` | App de control | Alfa | Base Norte |
 | `drone2` | `drone123` | App de control | Bravo | Base Sur |
 | `drone3` | `drone123` | App de control | Charlie | Base Este |
