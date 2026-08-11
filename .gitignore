@@ -6,6 +6,12 @@ dist/
 # Entornos / secretos
 .env
 
+# Claves privadas (la de acceso SSH a la VM de Oracle se usa desde esta carpeta).
+# Si una llega al repo, cualquiera con acceso al codigo entra al servidor: se
+# ignoran por patron para que no dependa de acordarse del nombre del archivo.
+*.key
+*.pem
+
 # Base de datos local
 backend/data/
 
