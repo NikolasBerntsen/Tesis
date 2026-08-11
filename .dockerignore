@@ -8,3 +8,5 @@ android-app
 detection-mock
 .git
 frontend/tsconfig.tsbuildinfo
+**/coverage
+**/tests

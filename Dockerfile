@@ -7,11 +7,12 @@ COPY frontend/ ./
 RUN npm run build
 
 # --- Etapa 2: build del backend ---
+# La imagen se construye en la propia VM (ARM), así que evitamos compilar acá el
+# módulo nativo: tsc sólo necesita los tipos, no el binario de better-sqlite3.
 FROM node:20-slim AS backend
-RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
 WORKDIR /be
 COPY backend/package.json backend/package-lock.json ./
-RUN npm ci
+RUN npm ci --ignore-scripts
 COPY backend/ ./
 RUN npm run build
 
@@ -26,15 +27,13 @@ RUN npm ci --omit=dev && apt-get purge -y make g++ 2>/dev/null || true
 COPY --from=backend /be/dist ./dist
 # El backend sirve el frontend desde ./public (ver src/app.ts)
 COPY --from=frontend /fe/dist ./public
-# El seed se ejecuta al arrancar (idempotente) para tener usuarios y rutas
-COPY --from=backend /be/dist/seed.js ./dist/seed.js
 
 EXPOSE 4000
 ENV PORT=4000
 ENV DB_FILE=/data/comando-central.db
 VOLUME /data
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
   CMD wget -qO- http://localhost:4000/api/health || exit 1
 
 # Siembra (idempotente) y arranca

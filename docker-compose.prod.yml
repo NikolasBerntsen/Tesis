@@ -1,18 +1,30 @@
 # Despliegue de producción: un solo contenedor sirve API + WebSocket + web.
-# La VM de Oracle lo levanta y el workflow de CD lo actualiza en cada push a main.
+# La imagen se construye en la propia VM (deploy/deploy.sh), igual que el otro
+# proyecto que comparte esa máquina.
+#
+# No publica ningún puerto: la única puerta de entrada es el Caddy del otro
+# proyecto, que llega hasta acá por la red compartida 'proxy' y resuelve el
+# nombre del contenedor por DNS interno de Docker.
 services:
   comando-central:
-    image: ${IMAGE:-ghcr.io/nikolasberntsen/tesis:latest}
+    build:
+      context: .
+    image: comando-central:local
     container_name: comando-central
     restart: unless-stopped
-    ports:
-      - "80:4000"
     environment:
-      # El secreto JWT lo pone la VM en un archivo .env junto a este compose
+      # El secreto JWT lo pone la VM en un .env junto a este compose. Si falta,
+      # el stack no arranca en vez de levantar algo a medias.
       JWT_SECRET: ${JWT_SECRET:?definí JWT_SECRET en el .env de la VM}
       DB_FILE: /data/comando-central.db
     volumes:
       - cc-data:/data
+    networks:
+      - proxy
 
 volumes:
   cc-data:
+
+networks:
+  proxy:
+    external: true
