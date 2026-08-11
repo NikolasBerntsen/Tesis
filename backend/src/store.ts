@@ -5,13 +5,32 @@ export interface UserRow {
   username: string;
   password_hash: string;
   role: 'operator' | 'drone';
+  display_name: string | null;
+  base_name: string | null;
+  base_lat: number | null;
+  base_lon: number | null;
+}
+
+/** Identidad persistente de un dron: lo que no cambia de una conexión a otra. */
+export interface DroneIdentity {
+  droneId: string;
+  displayName: string;
+  base: { name: string; lat: number; lon: number } | null;
+}
+
+/** `label` es el apodo opcional del nodo, para identificar zonas puntuales. */
+export interface Waypoint {
+  lat: number;
+  lon: number;
+  alt: number;
+  label?: string;
 }
 
 export interface PatrolRoute {
   id: number;
   name: string;
   description: string;
-  waypoints: { lat: number; lon: number; alt: number }[];
+  waypoints: Waypoint[];
 }
 
 export interface Alert {
@@ -41,11 +60,62 @@ export function getUser(username: string): UserRow | undefined {
   return db.prepare('SELECT * FROM users WHERE username = ?').get(username) as UserRow | undefined;
 }
 
+function toDroneIdentity(u: UserRow): DroneIdentity {
+  return {
+    droneId: u.username,
+    displayName: u.display_name ?? u.username,
+    base:
+      u.base_lat != null && u.base_lon != null
+        ? { name: u.base_name ?? 'Base', lat: u.base_lat, lon: u.base_lon }
+        : null,
+  };
+}
+
+export function getDroneIdentity(droneId: string): DroneIdentity | undefined {
+  const u = db.prepare("SELECT * FROM users WHERE username = ? AND role = 'drone'").get(droneId) as UserRow | undefined;
+  return u ? toDroneIdentity(u) : undefined;
+}
+
+export function listDroneIdentities(): DroneIdentity[] {
+  const rows = db.prepare("SELECT * FROM users WHERE role = 'drone' ORDER BY username").all() as UserRow[];
+  return rows.map(toDroneIdentity);
+}
+
+/** Renombra un dron. Devuelve la identidad ya actualizada, o undefined si no existe. */
+export function renameDrone(droneId: string, displayName: string): DroneIdentity | undefined {
+  const info = db
+    .prepare("UPDATE users SET display_name = ? WHERE username = ? AND role = 'drone'")
+    .run(displayName, droneId);
+  if (info.changes === 0) return undefined;
+  return getDroneIdentity(droneId);
+}
+
 export function getRoutes(): PatrolRoute[] {
   const rows = db.prepare('SELECT * FROM patrol_routes ORDER BY id').all() as {
     id: number; name: string; description: string; waypoints: string;
   }[];
   return rows.map((r) => ({ ...r, waypoints: JSON.parse(r.waypoints) }));
+}
+
+export function getRoute(id: number): PatrolRoute | undefined {
+  const r = db.prepare('SELECT * FROM patrol_routes WHERE id = ?').get(id) as
+    | { id: number; name: string; description: string; waypoints: string }
+    | undefined;
+  return r ? { ...r, waypoints: JSON.parse(r.waypoints) } : undefined;
+}
+
+/** Pone (o borra, con label vacío) el apodo de un nodo de la ruta. */
+export function setWaypointLabel(routeId: number, index: number, label: string): PatrolRoute | undefined {
+  const route = getRoute(routeId);
+  if (!route) return undefined;
+  const wp = route.waypoints[index];
+  if (!wp) return undefined;
+
+  if (label) wp.label = label;
+  else delete wp.label;
+
+  db.prepare('UPDATE patrol_routes SET waypoints = ? WHERE id = ?').run(JSON.stringify(route.waypoints), routeId);
+  return route;
 }
 
 export function createEvent(
@@ -62,7 +132,12 @@ export function createEvent(
   return { id: Number(info.lastInsertRowid), ts, type, source, message, drone_id: droneId, alert_id: alertId };
 }
 
-export function listEvents(limit = 200): EventRow[] {
+export function listEvents(limit = 200, droneId?: string): EventRow[] {
+  if (droneId) {
+    return db
+      .prepare('SELECT * FROM events WHERE drone_id = ? ORDER BY id DESC LIMIT ?')
+      .all(droneId, limit) as EventRow[];
+  }
   return db.prepare('SELECT * FROM events ORDER BY id DESC LIMIT ?').all(limit) as EventRow[];
 }
 

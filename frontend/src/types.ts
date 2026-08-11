@@ -1,20 +1,46 @@
-export interface PatrolRoute {
-  id: number;
+export interface Base {
   name: string;
-  description: string;
-  waypoints: { lat: number; lon: number; alt: number }[];
+  lat: number;
+  lon: number;
 }
 
 export interface DroneStatus {
-  type: 'status';
   droneId: string;
+  displayName: string;
   state: string;
   battery: number;
   lat: number;
   lon: number;
   routeId: number | null;
-  waypointIndex: number | null;
+  waypointIndex: number;
+  waypointTotal: number;
   signal: 'OK' | 'LOST';
+  signalPct: number;
+  mode: 'TEST' | 'DEPLOY';
+}
+
+/** Ficha de dron que devuelve GET /api/drones y los mensajes drone_online/offline. */
+export interface Drone {
+  droneId: string;
+  displayName: string;
+  base: Base | null;
+  online: boolean;
+  lastStatus: DroneStatus | null;
+}
+
+/** `label` es el apodo opcional que le pone el operador para identificar la zona. */
+export interface Waypoint {
+  lat: number;
+  lon: number;
+  alt: number;
+  label?: string;
+}
+
+export interface PatrolRoute {
+  id: number;
+  name: string;
+  description: string;
+  waypoints: Waypoint[];
 }
 
 export interface Alert {

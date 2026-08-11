@@ -13,7 +13,18 @@ data class Telemetry(
     val lon: Double,
     val altM: Double,
     val batteryPct: Double,
+    /** Intensidad del enlace RC 0..100 (baja con la distancia a la base). */
+    val signalPct: Int,
     val ts: Long,
+)
+
+data class DroneBase(val name: String, val lat: Double, val lon: Double)
+
+/** Ficha del dron que devuelve GET /api/me. */
+data class DroneProfile(
+    val droneId: String,
+    val displayName: String,
+    val base: DroneBase?,
 )
 
 enum class PatrolState {

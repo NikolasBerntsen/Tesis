@@ -1,22 +1,59 @@
 import type { Server } from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { verifyToken } from './auth';
-import { createAlert, createEvent } from './store';
+import { createAlert, createEvent, getDroneIdentity, listDroneIdentities, renameDrone } from './store';
 
-// Hub central: los operadores (web) reciben todo lo que emite el dron (celular),
-// y el celular recibe las decisiones del operador.
+// Hub central. Soporta varios drones a la vez: cada conexión de dron se guarda
+// bajo su droneId (el username del token), y los mensajes del operador se
+// dirigen al dron concreto en vez de a todos.
 const operators = new Set<WebSocket>();
-const drones = new Set<WebSocket>();
-let lastStatus: Record<string, unknown> | null = null;
+const drones = new Map<string, WebSocket>();
+const lastStatus = new Map<string, Record<string, unknown>>();
 
 export function broadcastOperators(msg: object) {
   const data = JSON.stringify(msg);
   for (const ws of operators) if (ws.readyState === WebSocket.OPEN) ws.send(data);
 }
 
-export function sendToDrones(msg: object) {
-  const data = JSON.stringify(msg);
-  for (const ws of drones) if (ws.readyState === WebSocket.OPEN) ws.send(data);
+/** Envía un mensaje a un dron concreto. Devuelve false si no está conectado. */
+export function sendToDrone(droneId: string, msg: object): boolean {
+  const ws = drones.get(droneId);
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  ws.send(JSON.stringify(msg));
+  return true;
+}
+
+export function isOnline(droneId: string): boolean {
+  const ws = drones.get(droneId);
+  return ws !== undefined && ws.readyState === WebSocket.OPEN;
+}
+
+export function getLastStatus(droneId: string): Record<string, unknown> | null {
+  return lastStatus.get(droneId) ?? null;
+}
+
+/** Ficha completa de un dron: identidad + si está online + su último estado. */
+export function droneCard(droneId: string) {
+  const identity = getDroneIdentity(droneId);
+  if (!identity) return null;
+  return { ...identity, online: isOnline(droneId), lastStatus: getLastStatus(droneId) };
+}
+
+export function listDroneCards() {
+  return listDroneIdentities().map((d) => ({
+    ...d,
+    online: isOnline(d.droneId),
+    lastStatus: getLastStatus(d.droneId),
+  }));
+}
+
+/** Aplica un renombre y avisa a los dos lados: operadores y el propio dron. */
+export function applyRename(droneId: string, displayName: string, notifyDrone: boolean) {
+  const identity = renameDrone(droneId, displayName);
+  if (!identity) return undefined;
+  broadcastOperators({ type: 'drone_renamed', droneId, displayName: identity.displayName });
+  if (notifyDrone) sendToDrone(droneId, { type: 'renamed', displayName: identity.displayName });
+  return identity;
 }
 
 function handleDroneMessage(droneId: string, raw: string) {
@@ -26,13 +63,17 @@ function handleDroneMessage(droneId: string, raw: string) {
   } catch {
     return;
   }
+  const displayName = getDroneIdentity(droneId)?.displayName ?? droneId;
+
   switch (msg.type) {
-    case 'status':
-      lastStatus = { ...msg, droneId };
-      broadcastOperators(lastStatus!);
+    case 'status': {
+      const status = { ...msg, type: 'status', droneId, displayName };
+      lastStatus.set(droneId, status);
+      broadcastOperators(status);
       break;
+    }
     case 'video_frame':
-      broadcastOperators({ type: 'video_frame', jpegBase64: msg.jpegBase64, ts: msg.ts, droneId });
+      broadcastOperators({ type: 'video_frame', droneId, jpegBase64: msg.jpegBase64, ts: msg.ts });
       break;
     case 'event': {
       const ev = createEvent(String(msg.eventType), 'drone', String(msg.message ?? ''), droneId);
@@ -45,12 +86,23 @@ function handleDroneMessage(droneId: string, raw: string) {
       const ev = createEvent(
         'ALERT_CREATED',
         'drone',
-        `Alerta de ${alertType === 'PERSON' ? 'PERSONA' : 'VEHÍCULO'} generada por ${droneId}`,
+        `Alerta de ${alertType === 'PERSON' ? 'PERSONA' : 'VEHÍCULO'} generada por ${displayName}`,
         droneId,
         alert.id,
       );
       broadcastOperators({ type: 'alert_created', alert });
       broadcastOperators({ type: 'event', event: ev });
+      break;
+    }
+    // El dron se renombró desde la app: no hace falta devolverle el eco
+    case 'set_name': {
+      const name = String(msg.displayName ?? '').trim();
+      if (!name) break;
+      const identity = applyRename(droneId, name, false);
+      if (identity) {
+        const ev = createEvent('DRONE_RENAMED', 'drone', `El dron ${droneId} pasó a llamarse "${name}"`, droneId);
+        broadcastOperators({ type: 'event', event: ev });
+      }
       break;
     }
   }
@@ -68,18 +120,30 @@ export function setupWebSocket(server: Server) {
     }
 
     if (payload.role === 'drone') {
-      drones.add(ws);
-      const ev = createEvent('DRONE_CONNECTED', 'backend', `${payload.sub} conectado al Comando Central`, payload.sub);
+      const droneId = payload.sub;
+      // Una sola conexión por dron: si reconecta, la anterior se descarta
+      drones.get(droneId)?.close(4000, 'Reemplazada por una conexión nueva');
+      drones.set(droneId, ws);
+
+      const name = getDroneIdentity(droneId)?.displayName ?? droneId;
+      const ev = createEvent('DRONE_CONNECTED', 'backend', `${name} conectado al Comando Central`, droneId);
       broadcastOperators({ type: 'event', event: ev });
-      ws.on('message', (data) => handleDroneMessage(payload.sub, data.toString()));
+      broadcastOperators({ type: 'drone_online', drone: droneCard(droneId) });
+
+      ws.on('message', (data) => handleDroneMessage(droneId, data.toString()));
       ws.on('close', () => {
-        drones.delete(ws);
-        const evc = createEvent('DRONE_DISCONNECTED', 'backend', `${payload.sub} desconectado del Comando Central`, payload.sub);
-        broadcastOperators({ type: 'event', event: evc });
+        if (drones.get(droneId) === ws) {
+          drones.delete(droneId);
+          lastStatus.delete(droneId);
+          const evc = createEvent('DRONE_DISCONNECTED', 'backend', `${name} desconectado del Comando Central`, droneId);
+          broadcastOperators({ type: 'event', event: evc });
+          broadcastOperators({ type: 'drone_offline', drone: droneCard(droneId) });
+        }
       });
     } else {
       operators.add(ws);
-      if (lastStatus) ws.send(JSON.stringify(lastStatus));
+      // Estado inicial: el operador pinta el dashboard sin esperar al próximo tick
+      for (const status of lastStatus.values()) ws.send(JSON.stringify(status));
       ws.on('close', () => operators.delete(ws));
     }
   });

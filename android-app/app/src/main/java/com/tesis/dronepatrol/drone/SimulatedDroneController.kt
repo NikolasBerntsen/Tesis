@@ -43,6 +43,9 @@ class SimulatedDroneController : DroneController {
         const val FAILSAFE_TIMEOUT_MS = 6_000L
         const val ARRIVE_THRESHOLD_M = 6.0
         const val METERS_PER_DEG_LAT = 111_320.0
+        // Alcance del enlace RC: a esta distancia de la base la señal ya está al mínimo
+        const val SIGNAL_RANGE_M = 1_200.0
+        const val SIGNAL_MIN_PCT = 10
     }
 
     private enum class Mode { IDLE, FLY_ROUTE, ORBIT, RTH }
@@ -55,6 +58,8 @@ class SimulatedDroneController : DroneController {
     private var loops: Job? = null
 
     private var mode = Mode.IDLE
+    private var homeLat = HOME_LAT
+    private var homeLon = HOME_LON
     private var lat = HOME_LAT
     private var lon = HOME_LON
     private var battery = 100.0
@@ -80,10 +85,24 @@ class SimulatedDroneController : DroneController {
         battery = 24.0
     }
 
+    fun rechargeBattery() {
+        battery = 100.0
+    }
+
+    /** Base real del dron que inició sesión (la simulación arranca y vuelve ahí). */
+    fun setHome(lat: Double, lon: Double) {
+        homeLat = lat
+        homeLon = lon
+        if (mode == Mode.IDLE) {
+            this.lat = lat
+            this.lon = lon
+        }
+    }
+
     override fun connect() {
         if (loops != null) return
-        lat = HOME_LAT
-        lon = HOME_LON
+        lat = homeLat
+        lon = homeLon
         battery = 100.0
         mode = Mode.IDLE
         loops = scope.launch {
@@ -145,7 +164,7 @@ class SimulatedDroneController : DroneController {
                     drainBattery()
                 }
                 Mode.RTH -> {
-                    if (moveToward(HOME_LAT, HOME_LON, dt)) {
+                    if (moveToward(homeLat, homeLon, dt)) {
                         mode = Mode.IDLE
                         emitEvent(FlightEvent.ArrivedHome)
                     }
@@ -155,7 +174,7 @@ class SimulatedDroneController : DroneController {
             }
 
             if (!signalLost) {
-                telemetry.tryEmit(Telemetry(lat, lon, 40.0, battery, System.currentTimeMillis()))
+                telemetry.tryEmit(Telemetry(lat, lon, 40.0, battery, signalPct(), System.currentTimeMillis()))
             }
         }
     }
@@ -173,6 +192,14 @@ class SimulatedDroneController : DroneController {
     }
 
     private fun metersPerDegLon() = METERS_PER_DEG_LAT * cos(Math.toRadians(lat))
+
+    /** La señal se degrada de forma lineal con la distancia a la base. */
+    private fun signalPct(): Int {
+        val dy = (lat - homeLat) * METERS_PER_DEG_LAT
+        val dx = (lon - homeLon) * metersPerDegLon()
+        val pct = 100 * (1 - hypot(dx, dy) / SIGNAL_RANGE_M)
+        return pct.toInt().coerceIn(SIGNAL_MIN_PCT, 100)
+    }
 
     private fun drainBattery() {
         battery = (battery - BATTERY_DRAIN_PER_TICK).coerceAtLeast(0.0)
@@ -205,7 +232,7 @@ class SimulatedDroneController : DroneController {
             val oy = 180f + (120 * cos(t * 0.4)).toFloat()
             c.drawRect(ox, oy, ox + 14f, oy + 28f, paint)
             paint.textSize = 18f
-            c.drawText("DRONE SIM drone1  ${timeFmt.format(Date())}", 12f, 24f, paint)
+            c.drawText("DRONE SIM  ${timeFmt.format(Date())}", 12f, 24f, paint)
             c.drawText("bat %.0f%%  %s".format(battery, mode.name), 12f, 48f, paint)
             c.drawText("pos %.5f, %.5f".format(lat, lon), 12f, 348f, paint)
 

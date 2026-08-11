@@ -136,7 +136,9 @@ class DjiDroneController : DroneController {
 
     private fun emitTelemetry() {
         if (!lastLat.isNaN()) {
-            telemetry.tryEmit(Telemetry(lastLat, lastLon, lastAlt, lastBattery, System.currentTimeMillis()))
+            // TODO(hardware): leer la intensidad real del enlace con
+            // KeyLinkQuality / KeySignalQuality en lugar de asumir 100.
+            telemetry.tryEmit(Telemetry(lastLat, lastLon, lastAlt, lastBattery, 100, System.currentTimeMillis()))
         }
     }
 
