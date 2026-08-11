@@ -99,7 +99,6 @@ button.ghost { background: transparent; }
   display: grid;
   grid-template-columns: minmax(340px, 5fr) 7fr;
   gap: 16px;
-  padding: 16px 20px;
   align-items: start;
 }
 @media (max-width: 900px) {
@@ -196,3 +195,151 @@ button.dismiss { background: #3a2626; border-color: var(--bad); }
 }
 .log-row:last-child { border-bottom: none; }
 .event-type { font-weight: 600; }
+
+/* ---- Navegación y vistas ---- */
+.dashboard-main,
+.detail-main {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 20px;
+}
+
+.view-switch { display: flex; gap: 8px; }
+.view-switch button.active {
+  background: #223d5c;
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.detail-head { display: flex; align-items: center; gap: 16px; }
+.detail-head h2 { margin: 0; font-size: 17px; }
+
+/* ---- Grilla de cámaras ---- */
+.camera-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+.camera-tile {
+  position: relative;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  cursor: pointer;
+}
+.camera-tile:hover { border-color: var(--accent); }
+.tile-info { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.tile-row { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+.tile-alerts {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  background: var(--bad);
+  color: #fff;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+}
+
+/* ---- Nombre editable ---- */
+.editable-name { display: inline-flex; align-items: center; gap: 6px; }
+.editable-name input {
+  font: inherit;
+  width: 130px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: #0f151c;
+  color: var(--text);
+}
+button.icon {
+  padding: 2px 7px;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 5px;
+}
+button.icon:hover { color: var(--text); }
+
+/* ---- Mapa ---- */
+.map {
+  height: 420px;
+  border-radius: 8px;
+  background: #0f151c;
+}
+.leaflet-container { font: inherit; }
+
+/* Marcador del dron: globo rojo con las iniciales del nombre */
+.drone-pin {
+  width: 28px;
+  height: 28px;
+  background: #e03131;
+  border: 2px solid #fff;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  display: grid;
+  place-items: center;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+.drone-pin span {
+  transform: rotate(45deg);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+/* Marcador de la base: cuadrado azul */
+.base-square {
+  width: 14px;
+  height: 14px;
+  background: #1c7ed6;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+.distance-tooltip {
+  background: #e03131;
+  border: none;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 6px;
+}
+.distance-tooltip::before { display: none; }
+
+/* Nodos de patrullaje en el mapa de detalle */
+.wp-form {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.wp-form .wp-alias {
+  font: inherit;
+  width: 150px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.wp-form .wp-save {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+/* Alertas pendientes: visibles desde cualquier vista del dashboard */
+.alert-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  border: 1px solid var(--bad);
+  border-radius: 8px;
+  background: #2a1a1a;
+}
+.alert-strip > strong { color: var(--bad); }
+.alert-chip {
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 999px;
+}

@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">Drone Patrol</string>
+    <string name="abrir_registro">Abrir el registro local</string>
+    <string name="cerrar_registro">Cerrar el registro local</string>
 </resources>

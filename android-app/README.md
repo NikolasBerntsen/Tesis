@@ -1,8 +1,12 @@
 # Drone Patrol — App de control (Android)
 
 App que corre en el dispositivo Android conectado al **DJI RC-N2** y ejecuta la
-lógica de patrullaje. La interfaz es mínima a propósito: el foco de esta
-entrega es la lógica (`patrol/PatrolManager.kt`).
+lógica de patrullaje (`patrol/PatrolManager.kt`).
+
+Tiene dos pantallas: una de **login**, donde se cargan las direcciones y la
+cuenta del dron y se elige el modo de operación, y la **principal**, con el
+estado del dron, la ruta a patrullar y —solo en modo prueba— los controles de
+simulación. El registro local de eventos vive en el menú lateral.
 
 ## Flavors
 
@@ -34,10 +38,15 @@ solo cambia la implementación de `DroneController` que inyecta `ControllerFacto
 2. Correr en un emulador. La única variante disponible es `mockDebug`, así que no
    hay nada que elegir.
 3. Con el backend y el detection-mock levantados (ver README raíz), en la app:
-   - URLs por defecto (`10.0.2.2` = localhost del host desde el emulador) → **Conectar**.
+   - URLs por defecto (`10.0.2.2` = localhost del host desde el emulador), usuario
+     y contraseña del dron (`drone1` / `drone123`) → **Iniciar sesión**.
+   - Elegir **Modo prueba** (muestra los controles de simulación) o **Despliegue**.
+     El modo viaja en el campo `mode` de cada `status`.
    - Elegir ruta → **Comenzar patrullaje**.
-   - El switch *Simular pérdida de señal* y el botón *Forzar batería baja*
-     disparan los flujos de failsafe.
+   - *Forzar batería baja*, *Recargar batería* y el switch *Simular pérdida de
+     señal* disparan los flujos de failsafe.
+   - El menú ⋮ tiene **Renombrar dron**; el nombre también se actualiza solo si
+     lo cambia el operador desde el Comando Central.
 
 En un teléfono físico, reemplazar `10.0.2.2` por la IP LAN de la laptop.
 
@@ -67,15 +76,17 @@ KeyManager y estructura la navegación. Antes de volar hace falta:
 ./gradlew testMockDebugUnitTest
 ```
 
-Incluye un smoke test de arranque con Robolectric que crea `MainActivity` en las
-APIs 26, 30 y 34. Si algo revienta al abrir la app, el test falla con el stack
-trace en vez de dejarte un cierre silencioso en el dispositivo.
+Incluye un smoke test de arranque con Robolectric que crea `LoginActivity` (la
+pantalla inicial) y `MainActivity` en las APIs 26, 30 y 34. Si algo revienta al
+abrir la app, el test falla con el stack trace en vez de dejarte un cierre
+silencioso en el dispositivo.
 
 ## Estructura
 
 ```
 app/src/main/java/com/tesis/dronepatrol/
-├── MainActivity.kt          UI mínima: conexión, selección de ruta, simulación
+├── LoginActivity.kt         Login con la cuenta del dron + elección de modo
+├── MainActivity.kt          Estado, selección de ruta, simulación y registro
 ├── model/Models.kt          Waypoint, PatrolRoute, Telemetry, PatrolState
 ├── drone/DroneController.kt Interfaz que abstrae el dron
 ├── drone/SimulatedDroneController.kt

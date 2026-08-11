@@ -1,75 +1,92 @@
-import { useEffect, useState } from 'react';
-import { api, getUsername } from '../api';
-import type { Alert, DroneStatus, EventRow } from '../types';
-import { useWebSocket } from '../useWebSocket';
-import AlertsPanel from './AlertsPanel';
-import DroneStatusCard from './DroneStatusCard';
-import EventLog from './EventLog';
-import LiveVideo from './LiveVideo';
+import { useMemo, useState } from 'react';
+import { time } from '../format';
+import type { Alert, Drone, DroneStatus } from '../types';
+import CameraTile from './CameraTile';
+import DronesMap, { type MapItem } from './DronesMap';
 
-const MAX_EVENTS = 300;
+const TIPO_ALERTA = { PERSON: 'PERSONA', VEHICLE: 'VEHÍCULO' } as const;
 
-export default function Dashboard({ onLogout }: { onLogout: () => void }) {
-  const [status, setStatus] = useState<DroneStatus | null>(null);
-  const [frame, setFrame] = useState<string | null>(null);
-  const [alerts, setAlerts] = useState<Alert[]>([]);
-  const [events, setEvents] = useState<EventRow[]>([]);
+export default function Dashboard({
+  drones,
+  statuses,
+  frames,
+  alerts,
+  pendingAlerts,
+  onOpenDrone,
+  onRename,
+}: {
+  drones: Drone[];
+  statuses: Record<string, DroneStatus>;
+  frames: Record<string, string>;
+  alerts: Alert[];
+  pendingAlerts: Record<string, number>;
+  onOpenDrone: (droneId: string) => void;
+  onRename: (droneId: string, displayName: string) => void;
+}) {
+  const [view, setView] = useState<'cameras' | 'map'>('cameras');
+  const active = drones.filter((d) => d.online);
 
-  useEffect(() => {
-    api<Alert[]>('/alerts').then(setAlerts).catch(console.error);
-    api<EventRow[]>('/events').then(setEvents).catch(console.error);
-  }, []);
+  const items = useMemo<MapItem[]>(
+    () =>
+      drones.map((d) => ({
+        droneId: d.droneId,
+        displayName: d.displayName,
+        base: d.base,
+        status: statuses[d.droneId] ?? null,
+      })),
+    [drones, statuses],
+  );
 
-  const connected = useWebSocket((msg) => {
-    switch (msg.type) {
-      case 'status':
-        setStatus(msg);
-        break;
-      case 'video_frame':
-        setFrame(msg.jpegBase64);
-        break;
-      case 'event':
-        setEvents((prev) => [msg.event, ...prev].slice(0, MAX_EVENTS));
-        break;
-      case 'alert_created':
-        setAlerts((prev) => [msg.alert, ...prev]);
-        break;
-      case 'alert_updated':
-        setAlerts((prev) => prev.map((a) => (a.id === msg.alert.id ? msg.alert : a)));
-        break;
-    }
-  });
-
-  async function decide(id: number, decision: 'VALIDATED' | 'DISMISSED') {
-    await api(`/alerts/${id}/decision`, { method: 'POST', body: JSON.stringify({ decision }) });
-  }
-
-  async function resumePatrol() {
-    await api('/drone/resume', { method: 'POST' });
-  }
+  // Las alertas se atienden en la vista de detalle, pero el operador tiene que
+  // enterarse sin importar en qué vista del dashboard esté parado.
+  const pendientes = alerts.filter((a) => a.status === 'PENDING');
+  const nombre = (droneId: string | null) =>
+    drones.find((d) => d.droneId === droneId)?.displayName ?? droneId ?? '—';
 
   return (
-    <div className="dashboard">
-      <header className="topbar">
-        <h1>Comando Central</h1>
-        <div className="topbar-right">
-          <span className={connected ? 'conn ok' : 'conn bad'}>{connected ? '● conectado' : '● sin conexión'}</span>
-          <span className="username">{getUsername()}</span>
-          <button className="ghost" onClick={onLogout}>
-            Salir
-          </button>
+    <main className="dashboard-main">
+      {pendientes.length > 0 && (
+        <div className="alert-strip">
+          <strong>{pendientes.length} alerta(s) sin atender</strong>
+          {pendientes.slice(0, 4).map((a) => (
+            <button key={a.id} className="alert-chip" onClick={() => a.drone_id && onOpenDrone(a.drone_id)}>
+              {TIPO_ALERTA[a.type]} · {nombre(a.drone_id)} · {time(a.created_at)}
+            </button>
+          ))}
         </div>
-      </header>
-      <main className="grid">
-        <section className="col">
-          <DroneStatusCard status={status} onResumePatrol={resumePatrol} />
-          <AlertsPanel alerts={alerts} onDecide={decide} />
-        </section>
-        <section className="col">
-          <LiveVideo frame={frame} />
-          <EventLog events={events} />
-        </section>
-      </main>
-    </div>
+      )}
+      <div className="view-switch">
+        <button className={view === 'cameras' ? 'active' : ''} onClick={() => setView('cameras')}>
+          Cámaras
+        </button>
+        <button className={view === 'map' ? 'active' : ''} onClick={() => setView('map')}>
+          Mapa
+        </button>
+      </div>
+
+      {view === 'cameras' ? (
+        active.length === 0 ? (
+          <p className="muted">No hay drones activos.</p>
+        ) : (
+          <div className="camera-grid">
+            {active.map((d) => (
+              <CameraTile
+                key={d.droneId}
+                drone={d}
+                status={statuses[d.droneId] ?? null}
+                frame={frames[d.droneId] ?? null}
+                pendingAlerts={pendingAlerts[d.droneId] ?? 0}
+                onOpen={() => onOpenDrone(d.droneId)}
+                onRename={(name) => onRename(d.droneId, name)}
+              />
+            ))}
+          </div>
+        )
+      ) : (
+        <div className="card">
+          <DronesMap items={items} />
+        </div>
+      )}
+    </main>
   );
 }

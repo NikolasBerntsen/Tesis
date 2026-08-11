@@ -28,6 +28,8 @@ class PatrolManager(
     private val commandCenter: CommandCenterClient,
     private val detection: DetectionClient,
     private val scope: CoroutineScope,
+    /** Modo elegido tras iniciar sesión: "TEST" o "DEPLOY" (viaja en cada status). */
+    private val mode: String,
 ) {
     private companion object {
         // Sin telemetría durante este tiempo => consideramos perdido el enlace RC
@@ -43,6 +45,10 @@ class PatrolManager(
     private val _signalOk = MutableStateFlow(true)
     val signalOk: StateFlow<Boolean> = _signalOk
 
+    /** Intensidad del enlace RC 0..100; 0 mientras la señal está perdida. */
+    private val _signalPct = MutableStateFlow(100)
+    val signalPct: StateFlow<Int> = _signalPct
+
     private val _localLog = MutableSharedFlow<String>(replay = 20, extraBufferCapacity = 16)
     val localLog: SharedFlow<String> = _localLog
 
@@ -53,7 +59,11 @@ class PatrolManager(
     private var lastTelemetryAt = 0L
     private var lastFrame: ByteArray? = null
 
+    private var started = false
+
     fun start() {
+        if (started) return
+        started = true
         scope.launch { controller.telemetry.collect { onTelemetry(it) } }
         scope.launch { controller.flightEvents.collect { onFlightEvent(it) } }
         scope.launch {
@@ -94,6 +104,7 @@ class PatrolManager(
             val silent = lastTelemetryAt > 0 && System.currentTimeMillis() - lastTelemetryAt > SIGNAL_TIMEOUT_MS
             if (flying && silent) {
                 _signalOk.value = false
+                _signalPct.value = 0
                 resumeWaypoint = lastReachedWaypoint
                 _state.value = PatrolState.RETURNING_HOME_SIGNAL
                 report("SIGNAL_LOST", "Se perdió la señal con el dron (sin telemetría hace ${SIGNAL_TIMEOUT_MS / 1000} s)")
@@ -107,6 +118,7 @@ class PatrolManager(
         lastTelemetry = t
         lastTelemetryAt = System.currentTimeMillis()
         _signalOk.value = true
+        _signalPct.value = t.signalPct
 
         if (recovering) {
             // Requisito: al recuperar la señal, el patrullaje continúa donde quedó
@@ -127,6 +139,15 @@ class PatrolManager(
             controller.returnHome()
             report("RTH_LOW_BATTERY", "Batería al ${t.batteryPct.toInt()}%: el dron vuelve a la base")
         }
+    }
+
+    /**
+     * Se cambió/recargó la batería. Si el dron había aterrizado por batería baja,
+     * vuelve a quedar disponible para arrancar un patrullaje.
+     */
+    fun onBatteryRecharged() {
+        if (_state.value == PatrolState.LANDED) _state.value = PatrolState.IDLE
+        report("BATTERY_RECHARGED", "Batería recargada al 100%: el dron queda listo para volar")
     }
 
     private suspend fun onFlightEvent(e: FlightEvent) {
@@ -190,7 +211,10 @@ class PatrolManager(
                 lon = t.lon,
                 routeId = route?.id,
                 waypointIndex = lastReachedWaypoint,
+                waypointTotal = route?.waypoints?.size ?: 0,
                 signalOk = _signalOk.value,
+                signalPct = _signalPct.value,
+                mode = mode,
             )
         }
     }

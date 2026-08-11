@@ -29,9 +29,17 @@ class DetectionClient(private val scope: CoroutineScope) {
     private var wantConnected = false
 
     fun connect(laptopUrl: String) {
+        if (wantConnected) return
         url = laptopUrl.trimEnd('/') + "/phone"
         wantConnected = true
         open()
+    }
+
+    fun disconnect() {
+        wantConnected = false
+        ws?.close(1000, null)
+        ws = null
+        connected.value = false
     }
 
     private fun open() {

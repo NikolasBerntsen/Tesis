@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { clearSession, getToken } from './api';
-import Dashboard from './components/Dashboard';
+import Console from './components/Console';
 import LoginForm from './components/LoginForm';
 
 export default function App() {
@@ -10,7 +10,7 @@ export default function App() {
     return <LoginForm onLogin={() => setAuthenticated(true)} />;
   }
   return (
-    <Dashboard
+    <Console
       onLogout={() => {
         clearSession();
         setAuthenticated(false);

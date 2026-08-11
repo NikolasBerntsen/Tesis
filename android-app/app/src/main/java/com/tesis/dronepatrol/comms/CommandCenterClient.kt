@@ -1,5 +1,7 @@
 package com.tesis.dronepatrol.comms
 
+import com.tesis.dronepatrol.model.DroneBase
+import com.tesis.dronepatrol.model.DroneProfile
 import com.tesis.dronepatrol.model.PatrolRoute
 import com.tesis.dronepatrol.model.Waypoint
 import java.util.concurrent.TimeUnit
@@ -27,6 +29,8 @@ class CommandCenterClient(private val scope: CoroutineScope) {
 
     var onAlertDecision: ((decision: String, decidedBy: String) -> Unit)? = null
     var onResumePatrol: (() -> Unit)? = null
+    /** El Comando Central renombró al dron. */
+    var onRenamed: ((displayName: String) -> Unit)? = null
     val connected = MutableStateFlow(false)
 
     private val http = OkHttpClient.Builder()
@@ -39,7 +43,8 @@ class CommandCenterClient(private val scope: CoroutineScope) {
     private var ws: WebSocket? = null
     private var wantConnected = false
 
-    suspend fun loginAndConnect(baseUrl: String, username: String, password: String) {
+    /** Solo autentica y guarda el JWT; el WebSocket se abre aparte con [connect]. */
+    suspend fun login(baseUrl: String, username: String, password: String) {
         this.baseUrl = baseUrl.trimEnd('/')
         token = withContext(Dispatchers.IO) {
             val body = JSONObject().put("username", username).put("password", password)
@@ -50,12 +55,45 @@ class CommandCenterClient(private val scope: CoroutineScope) {
                     .build(),
             ).execute()
             res.use {
+                if (it.code == 401) error("Usuario o contraseña incorrectos")
                 if (!it.isSuccessful) error("Login falló: HTTP ${it.code}")
                 JSONObject(it.body!!.string()).getString("token")
             }
         }
+    }
+
+    fun connect() {
+        if (wantConnected) return
         wantConnected = true
         openWebSocket()
+    }
+
+    fun disconnect() {
+        wantConnected = false
+        ws?.close(1000, null)
+        ws = null
+        connected.value = false
+    }
+
+    /** Ficha del dron autenticado: nombre visible y base a la que vuelve. */
+    suspend fun fetchProfile(): DroneProfile = withContext(Dispatchers.IO) {
+        val res = http.newCall(
+            Request.Builder()
+                .url("$baseUrl/api/me")
+                .header("Authorization", "Bearer $token")
+                .build(),
+        ).execute()
+        res.use {
+            if (!it.isSuccessful) error("No se pudo leer la ficha del dron: HTTP ${it.code}")
+            val o = JSONObject(it.body!!.string())
+            if (o.optString("role") != "drone") error("La cuenta no es de un dron")
+            val base = o.optJSONObject("base")
+            DroneProfile(
+                droneId = o.getString("droneId"),
+                displayName = o.getString("displayName"),
+                base = base?.let { b -> DroneBase(b.getString("name"), b.getDouble("lat"), b.getDouble("lon")) },
+            )
+        }
     }
 
     suspend fun fetchRoutes(): List<PatrolRoute> = withContext(Dispatchers.IO) {
@@ -100,6 +138,7 @@ class CommandCenterClient(private val scope: CoroutineScope) {
                             msg.optString("decidedBy"),
                         )
                         "resume_patrol" -> onResumePatrol?.invoke()
+                        "renamed" -> onRenamed?.invoke(msg.optString("displayName"))
                     }
                 }
 
@@ -135,7 +174,10 @@ class CommandCenterClient(private val scope: CoroutineScope) {
         lon: Double,
         routeId: Int?,
         waypointIndex: Int,
+        waypointTotal: Int,
         signalOk: Boolean,
+        signalPct: Int,
+        mode: String,
     ) = send(
         JSONObject()
             .put("type", "status")
@@ -145,8 +187,14 @@ class CommandCenterClient(private val scope: CoroutineScope) {
             .put("lon", lon)
             .put("routeId", routeId ?: JSONObject.NULL)
             .put("waypointIndex", waypointIndex)
-            .put("signal", if (signalOk) "OK" else "LOST"),
+            .put("waypointTotal", waypointTotal)
+            .put("signal", if (signalOk) "OK" else "LOST")
+            .put("signalPct", signalPct)
+            .put("mode", mode),
     )
+
+    fun sendSetName(displayName: String) =
+        send(JSONObject().put("type", "set_name").put("displayName", displayName))
 
     fun sendEvent(eventType: String, message: String) =
         send(JSONObject().put("type", "event").put("eventType", eventType).put("message", message))

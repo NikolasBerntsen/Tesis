@@ -8,16 +8,20 @@
     <application
         android:label="@string/app_name"
         android:icon="@android:drawable/ic_menu_mylocation"
-        android:theme="@style/Theme.AppCompat.DayNight"
+        android:theme="@style/Theme.DronePatrol"
         android:usesCleartextTraffic="true"
         tools:replace="android:usesCleartextTraffic">
         <activity
-            android:name=".MainActivity"
+            android:name=".LoginActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="false" />
     </application>
 </manifest>

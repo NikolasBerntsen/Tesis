@@ -1,10 +1,7 @@
+import { time } from '../format';
 import type { Alert } from '../types';
 
 const TYPE_LABELS = { PERSON: 'PERSONA', VEHICLE: 'VEHÍCULO' } as const;
-
-function time(ts: string) {
-  return new Date(ts).toLocaleTimeString();
-}
 
 export default function AlertsPanel({
   alerts,

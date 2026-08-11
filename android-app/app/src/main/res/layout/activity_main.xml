@@ -1,126 +1,277 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.drawerlayout.widget.DrawerLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/drawerLayout"
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
+    <!-- Contenido -->
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <com.google.android.material.appbar.AppBarLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <com.google.android.material.appbar.MaterialToolbar
+                android:id="@+id/toolbar"
+                android:layout_width="match_parent"
+                android:layout_height="?attr/actionBarSize" />
+        </com.google.android.material.appbar.AppBarLayout>
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="match_parent">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <!-- Estado, batería y señal -->
+                <com.google.android.material.card.MaterialCardView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="16dp">
+
+                        <TextView
+                            style="@style/TituloTarjeta"
+                            android:text="ESTADO" />
+
+                        <TextView
+                            android:id="@+id/txtState"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:text="En base"
+                            android:textSize="22sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/txtConnStatus"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Conectando…"
+                            android:textSize="13sp" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnRetry"
+                            style="@style/Widget.Material3.Button.TextButton"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Reintentar"
+                            android:visibility="gone" />
+
+                        <View
+                            android:layout_width="match_parent"
+                            android:layout_height="1dp"
+                            android:layout_marginTop="12dp"
+                            android:layout_marginBottom="12dp"
+                            android:background="?attr/colorOutlineVariant" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="Batería" />
+
+                            <TextView
+                                android:id="@+id/txtBattery"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="—"
+                                android:textStyle="bold" />
+                        </LinearLayout>
+
+                        <com.google.android.material.progressindicator.LinearProgressIndicator
+                            android:id="@+id/progressBattery"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:max="100"
+                            app:trackCornerRadius="4dp"
+                            app:trackThickness="8dp" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="14dp"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="Señal RC" />
+
+                            <TextView
+                                android:id="@+id/txtSignal"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="—"
+                                android:textStyle="bold" />
+                        </LinearLayout>
+
+                        <com.google.android.material.progressindicator.LinearProgressIndicator
+                            android:id="@+id/progressSignal"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:max="100"
+                            app:trackCornerRadius="4dp"
+                            app:trackThickness="8dp" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <!-- Patrullaje -->
+                <com.google.android.material.card.MaterialCardView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="16dp">
+
+                        <TextView
+                            style="@style/TituloTarjeta"
+                            android:text="PATRULLAJE" />
+
+                        <com.google.android.material.textfield.TextInputLayout
+                            android:id="@+id/layoutRoutes"
+                            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:hint="Ruta de patrullaje">
+
+                            <com.google.android.material.textfield.MaterialAutoCompleteTextView
+                                android:id="@+id/dropdownRoutes"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:inputType="none"
+                                android:text="Sin rutas cargadas" />
+                        </com.google.android.material.textfield.TextInputLayout>
+
+                        <TextView
+                            android:id="@+id/txtRouteInfo"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:textSize="13sp" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnStartPatrol"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:enabled="false"
+                            android:text="Comenzar patrullaje" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <!-- Simulación: solo en modo prueba y con el dron simulado -->
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/cardSim"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="16dp">
+
+                        <TextView
+                            style="@style/TituloTarjeta"
+                            android:text="SIMULACIÓN" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Controles para forzar las situaciones de la demo."
+                            android:textSize="13sp" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnLowBattery"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:text="Forzar batería baja" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnRecharge"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:text="Recargar batería" />
+
+                        <!-- Declarado explícito: con tema Material el inflador cambia
+                             <Switch> por SwitchMaterial y ViewBinding no castea -->
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/switchSignalLoss"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp"
+                            android:text="Simular pérdida de señal" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+            </LinearLayout>
+        </ScrollView>
+    </LinearLayout>
+
+    <!-- Menú lateral: registro local -->
+    <LinearLayout
+        android:layout_width="300dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="start"
+        android:background="?attr/colorSurface"
         android:orientation="vertical"
         android:padding="16dp">
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Conexión"
-            android:textStyle="bold" />
-
-        <EditText
-            android:id="@+id/editBackendUrl"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="URL del Comando Central"
-            android:inputType="textUri"
-            android:text="http://10.0.2.2:4000" />
-
-        <EditText
-            android:id="@+id/editLaptopUrl"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="URL del software de detección (laptop)"
-            android:inputType="textUri"
-            android:text="ws://10.0.2.2:8765" />
-
-        <Button
-            android:id="@+id/btnConnect"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Conectar" />
-
-        <TextView
-            android:id="@+id/txtConnStatus"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Desconectado" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="Patrullaje"
-            android:textStyle="bold" />
-
-        <Spinner
-            android:id="@+id/spinnerRoutes"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content" />
-
-        <Button
-            android:id="@+id/btnStartPatrol"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:enabled="false"
-            android:text="Comenzar patrullaje" />
-
-        <TextView
-            android:id="@+id/txtState"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="Estado: en base"
-            android:textSize="18sp"
+            android:text="Registro local"
+            android:textSize="20sp"
             android:textStyle="bold" />
 
         <TextView
-            android:id="@+id/txtBattery"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Batería: —" />
+            android:layout_marginBottom="8dp"
+            android:text="Últimos eventos de este dron"
+            android:textSize="13sp" />
 
-        <TextView
-            android:id="@+id/txtSignal"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Señal RC: —" />
-
-        <LinearLayout
-            android:id="@+id/sectionSim"
+        <ScrollView
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:orientation="vertical">
+            android:layout_height="match_parent">
 
             <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Simulación (solo build mock)"
-                android:textStyle="bold" />
-
-            <Switch
-                android:id="@+id/switchSignalLoss"
+                android:id="@+id/txtLocalLog"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Simular pérdida de señal RC" />
-
-            <Button
-                android:id="@+id/btnLowBattery"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Forzar batería baja" />
-        </LinearLayout>
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="Registro local"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/txtLocalLog"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:fontFamily="monospace"
-            android:textSize="11sp" />
+                android:fontFamily="monospace"
+                android:text="Sin eventos todavía."
+                android:textSize="11sp" />
+        </ScrollView>
     </LinearLayout>
-</ScrollView>
+</androidx.drawerlayout.widget.DrawerLayout>
