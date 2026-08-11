@@ -84,8 +84,10 @@ banner() {
   echo "  Detección (visor)      ${BOLD}http://localhost:8765${RESET}"
   echo
   echo "  ${BOLD}Usuarios de demo${RESET}"
-  echo "    operador / operador123   (consola web)"
-  echo "    drone1   / drone123      (usado por la app Android)"
+  echo "    operador   / operador123     (consola web)"
+  echo "    supervisor / supervisor123   (gestiona operadores)"
+  echo "    admin      / admin123        (usuarios y registro)"
+  echo "    drone1/2/3 / drone123        (usados por la app Android)"
   echo
   echo "  ${BOLD}En la app Android${RESET} (Android Studio, variante mockDebug)"
   echo "    Emulador  → Comando Central: http://10.0.2.2:4000"
