@@ -21,8 +21,12 @@ export function makeStatus(over: Partial<DroneStatus> = {}): DroneStatus {
 
 export function makeDrone(over: Partial<Drone> = {}): Drone {
   return {
+    hash: 'd1',
     droneId: 'd1',
     displayName: 'Alfa',
+    model: 'DJI Mini 3',
+    active: true,
+    deletedAt: null,
     base: { name: 'Base Norte', lat: -34.6, lon: -58.4 },
     online: true,
     lastStatus: null,
@@ -81,6 +85,7 @@ export function makeUser(over: Partial<UserView> = {}): UserView {
     role: 'operator',
     active: true,
     canControl: true,
+    deletedAt: null,
     ...over,
   };
 }

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { clearSession, getToken } from './api';
+import { cerrarSesion, clearSession, getToken } from './api';
 import Console from './components/Console';
 import LoginForm from './components/LoginForm';
 
@@ -11,7 +11,11 @@ export default function App() {
   }
   return (
     <Console
-      onLogout={() => {
+      onLogout={async () => {
+        // El aviso va primero porque necesita el token: es lo que deja el
+        // FIELD_SESSION_CLOSED del operador de campo. Que no llegue no puede
+        // dejar a nadie encerrado en una consola de la que quiso salir.
+        await cerrarSesion().catch(() => {});
         clearSession();
         setAuthenticated(false);
       }}
