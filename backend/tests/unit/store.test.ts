@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { db } from '../../src/db';
 import { limpiarBase } from '../helpers';
 import {
+  createBase, updateBase,
   toUserView,
   toDroneAssetView,
   getUser,
@@ -169,11 +170,14 @@ describe('store — usuarios', () => {
 
 describe('store — drones como activos', () => {
   it('createDrone genera un hash de 32 hexa y devuelve la vista completa', () => {
-    const d = createDrone({ displayName: 'Alfa', model: 'DJI Mini 3', base: { name: 'Base Norte', lat: -34.85, lon: -56.2 } }, 'campo');
+    const norte = createBase({ name: 'Base Norte', lat: -34.85, lon: -56.2 }, 'supervisor');
+    const d = createDrone({ displayName: 'Alfa', model: 'DJI Mini 3', inventoryCode: 'INV-1', baseId: norte.id }, 'campo');
     expect(d.hash).toMatch(/^[0-9a-f]{32}$/);
     expect(d.displayName).toBe('Alfa');
     expect(d.model).toBe('DJI Mini 3');
     expect(d.active).toBe(true);
+    expect(d.inventoryCode).toBe('INV-1');
+    expect(d.baseId).toBe(norte.id);
     expect(d.base).toEqual({ name: 'Base Norte', lat: -34.85, lon: -56.2 });
     expect(d.createdBy).toBe('campo');
     expect(d.deletedAt).toBeNull();
@@ -182,7 +186,9 @@ describe('store — drones como activos', () => {
     const otro = createDrone({ displayName: 'Bravo' }, 'campo');
     expect(otro.hash).not.toBe(d.hash);
     expect(otro.model).toBe('');
+    expect(otro.inventoryCode).toBe('');
     expect(otro.base).toBeNull();
+    expect(otro.baseId).toBeNull();
   });
 
   it('toDroneAssetView deja la base en null si falta lat o lon', () => {
@@ -191,7 +197,9 @@ describe('store — drones como activos', () => {
       hash: 'abc',
       display_name: 'X',
       model: '',
+      inventory_code: '',
       active: 0,
+      base_id: null,
       base_name: 'Base Norte',
       base_lat: -34.85,
       base_lon: null,
@@ -218,7 +226,8 @@ describe('store — drones como activos', () => {
   });
 
   it('updateDrone aplica solo lo pedido y devuelve antes/después', () => {
-    const d = createDrone({ displayName: 'Alfa', model: 'M1', base: { name: 'Norte', lat: 1, lon: 2 } }, 'campo');
+    const norte = createBase({ name: 'Norte', lat: 1, lon: 2 }, 'supervisor');
+    const d = createDrone({ displayName: 'Alfa', model: 'M1', baseId: norte.id }, 'campo');
     const r = updateDrone(d.hash, { displayName: 'Alfa-2' });
     expect(r?.before.displayName).toBe('Alfa');
     expect(r?.after.displayName).toBe('Alfa-2');
@@ -230,10 +239,15 @@ describe('store — drones como activos', () => {
     expect(updateDrone(d.hash, { model: 'M2' })?.after.model).toBe('M2');
   });
 
-  it('updateDrone con base:null la borra y con un objeto la reemplaza', () => {
-    const d = createDrone({ displayName: 'Alfa', base: { name: 'Norte', lat: 1, lon: 2 } }, 'campo');
-    expect(updateDrone(d.hash, { base: { name: 'Sur', lat: 3, lon: 4 } })?.after.base).toEqual({ name: 'Sur', lat: 3, lon: 4 });
-    expect(updateDrone(d.hash, { base: null })?.after.base).toBeNull();
+  it('updateDrone con baseId:null desasigna la base y con otro id la reemplaza', () => {
+    const norte = createBase({ name: 'Norte', lat: 1, lon: 2 }, 'supervisor');
+    const sur = createBase({ name: 'Sur', lat: 3, lon: 4 }, 'supervisor');
+    const d = createDrone({ displayName: 'Alfa', baseId: norte.id }, 'campo');
+    expect(updateDrone(d.hash, { baseId: sur.id })?.after.base).toEqual({ name: 'Sur', lat: 3, lon: 4 });
+    expect(updateDrone(d.hash, { baseId: null })?.after.base).toBeNull();
+    // renombrar la base se refleja en el dron: la referencia es viva, no una copia
+    updateBase(sur.id, { name: 'Sur Renombrada' });
+    expect(updateDrone(d.hash, { baseId: sur.id })?.after.base?.name).toBe('Sur Renombrada');
   });
 
   it('updateDrone y renameDrone no tocan drones borrados ni inexistentes', () => {
@@ -260,7 +274,8 @@ describe('store — drones como activos', () => {
   });
 
   it('getDroneIdentity excluye borrados pero NO inactivos', () => {
-    const activo = createDrone({ displayName: 'Alfa', base: { name: 'Base Norte', lat: -34.85, lon: -56.2 } }, 'campo');
+    const norte = createBase({ name: 'Base Norte', lat: -34.85, lon: -56.2 }, 'supervisor');
+    const activo = createDrone({ displayName: 'Alfa', baseId: norte.id }, 'campo');
     const inactivo = createDrone({ displayName: 'Bravo' }, 'campo');
     const borrado = createDrone({ displayName: 'Charlie' }, 'campo');
     updateDrone(inactivo.hash, { active: false });

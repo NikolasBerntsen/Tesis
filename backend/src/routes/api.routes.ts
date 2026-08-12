@@ -2,10 +2,10 @@ import bcrypt from 'bcryptjs';
 import { Router } from 'express';
 import { ROLE_RANK, requireAuth, requireRoles, signDroneToken, type AuthedRequest } from '../auth';
 import {
-  createDrone, createLog, createUser, decideAlert, getAlert, getDrone, getDroneIdentity, getRoute, getRoutes,
+  contarDronesEnBase, createBase, createDrone, createLog, createUser, getBase, listBases, restoreBase, softDeleteBase, updateBase, decideAlert, getAlert, getDrone, getDroneIdentity, getRoute, getRoutes,
   getUser, listAlerts, listEvents, listLogs, listUsers, restoreDrone, restoreUser, setWaypointLabel,
   softDeleteDrone, softDeleteUser, updateDrone, updateUser,
-  type DroneAssetView, type DroneBase, type DronePatch, type LogCategory, type Role,
+  type BasePatch, type BaseView, type DroneAssetView, type DronePatch, type LogCategory, type Role,
 } from '../store';
 import {
   broadcastDroneUpdated, broadcastOperators, droneCard, getController, kickDrone, kickUser, listDroneCards,
@@ -35,20 +35,22 @@ function leerLimite(raw: unknown, porDefecto: number, techo: number): number {
   return Number.isFinite(n) && n >= 1 ? Math.min(n, techo) : porDefecto;
 }
 
-type LecturaBase = { ok: true; base: DroneBase | null } | { ok: false; error: string };
+type LecturaBaseId = { ok: true; baseId: number | null } | { ok: false; error: string };
 
-/** `null` borra la base; un objeto la reemplaza. Cualquier otra cosa es un error. */
-function leerBase(raw: unknown): LecturaBase {
-  if (raw === null) return { ok: true, base: null };
-  if (typeof raw !== 'object') return { ok: false, error: 'base debe ser {name, lat, lon} o null' };
-  const b = raw as Record<string, unknown>;
-  const lat = typeof b.lat === 'number' ? b.lat : NaN;
-  const lon = typeof b.lon === 'number' ? b.lon : NaN;
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return { ok: false, error: 'base necesita lat y lon numéricos' };
-  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return { ok: false, error: 'base con coordenadas fuera de rango' };
-  const name = String(b.name ?? '').trim();
-  if (name.length > 40) return { ok: false, error: 'El nombre de la base no puede superar 40 caracteres' };
-  return { ok: true, base: { name: name || 'Base', lat, lon } };
+/**
+ * `null` desasigna la base; un número la referencia. Se valida que exista, que
+ * no esté eliminada y que esté activa: asignar un dron a una base dada de baja
+ * dejaría un vuelo de retorno apuntando a un lugar que ya no opera.
+ */
+function leerBaseId(raw: unknown): LecturaBaseId {
+  if (raw === null) return { ok: true, baseId: null };
+  const id = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isInteger(id) || id <= 0) return { ok: false, error: 'baseId debe ser el identificador de una base' };
+  const base = getBase(id);
+  if (!base) return { ok: false, error: 'La base indicada no existe' };
+  if (base.deletedAt) return { ok: false, error: 'La base indicada fue eliminada' };
+  if (!base.active) return { ok: false, error: 'La base indicada no está activa' };
+  return { ok: true, baseId: id };
 }
 
 /**
@@ -72,11 +74,10 @@ function estadoDron(d: DroneAssetView) {
   return {
     displayName: d.displayName,
     model: d.model,
-    activo: d.active,
+    inventario: d.inventoryCode,
+    operativo: d.active,
     eliminado: !!d.deletedAt,
     base: d.base?.name ?? null,
-    baseLat: d.base?.lat ?? null,
-    baseLon: d.base?.lon ?? null,
   };
 }
 
@@ -142,14 +143,17 @@ apiRouter.post('/drones', requireRoles('field_operator', 'supervisor', 'admin'),
   const model = String(req.body?.model ?? '').trim();
   if (model.length > 40) return res.status(400).json({ error: 'model no puede superar 40 caracteres' });
 
-  let base: DroneBase | null = null;
-  if (req.body?.base !== undefined) {
-    const lectura = leerBase(req.body.base);
+  const inventoryCode = String(req.body?.inventoryCode ?? '').trim();
+  if (inventoryCode.length > 30) return res.status(400).json({ error: 'El número de inventario no puede superar 30 caracteres' });
+
+  let baseId: number | null = null;
+  if (req.body?.baseId !== undefined) {
+    const lectura = leerBaseId(req.body.baseId);
     if (!lectura.ok) return res.status(400).json({ error: lectura.error });
-    base = lectura.base;
+    baseId = lectura.baseId;
   }
 
-  const drone = createDrone({ displayName, model, base }, req.user!.sub);
+  const drone = createDrone({ displayName, model, inventoryCode, baseId }, req.user!.sub);
   const ev = createLog('drone', 'DRONE_CREATED', req.user!.sub, `${req.user!.sub} dio de alta el dron "${displayName}"`, {
     droneId: drone.hash,
     meta: { drone: metaDron(drone.hash), despues: estadoDron(drone) },
@@ -205,15 +209,21 @@ apiRouter.post('/drones/:droneId/restore', requireAuth('supervisor'), (req: Auth
   res.json(droneCard(droneId));
 });
 
+// Lo que puede tocar el operador de campo: es quien está parado al lado del
+// aparato cuando lo despliega, así que reasignarle la base y ponerle nombre es
+// justamente su trabajo. El modelo, el inventario y el alta/baja no.
+const CAMPOS_DE_CAMPO = new Set(['displayName', 'baseId']);
+
 /**
- * Renombrar sigue siendo cosa del operador (la consola lo hace en línea desde
- * la ficha); tocar el activo —modelo, alta/baja, base— es de supervisor.
+ * Renombrar y reasignar la base las hacen el operador y el operador de campo;
+ * tocar el resto del activo —modelo, inventario, alta/baja— es de supervisor.
  */
-apiRouter.patch('/drones/:droneId', requireAuth('operator'), (req: AuthedRequest, res) => {
+apiRouter.patch('/drones/:droneId', requireRoles('field_operator', 'operator', 'supervisor', 'admin'), (req: AuthedRequest, res) => {
   const { droneId } = req.params;
   const body = (req.body ?? {}) as Record<string, unknown>;
-  const soloRenombra = Object.keys(body).every((k) => k === 'displayName');
-  if (!soloRenombra && !esSupervisorOMas(req.user!.role)) {
+  const claves = Object.keys(body);
+  const soloDeCampo = claves.every((k) => CAMPOS_DE_CAMPO.has(k));
+  if (!soloDeCampo && !esSupervisorOMas(req.user!.role)) {
     return res.status(403).json({ error: 'Solo un supervisor puede modificar el activo' });
   }
 
@@ -229,11 +239,16 @@ apiRouter.patch('/drones/:droneId', requireAuth('operator'), (req: AuthedRequest
     if (model.length > 40) return res.status(400).json({ error: 'model no puede superar 40 caracteres' });
     patch.model = model;
   }
+  if (body.inventoryCode !== undefined) {
+    const inventoryCode = String(body.inventoryCode).trim();
+    if (inventoryCode.length > 30) return res.status(400).json({ error: 'El número de inventario no puede superar 30 caracteres' });
+    patch.inventoryCode = inventoryCode;
+  }
   if (body.active !== undefined) patch.active = Boolean(body.active);
-  if (body.base !== undefined) {
-    const lectura = leerBase(body.base);
+  if (body.baseId !== undefined) {
+    const lectura = leerBaseId(body.baseId);
     if (!lectura.ok) return res.status(400).json({ error: lectura.error });
-    patch.base = lectura.base;
+    patch.baseId = lectura.baseId;
   }
   if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'Nada para modificar' });
 
@@ -443,6 +458,114 @@ apiRouter.post('/drones/:droneId/manual_move', requireAuth('operator'), (req: Au
   }
   const delivered = sendToDrone(droneId, { type: 'manual_move', bearing, distanceM, by: req.user!.sub });
   res.json({ ok: true, delivered });
+});
+
+// ---- Bases ----
+
+// El operador de campo da de alta bases en el terreno; el operador común las ve
+// para ubicarse en el mapa. Editarlas y darlas de baja es de supervisor.
+apiRouter.get('/bases', requireRoles('field_operator', 'operator', 'supervisor', 'admin'), (req: AuthedRequest, res) => {
+  const includeDeleted = flag(req.query.includeDeleted) && esSupervisorOMas(req.user!.role);
+  res.json(listBases({ includeDeleted, soloActivas: flag(req.query.soloActivas) }));
+});
+
+/** Nombre y coordenada de una base, ya validados. */
+function leerDatosDeBase(body: Record<string, unknown>, parcial: boolean) {
+  const tieneNombre = body.name !== undefined;
+  const name = String(body.name ?? '').trim();
+  if ((!parcial || tieneNombre) && !name) return { ok: false as const, error: 'El nombre de la base es requerido' };
+  if (name.length > 60) return { ok: false as const, error: 'El nombre no puede superar 60 caracteres' };
+
+  const tieneCoord = body.lat !== undefined || body.lon !== undefined;
+  if (!parcial || tieneCoord) {
+    const lat = typeof body.lat === 'number' ? body.lat : NaN;
+    const lon = typeof body.lon === 'number' ? body.lon : NaN;
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return { ok: false as const, error: 'lat y lon son requeridos y numéricos' };
+    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return { ok: false as const, error: 'Coordenadas fuera de rango' };
+    return { ok: true as const, name, lat, lon };
+  }
+  return { ok: true as const, name, lat: undefined, lon: undefined };
+}
+
+function estadoBase(b: BaseView) {
+  return { nombre: b.name, lat: b.lat, lon: b.lon, activa: b.active, eliminada: !!b.deletedAt };
+}
+
+apiRouter.post('/bases', requireRoles('field_operator', 'supervisor', 'admin'), (req: AuthedRequest, res) => {
+  const lectura = leerDatosDeBase((req.body ?? {}) as Record<string, unknown>, false);
+  if (!lectura.ok) return res.status(400).json({ error: lectura.error });
+
+  const base = createBase({ name: lectura.name, lat: lectura.lat!, lon: lectura.lon! }, req.user!.sub);
+  const ev = createLog('drone', 'BASE_CREATED', req.user!.sub, `${req.user!.sub} dio de alta la base "${base.name}"`, {
+    meta: { despues: estadoBase(base), ubicacion: { lat: base.lat, lon: base.lon, accuracyM: null } },
+  });
+  broadcastOperators({ type: 'event', event: ev });
+  broadcastOperators({ type: 'base_updated', base });
+  res.status(201).json(base);
+});
+
+apiRouter.patch('/bases/:id', requireAuth('supervisor'), (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const lectura = leerDatosDeBase(body, true);
+  if (!lectura.ok) return res.status(400).json({ error: lectura.error });
+
+  const patch: BasePatch = {};
+  if (body.name !== undefined) patch.name = lectura.name;
+  if (lectura.lat !== undefined) { patch.lat = lectura.lat; patch.lon = lectura.lon; }
+  if (body.active !== undefined) patch.active = Boolean(body.active);
+  if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'Nada para modificar' });
+
+  const actual = getBase(id);
+  if (!actual) return res.status(404).json({ error: 'Base inexistente' });
+  if (actual.deletedAt) return res.status(409).json({ error: 'La base está eliminada: restaurala antes de modificarla' });
+
+  const result = updateBase(id, patch)!;
+  const ev = createLog('drone', 'BASE_UPDATED', req.user!.sub, `${req.user!.sub} modificó la base "${result.after.name}"`, {
+    meta: { antes: estadoBase(result.before), despues: estadoBase(result.after) },
+  });
+  broadcastOperators({ type: 'event', event: ev });
+  broadcastOperators({ type: 'base_updated', base: result.after });
+  res.json(result.after);
+});
+
+apiRouter.delete('/bases/:id', requireAuth('supervisor'), (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  const actual = getBase(id);
+  if (!actual) return res.status(404).json({ error: 'Base inexistente' });
+  if (actual.deletedAt) return res.status(409).json({ error: 'La base ya estaba eliminada' });
+
+  // Dar de baja una base que todavía es el destino de retorno de algún dron
+  // dejaría vuelos apuntando a un lugar que no opera más.
+  const enUso = contarDronesEnBase(id);
+  if (enUso > 0) {
+    return res.status(409).json({
+      error: `La base tiene ${enUso} ${enUso === 1 ? 'dron asignado' : 'drones asignados'}: reasignalos antes de eliminarla`,
+    });
+  }
+
+  const base = softDeleteBase(id, req.user!.sub)!;
+  const ev = createLog('drone', 'BASE_DELETED', req.user!.sub, `${req.user!.sub} eliminó la base "${base.name}"`, {
+    meta: { antes: estadoBase(actual), despues: estadoBase(base) },
+  });
+  broadcastOperators({ type: 'event', event: ev });
+  broadcastOperators({ type: 'base_updated', base });
+  res.json(base);
+});
+
+apiRouter.post('/bases/:id/restore', requireAuth('supervisor'), (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  const actual = getBase(id);
+  if (!actual) return res.status(404).json({ error: 'Base inexistente' });
+  if (!actual.deletedAt) return res.status(409).json({ error: 'La base no estaba eliminada' });
+
+  const base = restoreBase(id)!;
+  const ev = createLog('drone', 'BASE_RESTORED', req.user!.sub, `${req.user!.sub} restauró la base "${base.name}"`, {
+    meta: { antes: estadoBase(actual), despues: estadoBase(base) },
+  });
+  broadcastOperators({ type: 'event', event: ev });
+  broadcastOperators({ type: 'base_updated', base });
+  res.json(base);
 });
 
 // ---- Alertas ----

@@ -74,6 +74,17 @@ for (const h of humans) {
   }
 }
 
+/** Las bases son un activo propio: se dan de alta una vez y los drones apuntan. */
+function idDeBase(b: { name: string; lat: number; lon: number }): number {
+  const ya = db.prepare('SELECT id FROM bases WHERE name = ? AND deleted_at IS NULL').get(b.name) as { id: number } | undefined;
+  if (ya) return ya.id;
+  const info = db
+    .prepare("INSERT INTO bases (name, lat, lon, created_at, created_by) VALUES (?, ?, ?, ?, 'seed')")
+    .run(b.name, b.lat, b.lon, new Date().toISOString());
+  console.log(`Base creada: ${b.name}`);
+  return Number(info.lastInsertRowid);
+}
+
 console.log('Drones de demostración (el contenido del QR es el hash):');
 for (const d of drones) {
   const hash = hashDemo(d.semilla);
@@ -88,9 +99,9 @@ for (const d of drones) {
     continue;
   }
   db.prepare(
-    `INSERT INTO drones (hash, display_name, model, base_name, base_lat, base_lon, created_at, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'seed')`,
-  ).run(hash, d.displayName, d.model, d.base.name, d.base.lat, d.base.lon, new Date().toISOString());
+    `INSERT INTO drones (hash, display_name, model, inventory_code, base_id, created_at, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, 'seed')`,
+  ).run(hash, d.displayName, d.model, `INV-${d.semilla.toUpperCase()}`, idDeBase(d.base), new Date().toISOString());
   console.log(`  ${d.displayName.padEnd(8)} ${hash}  (${d.model}, ${d.base.name})`);
 }
 

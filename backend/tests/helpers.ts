@@ -44,6 +44,19 @@ export const DRON = {
  * efímera del archivo de test actual. Replica lo esencial de src/seed.ts sin
  * sus console.log.
  */
+/**
+ * Da de alta la base si no existe y devuelve su id. El seed de tests arma así
+ * el mismo grafo que la aplicación real: drones apuntando a filas de `bases`.
+ */
+function idDeBase(b: { name: string; lat: number; lon: number }): number {
+  const ya = db.prepare('SELECT id FROM bases WHERE name = ?').get(b.name) as { id: number } | undefined;
+  if (ya) return ya.id;
+  const info = db
+    .prepare("INSERT INTO bases (name, lat, lon, created_at, created_by) VALUES (?, ?, ?, ?, 'semilla')")
+    .run(b.name, b.lat, b.lon, new Date().toISOString());
+  return Number(info.lastInsertRowid);
+}
+
 export function seed() {
   const humanos: [string, string, Role][] = [
     ['campo', CREDS.campo, 'field_operator'],
@@ -68,9 +81,9 @@ export function seed() {
   ];
   for (const d of drones) {
     db.prepare(
-      `INSERT INTO drones (hash, display_name, model, base_name, base_lat, base_lon, created_at, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'semilla')`,
-    ).run(d.hash, d.displayName, d.model, d.base.name, d.base.lat, d.base.lon, new Date().toISOString());
+      `INSERT INTO drones (hash, display_name, model, base_id, created_at, created_by)
+       VALUES (?, ?, ?, ?, ?, 'semilla')`,
+    ).run(d.hash, d.displayName, d.model, idDeBase(d.base), new Date().toISOString());
   }
 
   const routes = [
@@ -183,7 +196,21 @@ export async function api(
 export interface EntradaDron {
   displayName: string;
   model?: string;
-  base?: { name: string; lat: number; lon: number } | null;
+  inventoryCode?: string;
+  baseId?: number | null;
+}
+
+export interface EntradaBase {
+  name: string;
+  lat: number;
+  lon: number;
+}
+
+/** Da de alta una base por la API y devuelve su ficha. */
+export async function crearBase(base: string, token: string, input: EntradaBase) {
+  const r = await api(base, '/api/bases', token, { method: 'POST', body: JSON.stringify(input) });
+  if (r.status !== 201) throw new Error(`no se pudo dar de alta la base: ${r.status} ${JSON.stringify(r.body)}`);
+  return r.body as { id: number; name: string; lat: number; lon: number; active: boolean; deletedAt: string | null };
 }
 
 /** Da de alta un dron por la API y devuelve su ficha, con el hash del QR. */

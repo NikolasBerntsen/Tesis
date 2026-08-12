@@ -57,7 +57,13 @@ export interface DroneAsset {
   hash: string;
   display_name: string;
   model: string;
+  inventory_code: string;
   active: number;
+  base_id: number | null;
+  /** Nombre y coordenada de la base unida por base_id (LEFT JOIN). */
+  b_name?: string | null;
+  b_lat?: number | null;
+  b_lon?: number | null;
   base_name: string | null;
   base_lat: number | null;
   base_lon: number | null;
@@ -72,7 +78,9 @@ export interface DroneAssetView {
   hash: string;
   displayName: string;
   model: string;
+  inventoryCode: string;
   active: boolean;
+  baseId: number | null;
   base: DroneBase | null;
   createdAt: string;
   createdBy: string | null;
@@ -207,20 +215,107 @@ export function restoreUser(username: string): { before: UserView; after: UserVi
   return { before, after: toUserView(getUser(username)!) };
 }
 
+// ---- Bases ----
+
+export interface BaseRow {
+  id: number; name: string; lat: number; lon: number; active: number;
+  created_at: string; created_by: string | null; deleted_at: string | null; deleted_by: string | null;
+}
+
+export interface BaseView {
+  id: number; name: string; lat: number; lon: number; active: boolean;
+  createdAt: string; createdBy: string | null; deletedAt: string | null;
+}
+
+export function toBaseView(b: BaseRow): BaseView {
+  return {
+    id: b.id, name: b.name, lat: b.lat, lon: b.lon, active: !!b.active,
+    createdAt: b.created_at, createdBy: b.created_by, deletedAt: b.deleted_at,
+  };
+}
+
+export interface BaseInput { name: string; lat: number; lon: number }
+
+export function createBase(input: BaseInput, createdBy: string): BaseView {
+  const info = db
+    .prepare('INSERT INTO bases (name, lat, lon, created_at, created_by) VALUES (?, ?, ?, ?, ?)')
+    .run(input.name, input.lat, input.lon, new Date().toISOString(), createdBy);
+  return getBase(Number(info.lastInsertRowid))!;
+}
+
+/** Sin filtrar borradas: quien llama decide si es un 404 o un 409. */
+export function getBase(id: number): BaseView | undefined {
+  const row = db.prepare('SELECT * FROM bases WHERE id = ?').get(id) as BaseRow | undefined;
+  return row ? toBaseView(row) : undefined;
+}
+
+export function listBases(opts: { includeDeleted?: boolean; soloActivas?: boolean } = {}): BaseView[] {
+  const donde: string[] = [];
+  if (!opts.includeDeleted) donde.push('deleted_at IS NULL');
+  if (opts.soloActivas) donde.push('active = 1');
+  const filtro = donde.length ? `WHERE ${donde.join(' AND ')}` : '';
+  const rows = db.prepare(`SELECT * FROM bases ${filtro} ORDER BY name COLLATE NOCASE, id`).all() as BaseRow[];
+  return rows.map(toBaseView);
+}
+
+export interface BasePatch { name?: string; lat?: number; lon?: number; active?: boolean }
+
+export function updateBase(id: number, patch: BasePatch): { before: BaseView; after: BaseView } | undefined {
+  const before = getBase(id);
+  if (!before || before.deletedAt) return undefined;
+  db.prepare(
+    `UPDATE bases SET name = COALESCE(?, name), lat = COALESCE(?, lat), lon = COALESCE(?, lon),
+                      active = COALESCE(?, active) WHERE id = ?`,
+  ).run(patch.name ?? null, patch.lat ?? null, patch.lon ?? null,
+        patch.active === undefined ? null : patch.active ? 1 : 0, id);
+  return { before, after: getBase(id)! };
+}
+
+export function softDeleteBase(id: number, deletedBy: string): BaseView | undefined {
+  const actual = getBase(id);
+  if (!actual || actual.deletedAt) return undefined;
+  db.prepare('UPDATE bases SET deleted_at = ?, deleted_by = ? WHERE id = ?').run(new Date().toISOString(), deletedBy, id);
+  return getBase(id)!;
+}
+
+export function restoreBase(id: number): BaseView | undefined {
+  const actual = getBase(id);
+  if (!actual || !actual.deletedAt) return undefined;
+  db.prepare('UPDATE bases SET deleted_at = NULL, deleted_by = NULL WHERE id = ?').run(id);
+  return getBase(id)!;
+}
+
+/** Drones que apuntan a una base. Se consulta antes de darla de baja. */
+export function contarDronesEnBase(id: number): number {
+  return (db.prepare('SELECT COUNT(*) AS n FROM drones WHERE base_id = ? AND deleted_at IS NULL').get(id) as { n: number }).n;
+}
+
 // ---- Drones como activos ----
 
-function toDroneBase(d: { base_name: string | null; base_lat: number | null; base_lon: number | null }): DroneBase | null {
+/**
+ * La base sale de la tabla `bases` por base_id. Se conserva la lectura de las
+ * columnas embebidas viejas como red: un dron migrado a mano podría tener la
+ * coordenada y todavía no el vínculo.
+ */
+function toDroneBase(d: DroneAsset): DroneBase | null {
+  if (d.b_lat != null && d.b_lon != null) return { name: d.b_name ?? 'Base', lat: d.b_lat, lon: d.b_lon };
   return d.base_lat != null && d.base_lon != null
     ? { name: d.base_name ?? 'Base', lat: d.base_lat, lon: d.base_lon }
     : null;
 }
+
+/** Los drones se leen siempre unidos a su base. */
+const SELECT_DRON = `SELECT d.*, b.name AS b_name, b.lat AS b_lat, b.lon AS b_lon
+                       FROM drones d LEFT JOIN bases b ON b.id = d.base_id`;
 
 export function toDroneAssetView(d: DroneAsset): DroneAssetView {
   return {
     hash: d.hash,
     displayName: d.display_name,
     model: d.model,
+    inventoryCode: d.inventory_code ?? '',
     active: !!d.active,
+    baseId: d.base_id,
     base: toDroneBase(d),
     createdAt: d.created_at,
     createdBy: d.created_by,
@@ -236,7 +331,8 @@ function toDroneIdentity(d: DroneAsset): DroneIdentity {
 export interface DroneInput {
   displayName: string;
   model?: string;
-  base?: DroneBase | null;
+  inventoryCode?: string;
+  baseId?: number | null;
 }
 
 /**
@@ -246,31 +342,23 @@ export interface DroneInput {
 export function createDrone(input: DroneInput, createdBy: string): DroneAssetView {
   const hash = randomBytes(16).toString('hex');
   db.prepare(
-    `INSERT INTO drones (hash, display_name, model, base_name, base_lat, base_lon, created_at, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    hash,
-    input.displayName,
-    input.model ?? '',
-    input.base?.name ?? null,
-    input.base?.lat ?? null,
-    input.base?.lon ?? null,
-    new Date().toISOString(),
-    createdBy,
-  );
+    `INSERT INTO drones (hash, display_name, model, inventory_code, base_id, created_at, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(hash, input.displayName, input.model ?? '', input.inventoryCode ?? '', input.baseId ?? null,
+        new Date().toISOString(), createdBy);
   return getDrone(hash)!;
 }
 
 /** Busca por hash SIN filtrar borrados: quien llama decide si un 404 o un 410. */
 export function getDrone(hash: string): DroneAssetView | undefined {
-  const row = db.prepare('SELECT * FROM drones WHERE hash = ?').get(hash) as DroneAsset | undefined;
+  const row = db.prepare(`${SELECT_DRON} WHERE d.hash = ?`).get(hash) as DroneAsset | undefined;
   return row ? toDroneAssetView(row) : undefined;
 }
 
 export function listDrones(opts: { includeDeleted?: boolean } = {}): DroneAssetView[] {
-  const filtroBorrados = opts.includeDeleted ? '' : 'WHERE deleted_at IS NULL';
+  const filtroBorrados = opts.includeDeleted ? '' : 'WHERE d.deleted_at IS NULL';
   const rows = db
-    .prepare(`SELECT * FROM drones ${filtroBorrados} ORDER BY display_name COLLATE NOCASE, id`)
+    .prepare(`${SELECT_DRON} ${filtroBorrados} ORDER BY d.display_name COLLATE NOCASE, d.id`)
     .all() as DroneAsset[];
   return rows.map(toDroneAssetView);
 }
@@ -278,9 +366,10 @@ export function listDrones(opts: { includeDeleted?: boolean } = {}): DroneAssetV
 export interface DronePatch {
   displayName?: string;
   model?: string;
+  inventoryCode?: string;
   active?: boolean;
-  /** `null` borra la base; `undefined` la deja como está. */
-  base?: DroneBase | null;
+  /** `null` desasigna la base; `undefined` la deja como está. */
+  baseId?: number | null;
 }
 
 /** Aplica el cambio sobre un dron vivo y devuelve el antes y el después, para el log. */
@@ -292,23 +381,20 @@ export function updateDrone(hash: string, patch: DronePatch): { before: DroneAss
     `UPDATE drones SET
        display_name = COALESCE(?, display_name),
        model = COALESCE(?, model),
+       inventory_code = COALESCE(?, inventory_code),
        active = COALESCE(?, active)
      WHERE hash = ?`,
   ).run(
     patch.displayName ?? null,
     patch.model ?? null,
+    patch.inventoryCode ?? null,
     patch.active === undefined ? null : patch.active ? 1 : 0,
     hash,
   );
 
-  // La base va aparte porque COALESCE no distingue "no la toques" de "borrala".
-  if (patch.base !== undefined) {
-    db.prepare('UPDATE drones SET base_name = ?, base_lat = ?, base_lon = ? WHERE hash = ?').run(
-      patch.base?.name ?? null,
-      patch.base?.lat ?? null,
-      patch.base?.lon ?? null,
-      hash,
-    );
+  // La base va aparte porque COALESCE no distingue "no la toques" de "desasignala".
+  if (patch.baseId !== undefined) {
+    db.prepare('UPDATE drones SET base_id = ? WHERE hash = ?').run(patch.baseId, hash);
   }
 
   return { before, after: getDrone(hash)! };
@@ -337,7 +423,7 @@ export function restoreDrone(hash: string): DroneAssetView | undefined {
  * inactivos sí, porque la consola tiene que poder mostrarlos y reactivarlos.
  */
 export function getDroneIdentity(droneId: string): DroneIdentity | undefined {
-  const row = db.prepare('SELECT * FROM drones WHERE hash = ? AND deleted_at IS NULL').get(droneId) as
+  const row = db.prepare(`${SELECT_DRON} WHERE d.hash = ? AND d.deleted_at IS NULL`).get(droneId) as
     | DroneAsset
     | undefined;
   return row ? toDroneIdentity(row) : undefined;

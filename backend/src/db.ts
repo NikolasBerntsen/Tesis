@@ -20,6 +20,7 @@ db.exec(`
     base_name     TEXT,
     base_lat      REAL,
     base_lon      REAL,
+    full_name     TEXT NOT NULL DEFAULT '',
     active        INTEGER NOT NULL DEFAULT 1,
     can_control   INTEGER NOT NULL DEFAULT 1,
     -- Borrado lógico: la fila queda y por lo tanto el username SIGUE OCUPADO
@@ -36,7 +37,11 @@ db.exec(`
     hash         TEXT NOT NULL UNIQUE,
     display_name TEXT NOT NULL,
     model        TEXT NOT NULL DEFAULT '',
+    -- Número de inventario con el que la organización identifica al aparato.
+    -- No entra en el QR: se imprime al lado, para poder leerlo sin escanear.
+    inventory_code TEXT NOT NULL DEFAULT '',
     active       INTEGER NOT NULL DEFAULT 1,
+    base_id      INTEGER REFERENCES bases(id),
     base_name    TEXT,
     base_lat     REAL,
     base_lon     REAL,
@@ -79,6 +84,22 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_drones_hash ON drones(hash);
+
+  -- Las bases dejaron de vivir embebidas en cada dron: son un activo propio que
+  -- se da de alta una vez y al que muchos drones apuntan. El borrado es lógico,
+  -- como todo en el sistema.
+  CREATE TABLE IF NOT EXISTS bases (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL,
+    lat        REAL NOT NULL,
+    lon        REAL NOT NULL,
+    active     INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    created_by TEXT,
+    deleted_at TEXT,
+    deleted_by TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_bases_activas ON bases(deleted_at, active);
 `);
 
 // --- Migraciones sobre bases anteriores ---
@@ -191,5 +212,49 @@ if (dronesVacia) {
       db.prepare("DELETE FROM users WHERE role = 'drone'").run();
     });
     migrar();
+  }
+}
+
+// --- Bases como activo propio ---
+
+// Columnas nuevas sobre bases anteriores.
+const droneCols = (db.prepare('PRAGMA table_info(drones)').all() as { name: string }[]).map((c) => c.name);
+for (const [col, def] of [
+  ['inventory_code', "TEXT NOT NULL DEFAULT ''"],
+  ['base_id', 'INTEGER REFERENCES bases(id)'],
+]) {
+  if (!droneCols.includes(col)) db.exec(`ALTER TABLE drones ADD COLUMN ${col} ${def}`);
+}
+const userCols2 = (db.prepare('PRAGMA table_info(users)').all() as { name: string }[]).map((c) => c.name);
+if (!userCols2.includes('full_name')) db.exec("ALTER TABLE users ADD COLUMN full_name TEXT NOT NULL DEFAULT ''");
+
+// Las bases que vivían embebidas en cada dron se promueven a filas de `bases`.
+// Se agrupan por nombre y coordenada: tres drones que compartían "Base Norte"
+// terminan apuntando a una sola base, que es lo que el operador espera ver.
+const basesVacia = (db.prepare('SELECT COUNT(*) AS n FROM bases').get() as { n: number }).n === 0;
+if (basesVacia) {
+  const embebidas = db
+    .prepare(
+      `SELECT DISTINCT base_name AS name, base_lat AS lat, base_lon AS lon
+         FROM drones
+        WHERE base_lat IS NOT NULL AND base_lon IS NOT NULL`,
+    )
+    .all() as { name: string | null; lat: number; lon: number }[];
+
+  if (embebidas.length > 0) {
+    const promover = db.transaction(() => {
+      const insertar = db.prepare(
+        "INSERT INTO bases (name, lat, lon, created_at, created_by) VALUES (?, ?, ?, ?, 'migracion')",
+      );
+      const apuntar = db.prepare(
+        'UPDATE drones SET base_id = ? WHERE base_lat = ? AND base_lon = ? AND base_id IS NULL',
+      );
+      const creadaEn = new Date().toISOString();
+      for (const b of embebidas) {
+        const info = insertar.run(b.name ?? 'Base', b.lat, b.lon, creadaEn);
+        apuntar.run(Number(info.lastInsertRowid), b.lat, b.lon);
+      }
+    });
+    promover();
   }
 }
