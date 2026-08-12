@@ -97,6 +97,24 @@ jobs:
 
       - uses: android-actions/setup-android@v3
 
+      # El wrapper baja Gradle de services.gradle.org y NO reintenta: si ese
+      # servidor corta la conexión, el job muere en menos de un segundo sin que
+      # haya nada roto en el código. Pasó dos veces en trece minutos.
+      #
+      # Va en un paso aparte, y no envolviendo el build, para que se reintente
+      # SOLO la descarga: si falla la compilación o un test, tiene que fallar a
+      # la primera y no tardar el triple en decirlo.
+      - name: Asegurar la distribución de Gradle
+        run: |
+          for intento in 1 2 3 4 5; do
+            if ./gradlew --version; then exit 0; fi
+            espera=$((intento * 10))
+            echo "::warning::No se pudo obtener Gradle (intento $intento de 5). Reintento en ${espera}s."
+            sleep "$espera"
+          done
+          echo "::error::services.gradle.org no respondió después de 5 intentos. No es un problema del código."
+          exit 1
+
       - name: Build + tests unitarios (flavor mock)
         run: ./gradlew assembleMockDebug testMockDebugUnitTest --build-cache --no-daemon
       - name: Reporte de tests
