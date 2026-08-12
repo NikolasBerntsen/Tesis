@@ -1,5 +1,5 @@
 import { useEffect, useId, useState, type FormEvent } from 'react';
-import { api, traerUsuarios } from '../api';
+import { api, buscarUsuarios } from '../api';
 import type { Me, RolAsignable, RolConsola, UserView } from '../types';
 import Modal from './Modal';
 
@@ -24,9 +24,9 @@ const ICONO_CERRAR = {
   'aria-hidden': true,
 } as const;
 
-type Alta = { username: string; password: string; role: RolAsignable; canControl: boolean };
+type Alta = { username: string; fullName: string; role: RolAsignable; canControl: boolean };
 
-const ALTA_VACIA: Alta = { username: '', password: '', role: 'operator', canControl: true };
+const ALTA_VACIA: Alta = { username: '', fullName: '', role: 'operator', canControl: true };
 
 function textoError(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -105,6 +105,9 @@ export default function UsersView({ me }: { me: Me }) {
   const [recarga, setRecarga] = useState(0);
   const [aEliminar, setAEliminar] = useState<UserView | null>(null);
   const [nuevo, setNuevo] = useState<Alta>(ALTA_VACIA);
+  const [busqueda, setBusqueda] = useState('');
+  // La contraseña generada se muestra UNA vez: después no se puede recuperar.
+  const [credencial, setCredencial] = useState<{ username: string; password: string; nueva: boolean } | null>(null);
   const idNotaCampo = useId();
 
   const esAdmin = me.role === 'admin';
@@ -113,13 +116,13 @@ export default function UsersView({ me }: { me: Me }) {
 
   useEffect(() => {
     let vigente = true;
-    traerUsuarios({ incluirEliminados: verEliminados })
+    buscarUsuarios({ incluirEliminados: verEliminados, q: busqueda })
       .then((lista) => vigente && setUsers(lista))
       .catch((e) => vigente && setError(textoError(e)));
     return () => {
       vigente = false;
     };
-  }, [verEliminados, recarga]);
+  }, [verEliminados, recarga, busqueda]);
 
   async function accion(fn: () => Promise<unknown>) {
     setError('');
@@ -134,6 +137,19 @@ export default function UsersView({ me }: { me: Me }) {
   const patch = (username: string, body: object) => () =>
     accion(() => api(`/users/${username}`, { method: 'PATCH', body: JSON.stringify(body) }));
 
+  /**
+   * Regenerar es la única forma de recuperar el acceso a una cuenta: la
+   * anterior se pisa y la nueva se muestra una sola vez, acá mismo.
+   */
+  function regenerar(usuario: UserView) {
+    accion(async () => {
+      const r = await api<UserView & { password: string }>(`/users/${usuario.username}/regenerate-password`, {
+        method: 'POST',
+      });
+      setCredencial({ username: r.username, password: r.password, nueva: false });
+    });
+  }
+
   function eliminar(usuario: UserView) {
     setAEliminar(null);
     accion(() => api(`/users/${usuario.username}`, { method: 'DELETE' }));
@@ -145,8 +161,9 @@ export default function UsersView({ me }: { me: Me }) {
       // El backend le fuerza `canControl:false` al operador de campo; se manda
       // ya resuelto para que el alta no prometa un permiso que no va a existir.
       const cuerpo: Alta = { ...nuevo, canControl: !esOperadorDeCampo && nuevo.canControl };
-      await api('/users', { method: 'POST', body: JSON.stringify(cuerpo) });
+      const creado = await api<UserView & { password: string }>('/users', { method: 'POST', body: JSON.stringify(cuerpo) });
       setNuevo(ALTA_VACIA);
+      setCredencial({ username: creado.username, password: creado.password, nueva: true });
     });
   }
 
@@ -158,6 +175,14 @@ export default function UsersView({ me }: { me: Me }) {
     <main className="page-main">
       <div className="barra-acciones">
         <h2>Usuarios</h2>
+        <input
+          className="buscador"
+          type="search"
+          value={busqueda}
+          onChange={(e) => setBusqueda(e.target.value)}
+          placeholder="Buscar por usuario, nombre o rol…"
+          aria-label="Buscar usuarios"
+        />
         {esSupervisor && (
           <button
             className={`toggle-eliminados${verEliminados ? ' activo' : ''}`}
@@ -184,6 +209,7 @@ export default function UsersView({ me }: { me: Me }) {
               <thead>
                 <tr>
                   <th>Usuario</th>
+                  <th>Nombre</th>
                   <th>Rol</th>
                   <th>Control de drones</th>
                   <th>Estado</th>
@@ -206,6 +232,7 @@ export default function UsersView({ me }: { me: Me }) {
                         {u.username}
                         {esYo && <span className="muted"> (vos)</span>}
                       </td>
+                      <td className="inscripcion">{u.fullName || <span className="muted">—</span>}</td>
                       <td>{ROL[u.role]}</td>
                       <td>
                         {controlAplica ? (
@@ -249,11 +276,16 @@ export default function UsersView({ me }: { me: Me }) {
                               Restaurar
                             </button>
                           ) : (
-                            !esYo && (
-                              <button className="chico dismiss" onClick={() => setAEliminar(u)}>
-                                Eliminar
+                            <>
+                              <button className="chico" onClick={() => regenerar(u)}>
+                                Regenerar contraseña
                               </button>
-                            )
+                              {!esYo && (
+                                <button className="chico dismiss" onClick={() => setAEliminar(u)}>
+                                  Eliminar
+                                </button>
+                              )}
+                            </>
                           )}
                         </td>
                       )}
@@ -275,12 +307,12 @@ export default function UsersView({ me }: { me: Me }) {
               <input value={nuevo.username} onChange={(e) => setNuevo({ ...nuevo, username: e.target.value })} required />
             </label>
             <label>
-              Contraseña
+              Nombre y apellido
               <input
-                type="password"
-                value={nuevo.password}
-                onChange={(e) => setNuevo({ ...nuevo, password: e.target.value })}
-                minLength={6}
+                value={nuevo.fullName}
+                onChange={(e) => setNuevo({ ...nuevo, fullName: e.target.value })}
+                minLength={3}
+                maxLength={60}
                 required
               />
             </label>
@@ -313,6 +345,36 @@ export default function UsersView({ me }: { me: Me }) {
             </p>
           )}
         </section>
+      )}
+
+      {credencial && (
+        <Modal etiquetadoPor="titulo-credencial" onCerrar={() => setCredencial(null)}>
+          <header className="modal-cabecera">
+            <h2 className="modal-titulo" id="titulo-credencial">
+              {credencial.nueva ? 'Usuario creado' : 'Contraseña regenerada'}
+            </h2>
+          </header>
+          <div className="modal-cuerpo">
+            <p>
+              Contraseña de <strong>{credencial.username}</strong>. Anotala ahora:{' '}
+              <strong>no se puede volver a ver</strong>. Si se pierde, la única salida es regenerarla,
+              y eso invalida la anterior.
+            </p>
+            <p className="credencial mono">{credencial.password}</p>
+            <button
+              type="button"
+              className="chico"
+              onClick={() => navigator.clipboard?.writeText(credencial.password)}
+            >
+              Copiar
+            </button>
+          </div>
+          <footer className="modal-pie">
+            <button className="primario" onClick={() => setCredencial(null)}>
+              Ya la anoté
+            </button>
+          </footer>
+        </Modal>
       )}
 
       {aEliminar && (

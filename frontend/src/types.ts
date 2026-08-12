@@ -1,7 +1,20 @@
+/** Coordenada con nombre. La usan la ficha del dron y los mapas. */
 export interface Base {
   name: string;
   lat: number;
   lon: number;
+}
+
+/** La base como activo del inventario: es lo que devuelve /api/bases. */
+export interface BaseAsset {
+  id: number;
+  name: string;
+  lat: number;
+  lon: number;
+  active: boolean;
+  createdAt: string;
+  createdBy: string | null;
+  deletedAt: string | null;
 }
 
 export interface DroneStatus {
@@ -44,6 +57,7 @@ export interface Me {
 
 export interface UserView {
   username: string;
+  fullName: string;
   role: RolConsola;
   active: boolean;
   canControl: boolean;
@@ -61,8 +75,11 @@ export interface Drone {
   droneId: string;
   displayName: string;
   model: string;
-  /** Un dron desactivado no puede conectarse: el backend le corta el WebSocket. */
+  /** Número de inventario con el que la organización identifica al aparato. */
+  inventoryCode: string;
+  /** Un dron no operativo no puede conectarse: el backend le corta el WebSocket. */
   active: boolean;
+  baseId: number | null;
   /** Fecha ISO del borrado lógico; `null` mientras el activo esté vigente. */
   deletedAt: string | null;
   base: Base | null;

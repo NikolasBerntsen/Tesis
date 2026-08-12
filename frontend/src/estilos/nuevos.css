@@ -526,3 +526,108 @@
   font-size: var(--txt-sm);
   color: var(--tinta-media);
 }
+
+/* --- Bases: mapa para elegir el punto ---------------------------------------
+   Alto fijo: dentro de un modal, un mapa que crece con el contenido termina
+   empujando los botones fuera de la pantalla. */
+.mapa-elector {
+  height: 260px;
+  border-radius: var(--radio-chico);
+  border: 1px solid var(--veta);
+  box-shadow: var(--sombra-hundida);
+  cursor: crosshair;
+}
+.form-base {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-3);
+}
+.form-base label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-1);
+}
+/* Las coordenadas y el botón de GPS van en una línea: son un solo gesto. */
+.fila-coords {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: var(--e-3);
+  align-items: end;
+}
+@media (max-width: 640px) {
+  .fila-coords { grid-template-columns: 1fr; }
+}
+.base-marca {
+  display: block;
+  width: 14px;
+  height: 14px;
+  transform: rotate(45deg);
+  background: var(--tinta);
+  border: 1.5px solid var(--oro-claro);
+}
+
+.qr-sticker-inventario {
+  margin: var(--e-1) 0 0;
+  font-family: var(--fuente-mono);
+  font-size: var(--txt-sm);
+  letter-spacing: .04em;
+}
+
+/* --- Buscador de una tabla -------------------------------------------------- */
+.buscador {
+  flex: 1 1 220px;
+  max-width: 340px;
+}
+
+/* La contraseña recién generada: grande y monoespaciada, porque se va a copiar
+   a mano o a dictar por radio. */
+.credencial {
+  margin: var(--e-4) 0;
+  padding: var(--e-4);
+  text-align: center;
+  font-size: var(--txt-lg);
+  letter-spacing: .12em;
+  border-radius: var(--radio-chico);
+  border: 1px solid var(--veta);
+  background: var(--marmol-2);
+  box-shadow: var(--sombra-hundida);
+  user-select: all;
+}
+
+/* --- Selector de base con buscador ------------------------------------------ */
+.selector-base { position: relative; }
+.base-elegida {
+  display: flex;
+  align-items: center;
+  gap: var(--e-3);
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid var(--veta-fuerte);
+  border-radius: var(--radio-chico);
+  background: var(--marmol-2);
+}
+.lista-bases {
+  list-style: none;
+  margin: var(--e-1) 0 0;
+  padding: 0;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--veta-fuerte);
+  border-radius: var(--radio-chico);
+  background: var(--marmol-1);
+  box-shadow: var(--sombra-suave);
+}
+.lista-bases li { padding: 0; }
+.lista-bases li.muted { padding: var(--e-3); }
+.lista-bases button {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: var(--e-3);
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  text-align: left;
+}
+.lista-bases button:hover { background: var(--oro-velo); }

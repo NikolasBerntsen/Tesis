@@ -2,17 +2,19 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import DronesView from './DronesView';
-import { api, traerDrones } from '../api';
+import { api, traerBases, traerDrones } from '../api';
 import { makeDrone, makeMe } from '../test/fixtures';
 import type { Drone, NovedadDron, RolConsola } from '../types';
 
 // El QR se dibuja en el navegador con `qrcode`; el modal se prueba aparte.
 const { generarQr } = vi.hoisted(() => ({ generarQr: vi.fn() }));
 vi.mock('qrcode', () => ({ toDataURL: generarQr }));
-vi.mock('../api', () => ({ api: vi.fn(), traerDrones: vi.fn() }));
+vi.mock('../api', () => ({ api: vi.fn(), traerBases: vi.fn(async () => []),
+  traerDrones: vi.fn() }));
 
 const apiMock = vi.mocked(api);
 const traerMock = vi.mocked(traerDrones);
+const basesMock = vi.mocked(traerBases);
 const escribirEnPortapapeles = vi.fn();
 
 const HASH_ALFA = 'c54ae4a0aad98bdc6ae5ab810751335c';
@@ -121,65 +123,62 @@ describe('DronesView', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('No se pudo copiar el identificador');
   });
 
-  it('da de alta un dron con base y abre su sticker', async () => {
-    const nuevo = makeDrone({ hash: 'a'.repeat(32), droneId: 'a'.repeat(32), displayName: 'Delta', model: 'DJI Air 3' });
-    apiMock.mockResolvedValue(nuevo);
-    montar();
-    await screen.findByText('Alfa', { selector: 'div' });
 
-    const alta = formulario('Dar de alta un dron');
-    await userEvent.type(within(alta).getByLabelText('Nombre'), 'Delta');
-    await userEvent.type(within(alta).getByLabelText('Modelo'), 'DJI Air 3');
-    await userEvent.type(within(alta).getByLabelText('Base'), 'Base Este');
-    await userEvent.type(within(alta).getByLabelText('Latitud'), '-34.6');
-    await userEvent.type(within(alta).getByLabelText('Longitud'), '-58.4');
-    await userEvent.click(within(alta).getByRole('button', { name: 'Dar de alta' }));
 
-    await waitFor(() =>
-      expect(apiMock).toHaveBeenCalledWith('/drones', {
-        method: 'POST',
-        body: JSON.stringify({
-          displayName: 'Delta',
-          model: 'DJI Air 3',
-          base: { name: 'Base Este', lat: -34.6, lon: -58.4 },
-        }),
-      }),
-    );
-    // El sticker se abre con el hash que devolvió el backend y el formulario queda limpio.
-    expect(await screen.findByRole('dialog')).toHaveTextContent('Sticker del dron Delta');
-    await waitFor(() => expect(generarQr.mock.calls[0][0]).toBe('a'.repeat(32)));
-    expect(within(alta).getByLabelText('Nombre')).toHaveValue('');
-    expect(fila('Delta')).toBeInTheDocument();
+
+  it('da de alta un dron con inventario y base elegida del desplegable', async () => {
+    traerMock.mockResolvedValue([]);
+    basesMock.mockResolvedValue([
+      { id: 7, name: 'Base Norte', lat: -34.85, lon: -56.2, active: true, createdAt: '', createdBy: null, deletedAt: null },
+      { id: 8, name: 'Base Sur', lat: -34.9, lon: -56.1, active: true, createdAt: '', createdBy: null, deletedAt: null },
+    ]);
+    apiMock.mockResolvedValue(makeDrone({ hash: 'nuevo', displayName: 'Delta' }));
+    render(<DronesView me={makeMe({ username: 'admin1', role: 'admin' })} />);
+    await screen.findByText(/todavía no hay drones/i);
+
+    await userEvent.type(screen.getByLabelText('Nombre'), 'Delta');
+    await userEvent.type(screen.getByLabelText('Número de inventario'), 'INV-9');
+
+    // el buscador filtra a medida que se escribe
+    const buscador = screen.getByLabelText('Buscar base');
+    await userEvent.type(buscador, 'sur');
+    expect(screen.queryByRole('option', { name: /Base Norte/ })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('option', { name: /Base Sur/ }));
+
+    await userEvent.click(screen.getByRole('button', { name: /dar de alta/i }));
+
+    expect(apiMock).toHaveBeenCalledWith('/drones', expect.objectContaining({ method: 'POST' }));
+    const cuerpo = JSON.parse(apiMock.mock.calls.at(-1)![1].body);
+    expect(cuerpo).toEqual({ displayName: 'Delta', model: '', inventoryCode: 'INV-9', baseId: 8 });
+    // el sticker se abre solo
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
   });
 
-  it('no manda la base si el operador no cargó coordenadas', async () => {
-    apiMock.mockResolvedValue(makeDrone({ hash: 'b'.repeat(32), displayName: 'Eco', model: '' }));
-    montar('field_operator');
-    await screen.findByText('Alfa', { selector: 'div' });
+  it('el alta sin base no manda baseId', async () => {
+    traerMock.mockResolvedValue([]);
+    basesMock.mockResolvedValue([]);
+    apiMock.mockResolvedValue(makeDrone({ hash: 'nuevo' }));
+    render(<DronesView me={makeMe({ username: 'admin1', role: 'admin' })} />);
+    await screen.findByText(/todavía no hay drones/i);
 
-    const alta = formulario('Dar de alta un dron');
-    await userEvent.type(within(alta).getByLabelText('Nombre'), 'Eco');
-    await userEvent.click(within(alta).getByRole('button', { name: 'Dar de alta' }));
+    await userEvent.type(screen.getByLabelText('Nombre'), 'Sin base');
+    await userEvent.click(screen.getByRole('button', { name: /dar de alta/i }));
 
-    await waitFor(() =>
-      expect(apiMock).toHaveBeenCalledWith('/drones', {
-        method: 'POST',
-        body: JSON.stringify({ displayName: 'Eco', model: '' }),
-      }),
-    );
+    const cuerpo = JSON.parse(apiMock.mock.calls.at(-1)![1].body);
+    expect(cuerpo.baseId).toBeUndefined();
+    // y el selector avisa por qué no hay nada para elegir
+    expect(screen.getByLabelText('Buscar base')).toBeDisabled();
   });
 
-  it('rechaza una base a medio cargar sin llamar al backend', async () => {
-    montar();
-    await screen.findByText('Alfa', { selector: 'div' });
+  it('la latitud y la longitud del dron no se pueden escribir a mano', async () => {
+    traerMock.mockResolvedValue([]);
+    basesMock.mockResolvedValue([]);
+    render(<DronesView me={makeMe({ username: 'admin1', role: 'admin' })} />);
+    await screen.findByText(/todavía no hay drones/i);
 
-    const alta = formulario('Dar de alta un dron');
-    await userEvent.type(within(alta).getByLabelText('Nombre'), 'Eco');
-    await userEvent.type(within(alta).getByLabelText('Latitud'), '-34.6');
-    await userEvent.click(within(alta).getByRole('button', { name: 'Dar de alta' }));
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('La base necesita latitud y longitud numéricas');
-    expect(apiMock).not.toHaveBeenCalled();
+    // son un dato de la base, no del dron: no hay campos para tipearlas
+    expect(screen.queryByLabelText('Latitud')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Longitud')).not.toBeInTheDocument();
   });
 
   it('muestra el error del backend al dar de alta', async () => {
@@ -207,30 +206,9 @@ describe('DronesView', () => {
         body: JSON.stringify({ active: false }),
       }),
     );
-    expect(await within(fila('Alfa')).findByText('Inactivo')).toBeInTheDocument();
+    expect(await within(fila('Alfa')).findByText('No operativo')).toBeInTheDocument();
   });
 
-  it('edita nombre, modelo y base mandando sólo lo que cambió', async () => {
-    apiMock.mockResolvedValue(alfa({ displayName: 'Alfa II', base: { name: 'Base Sur', lat: -34.7, lon: -58.5 } }));
-    montar('supervisor');
-    await screen.findByText('Alfa', { selector: 'div' });
-
-    await userEvent.click(within(fila('Alfa')).getByRole('button', { name: 'Editar' }));
-    const edicion = formulario('Editar Alfa');
-    await userEvent.clear(within(edicion).getByLabelText('Nombre'));
-    await userEvent.type(within(edicion).getByLabelText('Nombre'), 'Alfa II');
-    await userEvent.clear(within(edicion).getByLabelText('Base'));
-    await userEvent.type(within(edicion).getByLabelText('Base'), 'Base Sur');
-    await userEvent.click(within(edicion).getByRole('button', { name: 'Guardar' }));
-
-    await waitFor(() =>
-      expect(apiMock).toHaveBeenCalledWith(`/drones/${HASH_ALFA}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ displayName: 'Alfa II', base: { name: 'Base Sur', lat: -34.6, lon: -58.4 } }),
-      }),
-    );
-    await waitFor(() => expect(screen.queryByRole('form', { name: 'Editar Alfa' })).not.toBeInTheDocument());
-  });
 
   it('edita un dron sin base sin inventarle una', async () => {
     traerMock.mockResolvedValue([bravo()]);
@@ -250,25 +228,6 @@ describe('DronesView', () => {
     );
   });
 
-  it('borra la base si se vacían las coordenadas', async () => {
-    apiMock.mockResolvedValue(alfa({ base: null }));
-    montar('supervisor');
-    await screen.findByText('Alfa', { selector: 'div' });
-
-    await userEvent.click(within(fila('Alfa')).getByRole('button', { name: 'Editar' }));
-    const edicion = formulario('Editar Alfa');
-    await userEvent.clear(within(edicion).getByLabelText('Latitud'));
-    await userEvent.clear(within(edicion).getByLabelText('Longitud'));
-    await userEvent.click(within(edicion).getByRole('button', { name: 'Guardar' }));
-
-    // El backend interpreta `base: null` como "sacarle la base".
-    await waitFor(() =>
-      expect(apiMock).toHaveBeenCalledWith(`/drones/${HASH_ALFA}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ base: null }),
-      }),
-    );
-  });
 
   it('deja la edición abierta si el backend rechaza el cambio', async () => {
     apiMock.mockRejectedValue(new Error('Solo un supervisor puede modificar el activo'));
@@ -438,7 +397,7 @@ describe('DronesView', () => {
     expect(screen.queryByRole('form', { name: 'Dar de alta un dron' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Ver eliminados' })).not.toBeInTheDocument();
     expect(within(fila('Alfa')).queryByRole('checkbox')).not.toBeInTheDocument();
-    expect(within(fila('Alfa')).getByText('Inactivo')).toBeInTheDocument();
+    expect(within(fila('Alfa')).getByText('No operativo')).toBeInTheDocument();
     expect(within(fila('Alfa')).queryByRole('button', { name: 'Editar' })).not.toBeInTheDocument();
     expect(within(fila('Alfa')).queryByRole('button', { name: 'Eliminar' })).not.toBeInTheDocument();
   });

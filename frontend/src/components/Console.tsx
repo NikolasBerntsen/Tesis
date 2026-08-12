@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, getRole, getUsername } from '../api';
 import type { Alert, Drone, DroneStatus, EventRow, Me, NovedadDron, PatrolRoute, RolConsola } from '../types';
 import { useWebSocket } from '../useWebSocket';
+import BasesView from './BasesView';
 import BotonTema from './BotonTema';
 import Dashboard from './Dashboard';
 import DroneDetail from './DroneDetail';
@@ -12,7 +13,7 @@ import UsersView from './UsersView';
 const MAX_EVENTS = 300;
 const TICK_MS = 1000;
 
-type Seccion = 'operacion' | 'drones' | 'usuarios' | 'registro';
+type Seccion = 'operacion' | 'drones' | 'bases' | 'usuarios' | 'registro';
 
 /**
  * Qué secciones ve cada rol, en el orden en que aparecen en la barra. La
@@ -22,16 +23,18 @@ type Seccion = 'operacion' | 'drones' | 'usuarios' | 'registro';
  * vacío y cada pedido le volvería con un 403.
  */
 const SECCIONES: Record<RolConsola, readonly Seccion[]> = {
-  field_operator: ['drones'],
-  operator: ['operacion'],
-  supervisor: ['operacion', 'drones', 'usuarios'],
-  admin: ['operacion', 'drones', 'usuarios', 'registro'],
+  field_operator: ['drones', 'bases'],
+  // El operador ve el inventario y las bases para ubicarse, pero no los edita.
+  operator: ['operacion', 'drones', 'bases'],
+  supervisor: ['operacion', 'drones', 'bases', 'usuarios'],
+  admin: ['operacion', 'drones', 'bases', 'usuarios', 'registro'],
 };
 
 /** "Operación" es la flota en vivo; "Drones" es el registro de activos. */
 const ETIQUETA: Record<Seccion, string> = {
   operacion: 'Operación',
   drones: 'Drones',
+  bases: 'Bases',
   usuarios: 'Usuarios',
   registro: 'Registro',
 };
@@ -233,6 +236,8 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
         </main>
       ) : abierta === 'drones' ? (
         <DronesView me={me} novedad={novedadDron} />
+      ) : abierta === 'bases' ? (
+        me && <BasesView me={me} />
       ) : abierta === 'usuarios' ? (
         <UsersView me={me} />
       ) : abierta === 'registro' ? (

@@ -25,6 +25,8 @@ export function makeDrone(over: Partial<Drone> = {}): Drone {
     droneId: 'd1',
     displayName: 'Alfa',
     model: 'DJI Mini 3',
+    inventoryCode: 'INV-0001',
+    baseId: 1,
     active: true,
     deletedAt: null,
     base: { name: 'Base Norte', lat: -34.6, lon: -58.4 },

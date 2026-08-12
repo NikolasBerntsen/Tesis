@@ -123,3 +123,37 @@
 
   @page { margin: 10mm; }
 }
+
+/* --- Una sola hoja ---------------------------------------------------------
+   El modal es alto y con scroll propio; al imprimir, ese alto se convertía en
+   una segunda hoja casi vacía. Acá se aplana todo y se corta el desborde. */
+@media print {
+  html, body {
+    height: auto !important;
+    overflow: hidden !important;
+  }
+  .modal-fondo {
+    position: static !important;
+    display: block !important;
+    background: none !important;
+    padding: 0 !important;
+  }
+  .modal-caja {
+    box-shadow: none !important;
+    border: 0 !important;
+    max-height: none !important;
+    height: auto !important;
+    overflow: visible !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+  .modal-cuerpo { overflow: visible !important; max-height: none !important; }
+  /* Encabezado, botones y todo lo que no sea el sticker en sí. */
+  .modal-cabecera,
+  .modal-pie,
+  .modal-cerrar { display: none !important; }
+  .qr-sticker {
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+}

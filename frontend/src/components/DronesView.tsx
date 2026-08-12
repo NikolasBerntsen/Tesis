@@ -1,6 +1,6 @@
-import { Fragment, useEffect, useRef, useState, type FormEvent } from 'react';
-import { api, traerDrones } from '../api';
-import type { Base, Drone, Me, NovedadDron } from '../types';
+import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { api, traerBases, traerDrones } from '../api';
+import type { BaseAsset, Drone, Me, NovedadDron } from '../types';
 import QrDronModal from './QrDronModal';
 
 const COLUMNAS = 6;
@@ -17,39 +17,19 @@ function textoError(e: unknown): string {
 type Formulario = {
   displayName: string;
   model: string;
-  baseName: string;
-  baseLat: string;
-  baseLon: string;
+  inventoryCode: string;
+  baseId: number | null;
 };
 
-const FORMULARIO_VACIO: Formulario = { displayName: '', model: '', baseName: '', baseLat: '', baseLon: '' };
+const FORMULARIO_VACIO: Formulario = { displayName: '', model: '', inventoryCode: '', baseId: null };
 
 function formularioDe(d: Drone): Formulario {
   return {
     displayName: d.displayName,
     model: d.model,
-    baseName: d.base?.name ?? '',
-    baseLat: d.base ? String(d.base.lat) : '',
-    baseLon: d.base ? String(d.base.lon) : '',
+    inventoryCode: d.inventoryCode,
+    baseId: d.baseId,
   };
-}
-
-type LecturaBase = { ok: true; base: Base | null } | { ok: false; error: string };
-
-/** El par de coordenadas vacío significa "sin base", no un error de carga. */
-function leerBase(f: Formulario): LecturaBase {
-  const lat = f.baseLat.trim();
-  const lon = f.baseLon.trim();
-  if (!lat && !lon) return { ok: true, base: null };
-  if (!lat || !lon || !Number.isFinite(Number(lat)) || !Number.isFinite(Number(lon))) {
-    return { ok: false, error: 'La base necesita latitud y longitud numéricas' };
-  }
-  return { ok: true, base: { name: f.baseName.trim() || 'Base', lat: Number(lat), lon: Number(lon) } };
-}
-
-function mismaBase(a: Base | null, b: Base | null): boolean {
-  if (!a || !b) return a === b;
-  return a.name === b.name && a.lat === b.lat && a.lon === b.lon;
 }
 
 function upsert(lista: Drone[], ficha: Drone): Drone[] {
@@ -59,7 +39,7 @@ function upsert(lista: Drone[], ficha: Drone): Drone[] {
 }
 
 /** Los mismos campos para el alta y para la edición: cambian sólo los botones. */
-function CamposDron({ valor, onCambio }: { valor: Formulario; onCambio: (f: Formulario) => void }) {
+function CamposDron({ valor, onCambio, bases }: { valor: Formulario; onCambio: (f: Formulario) => void; bases: BaseAsset[] }) {
   return (
     <>
       <label>
@@ -76,18 +56,95 @@ function CamposDron({ valor, onCambio }: { valor: Formulario; onCambio: (f: Form
         <input value={valor.model} onChange={(e) => onCambio({ ...valor, model: e.target.value })} maxLength={40} />
       </label>
       <label>
-        Base
-        <input value={valor.baseName} onChange={(e) => onCambio({ ...valor, baseName: e.target.value })} maxLength={40} />
+        Número de inventario
+        <input
+          value={valor.inventoryCode}
+          onChange={(e) => onCambio({ ...valor, inventoryCode: e.target.value })}
+          maxLength={30}
+          placeholder="INV-0042"
+        />
       </label>
-      <label>
-        Latitud
-        <input value={valor.baseLat} onChange={(e) => onCambio({ ...valor, baseLat: e.target.value })} inputMode="decimal" />
-      </label>
-      <label>
-        Longitud
-        <input value={valor.baseLon} onChange={(e) => onCambio({ ...valor, baseLon: e.target.value })} inputMode="decimal" />
-      </label>
+      <SelectorDeBase
+        bases={bases}
+        valor={valor.baseId}
+        onElegir={(baseId) => onCambio({ ...valor, baseId })}
+      />
     </>
+  );
+}
+
+/**
+ * Base del dron: se elige de las que están dadas de alta, con un buscador que
+ * filtra a medida que se escribe. La coordenada no se tipea acá — es un dato de
+ * la base, no del dron.
+ */
+function SelectorDeBase({
+  bases,
+  valor,
+  onElegir,
+}: {
+  bases: BaseAsset[];
+  valor: number | null;
+  onElegir: (id: number | null) => void;
+}) {
+  const [texto, setTexto] = useState('');
+  const [abierto, setAbierto] = useState(false);
+  const elegida = bases.find((b) => b.id === valor) ?? null;
+
+  const filtradas = useMemo(() => {
+    const q = texto.trim().toLowerCase();
+    return q ? bases.filter((b: BaseAsset) => b.name.toLowerCase().includes(q)) : bases;
+  }, [bases, texto]);
+
+  return (
+    <label className="selector-base">
+      Base
+      {elegida && !abierto ? (
+        <div className="base-elegida">
+          <span className="inscripcion">{elegida.name}</span>
+          <span className="muted mono">
+            {elegida.lat.toFixed(5)}, {elegida.lon.toFixed(5)}
+          </span>
+          <button type="button" className="chico" onClick={() => { setAbierto(true); setTexto(''); }}>
+            Cambiar
+          </button>
+          <button type="button" className="chico ghost" onClick={() => onElegir(null)}>
+            Quitar
+          </button>
+        </div>
+      ) : (
+        <>
+          <input
+            value={texto}
+            onChange={(e) => { setTexto(e.target.value); setAbierto(true); }}
+            onFocus={() => setAbierto(true)}
+            placeholder={bases.length ? 'Escribí para buscar una base…' : 'No hay bases dadas de alta'}
+            disabled={bases.length === 0}
+            aria-label="Buscar base"
+          />
+          {abierto && (
+            <ul className="lista-bases" role="listbox">
+              {filtradas.length === 0 && <li className="muted">Ninguna base coincide.</li>}
+              {filtradas.map((b) => (
+                <li key={b.id}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={b.id === valor}
+                    onClick={() => { onElegir(b.id); setAbierto(false); setTexto(''); }}
+                  >
+                    <span className="inscripcion">{b.name}</span>
+                    <span className="muted mono">
+                      {b.lat.toFixed(4)}, {b.lon.toFixed(4)}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </label>
   );
 }
 
@@ -110,6 +167,8 @@ type PropsDronesView = {
 export default function DronesView({ me, novedad = null }: PropsDronesView) {
   const [drones, setDrones] = useState<Drone[]>([]);
   const [cargando, setCargando] = useState(true);
+  // Las bases se traen una vez: el selector las necesita para el desplegable.
+  const [bases, setBases] = useState<BaseAsset[]>([]);
   const [error, setError] = useState('');
   const [verEliminados, setVerEliminados] = useState(false);
   const [nuevo, setNuevo] = useState<Formulario>(FORMULARIO_VACIO);
@@ -122,6 +181,16 @@ export default function DronesView({ me, novedad = null }: PropsDronesView) {
   const esSupervisor = me.role === 'supervisor' || me.role === 'admin';
   const puedeDarDeAlta = esSupervisor || me.role === 'field_operator';
   const mostrarEliminados = esSupervisor && verEliminados;
+
+  // Las bases sólo hacen falta para el selector del formulario: si el pedido
+  // falla, la vista sigue andando y el selector queda vacío con su aviso.
+  useEffect(() => {
+    traerBases({ soloActivas: true })
+      // Si el pedido falla o vuelve con algo raro, el selector queda vacío con
+      // su aviso: la vista de drones no depende de las bases para funcionar.
+      .then((lista) => setBases(Array.isArray(lista) ? lista : []))
+      .catch(() => setBases([]));
+  }, []);
 
   useEffect(() => {
     let vigente = true;
@@ -179,13 +248,11 @@ export default function DronesView({ me, novedad = null }: PropsDronesView) {
 
   async function crear(e: FormEvent) {
     e.preventDefault();
-    const lectura = leerBase(nuevo);
-    if (!lectura.ok) return setError(lectura.error);
-
     const cuerpo = {
       displayName: nuevo.displayName.trim(),
       model: nuevo.model.trim(),
-      ...(lectura.base ? { base: lectura.base } : {}),
+      inventoryCode: nuevo.inventoryCode.trim(),
+      ...(nuevo.baseId != null ? { baseId: nuevo.baseId } : {}),
     };
     const ficha = await accion(() => api<Drone>('/drones', { method: 'POST', body: JSON.stringify(cuerpo) }));
     if (!ficha) return;
@@ -196,13 +263,11 @@ export default function DronesView({ me, novedad = null }: PropsDronesView) {
 
   async function guardar(e: FormEvent, dron: Drone) {
     e.preventDefault();
-    const lectura = leerBase(edicion);
-    if (!lectura.ok) return setError(lectura.error);
-
-    const cuerpo: { displayName?: string; model?: string; base?: Base | null } = {};
+    const cuerpo: { displayName?: string; model?: string; inventoryCode?: string; baseId?: number | null } = {};
     if (edicion.displayName.trim() !== dron.displayName) cuerpo.displayName = edicion.displayName.trim();
     if (edicion.model.trim() !== dron.model) cuerpo.model = edicion.model.trim();
-    if (!mismaBase(lectura.base, dron.base)) cuerpo.base = lectura.base;
+    if (edicion.inventoryCode.trim() !== dron.inventoryCode) cuerpo.inventoryCode = edicion.inventoryCode.trim();
+    if (edicion.baseId !== dron.baseId) cuerpo.baseId = edicion.baseId;
 
     // Un PATCH sin cambios sólo traería un 400 "Nada para modificar".
     if (Object.keys(cuerpo).length > 0 && !(await patch(dron.hash, cuerpo))) return;
@@ -288,15 +353,15 @@ export default function DronesView({ me, novedad = null }: PropsDronesView) {
                               <input
                                 type="checkbox"
                                 checked={d.active}
-                                aria-label={`Dron ${d.displayName} activo`}
+                                aria-label={`Dron ${d.displayName} operativo`}
                                 onChange={() => patch(d.hash, { active: !d.active })}
                               />
                               <span className="switch-pista" />
-                              <span className="switch-texto">{d.active ? 'Activo' : 'Inactivo'}</span>
+                              <span className="switch-texto">{d.active ? 'Operativo' : 'No operativo'}</span>
                             </label>
                           ) : (
                             <span className={`estado ${d.active ? 'ok' : 'muted'}`}>
-                              {d.active ? 'Activo' : 'Inactivo'}
+                              {d.active ? 'Operativo' : 'No operativo'}
                             </span>
                           )}
                         </td>
@@ -349,7 +414,7 @@ export default function DronesView({ me, novedad = null }: PropsDronesView) {
                               aria-label={`Editar ${d.displayName}`}
                               onSubmit={(e) => guardar(e, d)}
                             >
-                              <CamposDron valor={edicion} onCambio={setEdicion} />
+                              <CamposDron valor={edicion} onCambio={setEdicion} bases={bases} />
                               <button type="submit">Guardar</button>
                               <button type="button" className="ghost" onClick={() => setEditando(null)}>
                                 Cancelar
@@ -371,7 +436,7 @@ export default function DronesView({ me, novedad = null }: PropsDronesView) {
         <section className="card">
           <h2>Dar de alta un dron</h2>
           <form className="form-crear" aria-label="Dar de alta un dron" onSubmit={crear}>
-            <CamposDron valor={nuevo} onCambio={setNuevo} />
+            <CamposDron valor={nuevo} onCambio={setNuevo} bases={bases} />
             <button type="submit">Dar de alta</button>
           </form>
           <p className="muted">La base es opcional: sin coordenadas el dron queda sin base asignada.</p>
