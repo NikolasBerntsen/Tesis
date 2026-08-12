@@ -7,12 +7,6 @@ import Modal from './Modal';
 type Formulario = { name: string; lat: string; lon: string };
 const VACIO: Formulario = { name: '', lat: '', lon: '' };
 
-const CRUZ = (
-  <svg viewBox="0 0 24 24" aria-hidden="true">
-    <path d="M12 3v18M3 12h18" />
-  </svg>
-);
-
 /** Marcador de la base: el mismo lenguaje que usa el mapa de la flota. */
 const iconoBase = L.divIcon({
   className: 'base-icon',
@@ -181,8 +175,8 @@ export default function BasesView({ me }: { me: Me }) {
               </button>
             )}
             {puedeCrear && (
-              <button type="button" className="primario" onClick={abrirAlta}>
-                {CRUZ} Nueva base
+              <button type="button" className="primario chico" onClick={abrirAlta}>
+                Nueva base
               </button>
             )}
           </div>

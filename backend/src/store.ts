@@ -186,14 +186,16 @@ export function listUsers(roles: Role[], opts: { includeDeleted?: boolean; q?: s
 const ALFABETO = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789abcdefghijkmnpqrstuvwxyz';
 
 /**
- * Contraseña de 16 caracteres agrupada en bloques de cuatro. La genera el
- * sistema porque es lo único que garantiza que nadie reutilice una que ya usa
- * en otro lado: se muestra una sola vez y después solo queda su hash.
+ * Contraseña de 10 caracteres corridos. La genera el sistema porque es lo único
+ * que garantiza que nadie reutilice una que ya usa en otro lado: se muestra una
+ * sola vez y después solo queda su hash.
+ *
+ * Diez caracteres del alfabeto de arriba dan ~58 bits: de sobra contra fuerza
+ * bruta sobre bcrypt, y corta como para retenerla mientras se camina del
+ * escritorio al dron.
  */
 export function generarContrasenia(): string {
-  const bytes = randomBytes(16);
-  const chars = Array.from(bytes, (b) => ALFABETO[b % ALFABETO.length]);
-  return [0, 4, 8, 12].map((i) => chars.slice(i, i + 4).join('')).join('-');
+  return Array.from(randomBytes(10), (b) => ALFABETO[b % ALFABETO.length]).join('');
 }
 
 export interface UserInput {

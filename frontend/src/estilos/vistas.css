@@ -461,3 +461,20 @@ details.meta pre {
 .editable-name input:focus {
   box-shadow: inset 0 -2px 0 var(--oro);
 }
+
+/* --- Conmutador de fondo del mapa -------------------------------------------
+   Va flotando sobre el mapa, arriba a la derecha, donde no tapa los controles
+   de zoom ni la atribución. */
+.mapa-caja { position: relative; }
+.mapa-fondos {
+  position: absolute;
+  z-index: 500;
+  top: var(--e-3);
+  right: var(--e-3);
+  display: flex;
+  border-radius: var(--radio-chico);
+  overflow: hidden;
+  box-shadow: var(--sombra-suave);
+}
+.mapa-fondos button { border-radius: 0; }
+.mapa-fondos button + button { border-left: 0; }

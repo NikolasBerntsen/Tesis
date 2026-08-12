@@ -34,7 +34,7 @@ describe('integración — ABM de usuarios', () => {
       username: 'nuevo1', fullName: 'Persona nuevo1', role: 'operator', active: true, canControl: false, deletedAt: null,
     });
     // la contraseña la genera el sistema y viaja UNA sola vez, en esta respuesta
-    expect(r.body.password).toMatch(/^[A-Za-z0-9]{4}(-[A-Za-z0-9]{4}){3}$/);
+    expect(r.body.password).toMatch(/^[A-Za-z0-9]{10}$/);
     expect(await login(srv.base, 'nuevo1', r.body.password)).toBeTruthy();
 
     // y no se puede volver a leer: el listado nunca la trae
@@ -158,7 +158,7 @@ describe('integración — ABM de usuarios', () => {
 
     const regen = await api(srv.base, '/api/users/operador/regenerate-password', adm, { method: 'POST' });
     expect(regen.status).toBe(200);
-    expect(regen.body.password).toMatch(/^[A-Za-z0-9]{4}(-[A-Za-z0-9]{4}){3}$/);
+    expect(regen.body.password).toMatch(/^[A-Za-z0-9]{10}$/);
     expect(await login(srv.base, 'operador', regen.body.password)).toBeTruthy();
     expect(await login(srv.base, 'operador', CREDS.operador)).toBeNull();
 
@@ -350,7 +350,7 @@ describe('integración — nombre completo, buscador y contraseñas generadas', 
     const b = await crearUsuario(srv.base, adm, { username: 'gen2' });
     expect(a.password).not.toBe(b.password);
     // formato legible: cuatro bloques de cuatro, sin caracteres ambiguos
-    expect(a.password).toMatch(/^[A-Za-z0-9]{4}(-[A-Za-z0-9]{4}){3}$/);
+    expect(a.password).toMatch(/^[A-Za-z0-9]{10}$/);
     expect(a.password).not.toMatch(/[O0Il1]/);
 
     const lista = (await api(srv.base, '/api/users?includeDeleted=1', adm)).body;
