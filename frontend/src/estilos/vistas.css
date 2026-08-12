@@ -478,3 +478,25 @@ details.meta pre {
 }
 .mapa-fondos button { border-radius: 0; }
 .mapa-fondos button + button { border-left: 0; }
+
+/* --- Estado del dron: dos niveles -------------------------------------------
+   Batería, señal, estado y nodo en una línea; modo y posición plegados. Sin
+   esto la tarjeta se comía la altura que necesitan el video y el mapa para
+   convivir en la misma pantalla. */
+.status-grid { align-items: start; }
+.status-grid .estado-actual {
+  display: block;
+  font-family: var(--fuente-serif);
+  font-size: var(--txt-md);
+  line-height: var(--interlinea-titulo);
+}
+.status-segundo-nivel { margin-top: var(--e-3); }
+.status-segundo-nivel > summary {
+  cursor: pointer;
+  font-size: var(--txt-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  color: var(--tinta-suave);
+}
+.status-segundo-nivel > summary:hover { color: var(--oro-oscuro); }
+.status-segundo-nivel .status-grid { margin-top: var(--e-3); }

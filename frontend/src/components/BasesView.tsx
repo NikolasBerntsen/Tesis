@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import L from 'leaflet';
-import { api, traerBases } from '../api';
-import type { BaseAsset, Me } from '../types';
+import { LEJOS_M, api, distanciaM, traerBases, traerRutas } from '../api';
+import type { BaseAsset, Me, PatrolRoute } from '../types';
 import Modal from './Modal';
 
 type Formulario = { name: string; lat: string; lon: string };
@@ -75,6 +75,13 @@ export default function BasesView({ me }: { me: Me }) {
   const [editando, setEditando] = useState<BaseAsset | null>(null);
   const [abierto, setAbierto] = useState(false);
   const [ubicando, setUbicando] = useState(false);
+  // Paso 2 del alta: qué rutas puede patrullar un dron que sale de esta base.
+  const [paso, setPaso] = useState<1 | 2>(1);
+  const [rutas, setRutas] = useState<PatrolRoute[]>([]);
+  const [elegidas, setElegidas] = useState<number[]>([]);
+  const [busqueda, setBusqueda] = useState('');
+  const [guardada, setGuardada] = useState<BaseAsset | null>(null);
+  const [aConfirmar, setAConfirmar] = useState<{ ruta: PatrolRoute; metros: number } | null>(null);
 
   const esSupervisor = me.role === 'supervisor' || me.role === 'admin';
   const puedeCrear = esSupervisor || me.role === 'field_operator';
@@ -113,7 +120,43 @@ export default function BasesView({ me }: { me: Me }) {
   function abrirAlta() {
     setEditando(null);
     setForm(VACIO);
+    setPaso(1);
+    setElegidas([]);
+    setBusqueda('');
+    setGuardada(null);
     setAbierto(true);
+  }
+
+  /**
+   * Las rutas se ordenan por la distancia entre la base y su PRIMER nodo: es
+   * desde ahí que el dron arranca el recorrido, así que es la distancia que
+   * decide si la ruta tiene sentido para esta base.
+   */
+  const rutasOrdenadas = useMemo(() => {
+    const origen = guardada ?? (lat != null && lon != null ? { lat, lon } : null);
+    const q = busqueda.trim().toLowerCase();
+    return rutas
+      .filter((r) => !q || r.name.toLowerCase().includes(q))
+      .map((r) => {
+        const primero = r.waypoints[0];
+        const metros = origen && primero ? distanciaM(origen, primero) : null;
+        return { ruta: r, metros };
+      })
+      .sort((a, b) => (a.metros ?? Infinity) - (b.metros ?? Infinity));
+  }, [rutas, busqueda, guardada, lat, lon]);
+
+  function alternarRuta(ruta: PatrolRoute, metros: number | null) {
+    if (elegidas.includes(ruta.id)) {
+      setElegidas((ids) => ids.filter((id) => id !== ruta.id));
+      return;
+    }
+    // Lejos de la base, el vuelo hasta el primer nodo se come la autonomía:
+    // se pregunta antes de asignarla, con la distancia a la vista.
+    if (metros != null && metros > LEJOS_M) {
+      setAConfirmar({ ruta, metros });
+      return;
+    }
+    setElegidas((ids) => [...ids, ruta.id]);
   }
 
   function abrirEdicion(b: BaseAsset) {
@@ -149,12 +192,23 @@ export default function BasesView({ me }: { me: Me }) {
     e.preventDefault();
     if (!completo) return;
     const cuerpo = JSON.stringify({ name: form.name.trim(), lat, lon });
-    const ok = await accion(() =>
-      editando
-        ? api(`/bases/${editando.id}`, { method: 'PATCH', body: cuerpo })
-        : api('/bases', { method: 'POST', body: cuerpo }),
-    );
-    if (ok) setAbierto(false);
+    if (editando) {
+      const ok = await accion(() => api(`/bases/${editando.id}`, { method: 'PATCH', body: cuerpo }));
+      if (ok) setAbierto(false);
+      return;
+    }
+    // Alta: se guarda la base y recién ahí se eligen sus rutas, que es el orden
+    // en que se piensa el problema (primero dónde está, después qué patrulla).
+    setError('');
+    try {
+      const creada = await api<BaseAsset>('/bases', { method: 'POST', body: cuerpo });
+      setGuardada(creada);
+      setRutas(await traerRutas().catch(() => []));
+      setPaso(2);
+      await cargar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   }
 
   const visibles = useMemo(() => bases, [bases]);
@@ -255,6 +309,64 @@ export default function BasesView({ me }: { me: Me }) {
               ×
             </button>
           </header>
+          {paso === 2 ? (
+            <>
+              <div className="modal-cuerpo form-base">
+                <p className="muted">
+                  <strong>{guardada?.name}</strong> quedó dada de alta. Elegí qué rutas puede patrullar un dron
+                  que sale de esta base; las más cercanas aparecen primero.
+                </p>
+                <input
+                  className="buscador"
+                  type="search"
+                  value={busqueda}
+                  onChange={(e) => setBusqueda(e.target.value)}
+                  placeholder="Buscar una ruta…"
+                  aria-label="Buscar rutas"
+                />
+                {rutasOrdenadas.length === 0 && <p className="vacio">No hay rutas para asignar.</p>}
+                <ul className="lista-bases" role="listbox" aria-label="Rutas disponibles">
+                  {rutasOrdenadas.map(({ ruta, metros }) => (
+                    <li key={ruta.id}>
+                      <button
+                        type="button"
+                        role="option"
+                        aria-selected={elegidas.includes(ruta.id)}
+                        className={elegidas.includes(ruta.id) ? 'active' : ''}
+                        onClick={() => alternarRuta(ruta, metros)}
+                      >
+                        <span className="inscripcion">{ruta.name}</span>
+                        <span className="muted mono">
+                          {ruta.waypoints.length} nodos
+                          {metros != null && ` · ${metros < 1000 ? `${Math.round(metros)} m` : `${(metros / 1000).toFixed(1)} km`}`}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div className="modal-pie">
+                <button type="button" className="ghost" onClick={() => setAbierto(false)}>
+                  Después
+                </button>
+                <button
+                  type="button"
+                  className="primario"
+                  onClick={() =>
+                    accion(async () => {
+                      await api(`/bases/${guardada!.id}/routes`, {
+                        method: 'PUT',
+                        body: JSON.stringify({ routeIds: elegidas }),
+                      });
+                      setAbierto(false);
+                    })
+                  }
+                >
+                  Asignar {elegidas.length > 0 ? `${elegidas.length} ruta(s)` : 'sin rutas'}
+                </button>
+              </div>
+            </>
+          ) : (
           <form className="form-base modal-cuerpo" onSubmit={guardar}>
             <label>
               Nombre
@@ -291,6 +403,39 @@ export default function BasesView({ me }: { me: Me }) {
               </button>
             </div>
           </form>
+          )}
+        </Modal>
+      )}
+      {aConfirmar && (
+        <Modal etiquetadoPor="titulo-lejos" onCerrar={() => setAConfirmar(null)}>
+          <header className="modal-cabecera">
+            <h2 className="modal-titulo" id="titulo-lejos">
+              La ruta queda lejos de la base
+            </h2>
+          </header>
+          <div className="modal-cuerpo">
+            <p>
+              El primer nodo de <strong>{aConfirmar.ruta.name}</strong> está a{' '}
+              <strong>{(aConfirmar.metros / 1000).toFixed(1)} km</strong> de la base. El dron va a gastar
+              esa ida y esa vuelta de su autonomía antes de empezar a patrullar.
+            </p>
+            <p className="muted">¿Querés asignarla igual?</p>
+          </div>
+          <footer className="modal-pie">
+            <button type="button" className="ghost" onClick={() => setAConfirmar(null)}>
+              No asignarla
+            </button>
+            <button
+              type="button"
+              className="primario"
+              onClick={() => {
+                setElegidas((ids) => [...ids, aConfirmar.ruta.id]);
+                setAConfirmar(null);
+              }}
+            >
+              Asignarla igual
+            </button>
+          </footer>
         </Modal>
       )}
     </main>

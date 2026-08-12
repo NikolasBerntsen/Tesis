@@ -175,8 +175,9 @@ export default function DroneDetail({
 
       <div className="grid-operacion">
         <section className="col col-video">
-          <LiveVideo frame={frame} />
-          <div className="card">
+          <div className="par-video-mapa">
+            <LiveVideo frame={frame} />
+            <div className="card">
             <div className="mapa-head">
               <h2>Ubicación</h2>
               <button
@@ -188,12 +189,13 @@ export default function DroneDetail({
               </button>
             </div>
             <DronesMap items={items} alwaysShowLine waypoints={waypoints} />
-            <div className="mapa-leyenda">
-              <span className="estado accent">Dron</span>
-              <span className="estado">Base</span>
-              <span className="estado bad">Nodo pendiente</span>
-              <span className="estado ok">Nodo recorrido</span>
-              {previsualizando && <span className="estado info">Ruta a comenzar</span>}
+              <div className="mapa-leyenda">
+                <span className="estado accent">Dron</span>
+                <span className="estado">Base</span>
+                <span className="estado bad">Nodo pendiente</span>
+                <span className="estado ok">Nodo recorrido</span>
+                {previsualizando && <span className="estado info">Ruta a comenzar</span>}
+              </div>
             </div>
           </div>
         </section>

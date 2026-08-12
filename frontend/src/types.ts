@@ -111,6 +111,8 @@ export interface PatrolRoute {
   name: string;
   description: string;
   waypoints: Waypoint[];
+  createdBy: string | null;
+  deletedAt: string | null;
 }
 
 export interface Alert {

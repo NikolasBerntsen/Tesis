@@ -281,3 +281,17 @@
   flex: 1;
   min-height: 420px;
 }
+
+/* Video y ubicación a la misma altura: son las dos ventanas de lo que está
+   pasando y se miran juntas. Patrullaje y control quedan justo debajo. */
+.par-video-mapa {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--e-4);
+  align-items: stretch;
+}
+@media (max-width: 900px) {
+  .par-video-mapa { grid-template-columns: 1fr; }
+}
+.par-video-mapa .video,
+.par-video-mapa .map { height: 300px; min-height: 300px; }
