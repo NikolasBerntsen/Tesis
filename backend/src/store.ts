@@ -105,6 +105,28 @@ export interface PatrolRoute {
   name: string;
   description: string;
   waypoints: Waypoint[];
+  createdBy: string | null;
+  deletedAt: string | null;
+}
+
+interface FilaRuta {
+  id: number;
+  name: string;
+  description: string;
+  waypoints: string;
+  created_by?: string | null;
+  deleted_at?: string | null;
+}
+
+function aRuta(r: FilaRuta): PatrolRoute {
+  return {
+    id: r.id,
+    name: r.name,
+    description: r.description,
+    waypoints: JSON.parse(r.waypoints),
+    createdBy: r.created_by ?? null,
+    deletedAt: r.deleted_at ?? null,
+  };
 }
 
 export interface Alert {
@@ -186,14 +208,16 @@ export function listUsers(roles: Role[], opts: { includeDeleted?: boolean; q?: s
 const ALFABETO = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789abcdefghijkmnpqrstuvwxyz';
 
 /**
- * Contraseña de 16 caracteres agrupada en bloques de cuatro. La genera el
- * sistema porque es lo único que garantiza que nadie reutilice una que ya usa
- * en otro lado: se muestra una sola vez y después solo queda su hash.
+ * Contraseña de 10 caracteres corridos. La genera el sistema porque es lo único
+ * que garantiza que nadie reutilice una que ya usa en otro lado: se muestra una
+ * sola vez y después solo queda su hash.
+ *
+ * Diez caracteres del alfabeto de arriba dan ~58 bits: de sobra contra fuerza
+ * bruta sobre bcrypt, y corta como para retenerla mientras se camina del
+ * escritorio al dron.
  */
 export function generarContrasenia(): string {
-  const bytes = randomBytes(16);
-  const chars = Array.from(bytes, (b) => ALFABETO[b % ALFABETO.length]);
-  return [0, 4, 8, 12].map((i) => chars.slice(i, i + 4).join('')).join('-');
+  return Array.from(randomBytes(10), (b) => ALFABETO[b % ALFABETO.length]).join('');
 }
 
 export interface UserInput {
@@ -494,18 +518,96 @@ export function renameDrone(droneId: string, displayName: string): DroneIdentity
 
 // ---- Rutas de patrullaje ----
 
-export function getRoutes(): PatrolRoute[] {
-  const rows = db.prepare('SELECT * FROM patrol_routes ORDER BY id').all() as {
-    id: number; name: string; description: string; waypoints: string;
-  }[];
-  return rows.map((r) => ({ ...r, waypoints: JSON.parse(r.waypoints) }));
+/** Distancia en metros entre dos coordenadas (fórmula del haversine). */
+export function distanciaM(a: { lat: number; lon: number }, b: { lat: number; lon: number }): number {
+  const R = 6_371_000;
+  const rad = (g: number) => (g * Math.PI) / 180;
+  const dLat = rad(b.lat - a.lat);
+  const dLon = rad(b.lon - a.lon);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
+export interface RouteInput {
+  name: string;
+  description?: string;
+  waypoints: Waypoint[];
+}
+
+export function createRoute(input: RouteInput, createdBy: string): PatrolRoute {
+  const info = db
+    .prepare('INSERT INTO patrol_routes (name, description, waypoints, created_at, created_by) VALUES (?, ?, ?, ?, ?)')
+    .run(input.name, input.description ?? '', JSON.stringify(input.waypoints), new Date().toISOString(), createdBy);
+  return getRoute(Number(info.lastInsertRowid))!;
+}
+
+export interface RoutePatch {
+  name?: string;
+  description?: string;
+  waypoints?: Waypoint[];
+}
+
+export function updateRoute(id: number, patch: RoutePatch): { before: PatrolRoute; after: PatrolRoute } | undefined {
+  const before = getRoute(id);
+  if (!before) return undefined;
+  db.prepare(
+    `UPDATE patrol_routes SET name = COALESCE(?, name), description = COALESCE(?, description),
+                              waypoints = COALESCE(?, waypoints) WHERE id = ?`,
+  ).run(patch.name ?? null, patch.description ?? null, patch.waypoints ? JSON.stringify(patch.waypoints) : null, id);
+  return { before, after: getRoute(id)! };
+}
+
+export function softDeleteRoute(id: number, deletedBy: string): PatrolRoute | undefined {
+  const actual = getRoute(id);
+  if (!actual || actual.deletedAt) return undefined;
+  db.prepare('UPDATE patrol_routes SET deleted_at = ?, deleted_by = ? WHERE id = ?').run(new Date().toISOString(), deletedBy, id);
+  return getRoute(id)!;
+}
+
+export function restoreRoute(id: number): PatrolRoute | undefined {
+  const actual = getRoute(id);
+  if (!actual || !actual.deletedAt) return undefined;
+  db.prepare('UPDATE patrol_routes SET deleted_at = NULL, deleted_by = NULL WHERE id = ?').run(id);
+  return getRoute(id)!;
+}
+
+/** Reemplaza de una las rutas asignadas a una base. */
+export function asignarRutas(baseId: number, routeIds: number[]): void {
+  const aplicar = db.transaction(() => {
+    db.prepare('DELETE FROM base_routes WHERE base_id = ?').run(baseId);
+    const insertar = db.prepare('INSERT OR IGNORE INTO base_routes (base_id, route_id) VALUES (?, ?)');
+    for (const id of routeIds) insertar.run(baseId, id);
+  });
+  aplicar();
+}
+
+export function rutasDeBase(baseId: number): PatrolRoute[] {
+  const filas = db
+    .prepare(
+      `SELECT r.* FROM patrol_routes r
+         JOIN base_routes br ON br.route_id = r.id
+        WHERE br.base_id = ? AND r.deleted_at IS NULL
+        ORDER BY r.name COLLATE NOCASE`,
+    )
+    .all(baseId) as FilaRuta[];
+  return filas.map(aRuta);
+}
+
+export function basesDeRuta(routeId: number): number[] {
+  return (db.prepare('SELECT base_id AS id FROM base_routes WHERE route_id = ?').all(routeId) as { id: number }[])
+    .map((f) => f.id);
+}
+
+export function getRoutes(opts: { includeDeleted?: boolean } = {}): PatrolRoute[] {
+  const filtro = opts.includeDeleted ? '' : 'WHERE deleted_at IS NULL';
+  const rows = db.prepare(`SELECT * FROM patrol_routes ${filtro} ORDER BY id`).all() as FilaRuta[];
+  return rows.map(aRuta);
+}
+
+/** Sin filtrar borradas: quien llama decide si es un 404 o un 409. */
 export function getRoute(id: number): PatrolRoute | undefined {
-  const r = db.prepare('SELECT * FROM patrol_routes WHERE id = ?').get(id) as
-    | { id: number; name: string; description: string; waypoints: string }
-    | undefined;
-  return r ? { ...r, waypoints: JSON.parse(r.waypoints) } : undefined;
+  const r = db.prepare('SELECT * FROM patrol_routes WHERE id = ?').get(id) as FilaRuta | undefined;
+  return r ? aRuta(r) : undefined;
 }
 
 /** Pone (o borra, con label vacío) el apodo de un nodo de la ruta. */

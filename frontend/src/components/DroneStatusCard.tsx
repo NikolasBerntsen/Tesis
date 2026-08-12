@@ -64,6 +64,12 @@ export default function DroneStatusCard({
           <Medidor pct={sinSenal ? 0 : status.signalPct} />
         </div>
         <div>
+          <span>Estado</span>
+          <strong className={`estado-actual ${status.state === 'ORBITING' ? 'accent' : ''}`}>
+            {stateLabel(status.state)}
+          </strong>
+        </div>
+        <div>
           <span>Nodo</span>
           {status.waypointTotal > 0 ? (
             <>
@@ -78,24 +84,23 @@ export default function DroneStatusCard({
         </div>
       </div>
 
-      <hr className="regla-ornamental" />
-
-      <div className="status-grid">
-        <div>
-          <span>Estado</span>
-          <strong className={status.state === 'ORBITING' ? 'accent' : ''}>{stateLabel(status.state)}</strong>
+      {/* Modo y posición se consultan de vez en cuando, no se vigilan: van
+          plegados para que el video y el mapa entren en la misma pantalla. */}
+      <details className="status-segundo-nivel">
+        <summary>Modo y posición</summary>
+        <div className="status-grid">
+          <div>
+            <span>Modo</span>
+            <strong>{status.mode}</strong>
+          </div>
+          <div>
+            <span>Posición</span>
+            <strong className="mono">
+              {status.lat.toFixed(5)}, {status.lon.toFixed(5)}
+            </strong>
+          </div>
         </div>
-        <div>
-          <span>Modo</span>
-          <strong>{status.mode}</strong>
-        </div>
-        <div>
-          <span>Posición</span>
-          <strong>
-            {status.lat.toFixed(5)}, {status.lon.toFixed(5)}
-          </strong>
-        </div>
-      </div>
+      </details>
 
       {status.state === 'ORBITING' && (
         <button className="resume" onClick={onResumePatrol}>

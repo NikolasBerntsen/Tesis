@@ -1,5 +1,6 @@
 import type {
   BaseAsset,
+  PatrolRoute,
   CamposMeta,
   Drone,
   EventRow,
@@ -157,6 +158,33 @@ export function buscarUsuarios(opts: { incluirEliminados?: boolean; q?: string }
     `/users${armarQuery({ includeDeleted: opts.incluirEliminados ? 1 : undefined, q: opts.q || undefined })}`,
   );
 }
+
+export function traerRutas(opts: { incluirEliminadas?: boolean; baseId?: number } = {}): Promise<PatrolRoute[]> {
+  return api<PatrolRoute[]>(
+    `/routes${armarQuery({ includeDeleted: opts.incluirEliminadas ? 1 : undefined, baseId: opts.baseId })}`,
+  );
+}
+
+export function rutasDeBase(baseId: number): Promise<PatrolRoute[]> {
+  return api<PatrolRoute[]>(`/bases/${baseId}/routes`);
+}
+
+/**
+ * Distancia en metros entre dos coordenadas (haversine). La consola la necesita
+ * para ordenar las rutas por cercanía y para avisar cuando el primer nodo de
+ * una ruta queda lejos de la base a la que se la está asignando.
+ */
+export function distanciaM(a: { lat: number; lon: number }, b: { lat: number; lon: number }): number {
+  const R = 6_371_000;
+  const rad = (g: number) => (g * Math.PI) / 180;
+  const dLat = rad(b.lat - a.lat);
+  const dLon = rad(b.lon - a.lon);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+/** Umbral a partir del cual asignar una ruta a una base pide confirmación. */
+export const LEJOS_M = 1_000;
 
 // ---- `meta` de los eventos ----
 

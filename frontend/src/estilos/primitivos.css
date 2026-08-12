@@ -164,12 +164,18 @@ button.resume {
 button.validate:hover:not(:disabled),
 button.resume:hover:not(:disabled) { background-color: var(--ok-velo); border-color: var(--ok); }
 
+/* Eliminar se lee igual que Editar o Desactivar: misma cara de piedra y la
+   misma tinta. Lo único que cambia es el filo, en rojo óxido. El relleno
+   rosado que tenía antes bajaba el contraste del texto justo en la acción que
+   más conviene leer bien antes de tocarla. */
 button.dismiss {
   border-color: var(--peligro);
-  color: var(--peligro);
-  background-image: linear-gradient(180deg, #FFFCFB 0%, var(--peligro-velo) 100%);
 }
-button.dismiss:hover:not(:disabled) { background-color: var(--peligro-velo); border-color: var(--peligro); }
+button.dismiss:hover:not(:disabled) {
+  border-color: var(--peligro);
+  color: var(--peligro);
+  background-color: var(--peligro-velo);
+}
 
 /* Activo/seleccionado: filo dorado + velo, nunca relleno macizo */
 button.active {

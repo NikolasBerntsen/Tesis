@@ -1,5 +1,5 @@
 import L from 'leaflet';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { formatDistance, initials, waypointLabel } from '../format';
 import type { Base, DroneStatus, PatrolRoute } from '../types';
 
@@ -43,6 +43,8 @@ const PALETA = {
   oliva: '#4F7A46', // --ok
   oxido: '#9C3B30', // --peligro
   info: '#3D6076', // --info
+  negro: '#14120F',
+  ambar: '#F2C230', // el par negro/ámbar es el de mayor contraste posible
 } as const;
 
 /* El mapa se deja con sus colores propios: lavarlo a marfil lo volvía lindo y
@@ -58,6 +60,9 @@ function filtroDeTeselas(): string {
 }
 
 const WP_PENDIENTE = PALETA.oxido;
+/** Fondo del mapa: callejero o imagen satelital. */
+type Fondo = 'mapa' | 'satelite';
+
 /* Los nodos de una ruta elegida pero todavía no ordenada: se ven, se pueden
    inspeccionar, y no se confunden con los de un patrullaje en curso. */
 const WP_PREVIO = PALETA.info;
@@ -148,16 +153,21 @@ function droneIcon(name: string): L.DivIcon {
   });
 }
 
-// La base es piedra tallada: un rombo de tinta con el reborde marfil
+/**
+ * La base: el mismo rombo, ahora en negro y amarillo. Marfil sobre tinta se
+ * perdía contra las teselas claras del mapa —y contra una vista de satélite se
+ * perdía del todo—; este par es el de mayor contraste que existe y se distingue
+ * sobre cualquier fondo, que es lo único que se le pide a un punto de retorno.
+ */
 const BASE_ICON = L.divIcon({
   className: 'base-icon',
-  html: `<svg width="22" height="22" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg">
-      <path d="M11 1.4 20.6 11 11 20.6 1.4 11z" fill="${PALETA.marfil}" stroke="${PALETA.tinta}" stroke-width="1.6" stroke-linejoin="round"/>
-      <path d="M11 6.6 15.4 11 11 15.4 6.6 11z" fill="${PALETA.tinta}"/>
+  html: `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 1.2 22.8 12 12 22.8 1.2 12z" fill="${PALETA.negro}" stroke="${PALETA.ambar}" stroke-width="2" stroke-linejoin="round"/>
+      <path d="M12 6.6 17.4 12 12 17.4 6.6 12z" fill="${PALETA.ambar}"/>
     </svg>`,
-  iconSize: [22, 22],
-  iconAnchor: [11, 11],
-  popupAnchor: [0, -12],
+  iconSize: [24, 24],
+  iconAnchor: [12, 12],
+  popupAnchor: [0, -13],
 });
 
 /* --- Globos y etiquetas --------------------------------------------------- */
@@ -345,6 +355,10 @@ export default function DronesMap({
   waypoints?: WaypointsLayer | null;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const [fondo, setFondo] = useState<Fondo>('mapa');
+  const fondoRef = useRef<Fondo>('mapa');
+  const capasRef = useRef<Record<Fondo, L.TileLayer> | null>(null);
+  const mapaRef = useRef<L.Map | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const layersRef = useRef(new Map<string, Layers>());
   const openIdRef = useRef<string | null>(null);
@@ -382,12 +396,38 @@ export default function DronesMap({
     });
   };
 
+  // Cambiar de fondo no recrea el mapa: se intercambian las capas y el resto
+  // —marcadores, líneas, popups abiertos— queda tal cual.
+  useEffect(() => {
+    fondoRef.current = fondo;
+    const map = mapaRef.current;
+    const capas = capasRef.current;
+    if (!map || !capas) return;
+    for (const [nombre, capa] of Object.entries(capas)) {
+      if (nombre === fondo) capa.addTo(map);
+      else map.removeLayer(capa);
+    }
+    vestir(map.getPane('tilePane'), { filter: filtroDeTeselas() });
+  }, [fondo]);
+
   useEffect(() => {
     const map = L.map(containerRef.current!, { zoomControl: false }).setView(CENTER, 15);
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '&copy; OpenStreetMap',
-    }).addTo(map);
+    // Dos fondos: el callejero para ubicarse por calles y el satelital para
+    // reconocer el terreno real —techos, arboledas, tinglados— que es lo que
+    // hace falta al decidir dónde poner un nodo de patrullaje.
+    const capas: Record<Fondo, L.TileLayer> = {
+      mapa: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap',
+      }),
+      satelite: L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        { maxZoom: 19, attribution: 'Imágenes &copy; Esri' },
+      ),
+    };
+    capasRef.current = capas;
+    capas[fondoRef.current].addTo(map);
+    mapaRef.current = map;
     vestir(map.getPane('tilePane'), { filter: filtroDeTeselas() });
     // Sin la banderita de fábrica: es lo único de color frío que quedaba
     map.attributionControl.setPrefix('Leaflet');
@@ -603,5 +643,22 @@ export default function DronesMap({
     if (cont) cont.onclick = () => { wpActionsRef.current.onContinue?.(index); marker.closePopup(); };
   }
 
-  return <div className="map" ref={containerRef} />;
+  return (
+    <div className="mapa-caja">
+      <div className="mapa-fondos" role="group" aria-label="Fondo del mapa">
+        {(['mapa', 'satelite'] as const).map((f) => (
+          <button
+            key={f}
+            type="button"
+            className={fondo === f ? 'chico active' : 'chico'}
+            aria-pressed={fondo === f}
+            onClick={() => setFondo(f)}
+          >
+            {f === 'mapa' ? 'Mapa' : 'Satélite'}
+          </button>
+        ))}
+      </div>
+      <div className="map" ref={containerRef} />
+    </div>
+  );
 }

@@ -631,3 +631,58 @@
   text-align: left;
 }
 .lista-bases button:hover { background: var(--oro-velo); }
+
+/* --- Rutas: catálogo y editor ---------------------------------------------- */
+.rutas-cuerpo {
+  display: grid;
+  grid-template-columns: minmax(280px, 4fr) 6fr;
+  gap: var(--e-4);
+  align-items: start;
+}
+@media (max-width: 1000px) {
+  .rutas-cuerpo { grid-template-columns: 1fr; }
+}
+.rutas-cuerpo .tabla tbody tr { cursor: pointer; }
+
+.editor-ruta { display: flex; flex-direction: column; gap: var(--e-3); }
+.editor-ruta-cuerpo {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--e-4);
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .editor-ruta-cuerpo { grid-template-columns: 1fr; }
+}
+.lista-nodos {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-2);
+}
+.lista-nodos li {
+  display: grid;
+  grid-template-columns: 26px 1fr 62px auto auto auto auto;
+  align-items: center;
+  gap: var(--e-2);
+  padding: 6px 8px;
+  border: 1px solid var(--veta);
+  border-radius: var(--radio-chico);
+  background: var(--marmol-1);
+  cursor: grab;
+}
+.lista-nodos li.nodo-encendido {
+  border-color: var(--oro);
+  background: var(--oro-velo);
+}
+.nodo-orden { font-weight: 700; text-align: center; }
+.nodo-coord { font-size: var(--txt-xs); }
+.nodo-apodo, .nodo-alt { padding: 4px 6px; font-size: var(--txt-sm); }
+@media (max-width: 700px) {
+  .lista-nodos li { grid-template-columns: 26px 1fr auto; }
+  .nodo-alt, .nodo-coord { display: none; }
+}

@@ -461,3 +461,42 @@ details.meta pre {
 .editable-name input:focus {
   box-shadow: inset 0 -2px 0 var(--oro);
 }
+
+/* --- Conmutador de fondo del mapa -------------------------------------------
+   Va flotando sobre el mapa, arriba a la derecha, donde no tapa los controles
+   de zoom ni la atribución. */
+.mapa-caja { position: relative; }
+.mapa-fondos {
+  position: absolute;
+  z-index: 500;
+  top: var(--e-3);
+  right: var(--e-3);
+  display: flex;
+  border-radius: var(--radio-chico);
+  overflow: hidden;
+  box-shadow: var(--sombra-suave);
+}
+.mapa-fondos button { border-radius: 0; }
+.mapa-fondos button + button { border-left: 0; }
+
+/* --- Estado del dron: dos niveles -------------------------------------------
+   Batería, señal, estado y nodo en una línea; modo y posición plegados. Sin
+   esto la tarjeta se comía la altura que necesitan el video y el mapa para
+   convivir en la misma pantalla. */
+.status-grid { align-items: start; }
+.status-grid .estado-actual {
+  display: block;
+  font-family: var(--fuente-serif);
+  font-size: var(--txt-md);
+  line-height: var(--interlinea-titulo);
+}
+.status-segundo-nivel { margin-top: var(--e-3); }
+.status-segundo-nivel > summary {
+  cursor: pointer;
+  font-size: var(--txt-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  color: var(--tinta-suave);
+}
+.status-segundo-nivel > summary:hover { color: var(--oro-oscuro); }
+.status-segundo-nivel .status-grid { margin-top: var(--e-3); }

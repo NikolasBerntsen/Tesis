@@ -37,7 +37,7 @@ Si el CI falla, el despliegue no corre. Se puede disparar a mano desde
 |---|---|
 | Se despliega la tesis | Sólo se recrea su contenedor: ~5 s sin responder en `tesis.…`. `panel.…` no se entera. |
 | Se despliega el otro proyecto | Al recrear Caddy hay unos segundos en que **ambos** sitios no responden desde afuera. El contenedor de la tesis sigue vivo y no pierde nada. |
-| El otro proyecto corre `reset` (`DEV_WIPE_DB=true`) | Borra **sus** volúmenes. La base de la tesis (volumen `cc-data`) no se toca. |
+| El otro proyecto corre su `reset` | Borra **sus** volúmenes. La base de la tesis (volumen `cc-data`) no se toca: son proyectos distintos de Docker Compose. |
 | Se borra o recrea la red `proxy` | Hay que volver a levantar ambos stacks. `deploy.sh` recrea la red si falta. |
 
 Cuidados sobre recursos compartidos: la VM es una Ampere A1 del *free tier*.
@@ -104,6 +104,32 @@ docker network create proxy
 **No hay que abrir nada nuevo.** La tesis no publica puertos: entra por el 80/443
 del Caddy, que ya están abiertos en la Security List para el otro proyecto.
 
+## `DEV_WIPE_DB`: borrar la base en cada despliegue
+
+Bandera pensada para la etapa de desarrollo, mientras el esquema todavía se
+mueve y volver a sembrar de cero es más rápido que migrar a mano.
+
+Con **`true`**, cada despliegue baja el stack con `down -v` —lo que elimina el
+volumen `cc-data`— y lo vuelve a levantar; el contenedor siembra la base al
+arrancar, así que el sistema queda con los usuarios y drones de demostración.
+Con **`false`**, o sin definir, los datos quedan intactos. Se revisa en **cada**
+despliegue, y el resultado se imprime en el registro de Actions.
+
+Se puede fijar en dos lugares:
+
+| Dónde | Cómo | Cuándo conviene |
+|---|---|---|
+| Variable del repositorio | Settings → Secrets and variables → Actions → **Variables** → `DEV_WIPE_DB` | Para prenderla y apagarla sin entrar a la VM |
+| `.env` de la VM | `DEV_WIPE_DB=true` en `/home/ubuntu/tesis/.env` | Para que quede atada a esa máquina |
+
+La variable del repositorio **le gana** al `.env`. Si no está definida, manda el
+`.env`. Cualquier valor que no sea `true` (o `1`, `si`, `yes`) se toma como
+`false`: ante la duda, no se borra.
+
+> **Antes de que haya datos reales, ponerla en `false`.** Con `true` no hay
+> confirmación ni vuelta atrás, y el borrado corre solo con cada merge a `main`.
+> El borrado manual con confirmación escrita sigue siendo `deploy.sh reset`.
+
 ## Primer despliegue manual (opcional)
 
 ```bash
@@ -144,8 +170,9 @@ curl -s https://tesis.144-22-138-149.sslip.io/api/health
   sin servicio. No hay despliegue azul/verde.
 - **Backups**: manuales. La base es un archivo SQLite dentro del volumen
   `cc-data` (`docker cp comando-central:/data/comando-central.db .`).
-- **`reset` es sólo manual** y pide confirmación escrita: a propósito no está
-  cableado al CI, para que ningún merge pueda borrar la base.
+- **`reset` es sólo manual** y pide confirmación escrita. El borrado automático
+  en cada despliegue existe aparte, con `DEV_WIPE_DB`, y está apagado por
+  defecto.
 
 ## Probarlo localmente
 

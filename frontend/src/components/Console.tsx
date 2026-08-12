@@ -4,6 +4,7 @@ import type { Alert, Drone, DroneStatus, EventRow, Me, NovedadDron, PatrolRoute,
 import { useWebSocket } from '../useWebSocket';
 import BasesView from './BasesView';
 import BotonTema from './BotonTema';
+import RutasView from './RutasView';
 import Dashboard from './Dashboard';
 import DroneDetail from './DroneDetail';
 import DronesView from './DronesView';
@@ -13,7 +14,7 @@ import UsersView from './UsersView';
 const MAX_EVENTS = 300;
 const TICK_MS = 1000;
 
-type Seccion = 'operacion' | 'drones' | 'bases' | 'usuarios' | 'registro';
+type Seccion = 'operacion' | 'drones' | 'bases' | 'rutas' | 'usuarios' | 'registro';
 
 /**
  * Qué secciones ve cada rol, en el orden en que aparecen en la barra. La
@@ -23,11 +24,11 @@ type Seccion = 'operacion' | 'drones' | 'bases' | 'usuarios' | 'registro';
  * vacío y cada pedido le volvería con un 403.
  */
 const SECCIONES: Record<RolConsola, readonly Seccion[]> = {
-  field_operator: ['drones', 'bases'],
+  field_operator: ['drones', 'bases', 'rutas'],
   // El operador ve el inventario y las bases para ubicarse, pero no los edita.
-  operator: ['operacion', 'drones', 'bases'],
-  supervisor: ['operacion', 'drones', 'bases', 'usuarios'],
-  admin: ['operacion', 'drones', 'bases', 'usuarios', 'registro'],
+  operator: ['operacion', 'drones', 'bases', 'rutas'],
+  supervisor: ['operacion', 'drones', 'bases', 'rutas', 'usuarios'],
+  admin: ['operacion', 'drones', 'bases', 'rutas', 'usuarios', 'registro'],
 };
 
 /** "Operación" es la flota en vivo; "Drones" es el registro de activos. */
@@ -35,6 +36,7 @@ const ETIQUETA: Record<Seccion, string> = {
   operacion: 'Operación',
   drones: 'Drones',
   bases: 'Bases',
+  rutas: 'Rutas',
   usuarios: 'Usuarios',
   registro: 'Registro',
 };
@@ -238,6 +240,8 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
         <DronesView me={me} novedad={novedadDron} />
       ) : abierta === 'bases' ? (
         me && <BasesView me={me} />
+      ) : abierta === 'rutas' ? (
+        me && <RutasView me={me} />
       ) : abierta === 'usuarios' ? (
         <UsersView me={me} />
       ) : abierta === 'registro' ? (

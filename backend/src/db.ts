@@ -100,6 +100,15 @@ db.exec(`
     deleted_by TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_bases_activas ON bases(deleted_at, active);
+
+  -- Una base puede tener varias rutas y una ruta puede servir a varias bases:
+  -- el operador elige, entre las de SU base, cuál patrullar.
+  CREATE TABLE IF NOT EXISTS base_routes (
+    base_id  INTEGER NOT NULL REFERENCES bases(id),
+    route_id INTEGER NOT NULL REFERENCES patrol_routes(id),
+    PRIMARY KEY (base_id, route_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_base_routes_ruta ON base_routes(route_id);
 `);
 
 // --- Migraciones sobre bases anteriores ---
@@ -257,4 +266,16 @@ if (basesVacia) {
     });
     promover();
   }
+}
+
+// Las rutas nacieron como datos de demostración sin autoría ni baja: ahora se
+// dan de alta desde la consola, así que necesitan lo mismo que el resto.
+const rutaCols = (db.prepare('PRAGMA table_info(patrol_routes)').all() as { name: string }[]).map((c) => c.name);
+for (const [col, def] of [
+  ['created_at', 'TEXT'],
+  ['created_by', 'TEXT'],
+  ['deleted_at', 'TEXT'],
+  ['deleted_by', 'TEXT'],
+]) {
+  if (!rutaCols.includes(col)) db.exec(`ALTER TABLE patrol_routes ADD COLUMN ${col} ${def}`);
 }

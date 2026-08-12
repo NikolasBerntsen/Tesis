@@ -1,11 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { api, traerBases } from '../api';
+import { api, traerBases, traerRutas } from '../api';
 import { makeMe } from '../test/fixtures';
 import BasesView from './BasesView';
 
-vi.mock('../api', () => ({ api: vi.fn(), traerBases: vi.fn() }));
+vi.mock('../api', async (original) => ({
+  ...(await original<Record<string, unknown>>()),
+  api: vi.fn(),
+  traerBases: vi.fn(),
+  traerRutas: vi.fn(async () => []),
+}));
 // Leaflet no corre en jsdom: mide el contenedor y pinta lienzos. El doble deja
 // probar lo único que importa acá, que es el clic sobre el mapa.
 const { alClickear } = vi.hoisted(() => ({ alClickear: { fn: null as null | ((e: unknown) => void) } }));
@@ -32,6 +37,7 @@ vi.mock('leaflet', () => {
 
 const apiMock = vi.mocked(api);
 const basesMock = vi.mocked(traerBases);
+const rutasMock = vi.mocked(traerRutas);
 const ADMIN = makeMe({ username: 'admin1', role: 'admin' });
 const CAMPO = makeMe({ username: 'campo1', role: 'field_operator' });
 const OPERADOR = makeMe({ username: 'oper1', role: 'operator' });
@@ -294,5 +300,108 @@ describe('BasesView — caminos que faltaban cubrir', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Restaurar' }));
 
     expect(apiMock).toHaveBeenLastCalledWith('/bases/1/restore', { method: 'POST' });
+  });
+});
+
+describe('BasesView — paso 2: asignar rutas a la base', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    alClickear.fn = null;
+  });
+
+  const nueva = { id: 5, name: 'Base Río', lat: -34.9, lon: -56.15, active: true, createdAt: '', createdBy: 'campo1', deletedAt: null };
+
+  function rutaCerca() {
+    return { id: 1, name: 'Perímetro cercano', description: '', waypoints: [{ lat: -34.9005, lon: -56.1505, alt: 40 }, { lat: -34.901, lon: -56.151, alt: 40 }], createdBy: null, deletedAt: null };
+  }
+  function rutaLejos() {
+    // ~5 km al norte: bien pasado el umbral del kilómetro
+    return { id: 2, name: 'Perímetro lejano', description: '', waypoints: [{ lat: -34.855, lon: -56.15, alt: 40 }, { lat: -34.856, lon: -56.151, alt: 40 }], createdBy: null, deletedAt: null };
+  }
+
+  async function llegarAlPaso2() {
+    basesMock.mockResolvedValue([]);
+    apiMock.mockResolvedValue(nueva);
+    rutasMock.mockResolvedValue([rutaLejos(), rutaCerca()]);
+    render(<BasesView me={CAMPO} />);
+    await screen.findByText(/todavía no hay bases/i);
+    await userEvent.click(screen.getByRole('button', { name: /nueva base/i }));
+
+    const dialogo = screen.getByRole('dialog');
+    await userEvent.type(within(dialogo).getByLabelText('Nombre'), 'Base Río');
+    await userEvent.type(within(dialogo).getByLabelText('Latitud'), '-34.9');
+    await userEvent.type(within(dialogo).getByLabelText('Longitud'), '-56.15');
+    await userEvent.click(within(dialogo).getByRole('button', { name: /dar de alta/i }));
+  }
+
+  it('después de guardar la base ofrece elegir sus rutas, más cercana primero', async () => {
+    await llegarAlPaso2();
+
+    expect(await screen.findByText(/quedó dada de alta/i)).toBeInTheDocument();
+    const opciones = screen.getAllByRole('option');
+    // la cercana va arriba aunque en la lista original venía segunda
+    expect(opciones[0]).toHaveTextContent('Perímetro cercano');
+    expect(opciones[1]).toHaveTextContent('Perímetro lejano');
+  });
+
+  it('asignar una ruta cercana no pregunta nada', async () => {
+    await llegarAlPaso2();
+    await screen.findByText(/quedó dada de alta/i);
+
+    await userEvent.click(screen.getByRole('option', { name: /Perímetro cercano/ }));
+    expect(screen.queryByText(/queda lejos de la base/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /asignar 1 ruta/i })).toBeInTheDocument();
+  });
+
+  it('una ruta cuyo primer nodo está a más de un kilómetro pide confirmación', async () => {
+    await llegarAlPaso2();
+    await screen.findByText(/quedó dada de alta/i);
+
+    await userEvent.click(screen.getByRole('option', { name: /Perímetro lejano/ }));
+    expect(await screen.findByText(/queda lejos de la base/i)).toBeInTheDocument();
+    // y el aviso dice la distancia, que es el dato con el que se decide
+    // hay dos diálogos abiertos (el del alta y el aviso): se mira el aviso
+    const aviso = screen.getByRole('dialog', { name: /queda lejos de la base/i });
+    expect(aviso).toHaveTextContent(/\d+[.,]\d+ km/);
+
+    // si se rechaza, no queda asignada
+    await userEvent.click(screen.getByRole('button', { name: /no asignarla/i }));
+    expect(screen.getByRole('button', { name: /sin rutas/i })).toBeInTheDocument();
+  });
+
+  it('se puede asignarla igual desde el aviso', async () => {
+    await llegarAlPaso2();
+    await screen.findByText(/quedó dada de alta/i);
+
+    await userEvent.click(screen.getByRole('option', { name: /Perímetro lejano/ }));
+    await userEvent.click(await screen.findByRole('button', { name: /asignarla igual/i }));
+    expect(screen.getByRole('button', { name: /asignar 1 ruta/i })).toBeInTheDocument();
+  });
+
+  it('el buscador filtra las rutas del paso 2', async () => {
+    await llegarAlPaso2();
+    await screen.findByText(/quedó dada de alta/i);
+
+    await userEvent.type(screen.getByLabelText('Buscar rutas'), 'cercano');
+    expect(screen.getAllByRole('option')).toHaveLength(1);
+  });
+
+  it('guardar la asignación llama al endpoint de la base', async () => {
+    await llegarAlPaso2();
+    await screen.findByText(/quedó dada de alta/i);
+
+    await userEvent.click(screen.getByRole('option', { name: /Perímetro cercano/ }));
+    await userEvent.click(screen.getByRole('button', { name: /asignar 1 ruta/i }));
+
+    expect(apiMock).toHaveBeenCalledWith('/bases/5/routes', expect.objectContaining({ method: 'PUT' }));
+    expect(JSON.parse(apiMock.mock.calls.at(-1)![1].body)).toEqual({ routeIds: [1] });
+  });
+
+  it('se puede saltear el paso con "Después"', async () => {
+    await llegarAlPaso2();
+    await screen.findByText(/quedó dada de alta/i);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Después' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });
