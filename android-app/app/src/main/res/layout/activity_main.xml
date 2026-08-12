@@ -44,14 +44,14 @@
 
                         <TextView
                             style="@style/TituloTarjeta"
-                            android:text="ESTADO" />
+                            android:text="@string/main_estado" />
 
                         <TextView
                             android:id="@+id/txtState"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="4dp"
-                            android:text="En base"
+                            android:text="@string/estado_idle"
                             android:textSize="22sp"
                             android:textStyle="bold" />
 
@@ -59,7 +59,13 @@
                             android:id="@+id/txtConnStatus"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:text="Conectando…"
+                            android:text="@string/main_conectando"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:id="@+id/txtDetectionStatus"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
                             android:textSize="13sp" />
 
                         <com.google.android.material.button.MaterialButton
@@ -67,7 +73,7 @@
                             style="@style/Widget.Material3.Button.TextButton"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="Reintentar"
+                            android:text="@string/main_reintentar"
                             android:visibility="gone" />
 
                         <View
@@ -86,13 +92,13 @@
                                 android:layout_width="0dp"
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
-                                android:text="Batería" />
+                                android:text="@string/main_bateria" />
 
                             <TextView
                                 android:id="@+id/txtBattery"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="—"
+                                android:text="@string/main_sin_dato"
                                 android:textStyle="bold" />
                         </LinearLayout>
 
@@ -115,13 +121,13 @@
                                 android:layout_width="0dp"
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
-                                android:text="Señal RC" />
+                                android:text="@string/main_senal" />
 
                             <TextView
                                 android:id="@+id/txtSignal"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="—"
+                                android:text="@string/main_sin_dato"
                                 android:textStyle="bold" />
                         </LinearLayout>
 
@@ -150,7 +156,7 @@
 
                         <TextView
                             style="@style/TituloTarjeta"
-                            android:text="PATRULLAJE" />
+                            android:text="@string/main_patrullaje" />
 
                         <com.google.android.material.textfield.TextInputLayout
                             android:id="@+id/layoutRoutes"
@@ -158,14 +164,14 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="8dp"
-                            android:hint="Ruta de patrullaje">
+                            android:hint="@string/main_ruta">
 
                             <com.google.android.material.textfield.MaterialAutoCompleteTextView
                                 android:id="@+id/dropdownRoutes"
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
                                 android:inputType="none"
-                                android:text="Sin rutas cargadas" />
+                                android:text="@string/main_sin_rutas_cargadas" />
                         </com.google.android.material.textfield.TextInputLayout>
 
                         <TextView
@@ -181,7 +187,7 @@
                             android:layout_height="wrap_content"
                             android:layout_marginTop="12dp"
                             android:enabled="false"
-                            android:text="Comenzar patrullaje" />
+                            android:text="@string/main_comenzar_patrullaje" />
                     </LinearLayout>
                 </com.google.android.material.card.MaterialCardView>
 
@@ -200,12 +206,12 @@
 
                         <TextView
                             style="@style/TituloTarjeta"
-                            android:text="SIMULACIÓN" />
+                            android:text="@string/main_simulacion" />
 
                         <TextView
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:text="Controles para forzar las situaciones de la demo."
+                            android:text="@string/main_simulacion_ayuda"
                             android:textSize="13sp" />
 
                         <com.google.android.material.button.MaterialButton
@@ -214,7 +220,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="12dp"
-                            android:text="Forzar batería baja" />
+                            android:text="@string/main_forzar_bateria" />
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/btnRecharge"
@@ -222,7 +228,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="8dp"
-                            android:text="Recargar batería" />
+                            android:text="@string/main_recargar_bateria" />
 
                         <!-- Declarado explícito: con tema Material el inflador cambia
                              <Switch> por SwitchMaterial y ViewBinding no castea -->
@@ -231,7 +237,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="12dp"
-                            android:text="Simular pérdida de señal" />
+                            android:text="@string/main_simular_perdida_senal" />
                     </LinearLayout>
                 </com.google.android.material.card.MaterialCardView>
             </LinearLayout>
@@ -250,7 +256,7 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Registro local"
+            android:text="@string/main_registro_local"
             android:textSize="20sp"
             android:textStyle="bold" />
 
@@ -258,7 +264,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginBottom="8dp"
-            android:text="Últimos eventos de este dron"
+            android:text="@string/main_registro_local_ayuda"
             android:textSize="13sp" />
 
         <ScrollView
@@ -270,7 +276,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:fontFamily="monospace"
-                android:text="Sin eventos todavía."
+                android:text="@string/main_registro_vacio"
                 android:textSize="11sp" />
         </ScrollView>
     </LinearLayout>

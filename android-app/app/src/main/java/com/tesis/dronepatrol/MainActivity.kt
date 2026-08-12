@@ -14,6 +14,7 @@ import androidx.lifecycle.lifecycleScope
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.tesis.dronepatrol.comms.CommandCenterClient
 import com.tesis.dronepatrol.comms.DetectionClient
+import com.tesis.dronepatrol.comms.ModoEnlace
 import com.tesis.dronepatrol.databinding.ActivityMainBinding
 import com.tesis.dronepatrol.drone.ControllerFactory
 import com.tesis.dronepatrol.drone.SimulatedDroneController
@@ -26,15 +27,15 @@ import kotlinx.coroutines.launch
 /**
  * Pantalla principal: estado del dron, elección de ruta y —solo en modo
  * prueba— los controles de simulación. El registro local vive en el menú
- * lateral. Los datos de conexión llegan desde [LoginActivity].
+ * lateral. Llega acá con el token que devolvió el emparejamiento por QR
+ * ([FieldMenuActivity]): de este punto en adelante la app habla como el dron.
  */
 class MainActivity : AppCompatActivity() {
 
     companion object {
-        const val EXTRA_BACKEND_URL = "backendUrl"
-        const val EXTRA_DETECTION_URL = "detectionUrl"
-        const val EXTRA_USERNAME = "username"
-        const val EXTRA_PASSWORD = "password"
+        /** JWT de rol `drone` que devolvió POST /api/drones/pair. */
+        const val EXTRA_DRONE_TOKEN = "droneToken"
+        const val EXTRA_DRONE_HASH = "droneHash"
         const val EXTRA_DISPLAY_NAME = "displayName"
         const val EXTRA_BASE_LAT = "baseLat"
         const val EXTRA_BASE_LON = "baseLon"
@@ -43,15 +44,15 @@ class MainActivity : AppCompatActivity() {
         private const val MAX_LINEAS_LOG = 50
 
         private val ETIQUETAS_ESTADO = mapOf(
-            PatrolState.IDLE to "En base",
-            PatrolState.PATROLLING to "Patrullando",
-            PatrolState.ORBITING to "Orbitando objetivo",
-            PatrolState.RETURNING_HOME_SIGNAL to "Volviendo a base (pérdida de señal)",
-            PatrolState.RETURNING_HOME_BATTERY to "Volviendo a base (batería baja)",
-            PatrolState.LANDED to "Aterrizado",
-            PatrolState.PAUSED to "Patrulla interrumpida",
-            PatrolState.MANUAL to "Control manual",
-            PatrolState.FORCED to "Desvío a nodo",
+            PatrolState.IDLE to R.string.estado_idle,
+            PatrolState.PATROLLING to R.string.estado_patrullando,
+            PatrolState.ORBITING to R.string.estado_orbitando,
+            PatrolState.RETURNING_HOME_SIGNAL to R.string.estado_rth_senal,
+            PatrolState.RETURNING_HOME_BATTERY to R.string.estado_rth_bateria,
+            PatrolState.LANDED to R.string.estado_aterrizado,
+            PatrolState.PAUSED to R.string.estado_pausado,
+            PatrolState.MANUAL to R.string.estado_manual,
+            PatrolState.FORCED to R.string.estado_forzado,
         )
     }
 
@@ -60,11 +61,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var commandCenter: CommandCenterClient
     private lateinit var detection: DetectionClient
     private lateinit var manager: PatrolManager
+    private val preferencias by lazy { PreferenciasEnlace(this) }
 
-    private lateinit var backendUrl: String
-    private lateinit var detectionUrl: String
-    private lateinit var username: String
-    private lateinit var password: String
+    private lateinit var droneToken: String
+    private lateinit var droneHash: String
     private lateinit var modo: String
     private var displayName = ""
     private var routes: List<PatrolRoute> = emptyList()
@@ -76,12 +76,10 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        backendUrl = intent.getStringExtra(EXTRA_BACKEND_URL).orEmpty()
-        detectionUrl = intent.getStringExtra(EXTRA_DETECTION_URL).orEmpty()
-        username = intent.getStringExtra(EXTRA_USERNAME).orEmpty()
-        password = intent.getStringExtra(EXTRA_PASSWORD).orEmpty()
+        droneToken = intent.getStringExtra(EXTRA_DRONE_TOKEN).orEmpty()
+        droneHash = intent.getStringExtra(EXTRA_DRONE_HASH).orEmpty()
         modo = intent.getStringExtra(EXTRA_MODE) ?: "TEST"
-        displayName = intent.getStringExtra(EXTRA_DISPLAY_NAME) ?: username
+        displayName = intent.getStringExtra(EXTRA_DISPLAY_NAME) ?: hashAbreviado(droneHash)
 
         commandCenter = CommandCenterClient(lifecycleScope)
         detection = DetectionClient(lifecycleScope)
@@ -95,13 +93,17 @@ class MainActivity : AppCompatActivity() {
         binding.btnRetry.setOnClickListener { conectar() }
         observarEstado()
         conectar()
+        conectarDeteccion()
     }
 
     private fun configurarBarraYMenuLateral() {
         setSupportActionBar(binding.toolbar)
         supportActionBar?.title = displayName
-        supportActionBar?.subtitle =
-            "${if (modo == "TEST") "Modo prueba" else "Despliegue"} · $username"
+        supportActionBar?.subtitle = getString(
+            R.string.main_subtitulo,
+            getString(if (modo == "TEST") R.string.main_modo_prueba else R.string.main_modo_despliegue),
+            hashAbreviado(droneHash),
+        )
 
         val toggle = ActionBarDrawerToggle(
             this,
@@ -129,7 +131,7 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    /** El simulador despega y vuelve a la base de la cuenta con la que se inició sesión. */
+    /** El simulador despega y vuelve a la base que tiene cargada el dron emparejado. */
     private fun ubicarBaseDelDron() {
         val lat = intent.getDoubleExtra(EXTRA_BASE_LAT, Double.NaN)
         val lon = intent.getDoubleExtra(EXTRA_BASE_LON, Double.NaN)
@@ -153,10 +155,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun conectar() {
         binding.btnRetry.visibility = View.GONE
-        binding.txtConnStatus.text = "Conectando con el Comando Central…"
+        binding.txtConnStatus.text = getString(R.string.main_conectando)
         lifecycleScope.launch {
             try {
-                commandCenter.login(backendUrl, username, password)
+                commandCenter.usarTokenDeDron(droneToken, preferencias.urlComandoCentral)
                 commandCenter.connect()
                 routes = commandCenter.fetchRoutes()
                 manager.availableRoutes = routes
@@ -165,9 +167,8 @@ class MainActivity : AppCompatActivity() {
                 manager.start()
                 binding.btnStartPatrol.isEnabled = routes.isNotEmpty()
                 observarConexion()
-                conectarDeteccion()
             } catch (e: Exception) {
-                binding.txtConnStatus.text = "Error de conexión: ${e.message}"
+                binding.txtConnStatus.text = getString(R.string.main_error_conexion, e.message.orEmpty())
                 binding.btnRetry.visibility = View.VISIBLE
                 Toast.makeText(this@MainActivity, e.message, Toast.LENGTH_LONG).show()
             }
@@ -175,13 +176,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * El enlace con la detección es opcional: si no se cargó la URL o es
-     * inválida, el patrullaje igual funciona (sin alertas automáticas).
+     * El enlace con la detección es opcional: si no engancha, el patrullaje
+     * sigue andando (sin alertas automáticas). Lo que no puede pasar es que
+     * falle mudo, así que lo que diga el cliente se muestra tal cual.
      */
     private fun conectarDeteccion() {
-        val ok = detectionUrl.isNotEmpty() && runCatching { detection.connect(detectionUrl) }.isSuccess
-        if (!ok) {
-            Toast.makeText(this, "Sin enlace con la detección: no se van a generar alertas", Toast.LENGTH_LONG).show()
+        val modoEnlace = preferencias.modoEnlace
+        val etiqueta = getString(
+            if (modoEnlace == ModoEnlace.CABLE) R.string.main_enlace_cable else R.string.main_enlace_red,
+        )
+        detection.connect(modoEnlace, preferencias.urlDeteccionRed)
+        lifecycleScope.launch {
+            detection.connected.combine(detection.ultimoFallo) { ok, fallo -> ok to fallo }
+                .collect { (ok, fallo) ->
+                    binding.txtDetectionStatus.text = when {
+                        ok -> getString(R.string.main_deteccion_conectada, etiqueta)
+                        fallo != null -> getString(R.string.main_deteccion_fallo, fallo)
+                        else -> getString(R.string.main_deteccion_esperando, etiqueta)
+                    }
+                }
         }
     }
 
@@ -189,7 +202,7 @@ class MainActivity : AppCompatActivity() {
         binding.dropdownRoutes.setSimpleItems(routes.map { it.name }.toTypedArray())
         binding.dropdownRoutes.setOnItemClickListener { _, _, posicion, _ -> elegirRuta(posicion) }
         if (routes.isEmpty()) {
-            binding.dropdownRoutes.setText("Sin rutas disponibles", false)
+            binding.dropdownRoutes.setText(getString(R.string.main_sin_rutas), false)
             binding.txtRouteInfo.text = ""
         } else {
             elegirRuta(0)
@@ -200,7 +213,8 @@ class MainActivity : AppCompatActivity() {
         rutaElegida = posicion
         val ruta = routes[posicion]
         binding.dropdownRoutes.setText(ruta.name, false)
-        binding.txtRouteInfo.text = "${ruta.waypoints.size} waypoints"
+        binding.txtRouteInfo.text =
+            resources.getQuantityString(R.plurals.main_waypoints, ruta.waypoints.size, ruta.waypoints.size)
     }
 
     private fun comenzarPatrullaje() {
@@ -228,10 +242,10 @@ class MainActivity : AppCompatActivity() {
         val campo = vista.findViewById<EditText>(R.id.editDisplayName)
         campo.setText(displayName)
         MaterialAlertDialogBuilder(this)
-            .setTitle("Renombrar dron")
+            .setTitle(R.string.main_renombrar)
             .setView(vista)
-            .setNegativeButton("Cancelar", null)
-            .setPositiveButton("Guardar") { _, _ ->
+            .setNegativeButton(R.string.cancelar, null)
+            .setPositiveButton(R.string.guardar) { _, _ ->
                 val nuevo = campo.text.toString().trim()
                 if (nuevo.isNotEmpty()) {
                     commandCenter.sendSetName(nuevo)
@@ -248,19 +262,25 @@ class MainActivity : AppCompatActivity() {
 
     private fun observarEstado() {
         lifecycleScope.launch {
-            manager.state.collect { binding.txtState.text = ETIQUETAS_ESTADO[it] }
+            manager.state.collect { estado ->
+                ETIQUETAS_ESTADO[estado]?.let { binding.txtState.setText(it) }
+            }
         }
         lifecycleScope.launch {
             controller.telemetry.collect {
                 val pct = it.batteryPct.toInt()
-                binding.txtBattery.text = "$pct %"
+                binding.txtBattery.text = getString(R.string.main_bateria_pct, pct)
                 binding.progressBattery.setProgressCompat(pct, true)
             }
         }
         lifecycleScope.launch {
             manager.signalOk.combine(manager.signalPct) { ok, pct -> ok to pct }
                 .collect { (ok, pct) ->
-                    binding.txtSignal.text = if (ok) "OK · $pct %" else "PERDIDA"
+                    binding.txtSignal.text = if (ok) {
+                        getString(R.string.main_senal_ok, pct)
+                    } else {
+                        getString(R.string.main_senal_perdida)
+                    }
                     binding.progressSignal.setProgressCompat(pct, true)
                 }
         }
@@ -277,9 +297,9 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             commandCenter.connected.collect { ok ->
                 binding.txtConnStatus.text = if (ok) {
-                    "Comando Central: conectado · ${routes.size} rutas"
+                    resources.getQuantityString(R.plurals.main_rutas_conectado, routes.size, routes.size)
                 } else {
-                    "Comando Central: sin enlace, reintentando…"
+                    getString(R.string.main_sin_enlace)
                 }
             }
         }

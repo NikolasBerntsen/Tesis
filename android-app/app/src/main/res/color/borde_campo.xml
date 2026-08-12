@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Campo de texto: veta en reposo, filo de oro oscuro al enfocarse (4.8:1
+     sobre mármol, o sea que también sirve de indicador de foco accesible). -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:color="@color/veta" android:state_enabled="false" />
+    <item android:color="@color/oro_oscuro" android:state_focused="true" />
+    <item android:color="@color/veta_fuerte" android:state_hovered="true" />
+    <item android:color="@color/veta" />
+</selector>

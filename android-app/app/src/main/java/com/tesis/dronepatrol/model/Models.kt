@@ -22,11 +22,32 @@ data class Telemetry(
 
 data class DroneBase(val name: String, val lat: Double, val lon: Double)
 
-/** Ficha del dron que devuelve GET /api/me. */
+/**
+ * Ficha del dron. El [hash] es su identificador en todo el protocolo (el
+ * `droneId` de los mensajes): sale del QR pegado en el dron, nunca lo declara
+ * la app.
+ */
 data class DroneProfile(
-    val droneId: String,
+    val hash: String,
     val displayName: String,
-    val base: DroneBase?,
+    val model: String = "",
+    val base: DroneBase? = null,
+)
+
+/**
+ * Sesión del operador de campo (POST /api/auth/login). Es efímera a propósito:
+ * [expiresIn] son los segundos que le quedan, para la cuenta regresiva.
+ */
+data class SesionOperador(
+    val username: String,
+    val role: String,
+    val expiresIn: Long,
+)
+
+/** Resultado de POST /api/drones/pair: el token de máquina del dron y su ficha. */
+data class Emparejamiento(
+    val token: String,
+    val drone: DroneProfile,
 )
 
 enum class PatrolState {

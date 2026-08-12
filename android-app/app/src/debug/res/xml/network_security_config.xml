@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Solo para las compilaciones de prueba (buildType debug), que son las que se
+  usan en el banco y en las salidas de campo. Habilita el texto plano en general
+  porque el modo RED apunta a la IP que tenga la laptop ese día (con anclaje USB
+  suele ser 192.168.42.x) y no hay forma de declararla acá.
+
+  La compilación de release usa el archivo de src/main, que solo permite texto
+  plano contra el loopback del cable.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

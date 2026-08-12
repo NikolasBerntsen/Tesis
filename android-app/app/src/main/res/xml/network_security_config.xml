@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  El Comando Central va por HTTPS, así que el texto plano queda prohibido en
+  general. La única excepción es el loopback del propio celular: en modo CABLE
+  la detección llega por el túnel que arma 'adb reverse tcp:8765 tcp:8765', o
+  sea ws://127.0.0.1:8765, tráfico que nunca sale del aparato.
+
+  El modo RED (ws:// contra la IP de la laptop) no entra acá porque esa IP la
+  escribe el operador y no se puede declarar de antemano: queda habilitado solo
+  en las compilaciones de prueba (ver src/debug/res/xml/network_security_config.xml).
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>
