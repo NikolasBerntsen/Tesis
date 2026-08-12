@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { seed, startServer, login, api, crearBase, CREDS, type TestServer } from '../helpers';
+import { seed, startServer, login, api, crearBase, limpiarBase, CREDS, type TestServer } from '../helpers';
 
 describe('integración — ABM de rutas y su asignación a bases', () => {
   let srv: TestServer;
@@ -148,5 +148,77 @@ describe('integración — ABM de rutas y su asignación a bases', () => {
     expect((await api(srv.base, '/api/routes/99999', sup, { method: 'DELETE' })).status).toBe(404);
     expect((await api(srv.base, '/api/routes/99999/restore', sup, { method: 'POST' })).status).toBe(404);
     expect((await api(srv.base, '/api/bases/99999/routes', sup, { method: 'PUT', body: JSON.stringify({ routeIds: [] }) })).status).toBe(404);
+  });
+});
+
+describe('integración — rutas: bordes de validación', () => {
+  let srv: TestServer;
+  let sup = '';
+
+  const DOS = [
+    { lat: -34.856, lon: -56.207 },
+    { lat: -34.8532, lon: -56.207 },
+  ];
+
+  beforeAll(async () => {
+    limpiarBase();
+    seed();
+    srv = await startServer();
+    sup = (await login(srv.base, 'supervisor', CREDS.supervisor))!;
+  });
+  afterAll(async () => {
+    await srv.close();
+  });
+
+  it('rechaza nombres y descripciones demasiado largos, y listas de nodos gigantes', async () => {
+    const casos: [object, string][] = [
+      [{ name: 'n'.repeat(61), waypoints: DOS }, 'nombre largo'],
+      [{ name: 'Ok', description: 'd'.repeat(201), waypoints: DOS }, 'descripción larga'],
+      [{ name: 'Ok', waypoints: 'no es una lista' }, 'waypoints no es lista'],
+      [{ name: 'Ok', waypoints: Array.from({ length: 61 }, () => DOS[0]) }, 'demasiados nodos'],
+      [{ name: 'Ok', waypoints: [{ lat: 1, lon: 1, alt: -5 }, DOS[1]] }, 'altura negativa'],
+    ];
+    for (const [body, que] of casos) {
+      const r = await api(srv.base, '/api/routes', sup, { method: 'POST', body: JSON.stringify(body) });
+      expect(r.status, que).toBe(400);
+    }
+  });
+
+  it('la altura por defecto es 40 y el apodo vacío no se guarda', async () => {
+    const r = await api(srv.base, '/api/routes', sup, {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Sin altura', waypoints: [{ lat: 1, lon: 1, label: '  ' }, DOS[1]] }),
+    });
+    expect(r.status).toBe(201);
+    expect(r.body.waypoints[0]).toEqual({ lat: 1, lon: 1, alt: 40 });
+  });
+
+  it('el PATCH acepta cambiar sólo el nombre o sólo la descripción, y rechaza el vacío', async () => {
+    const alta = await api(srv.base, '/api/routes', sup, {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Retocable', waypoints: DOS }),
+    });
+    const id = alta.body.id;
+
+    expect((await api(srv.base, `/api/routes/${id}`, sup, { method: 'PATCH', body: JSON.stringify({ description: 'nueva' }) })).body.description).toBe('nueva');
+    expect((await api(srv.base, `/api/routes/${id}`, sup, { method: 'PATCH', body: JSON.stringify({ name: 'Retocada' }) })).body.name).toBe('Retocada');
+    expect((await api(srv.base, `/api/routes/${id}`, sup, { method: 'PATCH', body: JSON.stringify({}) })).status).toBe(400);
+    expect((await api(srv.base, `/api/routes/${id}`, sup, { method: 'PATCH', body: JSON.stringify({ name: '   ' }) })).status).toBe(400);
+    expect((await api(srv.base, `/api/routes/${id}`, sup, { method: 'PATCH', body: JSON.stringify({ name: 'n'.repeat(61) }) })).status).toBe(400);
+    expect((await api(srv.base, `/api/routes/${id}`, sup, { method: 'PATCH', body: JSON.stringify({ waypoints: [DOS[0]] }) })).status).toBe(400);
+  });
+
+  it('no se edita una ruta eliminada hasta restaurarla', async () => {
+    const alta = await api(srv.base, '/api/routes', sup, { method: 'POST', body: JSON.stringify({ name: 'Muerta', waypoints: DOS }) });
+    await api(srv.base, `/api/routes/${alta.body.id}`, sup, { method: 'DELETE' });
+    const r = await api(srv.base, `/api/routes/${alta.body.id}`, sup, { method: 'PATCH', body: JSON.stringify({ name: 'X' }) });
+    expect(r.status).toBe(409);
+  });
+
+  it('pedir las rutas de una base sin asignaciones devuelve una lista vacía', async () => {
+    const base = await crearBase(srv.base, sup, { name: 'Base Pelada', lat: -34.5, lon: -56.5 });
+    expect((await api(srv.base, `/api/bases/${base.id}/routes`, sup)).body).toEqual([]);
+    // y el filtro por base tampoco inventa nada
+    expect((await api(srv.base, `/api/routes?baseId=${base.id}`, sup)).body).toEqual([]);
   });
 });
