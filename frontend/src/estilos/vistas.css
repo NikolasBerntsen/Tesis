@@ -468,7 +468,9 @@ details.meta pre {
 .mapa-caja { position: relative; }
 .mapa-fondos {
   position: absolute;
-  z-index: 500;
+  /* Arriba de las capas de Leaflet (marcadores 600, globos 700, controles 1000)
+     y abajo del velo de los diálogos, que va en 2000. */
+  z-index: 1100;
   top: var(--e-3);
   right: var(--e-3);
   display: flex;

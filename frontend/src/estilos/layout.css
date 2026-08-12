@@ -147,6 +147,12 @@
   gap: var(--e-4);
   flex-wrap: wrap;
 }
+/* Adentro de una fila las acciones van juntas y a la derecha: repartidas a lo
+   ancho de la celda se leen como si cada una fuera una columna distinta. */
+td.barra-acciones {
+  justify-content: flex-end;
+  gap: var(--e-2);
+}
 
 /* --- Login: una placa de mármol sola en el centro ------------------------- */
 .login-wrapper {

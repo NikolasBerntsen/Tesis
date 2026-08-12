@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { api, traerBases, traerRutas } from '../api';
+import { api, rutasDeBase, traerBases, traerRutas } from '../api';
 import { makeMe } from '../test/fixtures';
 import BasesView from './BasesView';
 
@@ -10,6 +10,7 @@ vi.mock('../api', async (original) => ({
   api: vi.fn(),
   traerBases: vi.fn(),
   traerRutas: vi.fn(async () => []),
+  rutasDeBase: vi.fn(async () => []),
 }));
 // Leaflet no corre en jsdom: mide el contenedor y pinta lienzos. El doble deja
 // probar lo único que importa acá, que es el clic sobre el mapa.
@@ -24,13 +25,20 @@ vi.mock('leaflet', () => {
     remove: vi.fn(),
     panTo: vi.fn(),
     invalidateSize: vi.fn(),
+    fitBounds: vi.fn(),
   };
+  const capa = { addTo: () => capa, bindTooltip: () => capa };
+  const grupo = { clearLayers: vi.fn(), addTo: () => grupo };
   return {
     default: {
       map: () => mapa,
       tileLayer: () => ({ addTo: vi.fn() }),
       marker: () => ({ addTo: vi.fn(), setLatLng: vi.fn(), remove: vi.fn() }),
       divIcon: () => ({}),
+      layerGroup: () => grupo,
+      polyline: () => capa,
+      circleMarker: () => capa,
+      latLngBounds: () => ({ pad: () => ({}) }),
     },
   };
 });
@@ -38,6 +46,7 @@ vi.mock('leaflet', () => {
 const apiMock = vi.mocked(api);
 const basesMock = vi.mocked(traerBases);
 const rutasMock = vi.mocked(traerRutas);
+const rutasDeBaseMock = vi.mocked(rutasDeBase);
 const ADMIN = makeMe({ username: 'admin1', role: 'admin' });
 const CAMPO = makeMe({ username: 'campo1', role: 'field_operator' });
 const OPERADOR = makeMe({ username: 'oper1', role: 'operator' });
@@ -303,7 +312,7 @@ describe('BasesView — caminos que faltaban cubrir', () => {
   });
 });
 
-describe('BasesView — paso 2: asignar rutas a la base', () => {
+describe('BasesView — asignar rutas apenas se da de alta la base', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     alClickear.fn = null;
@@ -319,7 +328,7 @@ describe('BasesView — paso 2: asignar rutas a la base', () => {
     return { id: 2, name: 'Perímetro lejano', description: '', waypoints: [{ lat: -34.855, lon: -56.15, alt: 40 }, { lat: -34.856, lon: -56.151, alt: 40 }], createdBy: null, deletedAt: null };
   }
 
-  async function llegarAlPaso2() {
+  async function llegarALasRutas() {
     basesMock.mockResolvedValue([]);
     apiMock.mockResolvedValue(nueva);
     rutasMock.mockResolvedValue([rutaLejos(), rutaCerca()]);
@@ -335,7 +344,7 @@ describe('BasesView — paso 2: asignar rutas a la base', () => {
   }
 
   it('después de guardar la base ofrece elegir sus rutas, más cercana primero', async () => {
-    await llegarAlPaso2();
+    await llegarALasRutas();
 
     expect(await screen.findByText(/quedó dada de alta/i)).toBeInTheDocument();
     const opciones = screen.getAllByRole('option');
@@ -345,7 +354,7 @@ describe('BasesView — paso 2: asignar rutas a la base', () => {
   });
 
   it('asignar una ruta cercana no pregunta nada', async () => {
-    await llegarAlPaso2();
+    await llegarALasRutas();
     await screen.findByText(/quedó dada de alta/i);
 
     await userEvent.click(screen.getByRole('option', { name: /Perímetro cercano/ }));
@@ -354,7 +363,7 @@ describe('BasesView — paso 2: asignar rutas a la base', () => {
   });
 
   it('una ruta cuyo primer nodo está a más de un kilómetro pide confirmación', async () => {
-    await llegarAlPaso2();
+    await llegarALasRutas();
     await screen.findByText(/quedó dada de alta/i);
 
     await userEvent.click(screen.getByRole('option', { name: /Perímetro lejano/ }));
@@ -370,7 +379,7 @@ describe('BasesView — paso 2: asignar rutas a la base', () => {
   });
 
   it('se puede asignarla igual desde el aviso', async () => {
-    await llegarAlPaso2();
+    await llegarALasRutas();
     await screen.findByText(/quedó dada de alta/i);
 
     await userEvent.click(screen.getByRole('option', { name: /Perímetro lejano/ }));
@@ -379,7 +388,7 @@ describe('BasesView — paso 2: asignar rutas a la base', () => {
   });
 
   it('el buscador filtra las rutas del paso 2', async () => {
-    await llegarAlPaso2();
+    await llegarALasRutas();
     await screen.findByText(/quedó dada de alta/i);
 
     await userEvent.type(screen.getByLabelText('Buscar rutas'), 'cercano');
@@ -387,7 +396,7 @@ describe('BasesView — paso 2: asignar rutas a la base', () => {
   });
 
   it('guardar la asignación llama al endpoint de la base', async () => {
-    await llegarAlPaso2();
+    await llegarALasRutas();
     await screen.findByText(/quedó dada de alta/i);
 
     await userEvent.click(screen.getByRole('option', { name: /Perímetro cercano/ }));
@@ -398,10 +407,126 @@ describe('BasesView — paso 2: asignar rutas a la base', () => {
   });
 
   it('se puede saltear el paso con "Después"', async () => {
-    await llegarAlPaso2();
+    await llegarALasRutas();
     await screen.findByText(/quedó dada de alta/i);
 
     await userEvent.click(screen.getByRole('button', { name: 'Después' }));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+});
+
+describe('BasesView — rutas de una base que ya existe', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    alClickear.fn = null;
+  });
+
+  function ruta(id: number, name: string, lat: number, lon: number) {
+    return {
+      id, name, description: '',
+      waypoints: [{ lat, lon, alt: 40 }, { lat: lat - 0.001, lon: lon - 0.001, alt: 40 }],
+      createdBy: null, deletedAt: null,
+    };
+  }
+
+  const CERCA = ruta(1, 'Perímetro cercano', -34.857, -56.208);
+  const LEJOS = ruta(2, 'Perímetro lejano', -34.8, -56.208);
+
+  async function abrirRutas(me = ADMIN) {
+    basesMock.mockResolvedValue([base()]);
+    rutasMock.mockResolvedValue([LEJOS, CERCA]);
+    render(<BasesView me={me} />);
+    await screen.findByText('Base Norte');
+    await userEvent.click(screen.getByRole('button', { name: 'Rutas' }));
+    return screen.findByRole('dialog', { name: /rutas de base norte/i });
+  }
+
+  it('trae las rutas que la base ya tiene y las deja marcadas', async () => {
+    rutasDeBaseMock.mockResolvedValue([CERCA]);
+    const dialogo = await abrirRutas();
+
+    expect(rutasDeBaseMock).toHaveBeenCalledWith(1);
+    const opciones = await within(dialogo).findAllByRole('option');
+    // la cercana primero, y ya seleccionada porque la base la tiene asignada
+    expect(opciones[0]).toHaveTextContent('Perímetro cercano');
+    expect(opciones[0]).toHaveAttribute('aria-selected', 'true');
+    expect(opciones[1]).toHaveAttribute('aria-selected', 'false');
+    expect(within(dialogo).getByRole('button', { name: /asignar 1 ruta/i })).toBeInTheDocument();
+  });
+
+  it('desmarcar y guardar le saca la ruta a la base', async () => {
+    rutasDeBaseMock.mockResolvedValue([CERCA]);
+    apiMock.mockResolvedValue({});
+    const dialogo = await abrirRutas();
+    await within(dialogo).findAllByRole('option');
+
+    await userEvent.click(within(dialogo).getByRole('option', { name: /Perímetro cercano/ }));
+    await userEvent.click(within(dialogo).getByRole('button', { name: /sin rutas/i }));
+
+    expect(apiMock).toHaveBeenCalledWith('/bases/1/routes', expect.objectContaining({ method: 'PUT' }));
+    expect(JSON.parse(apiMock.mock.calls.at(-1)![1].body)).toEqual({ routeIds: [] });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('agregar una ruta lejana sigue pidiendo confirmación', async () => {
+    rutasDeBaseMock.mockResolvedValue([]);
+    const dialogo = await abrirRutas();
+    await within(dialogo).findAllByRole('option');
+
+    await userEvent.click(within(dialogo).getByRole('option', { name: /Perímetro lejano/ }));
+    expect(await screen.findByRole('dialog', { name: /queda lejos de la base/i })).toBeInTheDocument();
+  });
+
+  it('el operador de campo también asigna rutas', async () => {
+    rutasDeBaseMock.mockResolvedValue([CERCA]);
+    const dialogo = await abrirRutas(CAMPO);
+    expect(await within(dialogo).findAllByRole('option')).toHaveLength(2);
+    // y sigue sin poder editar ni borrar la base
+    expect(screen.queryByRole('button', { name: 'Eliminar' })).not.toBeInTheDocument();
+  });
+
+  it('el operador común ni siquiera ve el botón', async () => {
+    basesMock.mockResolvedValue([base()]);
+    render(<BasesView me={OPERADOR} />);
+    await screen.findByText('Base Norte');
+
+    expect(screen.queryByRole('button', { name: 'Rutas' })).not.toBeInTheDocument();
+    expect(rutasDeBaseMock).not.toHaveBeenCalled();
+  });
+
+  it('si el backend no devuelve las rutas, el error se lee adentro del diálogo', async () => {
+    basesMock.mockResolvedValue([base()]);
+    rutasMock.mockResolvedValue([]);
+    rutasDeBaseMock.mockRejectedValue(new Error('sin permiso para ver las rutas'));
+    render(<BasesView me={ADMIN} />);
+    await screen.findByText('Base Norte');
+    await userEvent.click(screen.getByRole('button', { name: 'Rutas' }));
+
+    const dialogo = await screen.findByRole('dialog', { name: /rutas de base norte/i });
+    expect(await within(dialogo).findByText(/sin permiso para ver las rutas/)).toBeInTheDocument();
+  });
+
+  it('se puede dibujar una ruta nueva desde la base y queda elegida', async () => {
+    rutasDeBaseMock.mockResolvedValue([]);
+    const dialogo = await abrirRutas();
+    await within(dialogo).findAllByRole('option');
+
+    await userEvent.click(within(dialogo).getByRole('button', { name: /nueva ruta/i }));
+    const editor = await screen.findByRole('dialog', { name: /nueva ruta de patrullaje/i });
+
+    await userEvent.type(within(editor).getByLabelText('Nombre'), 'Perímetro nuevo');
+    // dos clics en el mapa: el editor toma el manejador al montarse
+    act(() => {
+      alClickear.fn!({ latlng: { lat: -34.858, lng: -56.209 } });
+      alClickear.fn!({ latlng: { lat: -34.859, lng: -56.21 } });
+    });
+
+    apiMock.mockResolvedValue(ruta(7, 'Perímetro nuevo', -34.858, -56.209));
+    await userEvent.click(await within(editor).findByRole('button', { name: /guardar ruta/i }));
+
+    expect(apiMock).toHaveBeenCalledWith('/routes', expect.objectContaining({ method: 'POST' }));
+    // el editor se cierra y la ruta recién dibujada queda marcada en la base
+    expect(screen.queryByRole('dialog', { name: /nueva ruta de patrullaje/i })).not.toBeInTheDocument();
+    expect(await screen.findByRole('option', { name: /Perímetro nuevo/ })).toHaveAttribute('aria-selected', 'true');
   });
 });

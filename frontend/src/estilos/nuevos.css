@@ -18,11 +18,16 @@
    </div>
    (.modal es alias de .modal-fondo, por si el marcado la usa suelta.)
 ------------------------------------------------------------------------------ */
+/* Leaflet apila sus propias capas hasta 1000 (`.leaflet-top`/`.leaflet-bottom`,
+   con los marcadores en 600 y los globos en 700). Si el velo queda por debajo,
+   un mapa que esté atrás —el de perímetro de Rutas, por ejemplo— se pinta
+   ENCIMA del diálogo y lo tapa. De ahí el 2000: arriba de todo lo que Leaflet
+   puede llegar a dibujar, con lugar de sobra para lo que venga. */
 .modal,
 .modal-fondo {
   position: fixed;
   inset: 0;
-  z-index: 100;
+  z-index: 2000;
   display: grid;
   place-items: center;
   padding: var(--e-5);
