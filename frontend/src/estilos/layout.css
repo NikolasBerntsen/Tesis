@@ -249,3 +249,35 @@
   min-width: 160px;
 }
 .form-crear input[type='checkbox'] { min-width: 0; }
+
+/* --- Vista de operación de un dron -----------------------------------------
+   El estado cruza todo el ancho arriba (lo pone el propio componente, fuera de
+   la grilla). Debajo, el video manda sobre el mapa —es donde pasa lo que hay
+   que decidir— y la columna angosta queda para patrullaje, alertas y registro. */
+.grid-operacion {
+  display: grid;
+  grid-template-columns: 7fr 5fr;
+  gap: var(--e-4);
+  align-items: start;
+  margin-top: var(--e-4);
+}
+@media (max-width: 1100px) {
+  .grid-operacion { grid-template-columns: 1fr; }
+}
+/* El video pide todo el alto que le den: es la pieza que se mira. */
+.col-video .video { min-height: 340px; }
+.col-video .map { height: 380px; }
+
+/* El mapa de la flota ocupa el alto útil que sobra: antes quedaba angosto y
+   largo dentro de una tarjeta de alto fijo, y en un predio grande eso obliga a
+   alejar el zoom hasta que los drones son puntos. */
+.dashboard-main .card:has(> .mapa-head) {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.dashboard-main .card:has(> .mapa-head) .map {
+  flex: 1;
+  min-height: 420px;
+}

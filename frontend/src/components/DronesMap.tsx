@@ -19,6 +19,8 @@ export interface MapItem {
 export interface WaypointsLayer {
   route: PatrolRoute;
   visitedIndex: number;
+  /** Ruta elegida pero todavía no ordenada: sus nodos van en otro color. */
+  preview?: boolean;
   onLabel: (index: number, label: string) => void;
   /** Mostrar "Forzar ruta" en el popup (requiere autorización de control). */
   canForce?: boolean;
@@ -40,6 +42,7 @@ const PALETA = {
   oroOscuro: '#8A6A1C', // --oro-oscuro
   oliva: '#4F7A46', // --ok
   oxido: '#9C3B30', // --peligro
+  info: '#3D6076', // --info
 } as const;
 
 /* El mapa se deja con sus colores propios: lavarlo a marfil lo volvía lindo y
@@ -55,6 +58,9 @@ function filtroDeTeselas(): string {
 }
 
 const WP_PENDIENTE = PALETA.oxido;
+/* Los nodos de una ruta elegida pero todavía no ordenada: se ven, se pueden
+   inspeccionar, y no se confunden con los de un patrullaje en curso. */
+const WP_PREVIO = PALETA.info;
 const WP_VISITADO = PALETA.oliva;
 const WP_STYLE: L.CircleMarkerOptions = { radius: 7, color: PALETA.marfil, weight: 2, fillOpacity: 1 };
 
@@ -538,7 +544,12 @@ export default function DronesMap({
       const marker = wpMarkersRef.current[i];
       if (!marker) return;
       marker.setLatLng([wp.lat, wp.lon]);
-      marker.setStyle({ fillColor: i <= (waypoints?.visitedIndex ?? -1) ? WP_VISITADO : WP_PENDIENTE });
+      const color = waypoints?.preview
+        ? WP_PREVIO
+        : i <= (waypoints?.visitedIndex ?? -1)
+          ? WP_VISITADO
+          : WP_PENDIENTE;
+      marker.setStyle({ fillColor: color });
       marker.setTooltipContent(waypointTooltip(i, wp.label));
       // Si está abierto no se toca: reemplazar el HTML borraría lo que se esté tipeando
       if (!marker.isPopupOpen()) {
