@@ -100,7 +100,7 @@
 .modal-cerrar:hover:not(:disabled) {
   border-color: var(--oro);
   color: var(--tinta);
-  background: rgba(255, 255, 255, .8);
+  background: var(--realce-70);
 }
 .modal-cuerpo {
   padding: var(--e-5) var(--e-6);
@@ -115,7 +115,7 @@
   gap: var(--e-3);
   padding: var(--e-4) var(--e-6) var(--e-5);
   border-top: 1px solid var(--veta);
-  background: rgba(255, 255, 255, .5);
+  background: var(--realce-55);
 }
 
 /* Lista de clave/valor para el detalle del registro (meta.detalle) */
@@ -337,7 +337,7 @@
 .switch input:checked + .switch-pista::after {
   transform: translateX(17px);
   background: var(--marmol-0);
-  border-color: rgba(255, 255, 255, .8);
+  border-color: var(--realce-70);
 }
 .switch input:focus-visible + .switch-pista {
   outline: var(--filo) solid var(--oro);
@@ -366,7 +366,7 @@
   color: var(--tinta);
   font-weight: 600;
   border-color: transparent;
-  background-image: linear-gradient(180deg, #FFFFFF 0%, var(--oro-velo) 100%);
+  background-image: linear-gradient(180deg, var(--realce-cara) 0%, var(--oro-velo) 100%);
 }
 .toggle-eliminados.activo::after {
   content: '';
@@ -409,7 +409,7 @@
 }
 .tabs button:hover:not(:disabled) {
   color: var(--tinta);
-  background: rgba(255, 255, 255, .7);
+  background: var(--realce-70);
 }
 .tabs button.active,
 .tabs button[aria-selected='true'] {
@@ -467,7 +467,7 @@
   border: 1px solid var(--veta);
   border-radius: var(--radio);
   background-color: var(--marmol-0);
-  background-image: var(--grano-textura), linear-gradient(180deg, #FFFFFF 0%, var(--marmol-1) 100%);
+  background-image: var(--grano-textura), linear-gradient(180deg, var(--realce-cara) 0%, var(--marmol-1) 100%);
   box-shadow: var(--sombra-relieve);
 }
 .qr-sticker-marco {

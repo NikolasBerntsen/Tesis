@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, getRole, getUsername } from '../api';
 import type { Alert, Drone, DroneStatus, EventRow, Me, NovedadDron, PatrolRoute, RolConsola } from '../types';
 import { useWebSocket } from '../useWebSocket';
+import BotonTema from './BotonTema';
 import Dashboard from './Dashboard';
 import DroneDetail from './DroneDetail';
 import DronesView from './DronesView';
@@ -219,6 +220,7 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
           <span className={`conn estado versalita ${connected ? 'ok' : 'bad'}`} aria-live="polite">
             {connected ? 'conectado' : 'sin conexión'}
           </span>
+          <BotonTema />
           <span className="username">{getUsername()}</span>
           <button className="ghost versalita" onClick={onLogout}>
             Salir

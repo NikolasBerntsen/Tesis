@@ -25,8 +25,8 @@
   background-color: var(--marmol-0);
   background-image:
     var(--grano-textura),
-    linear-gradient(180deg, #FFFFFF 0%, var(--marmol-0) 62%, var(--marmol-1) 100%);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, .8), 0 14px 30px -22px rgba(43, 38, 32, .55);
+    linear-gradient(180deg, var(--realce-cara) 0%, var(--marmol-0) 62%, var(--marmol-1) 100%);
+  box-shadow: 0 1px 0 var(--realce-70), 0 14px 30px -22px rgba(43, 38, 32, .55);
 }
 /* Hilo dorado al pie de la cornisa: el único oro permanente de la pantalla */
 .topbar::after {
@@ -88,12 +88,12 @@
 .view-switch button:hover:not(:disabled) {
   color: var(--tinta);
   border-color: var(--veta);
-  background: rgba(255, 255, 255, .7);
+  background: var(--realce-70);
 }
 .topnav button.active,
 .view-switch button.active {
   color: var(--tinta);
-  background-image: linear-gradient(180deg, #FFFFFF 0%, var(--oro-velo) 100%);
+  background-image: linear-gradient(180deg, var(--realce-cara) 0%, var(--oro-velo) 100%);
 }
 
 /* --- Cuerpo de la página -------------------------------------------------- */

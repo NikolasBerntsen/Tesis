@@ -42,10 +42,17 @@ const PALETA = {
   oxido: '#9C3B30', // --peligro
 } as const;
 
-/* Las teselas de OpenStreetMap vienen a todo color y son lo que delata al
-   "mapa web genérico". Este lavado las deja en marfil: el mapa pasa a ser una
-   superficie de mármol más y el oro vuelve a ser lo único que brilla. */
-const LAVADO_MARMOL = 'grayscale(1) sepia(.34) saturate(.8) brightness(1.07) contrast(.92)';
+/* El mapa se deja con sus colores propios: lavarlo a marfil lo volvía lindo y
+   difícil de leer, y un mapa es una herramienta de orientación antes que una
+   superficie decorativa. Los marcadores sí siguen la estética, que es lo que
+   distingue a esta consola de cualquier mapa web.
+   En modo oscuro se atenúa apenas: una lámina blanca a pantalla completa en
+   una guardia nocturna encandila. */
+const ATENUAR_OSCURO = 'brightness(.82) contrast(1.04)';
+
+function filtroDeTeselas(): string {
+  return document.documentElement.dataset.tema === 'oscuro' ? ATENUAR_OSCURO : 'none';
+}
 
 const WP_PENDIENTE = PALETA.oxido;
 const WP_VISITADO = PALETA.oliva;
@@ -375,7 +382,7 @@ export default function DronesMap({
       maxZoom: 19,
       attribution: '&copy; OpenStreetMap',
     }).addTo(map);
-    vestir(map.getPane('tilePane'), { filter: LAVADO_MARMOL });
+    vestir(map.getPane('tilePane'), { filter: filtroDeTeselas() });
     // Sin la banderita de fábrica: es lo único de color frío que quedaba
     map.attributionControl.setPrefix('Leaflet');
     vestir(map.attributionControl.getContainer(), {

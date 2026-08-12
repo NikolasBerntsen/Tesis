@@ -27,8 +27,8 @@ body {
   background-image:
     var(--grano-textura),
     var(--veta-textura),
-    radial-gradient(120% 85% at 8% -18%, rgba(255, 255, 255, .95) 0%, rgba(255, 255, 255, 0) 58%),
-    radial-gradient(80% 55% at 100% 0%, rgba(253, 246, 232, .9) 0%, rgba(253, 246, 232, 0) 60%),
+    radial-gradient(120% 85% at 8% -18%, var(--luz-rasante) 0%, transparent 58%),
+    radial-gradient(80% 55% at 100% 0%, var(--luz-alta) 0%, transparent 60%),
     linear-gradient(166deg, var(--marmol-1) 0%, var(--marmol-2) 62%, var(--marmol-3) 100%);
   background-attachment: fixed;
 }
@@ -177,16 +177,17 @@ samp {
   border-radius: 2px;
 }
 
-/* --- Ornamento ----------------------------------------------------------- */
-/* Separador con filigrana: se adivina, no compite. Si se nota antes que el
-   dato de al lado, bajá la opacidad. */
+/* --- Ornamento -----------------------------------------------------------
+   Sin filigrana floral: el adorno terminaba compitiendo con el dato, que es lo
+   que la persona vino a leer. Queda un hairline con un realce de oro al medio:
+   separa igual y no dibuja nada. */
 .regla-ornamental {
-  height: 20px;
+  height: 1px;
   border: 0;
   margin: var(--e-5) auto;
   width: min(260px, 62%);
-  background: var(--filigrana) center / contain no-repeat;
-  opacity: .32;
+  background: linear-gradient(90deg, transparent, var(--veta) 22%, var(--oro) 50%, var(--veta) 78%, transparent);
+  opacity: .7;
 }
 
 .regla {
@@ -196,27 +197,11 @@ samp {
   background: linear-gradient(90deg, transparent, var(--veta) 12%, var(--veta) 88%, transparent);
 }
 
-/* Marca de esquina: la ramita se insinúa abajo a la derecha, que es donde no
-   compite con el título ni con el dato.
-   `isolation` + z-index negativo la meten DEBAJO del contenido: sin eso la
-   ramita, por estar posicionada, se pinta encima de los botones que le quedan
-   cerca (pasaba con "Devolver al patrullaje"). */
+/* La marca de esquina era la otra pieza floral. Se queda la clase, sin dibujo,
+   para no romper el marcado que ya la usa. */
 .con-esquina {
   position: relative;
-  overflow: hidden;
   isolation: isolate;
-}
-.con-esquina::before {
-  content: '';
-  position: absolute;
-  z-index: -1;
-  right: -10px;
-  bottom: -10px;
-  width: 104px;
-  height: 104px;
-  background: var(--filigrana-esquina) no-repeat;
-  opacity: .09;
-  pointer-events: none;
 }
 
 /* --- Movimiento ---------------------------------------------------------- */
