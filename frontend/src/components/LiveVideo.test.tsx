@@ -13,4 +13,9 @@ describe('LiveVideo', () => {
     render(<LiveVideo frame={null} />);
     expect(screen.getByText('Sin señal de video')).toBeInTheDocument();
   });
+
+  it('encuadra el video en un marco de mármol con filo dorado', () => {
+    const { container } = render(<LiveVideo frame="ZZZ" />);
+    expect(container.querySelector('.hueco.filo-oro img.video')).toBeInTheDocument();
+  });
 });

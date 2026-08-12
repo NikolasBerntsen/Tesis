@@ -39,4 +39,14 @@ describe('EventLog', () => {
     expect(normal).not.toHaveClass('bad');
     expect(normal).not.toHaveClass('warn');
   });
+
+  it('rotula las columnas sólo cuando hay eventos', () => {
+    const { rerender } = render(<EventLog events={[]} />);
+    expect(screen.queryByText('Detalle')).not.toBeInTheDocument();
+
+    rerender(<EventLog events={[makeEvent()]} />);
+    expect(screen.getByText('Hora')).toBeInTheDocument();
+    expect(screen.getByText('Evento')).toBeInTheDocument();
+    expect(screen.getByText('Detalle')).toBeInTheDocument();
+  });
 });

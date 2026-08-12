@@ -1,0 +1,251 @@
+/* ============================================================================
+   LAYOUT — armazón de la consola, navegación, login y formularios
+   ========================================================================= */
+
+#root { min-height: 100vh; }
+
+/* El contenedor raíz de la consola: alto completo para que las vistas que
+   scrollean adentro (el registro) tengan contra qué medirse. */
+.dashboard {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* --- Barra superior: una cornisa de mármol -------------------------------- */
+.topbar {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--e-5);
+  flex-wrap: wrap;
+  padding: var(--e-4) var(--e-6);
+  border-bottom: 1px solid var(--veta);
+  background-color: var(--marmol-0);
+  background-image:
+    var(--grano-textura),
+    linear-gradient(180deg, #FFFFFF 0%, var(--marmol-0) 62%, var(--marmol-1) 100%);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .8), 0 14px 30px -22px rgba(43, 38, 32, .55);
+}
+/* Hilo dorado al pie de la cornisa: el único oro permanente de la pantalla */
+.topbar::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--oro-claro) 18%, var(--oro) 50%, var(--oro-claro) 82%, transparent);
+  opacity: .7;
+}
+.topbar h1 {
+  margin: 0;
+  font-family: var(--fuente-serif);
+  font-size: var(--txt-lg);
+  letter-spacing: .01em;
+}
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--e-4);
+  font-size: var(--txt-sm);
+}
+.username {
+  color: var(--tinta-media);
+  font-size: var(--txt-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  font-weight: 600;
+}
+.conn { font-size: var(--txt-xs); letter-spacing: .04em; }
+.conn.ok { color: var(--ok); }
+.conn.bad { color: var(--peligro); }
+
+/* --- Navegación por secciones y conmutadores de vista --------------------- */
+.topnav,
+.view-switch,
+.tabs {
+  display: flex;
+  gap: var(--e-2);
+  flex-wrap: wrap;
+}
+.topnav button,
+.view-switch button {
+  background: transparent;
+  background-image: none;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--tinta-media);
+  font-size: var(--txt-sm);
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  font-weight: 600;
+  padding: 7px 14px;
+}
+.topnav button:hover:not(:disabled),
+.view-switch button:hover:not(:disabled) {
+  color: var(--tinta);
+  border-color: var(--veta);
+  background: rgba(255, 255, 255, .7);
+}
+.topnav button.active,
+.view-switch button.active {
+  color: var(--tinta);
+  background-image: linear-gradient(180deg, #FFFFFF 0%, var(--oro-velo) 100%);
+}
+
+/* --- Cuerpo de la página -------------------------------------------------- */
+.page-main,
+.dashboard-main,
+.detail-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-5);
+  padding: var(--e-6);
+  flex: 1;
+  min-height: 0; /* deja que el hijo con overflow scrollee en vez de estirar */
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(340px, 5fr) 7fr;
+  gap: var(--e-5);
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .grid { grid-template-columns: 1fr; }
+  .page-main,
+  .dashboard-main,
+  .detail-main { padding: var(--e-4); }
+  .topbar { padding: var(--e-3) var(--e-4); }
+}
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-5);
+  min-width: 0;
+}
+
+.detail-head {
+  display: flex;
+  align-items: center;
+  gap: var(--e-4);
+  flex-wrap: wrap;
+}
+.detail-head h2 {
+  margin: 0;
+  font-size: var(--txt-xl);
+}
+
+/* Barra de acciones de una vista (título a la izquierda, botones a la derecha) */
+.barra-acciones {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--e-4);
+  flex-wrap: wrap;
+}
+
+/* --- Login: una placa de mármol sola en el centro ------------------------- */
+.login-wrapper {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: var(--e-6);
+}
+.login-card {
+  position: relative;
+  width: 380px;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-4);
+  padding: var(--e-7) var(--e-6) var(--e-6);
+  border: 1px solid var(--veta);
+  border-radius: var(--radio-grande);
+  background-color: var(--marmol-0);
+  background-image:
+    var(--grano-textura),
+    linear-gradient(158deg, #FFFFFF 0%, var(--marmol-0) 52%, var(--marmol-1) 100%);
+  box-shadow: var(--sombra-flotante);
+}
+/* Filo dorado superior: la piedra abierta en el canto de la placa */
+.login-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 12%;
+  right: 12%;
+  height: var(--filo);
+  border-radius: 0 0 3px 3px;
+  background: var(--oro-lamina);
+}
+.login-card h1 {
+  margin: 0;
+  font-family: var(--fuente-serif);
+  font-size: var(--txt-xl);
+  text-align: center;
+}
+.login-subtitle {
+  margin: 0 0 var(--e-3);
+  text-align: center;
+  color: var(--tinta-media);
+  font-size: var(--txt-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+}
+.login-card label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-2);
+  color: var(--tinta-media);
+  font-size: var(--txt-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  font-weight: 600;
+}
+.login-card input {
+  font-size: var(--txt-base);
+  text-transform: none;
+  letter-spacing: normal;
+  padding: 10px 12px;
+}
+.login-card button { margin-top: var(--e-2); }
+.login-error {
+  color: var(--peligro);
+  font-size: var(--txt-sm);
+  text-align: center;
+}
+
+/* --- Formulario de alta --------------------------------------------------- */
+.form-crear {
+  display: flex;
+  gap: var(--e-4);
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+.form-crear label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-1);
+  color: var(--tinta-media);
+  font-size: var(--txt-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  font-weight: 600;
+}
+.form-crear label.fila {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--e-2);
+  padding-bottom: 9px;
+}
+.form-crear input,
+.form-crear select {
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+  min-width: 160px;
+}
+.form-crear input[type='checkbox'] { min-width: 0; }

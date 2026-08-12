@@ -5,6 +5,8 @@ import CameraTile from './CameraTile';
 import DronesMap, { type MapItem } from './DronesMap';
 
 const TIPO_ALERTA = { PERSON: 'PERSONA', VEHICLE: 'VEHÍCULO' } as const;
+// Más de cuatro chips y la franja deja de leerse de un vistazo.
+const CHIPS_VISIBLES = 4;
 
 export default function Dashboard({
   drones,
@@ -40,33 +42,53 @@ export default function Dashboard({
   // Las alertas se atienden en la vista de detalle, pero el operador tiene que
   // enterarse sin importar en qué vista del dashboard esté parado.
   const pendientes = alerts.filter((a) => a.status === 'PENDING');
+  const sinMostrar = pendientes.length - CHIPS_VISIBLES;
   const nombre = (droneId: string | null) =>
     drones.find((d) => d.droneId === droneId)?.displayName ?? droneId ?? '—';
 
   return (
     <main className="dashboard-main">
       {pendientes.length > 0 && (
-        <div className="alert-strip">
-          <strong>{pendientes.length} alerta(s) sin atender</strong>
-          {pendientes.slice(0, 4).map((a) => (
+        <div className="alert-strip" role="status">
+          <strong>
+            {pendientes.length} {pendientes.length === 1 ? 'alerta sin atender' : 'alertas sin atender'}
+          </strong>
+          {pendientes.slice(0, CHIPS_VISIBLES).map((a) => (
             <button key={a.id} className="alert-chip" onClick={() => a.drone_id && onOpenDrone(a.drone_id)}>
               {TIPO_ALERTA[a.type]} · {nombre(a.drone_id)} · {time(a.created_at)}
             </button>
           ))}
+          {sinMostrar > 0 && <span className="badge">+{sinMostrar} más</span>}
         </div>
       )}
-      <div className="view-switch">
-        <button className={view === 'cameras' ? 'active' : ''} onClick={() => setView('cameras')}>
-          Cámaras
-        </button>
-        <button className={view === 'map' ? 'active' : ''} onClick={() => setView('map')}>
-          Mapa
-        </button>
+
+      <div className="barra-acciones">
+        <span className="etiqueta">
+          {active.length} en vuelo · {drones.length} {drones.length === 1 ? 'registrado' : 'registrados'}
+        </span>
+        <div className="view-switch">
+          <button
+            className={view === 'cameras' ? 'active' : ''}
+            aria-pressed={view === 'cameras'}
+            onClick={() => setView('cameras')}
+          >
+            Cámaras
+          </button>
+          <button
+            className={view === 'map' ? 'active' : ''}
+            aria-pressed={view === 'map'}
+            onClick={() => setView('map')}
+          >
+            Mapa
+          </button>
+        </div>
       </div>
 
       {view === 'cameras' ? (
         active.length === 0 ? (
-          <p className="muted">No hay drones activos.</p>
+          <div className="card con-esquina">
+            <p className="vacio">No hay drones activos.</p>
+          </div>
         ) : (
           <div className="camera-grid">
             {active.map((d) => (
@@ -84,6 +106,7 @@ export default function Dashboard({
         )
       ) : (
         <div className="card">
+          <h2>Posición de la flota</h2>
           <DronesMap items={items} />
         </div>
       )}

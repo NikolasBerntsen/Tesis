@@ -1,0 +1,113 @@
+/* ============================================================================
+   TOKENS — "mármol y oro"
+   Mármol blanco cálido; donde la piedra se gasta asoma un oro metalizado.
+   Todo el sistema se apoya en estas variables: ningún componente debería
+   escribir un color literal.
+   ========================================================================= */
+
+:root {
+  color-scheme: light; /* la consola es clara a propósito: sin tema oscuro */
+
+  /* --- Piedra ----------------------------------------------------------- */
+  --marmol-0: #FBFAF7;   /* fondo de la página */
+  --marmol-1: #F5F2EC;   /* superficie de las tarjetas */
+  --marmol-2: #EDE8DE;   /* superficies hundidas: campos, encabezados */
+  --marmol-3: #E3DCCE;   /* piedra pulida: pastillas, franjas */
+  --veta: #D8CFBE;       /* bordes: la veta del mármol */
+  --veta-fuerte: #C4B8A2;
+
+  /* --- Tinta ------------------------------------------------------------ */
+  --tinta: #2B2620;        /* texto principal, negro cálido */
+  --tinta-media: #5C544A;  /* texto secundario legible (AA sobre mármol) */
+  --tinta-suave: #8A8073;  /* apagado: NO llega a AA, solo adorno/placeholder */
+
+  /* --- Oro -------------------------------------------------------------- */
+  --oro: #B8912F;
+  --oro-claro: #E4CE8A;
+  --oro-oscuro: #8A6A1C;   /* el único oro que llega a AA como texto */
+  --oro-lamina: linear-gradient(135deg, #F0E3B8 0%, #D9BE6B 28%, #B8912F 55%, #8A6A1C 100%);
+  /* La lámina pura, con tinta encima, se queda corta de contraste en su
+     esquina oscura; esta variante lavada con blanco sí llega a AA y es la que
+     va en los RELLENOS (botón primario). Los FILOS usan --oro-lamina. */
+  --oro-lamina-relleno:
+    linear-gradient(180deg, rgba(255, 255, 255, .42), rgba(255, 255, 255, .16)),
+    linear-gradient(135deg, #F0E3B8 0%, #D9BE6B 28%, #B8912F 55%, #8A6A1C 100%);
+  --oro-velo: rgba(184, 145, 47, .10); /* fondo de lo seleccionado */
+
+  /* --- Estados (apagados, nunca saturados) ------------------------------ */
+  --ok: #4F7A46;
+  --alerta: #B07A1E;
+  --alerta-texto: #8A5D10; /* el ámbar del token no llega a AA como texto */
+  --peligro: #9C3B30;
+  --info: #3D6076;
+  --ok-velo: rgba(79, 122, 70, .12);
+  --alerta-velo: rgba(176, 122, 30, .14);
+  --peligro-velo: rgba(156, 59, 48, .12);
+  --info-velo: rgba(61, 96, 118, .12);
+
+  /* --- Relieve ---------------------------------------------------------- */
+  --sombra-suave: 0 1px 2px rgba(43, 38, 32, .06), 0 8px 24px -12px rgba(43, 38, 32, .18);
+  /* Bajorrelieve: filo de luz arriba + sombra larga y difusa, como una talla */
+  --sombra-relieve:
+    inset 0 1px 0 rgba(255, 255, 255, .85),
+    0 1px 2px rgba(43, 38, 32, .05),
+    0 20px 44px -26px rgba(43, 38, 32, .30);
+  --sombra-flotante:
+    inset 0 1px 0 rgba(255, 255, 255, .9),
+    0 2px 6px rgba(43, 38, 32, .07),
+    0 34px 80px -34px rgba(43, 38, 32, .42);
+  --sombra-hundida: inset 0 1px 2px rgba(43, 38, 32, .08);
+
+  /* --- Geometría -------------------------------------------------------- */
+  --radio: 10px;
+  --radio-chico: 6px;
+  --radio-grande: 16px;
+  --filo: 2px; /* grosor del filo dorado */
+
+  /* --- Espaciado (múltiplos de 4) --------------------------------------- */
+  --e-1: 4px;
+  --e-2: 8px;
+  --e-3: 12px;
+  --e-4: 16px;
+  --e-5: 22px;
+  --e-6: 30px;
+  --e-7: 42px;
+  --e-8: 60px;
+
+  /* --- Tipografía ------------------------------------------------------- */
+  --fuente-serif: Georgia, 'Iowan Old Style', 'Times New Roman', serif;
+  --fuente-cuerpo: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --fuente-mono: ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, monospace;
+
+  /* Escala en razón ~1.22, anclada en 14px de cuerpo */
+  --txt-xxs: 10px;
+  --txt-xs: 11.5px;
+  --txt-sm: 12.5px;
+  --txt-base: 14px;
+  --txt-md: 17px;
+  --txt-lg: 21px;
+  --txt-xl: 26px;
+  --txt-2xl: 32px;
+  --txt-cifra: 38px;
+
+  --interlinea: 1.65;
+  --interlinea-titulo: 1.22;
+  --versalita: .09em; /* letter-spacing de las etiquetas en versalitas */
+
+  /* --- Movimiento ------------------------------------------------------- */
+  --transicion: 160ms cubic-bezier(.4, 0, .2, 1);
+
+  /* --- Texturas y ornamento --------------------------------------------- */
+  /* Veta: manchas grandes y blandas de ruido fractal (baseFrequency muy baja).
+     Con frecuencias altas el fondo lee como pana o ruido de televisión, no como
+     piedra. La opacidad va horneada en el SVG: alfa máx ≈ .065, media ≈ .015. */
+  --veta-textura: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22900%22 height=%22900%22%3E %3Cfilter id=%22v%22 x=%220%22 y=%220%22 width=%22100%25%22 height=%22100%25%22%3E %3CfeTurbulence type=%22fractalNoise%22 baseFrequency=%220.011 0.024%22 numOctaves=%224%22 seed=%229%22 stitchTiles=%22stitch%22/%3E %3CfeColorMatrix type=%22matrix%22 values=%220 0 0 0 0.33 0 0 0 0 0.28 0 0 0 0 0.19 0 0 0 0.10 -0.035%22/%3E %3C/filter%3E %3Crect width=%22900%22 height=%22900%22 filter=%22url(%23v)%22/%3E%3C/svg%3E");
+  /* Grano finísimo: el "diente" del pulido, al borde de lo invisible (alfa ≤ .03) */
+  --grano-textura: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22%3E %3Cfilter id=%22g%22 x=%220%22 y=%220%22 width=%22100%25%22 height=%22100%25%22%3E %3CfeTurbulence type=%22fractalNoise%22 baseFrequency=%220.8%22 numOctaves=%222%22 seed=%225%22 stitchTiles=%22stitch%22/%3E %3CfeColorMatrix type=%22matrix%22 values=%220 0 0 0 0.31 0 0 0 0 0.27 0 0 0 0 0.20 0 0 0 0.05 -0.02%22/%3E %3C/filter%3E %3Crect width=%22200%22 height=%22200%22 filter=%22url(%23g)%22/%3E%3C/svg%3E");
+  /* Filigrana: hojas y una flor, como el fondo tallado del bajorrelieve. Va
+     siempre a opacidad baja: si se nota antes que el dato, está mal. */
+  --filigrana: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22260%22 height=%2222%22 viewBox=%220 0 260 22%22 fill=%22none%22 stroke=%22%238A6A1C%22 stroke-width=%221%22 stroke-linecap=%22round%22%3E %3Cpath d=%22M4 11h72%22/%3E%3Cpath d=%22M184 11h72%22/%3E %3Cpath d=%22M76 11c6-7 16-7 22 0-6 7-16 7-22 0z%22/%3E %3Cpath d=%22M184 11c-6-7-16-7-22 0 6 7 16 7 22 0z%22/%3E %3Cpath d=%22M98 11h8%22/%3E%3Cpath d=%22M154 11h8%22/%3E %3Cpath d=%22M106 11c4-4 10-4 14 0-4 4-10 4-14 0z%22/%3E %3Cpath d=%22M154 11c-4-4-10-4-14 0 4 4 10 4 14 0z%22/%3E %3Cpath d=%22M130 4l7 7-7 7-7-7z%22/%3E%3C/svg%3E");
+  --filigrana-esquina: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22104%22 height=%22104%22 viewBox=%220 0 104 104%22 fill=%22none%22 stroke=%22%238A6A1C%22 stroke-width=%221%22 stroke-linecap=%22round%22%3E %3Cpath d=%22M100 100C80 95 62 82 51 64 42 49 38 33 38 18%22/%3E %3Cpath d=%22M51 64c-11 2-20-2-24-11 10-3 19 1 24 11z%22/%3E %3Cpath d=%22M51 64c9-4 13-13 11-23-9 4-13 13-11 23z%22/%3E %3Cpath d=%22M68 79c-10 3-19 0-24-10 10-3 19 0 24 10z%22/%3E %3Cpath d=%22M74 88c8 1 14 5 16 12-8 1-14-4-16-12z%22/%3E %3Ccircle cx=%2238%22 cy=%2214%22 r=%223.5%22/%3E %3Cpath d=%22M38 10c0-6 5-9 9-7 2 5-3 8-9 7z%22/%3E %3Cpath d=%22M38 10c0-6-5-9-9-7-2 5 3 8 9 7z%22/%3E %3Cpath d=%22M34 17c-5-3-10-2-11 4 4 3 9 1 11-4z%22/%3E %3Cpath d=%22M42 17c5-3 10-2 11 4-4 3-9 1-11-4z%22/%3E %3Cpath d=%22M38 19c-3 5 0 10 5 11 1-5-1-9-5-11z%22/%3E%3C/svg%3E");
+
+  --velo-modal: rgba(43, 38, 32, .30);
+}

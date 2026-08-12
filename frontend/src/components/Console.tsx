@@ -10,6 +10,8 @@ import UsersView from './UsersView';
 const MAX_EVENTS = 300;
 const TICK_MS = 1000;
 
+type Seccion = 'drones' | 'usuarios' | 'registro';
+
 export default function Console({ onLogout }: { onLogout: () => void }) {
   const [drones, setDrones] = useState<Drone[]>([]);
   const [statuses, setStatuses] = useState<Record<string, DroneStatus>>({});
@@ -19,8 +21,7 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
   const [routes, setRoutes] = useState<PatrolRoute[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [me, setMe] = useState<Me | null>(null);
-  // 'drones' | 'usuarios' | 'registro'
-  const [seccion, setSeccion] = useState<'drones' | 'usuarios' | 'registro'>('drones');
+  const [seccion, setSeccion] = useState<Seccion>('drones');
   // Los status de cada dron llegan a destiempo: se acumulan acá y se vuelcan
   // al estado en un único tick, así todos los marcadores se mueven a la vez.
   const statusBuffer = useRef<Record<string, DroneStatus>>({});
@@ -137,26 +138,40 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
       <header className="topbar">
         <h1>Comando Central</h1>
         <nav className="topnav">
-          <button className={seccion === 'drones' ? 'active' : ''} onClick={() => setSeccion('drones')}>
+          <button
+            className={seccion === 'drones' ? 'active' : ''}
+            aria-current={seccion === 'drones' ? 'page' : undefined}
+            onClick={() => setSeccion('drones')}
+          >
             Drones
           </button>
           {(rol === 'supervisor' || rol === 'admin') && (
-            <button className={seccion === 'usuarios' ? 'active' : ''} onClick={() => setSeccion('usuarios')}>
+            <button
+              className={seccion === 'usuarios' ? 'active' : ''}
+              aria-current={seccion === 'usuarios' ? 'page' : undefined}
+              onClick={() => setSeccion('usuarios')}
+            >
               Usuarios
             </button>
           )}
           {rol === 'admin' && (
-            <button className={seccion === 'registro' ? 'active' : ''} onClick={() => setSeccion('registro')}>
+            <button
+              className={seccion === 'registro' ? 'active' : ''}
+              aria-current={seccion === 'registro' ? 'page' : undefined}
+              onClick={() => setSeccion('registro')}
+            >
               Registro
             </button>
           )}
         </nav>
         <div className="topbar-right">
-          <span className={connected ? 'conn ok' : 'conn bad'}>
-            {connected ? '● conectado' : '● sin conexión'}
+          {/* El punto lo dibuja .estado con currentColor: en la interfaz no hay
+              caracteres decorativos, y así el punto toma el verde o el rojo. */}
+          <span className={`conn estado versalita ${connected ? 'ok' : 'bad'}`} aria-live="polite">
+            {connected ? 'conectado' : 'sin conexión'}
           </span>
           <span className="username">{getUsername()}</span>
-          <button className="ghost" onClick={onLogout}>
+          <button className="ghost versalita" onClick={onLogout}>
             Salir
           </button>
         </div>

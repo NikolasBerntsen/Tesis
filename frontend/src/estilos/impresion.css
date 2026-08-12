@@ -1,0 +1,107 @@
+/* ============================================================================
+   IMPRESIÓN — pensada para el sticker del QR: papel blanco, tinta negra,
+   sin mármol, sin ornamento y sin sombras (el tóner las convierte en manchas).
+   ========================================================================= */
+
+@media print {
+  :root {
+    --sombra-suave: none;
+    --sombra-relieve: none;
+    --sombra-flotante: none;
+    --sombra-hundida: none;
+  }
+
+  body {
+    background: #FFFFFF !important;
+    background-image: none !important;
+    color: #000000;
+  }
+
+  /* Fuera todo lo que no sea el sticker */
+  .topbar,
+  .topnav,
+  .view-switch,
+  .tabs,
+  .paginador,
+  .modal-cabecera,
+  .modal-pie,
+  .barra-acciones,
+  .icono-boton,
+  .toggle-eliminados,
+  button {
+    display: none !important;
+  }
+
+  .modal,
+  .modal-fondo {
+    position: static;
+    display: block;
+    padding: 0;
+    background: none;
+    backdrop-filter: none;
+    animation: none;
+  }
+  .modal-caja {
+    max-height: none;
+    width: auto;
+    border: none;
+    border-radius: 0;
+    background: #FFFFFF !important;
+    background-image: none !important;
+    box-shadow: none;
+    animation: none;
+  }
+  .modal-caja::before { display: none; }
+  .modal-cuerpo { padding: 0; overflow: visible; }
+
+  .card,
+  .qr-sticker {
+    background: #FFFFFF !important;
+    background-image: none !important;
+    box-shadow: none !important;
+  }
+
+  .qr-sticker {
+    width: 62mm;
+    margin: 0;
+    padding: 6mm 4mm;
+    border: 1px solid #000000;
+    border-radius: 0;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+  .qr-sticker-marco {
+    border: none;
+    padding: 0;
+  }
+  .qr-sticker-marco canvas,
+  .qr-sticker-marco img,
+  .qr-sticker-marco svg { max-width: 46mm; }
+  .qr-sticker-nombre { color: #000000; }
+  .qr-sticker-modelo,
+  .qr-sticker-hash { color: #333333; }
+
+  /* Nada de filigranas ni filos dorados en papel: el tóner los ensucia */
+  .con-esquina::before,
+  .regla-ornamental,
+  .filo-oro::after,
+  .card > h2::after,
+  .card.activa::after,
+  .comparacion-despues::after,
+  .login-card::before,
+  .modal-caja::before,
+  .topbar::after { display: none !important; }
+
+  /* Lo dorado que sí lleva información se imprime en blanco y negro */
+  .tabla tbody tr.seleccionada {
+    background: none;
+    box-shadow: inset 2px 0 0 #000000;
+  }
+  .switch-pista { background: #FFFFFF; border-color: #000000; }
+  .switch input:checked + .switch-pista {
+    background: #000000;
+    border-color: #000000;
+  }
+
+  @page { margin: 10mm; }
+}

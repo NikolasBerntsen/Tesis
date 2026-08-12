@@ -18,8 +18,9 @@ describe('DroneStatusCard', () => {
       />,
     );
     expect(screen.getByText('Patrullando')).toBeInTheDocument();
-    expect(screen.getByText('63%')).toBeInTheDocument();
-    expect(screen.getByText('72%')).toBeInTheDocument();
+    // La cifra y su unidad son dos nodos: el valor manda y el '%' va chico.
+    expect(screen.getByText('63')).toHaveTextContent('63%');
+    expect(screen.getByText('72')).toHaveTextContent('72%');
     expect(screen.getByText('3 de 5')).toBeInTheDocument();
     expect(screen.getByText('DEPLOY')).toBeInTheDocument();
     expect(screen.getByText('-34.60123, -58.40456')).toBeInTheDocument();
@@ -44,8 +45,17 @@ describe('DroneStatusCard', () => {
     expect(screen.queryByRole('button', { name: 'Reanudar patrullaje' })).not.toBeInTheDocument();
   });
 
+  it('sin ruta cargada no muestra nodo ni su medidor', () => {
+    const { container } = render(
+      <DroneStatusCard status={makeStatus({ waypointTotal: 0 })} onResumePatrol={() => {}} />,
+    );
+    expect(screen.getByText('—')).toBeInTheDocument();
+    // Quedan los medidores de batería y señal; el del recorrido no se dibuja.
+    expect(container.querySelectorAll('.medidor')).toHaveLength(2);
+  });
+
   it('aplica la clase de batería según el nivel', () => {
     render(<DroneStatusCard status={makeStatus({ battery: 15 })} onResumePatrol={() => {}} />);
-    expect(screen.getByText('15%')).toHaveClass('bad');
+    expect(screen.getByText('15')).toHaveClass('bad');
   });
 });

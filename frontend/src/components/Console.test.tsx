@@ -56,7 +56,9 @@ describe('Console', () => {
     expect(apiMock).toHaveBeenCalledWith('/drones');
     expect(apiMock).toHaveBeenCalledWith('/alerts');
     expect(apiMock).toHaveBeenCalledWith('/routes');
-    expect(screen.getByText(/conectado/)).toBeInTheDocument();
+    // El enlace se dibuja con .estado (punto de currentColor), sin el carácter
+    // decorativo que traía el texto.
+    expect(screen.getByText('conectado')).toHaveClass('conn', 'estado', 'ok');
     // Un operador no ve Usuarios ni Registro
     expect(screen.queryByRole('button', { name: 'Usuarios' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Registro' })).not.toBeInTheDocument();
@@ -69,6 +71,9 @@ describe('Console', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: 'Usuarios' }));
     expect(await screen.findByRole('heading', { name: 'Usuarios' })).toBeInTheDocument();
+    // La sección abierta lleva el filo dorado (.active) y se anuncia como actual
+    expect(screen.getByRole('button', { name: 'Usuarios' })).toHaveClass('active');
+    expect(screen.getByRole('button', { name: 'Usuarios' })).toHaveAttribute('aria-current', 'page');
 
     await userEvent.click(screen.getByRole('button', { name: 'Registro' }));
     expect(await screen.findByRole('heading', { name: 'Registro del sistema' })).toBeInTheDocument();
@@ -87,7 +92,7 @@ describe('Console', () => {
     await screen.findByText('Alfa');
 
     fire({ type: 'alert_created', alert: { id: 1, type: 'PERSON', status: 'PENDING', drone_id: 'd1', created_at: '2024-01-01T12:00:00.000Z' } });
-    expect(await screen.findByText('1 alerta(s) sin atender')).toBeInTheDocument();
+    expect(await screen.findByText(/1 alerta(s)? sin atender/)).toBeInTheDocument();
 
     fire({ type: 'drone_online', drone: makeDrone({ droneId: 'd2', displayName: 'Bravo', online: true }) });
     expect(await screen.findByText('Bravo')).toBeInTheDocument();

@@ -32,6 +32,7 @@ describe('Dashboard', () => {
     });
     expect(screen.getByText('Alfa')).toBeInTheDocument();
     expect(screen.queryByText('Bravo')).not.toBeInTheDocument();
+    expect(screen.getByText('1 en vuelo · 2 registrados')).toBeInTheDocument();
   });
 
   it('muestra el vacío cuando no hay drones activos', () => {
@@ -54,10 +55,21 @@ describe('Dashboard', () => {
     const props = renderDashboard({
       alerts: [makeAlert({ id: 5, type: 'PERSON', status: 'PENDING', drone_id: 'd1' })],
     });
-    expect(screen.getByText('1 alerta(s) sin atender')).toBeInTheDocument();
+    expect(screen.getByText('1 alerta sin atender')).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: /PERSONA/ }));
     expect(props.onOpenDrone).toHaveBeenCalledWith('d1');
+  });
+
+  it('condensa la franja cuando hay más alertas que chips', () => {
+    renderDashboard({
+      alerts: Array.from({ length: 6 }, (_, i) =>
+        makeAlert({ id: i + 1, type: 'PERSON', status: 'PENDING', drone_id: 'd1' }),
+      ),
+    });
+    expect(screen.getByText('6 alertas sin atender')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /PERSONA/ })).toHaveLength(4);
+    expect(screen.getByText('+2 más')).toBeInTheDocument();
   });
 
   it('no muestra la franja cuando no hay alertas pendientes', () => {
