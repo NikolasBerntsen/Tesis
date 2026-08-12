@@ -22,6 +22,7 @@
         </com.google.android.material.appbar.AppBarLayout>
 
         <ScrollView
+            android:id="@+id/panelOperativo"
             android:layout_width="match_parent"
             android:layout_height="match_parent">
 
@@ -242,6 +243,24 @@
                 </com.google.android.material.card.MaterialCardView>
             </LinearLayout>
         </ScrollView>
+
+        <!-- El registro deja de vivir dentro del cajón: es una vista más, que se
+             elige desde el menú. Adentro del cajón no se podía leer sin taparlo. -->
+        <ScrollView
+            android:id="@+id/panelLogs"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:padding="16dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/txtLocalLog"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:text="@string/main_registro_vacio"
+                android:textSize="12sp" />
+        </ScrollView>
     </LinearLayout>
 
     <!-- Menú lateral: registro local -->
@@ -256,28 +275,32 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="@string/main_registro_local"
+            android:text="@string/main_menu_titulo"
             android:textSize="20sp"
             android:textStyle="bold" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="8dp"
-            android:text="@string/main_registro_local_ayuda"
-            android:textSize="13sp" />
-
-        <ScrollView
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnVistaOperativa"
             android:layout_width="match_parent"
-            android:layout_height="match_parent">
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="@string/menu_vista_operativa" />
 
-            <TextView
-                android:id="@+id/txtLocalLog"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:fontFamily="monospace"
-                android:text="@string/main_registro_vacio"
-                android:textSize="11sp" />
-        </ScrollView>
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnVerLogs"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/menu_ver_logs" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnSalirOperacion"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="@string/menu_cerrar_sesion" />
+
     </LinearLayout>
 </androidx.drawerlayout.widget.DrawerLayout>

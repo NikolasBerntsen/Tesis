@@ -93,6 +93,14 @@
             android:layout_marginTop="12dp" />
 
         <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnIdentificador"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="@string/menu_campo_configuracion" />
+
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/btnConfiguracion"
             style="@style/Widget.Material3.Button.OutlinedButton"
             android:layout_width="match_parent"

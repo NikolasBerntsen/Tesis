@@ -164,3 +164,26 @@ app/src/mock/  → ControllerFactory (simulador)
 app/src/dji/   → ControllerFactory + DjiApplication + DjiDroneController (MSDK v5)
 app/src/debug/ → network security config permisiva (habilita el modo RED en pruebas)
 ```
+
+## Menú de la pantalla de operación
+
+El cajón lateral tiene tres acciones:
+
+| Acción | Qué hace |
+|---|---|
+| **Vista operativa** | El panel de vuelo: estado, batería, señal, ruta y —en modo prueba— los controles de simulación |
+| **Ver registro** | El registro local del vuelo, que antes vivía dentro del propio cajón y no se podía leer sin taparlo |
+| **Cerrar sesión** | Corta el enlace del dron y vuelve al login. El token de máquina no queda vivo esperando a que alguien reabra la app |
+
+Durante la operación **la pantalla no se apaga**: el operador mira el video y
+casi no toca el teléfono, así que dejarla apagarse cortaría justo lo que vino a
+vigilar.
+
+Las tres pantallas sobreviven a la rotación sin recrearse, así que un diálogo
+abierto —el de emparejamiento, el del identificador a mano— ya no se cierra al
+girar el teléfono.
+
+El escaneo del QR abre **en vertical**: el sticker está pegado en el dron y
+girar el teléfono mientras se apunta es justo lo que no se quiere. Si el código
+está rayado o el teléfono no enfoca, **"Escribir el identificador"** permite
+tipear los 32 caracteres a mano, con la misma validación que el QR.

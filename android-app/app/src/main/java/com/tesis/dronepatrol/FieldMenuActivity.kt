@@ -17,6 +17,10 @@ import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import android.text.InputFilter
+import android.text.InputType
+import android.widget.EditText
+import com.journeyapps.barcodescanner.CaptureActivity
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import com.tesis.dronepatrol.comms.ModoEnlace
@@ -87,6 +91,7 @@ class FieldMenuActivity : AppCompatActivity() {
         binding.txtQuien.text =
             getString(R.string.menu_campo_quien, SesionDeCampo.usuario, etiquetaDeRol(this, SesionDeCampo.rol))
         binding.btnEscanear.setOnClickListener { escanearQr() }
+        binding.btnIdentificador.setOnClickListener { pedirIdentificadorAMano() }
         binding.btnConfiguracion.setOnClickListener { configurarEnlace() }
         binding.btnCerrarSesion.setOnClickListener { volverAlLogin(getString(R.string.aviso_sesion_cerrada), SesionDeCampo.Motivo.MANUAL) }
 
@@ -131,6 +136,30 @@ class FieldMenuActivity : AppCompatActivity() {
         if (tienePermiso(Manifest.permission.CAMERA)) abrirEscaner() else pedirCamara.launch(Manifest.permission.CAMERA)
     }
 
+    /**
+     * Alta escribiendo el identificador. El sticker se raya, se moja o el
+     * teléfono no enfoca: sin esta salida un dron quedaría inutilizable en el
+     * campo por un código ilegible.
+     */
+    private fun pedirIdentificadorAMano() {
+        val campo = EditText(this).apply {
+            hint = getString(R.string.identificador_pista)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            filters = arrayOf(InputFilter.LengthFilter(32))
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.identificador_titulo)
+            .setMessage(R.string.identificador_ayuda)
+            .setView(campo)
+            .setNegativeButton(R.string.cancelar, null)
+            .setPositiveButton(R.string.continuar) { _, _ ->
+                val hash = hashDeDronODescartar(campo.text.toString())
+                if (hash == null) binding.txtEstado.text = getString(R.string.qr_invalido)
+                else pedirUbicacionYEmparejar(hash)
+            }
+            .show()
+    }
+
     private fun abrirEscaner() {
         binding.txtEstado.text = ""
         escanear.launch(
@@ -138,7 +167,10 @@ class FieldMenuActivity : AppCompatActivity() {
                 .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
                 .setPrompt(getString(R.string.qr_pista))
                 .setBeepEnabled(false)
-                .setOrientationLocked(false),
+                // Vertical y trabado: el sticker está pegado en el dron y girar
+                // el teléfono mientras se apunta es justo lo que no se quiere.
+                .setOrientationLocked(true)
+                .setCaptureActivity(CaptureActivity::class.java),
         )
     }
 

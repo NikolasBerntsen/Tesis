@@ -1,7 +1,9 @@
 package com.tesis.dronepatrol
 
+import android.content.Intent
 import android.os.Bundle
 import android.view.Menu
+import android.view.WindowManager
 import android.view.MenuItem
 import android.view.View
 import android.widget.EditText
@@ -75,6 +77,9 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        // En operación el operador mira el video y casi no toca la pantalla:
+        // dejarla apagarse cortaría justo lo que vino a vigilar.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         droneToken = intent.getStringExtra(EXTRA_DRONE_TOKEN).orEmpty()
         droneHash = intent.getStringExtra(EXTRA_DRONE_HASH).orEmpty()
@@ -87,6 +92,7 @@ class MainActivity : AppCompatActivity() {
         commandCenter.onRenamed = { nombre -> lifecycleScope.launch { aplicarNombre(nombre) } }
 
         configurarBarraYMenuLateral()
+        configurarMenuLateral()
         ubicarBaseDelDron()
         configurarSimulacion()
         binding.btnStartPatrol.setOnClickListener { comenzarPatrullaje() }
@@ -94,6 +100,38 @@ class MainActivity : AppCompatActivity() {
         observarEstado()
         conectar()
         conectarDeteccion()
+    }
+
+    /** Las dos vistas del cajón y la salida de la operación. */
+    private fun configurarMenuLateral() {
+        binding.btnVistaOperativa.setOnClickListener { mostrarPanel(operativo = true) }
+        binding.btnVerLogs.setOnClickListener { mostrarPanel(operativo = false) }
+        binding.btnSalirOperacion.setOnClickListener { desconectarYVolverAlLogin() }
+    }
+
+    private fun mostrarPanel(operativo: Boolean) {
+        binding.panelOperativo.visibility = if (operativo) View.VISIBLE else View.GONE
+        binding.panelLogs.visibility = if (operativo) View.GONE else View.VISIBLE
+        supportActionBar?.subtitle =
+            if (operativo) "${if (modo == "TEST") "Modo prueba" else "Despliegue"} · $displayName"
+            else getString(R.string.menu_ver_logs)
+        binding.drawerLayout.closeDrawer(GravityCompat.START)
+    }
+
+    /**
+     * Corta el enlace del dron y vuelve al login. La sesión de máquina termina
+     * acá: el token del dron no queda vivo esperando a que alguien reabra.
+     */
+    private fun desconectarYVolverAlLogin() {
+        controller.disconnect()
+        commandCenter.disconnect()
+        detection.disconnect()
+        startActivity(
+            Intent(this, LoginActivity::class.java).addFlags(
+                Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK,
+            ),
+        )
+        finish()
     }
 
     private fun configurarBarraYMenuLateral() {
