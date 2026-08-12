@@ -3,6 +3,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { api, traerRutas } from '../api';
 import { makeMe, makeRoute } from '../test/fixtures';
+import { estadoMapa, fondosPuestos, limpiarEstadoMapa } from '../test/dobleLeaflet';
 import RutasView from './RutasView';
 
 vi.mock('../api', async (original) => ({
@@ -10,23 +11,7 @@ vi.mock('../api', async (original) => ({
   api: vi.fn(),
   traerRutas: vi.fn(),
 }));
-vi.mock('leaflet', () => {
-  const grupo = { clearLayers: vi.fn(), addLayer: vi.fn() };
-  const mapa = {
-    setView: () => mapa, on: () => mapa, remove: vi.fn(), invalidateSize: vi.fn(), fitBounds: vi.fn(),
-  };
-  const capa = { addTo: () => capa, bindTooltip: () => capa };
-  return {
-    default: {
-      map: () => mapa,
-      tileLayer: () => capa,
-      layerGroup: () => ({ ...grupo, addTo: () => grupo }),
-      polyline: () => capa,
-      circleMarker: () => capa,
-      latLngBounds: () => ({ pad: () => ({}) }),
-    },
-  };
-});
+vi.mock('leaflet', async () => (await import('../test/dobleLeaflet')).dobleLeaflet());
 
 const apiMock = vi.mocked(api);
 const rutasMock = vi.mocked(traerRutas);
@@ -237,5 +222,45 @@ describe('EditorDeRuta — repaso, edición de nodos y arrastre', () => {
     await userEvent.click(within(dialogo).getByRole('button', { name: 'Cancelar' }));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(apiMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('RutasView y su editor — mapa doble y lista de nodos rotulada', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    limpiarEstadoMapa();
+  });
+
+  it('el mapa del recorrido arranca en callejero y se puede pasar a satélite', async () => {
+    rutasMock.mockResolvedValue([ruta()]);
+    render(<RutasView me={ADMIN} />);
+    await screen.findAllByText('Perímetro Norte');
+
+    expect(fondosPuestos().some((u) => u.includes('openstreetmap'))).toBe(true);
+    await userEvent.click(screen.getByRole('button', { name: 'Satélite' }));
+    expect(fondosPuestos().some((u) => u.includes('World_Imagery'))).toBe(true);
+  });
+
+  it('el editor rotula el apodo y la altura, que si no es un 40 suelto', async () => {
+    rutasMock.mockResolvedValue([ruta()]);
+    render(<RutasView me={ADMIN} />);
+    await screen.findAllByText('Perímetro Norte');
+    await userEvent.click(screen.getAllByRole('button', { name: 'Editar' })[0]);
+
+    const editor = await screen.findByRole('dialog', { name: /editar/i });
+    const encabezado = editor.querySelector('.nodos-encabezado') as HTMLElement;
+    expect(within(encabezado).getByText('Apodo')).toBeInTheDocument();
+    expect(within(encabezado).getByText('Altura (m)')).toBeInTheDocument();
+    expect(within(encabezado).getByText('Coordenadas')).toBeInTheDocument();
+  });
+
+  it('desde el catálogo el editor no dibuja ninguna base: no se abrió desde una', async () => {
+    rutasMock.mockResolvedValue([ruta()]);
+    render(<RutasView me={ADMIN} />);
+    await screen.findAllByText('Perímetro Norte');
+    await userEvent.click(screen.getAllByRole('button', { name: 'Editar' })[0]);
+    await screen.findByRole('dialog', { name: /editar/i });
+
+    expect(estadoMapa.puestas.filter((c) => c.clase === 'marker')).toHaveLength(0);
   });
 });

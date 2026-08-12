@@ -1,7 +1,9 @@
 import L from 'leaflet';
 import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { api, parsearMeta } from '../api';
+import { useFondo, vestirAtribucion } from '../mapa';
 import type { Alert, CamposMeta, EventRow, MetaAlerta, MetaDron, MetaUbicacion, ValorMeta } from '../types';
+import ConmutadorDeFondo from './ConmutadorDeFondo';
 import Modal from './Modal';
 
 const CATEGORIA: Record<EventRow['category'], string> = {
@@ -99,7 +101,6 @@ function mensajeDeError(e: unknown): string {
 
 /* Leaflet pinta sus capas desde JS, no desde CSS: los tokens se repiten acá,
    igual que en DronesMap.tsx. */
-const LAVADO_MARMOL = 'grayscale(1) sepia(.34) saturate(.8) brightness(1.07) contrast(.92)';
 const ORO = '#B8912F';
 const MARFIL = '#FBFAF7';
 
@@ -113,13 +114,6 @@ const PIN_UBICACION = L.divIcon({
   iconSize: [26, 32],
   iconAnchor: [13, 30],
 });
-
-/* Leaflet inyecta su mobiliario fuera del alcance de las hojas de la consola:
-   se lo viste acá con los mismos tokens, igual que en DronesMap.tsx. */
-function vestir(el: HTMLElement | null | undefined, estilos: Record<string, string>) {
-  if (!el) return;
-  for (const [prop, valor] of Object.entries(estilos)) el.style.setProperty(prop, valor);
-}
 
 const CIRCULO_PRECISION: L.CircleMarkerOptions = {
   color: ORO,
@@ -137,51 +131,59 @@ const CIRCULO_PRECISION: L.CircleMarkerOptions = {
  */
 function MiniMapa({ ubicacion }: { ubicacion: MetaUbicacion }) {
   const contenedor = useRef<HTMLDivElement>(null);
+  const mapa = useRef<L.Map | null>(null);
+  const marca = useRef<L.LayerGroup | null>(null);
 
+  // El mapa se crea una sola vez. El pop-up se re-renderiza a cada tick de
+  // status de la consola, y rehacerlo por render parpadea, pierde el arrastre
+  // y vuelve a pedir todas las teselas.
   useEffect(() => {
-    const punto: L.LatLngTuple = [ubicacion.lat, ubicacion.lon];
-    const mapa = L.map(contenedor.current!, {
-      // El control de zoom de fábrica rotula en inglés y la rueda del mouse
-      // tiene que seguir scrolleando el cuerpo del pop-up, no acercar el mapa.
+    const m = L.map(contenedor.current!, {
+      // El control de fábrica rotula en inglés; se lo pone aparte en castellano.
       zoomControl: false,
+      // La rueda del mouse tiene que seguir scrolleando el cuerpo del pop-up:
+      // el zoom va por los botones, que es lo que faltaba acá.
       scrollWheelZoom: false,
-    }).setView(punto, 16);
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '&copy; OpenStreetMap',
-    }).addTo(mapa);
-    mapa.attributionControl.setPrefix('');
-    vestir(mapa.getPane('tilePane'), { filter: LAVADO_MARMOL });
-    // La banderita de fábrica es lo único de color frío que quedaría en la piedra
-    vestir(mapa.attributionControl.getContainer(), {
-      background: 'var(--marmol-0)',
-      color: 'var(--tinta-media)',
-      'font-size': 'var(--txt-xxs)',
-      padding: '1px 7px',
-      'border-top': '1px solid var(--veta)',
-      'border-left': '1px solid var(--veta)',
-      'border-top-left-radius': 'var(--radio-chico)',
-    });
-    if (ubicacion.accuracyM !== null) {
-      L.circle(punto, { ...CIRCULO_PRECISION, radius: ubicacion.accuracyM }).addTo(mapa);
-    }
-    L.marker(punto, { icon: PIN_UBICACION, keyboard: false }).addTo(mapa);
+    }).setView([ubicacion.lat, ubicacion.lon], 16);
+    L.control.zoom({ position: 'topleft', zoomInTitle: 'Acercar', zoomOutTitle: 'Alejar' }).addTo(m);
+    vestirAtribucion(m, '');
+    marca.current = L.layerGroup().addTo(m);
+    mapa.current = m;
 
     // La caja del pop-up entra con una animación de escala: si Leaflet mide
     // mientras corre, calcula mal el tamaño y quedan teselas sin pedir.
-    const remedir = window.setTimeout(() => mapa.invalidateSize(), 250);
+    const remedir = window.setTimeout(() => m.invalidateSize(), 250);
     return () => {
       window.clearTimeout(remedir);
-      mapa.remove();
+      m.remove();
+      mapa.current = null;
+      marca.current = null;
     };
-    // Las dependencias son los números y no el objeto `ubicacion`: el pop-up se
-    // re-renderiza una vez por segundo (el tick de status de la consola) y un
-    // mapa nuevo por render parpadea, pierde el arrastre y repide las teselas.
+  }, []);
+
+  const [fondo, setFondo] = useFondo(mapa);
+
+  useEffect(() => {
+    const m = mapa.current;
+    const grupo = marca.current;
+    if (!m || !grupo) return;
+    const punto: L.LatLngTuple = [ubicacion.lat, ubicacion.lon];
+    grupo.clearLayers();
+    if (ubicacion.accuracyM !== null) {
+      L.circle(punto, { ...CIRCULO_PRECISION, radius: ubicacion.accuracyM }).addTo(grupo);
+    }
+    L.marker(punto, { icon: PIN_UBICACION, keyboard: false }).addTo(grupo);
+    m.setView(punto, m.getZoom());
+    // Las dependencias son los números y no el objeto `ubicacion`, que se
+    // rearma en cada parseo de la meta.
   }, [ubicacion.lat, ubicacion.lon, ubicacion.accuracyM]);
 
   return (
     <div>
-      <div className="mapa-mini" ref={contenedor} data-testid="mapa-ubicacion" />
+      <div className="mapa-caja">
+        <ConmutadorDeFondo fondo={fondo} onCambiar={setFondo} />
+        <div className="mapa-mini" ref={contenedor} data-testid="mapa-ubicacion" />
+      </div>
       <p className="mapa-mini-coords">
         {coordenadas(ubicacion.lat, ubicacion.lon)}
         {ubicacion.accuracyM !== null && ` · precisión ±${Math.round(ubicacion.accuracyM)} m`}

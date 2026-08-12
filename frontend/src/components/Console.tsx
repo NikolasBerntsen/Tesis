@@ -4,6 +4,7 @@ import type { Alert, Drone, DroneStatus, EventRow, Me, NovedadDron, PatrolRoute,
 import { useWebSocket } from '../useWebSocket';
 import BasesView from './BasesView';
 import BotonTema from './BotonTema';
+import CampanaDeAlertas from './CampanaDeAlertas';
 import RutasView from './RutasView';
 import Dashboard from './Dashboard';
 import DroneDetail from './DroneDetail';
@@ -110,6 +111,18 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
         }
         setNovedadDron({ tipo: 'ficha', drone: msg.drone });
         break;
+      case 'base_updated':
+        // Mover o renombrar una base cambia la ficha de todos los drones que la
+        // tienen asignada. Sin esto la tarjeta y el marcador del mapa seguían
+        // mostrando la base vieja hasta recargar la consola entera.
+        setDrones((prev) =>
+          prev.map((d) =>
+            d.baseId === msg.base.id
+              ? { ...d, base: { name: msg.base.name, lat: msg.base.lat, lon: msg.base.lon } }
+              : d,
+          ),
+        );
+        break;
       case 'route_updated':
         setRoutes((prev) => prev.map((r) => (r.id === msg.route.id ? msg.route : r)));
         break;
@@ -182,6 +195,14 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
     });
   }
 
+  async function decidirAlerta(id: number, decision: 'VALIDATED' | 'DISMISSED') {
+    try {
+      await api(`/alerts/${id}/decision`, { method: 'POST', body: JSON.stringify({ decision }) });
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
   async function rename(droneId: string, displayName: string) {
     try {
       upsertDrone(await api<Drone>(`/drones/${droneId}`, { method: 'PATCH', body: JSON.stringify({ displayName }) }));
@@ -220,6 +241,18 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
           {/* El operador de campo entra a una consola recortada: conviene que lo
               lea, y no que lo deduzca de que no hay más botones. */}
           {deCampo && <span className="badge oro">Sesión de campo</span>}
+          {/* El operador de campo no recibe alertas: el backend no se las manda. */}
+          {!deCampo && (
+            <CampanaDeAlertas
+              alerts={alerts}
+              drones={drones}
+              onDecidir={decidirAlerta}
+              onVerDron={(droneId) => {
+                setSeccion('operacion');
+                setSelectedId(droneId);
+              }}
+            />
+          )}
           {/* El punto lo dibuja .estado con currentColor: en la interfaz no hay
               caracteres decorativos, y así el punto toma el verde o el rojo. */}
           <span className={`conn estado versalita ${connected ? 'ok' : 'bad'}`} aria-live="polite">
@@ -252,7 +285,6 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
           drone={selected}
           status={statuses[selected.droneId] ?? null}
           frame={frames[selected.droneId] ?? null}
-          alerts={alerts}
           liveEvents={liveEvents}
           routes={routes}
           onBack={() => setSelectedId(null)}

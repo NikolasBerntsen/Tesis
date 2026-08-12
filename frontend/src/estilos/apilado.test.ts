@@ -43,3 +43,26 @@ describe('orden de apilado', () => {
     expect(fondos).toBeLessThan(velo);
   });
 });
+
+/**
+ * La celda de acciones de una tabla tiene que seguir siendo una celda. Un `td`
+ * en `display:flex` deja de serlo —el navegador le arma una celda anónima
+ * alrededor— y su borde inferior termina a distinta altura que el de las
+ * celdas vecinas: la línea que separa las filas se ve cortada en pedazos, que
+ * es exactamente como se veía la tabla de rutas.
+ */
+describe('celda de acciones de las tablas', () => {
+  const layout = leer('./layout.css');
+
+  it('la celda no queda en flex: la fila se cortaba en pedazos', () => {
+    const bloque = layout.slice(layout.indexOf('td.barra-acciones {'));
+    const cuerpo = bloque.slice(0, bloque.indexOf('}'));
+    expect(cuerpo).toMatch(/display:\s*table-cell/);
+    expect(cuerpo).not.toMatch(/display:\s*flex/);
+  });
+
+  it('los botones no se parten en dos renglones', () => {
+    const bloque = layout.slice(layout.indexOf('td.barra-acciones {'));
+    expect(bloque.slice(0, bloque.indexOf('}'))).toMatch(/white-space:\s*nowrap/);
+  });
+});

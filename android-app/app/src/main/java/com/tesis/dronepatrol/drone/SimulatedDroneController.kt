@@ -33,8 +33,10 @@ import kotlinx.coroutines.launch
 class SimulatedDroneController : DroneController {
 
     private companion object {
-        const val HOME_LAT = -34.8565
-        const val HOME_LON = -56.2075
+        // El Obelisco, sobre la 9 de Julio: el mismo punto en el que abren los
+        // mapas de la consola y en el que están las bases de demostración.
+        const val HOME_LAT = -34.6037
+        const val HOME_LON = -58.3816
         const val SPEED_MS = 12.0
         const val TICK_MS = 500L
         const val FRAME_MS = 500L // ~2 fps

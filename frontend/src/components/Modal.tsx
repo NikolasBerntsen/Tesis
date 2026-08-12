@@ -25,12 +25,15 @@ const pila: object[] = [];
 export default function Modal({
   etiquetadoPor,
   descritoPor,
+  ancho,
   onCerrar,
   children,
 }: {
   /** `id` del título, para el `aria-labelledby` de la caja. */
   etiquetadoPor: string;
   descritoPor?: string;
+  /** Caja ancha, para los diálogos que llevan un mapa al lado de una lista. */
+  ancho?: boolean;
   onCerrar: () => void;
   children: ReactNode;
 }) {
@@ -104,7 +107,7 @@ export default function Modal({
       }}
     >
       <div
-        className="modal-caja"
+        className={ancho ? 'modal-caja modal-ancho' : 'modal-caja'}
         role="dialog"
         aria-modal="true"
         aria-labelledby={etiquetadoPor}

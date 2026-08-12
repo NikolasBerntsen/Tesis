@@ -115,6 +115,9 @@
   --txt-xl: 26px;
   --txt-2xl: 32px;
   --txt-cifra: 38px;
+  /* La misma cifra, para tarjetas que cruzan toda la pantalla y tienen que
+     dejarle el alto al video y al mapa. */
+  --txt-cifra-chica: 27px;
 
   --interlinea: 1.65;
   --interlinea-titulo: 1.22;

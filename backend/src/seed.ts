@@ -20,42 +20,68 @@ function hashDemo(semilla: string): string {
   return createHash('sha256').update(`tesis-demo:${semilla}`).digest('hex').slice(0, 32);
 }
 
+/* Las tres bases de demostración están repartidas por la Ciudad de Buenos
+   Aires, con el Obelisco de referencia: los mapas abren ahí y no hay que
+   arrastrarlos hasta la ciudad antes de poder trabajar. */
+const BASES = {
+  obelisco: { name: 'Base Obelisco', lat: -34.6037, lon: -58.3816 },
+  retiro:   { name: 'Base Retiro',   lat: -34.5925, lon: -58.3745 },
+  palermo:  { name: 'Base Palermo',  lat: -34.5735, lon: -58.4120 },
+};
+
 const drones = [
-  { semilla: 'alfa',    displayName: 'Alfa',    model: 'DJI Mini 3',  base: { name: 'Base Norte', lat: -34.8565, lon: -56.2075 } },
-  { semilla: 'bravo',   displayName: 'Bravo',   model: 'DJI Mini 3',  base: { name: 'Base Sur',   lat: -34.86,   lon: -56.205  } },
-  { semilla: 'charlie', displayName: 'Charlie', model: 'DJI Air 3',   base: { name: 'Base Este',  lat: -34.8575, lon: -56.201  } },
+  { semilla: 'alfa',    displayName: 'Alfa',    model: 'DJI Mini 3',  base: BASES.obelisco },
+  { semilla: 'bravo',   displayName: 'Bravo',   model: 'DJI Mini 3',  base: BASES.retiro },
+  { semilla: 'charlie', displayName: 'Charlie', model: 'DJI Air 3',   base: BASES.palermo },
 ];
 
+/* Cada ruta nace asignada a una base: un dron sólo puede patrullar las rutas
+   de la base de la que sale, así que una ruta sin base no la puede volar
+   nadie. */
 const routes = [
   {
-    name: 'Perímetro Norte',
-    description: 'Rectángulo sobre el sector norte del predio',
+    name: 'Perímetro 9 de Julio',
+    description: 'Vuelta a la manzana del Obelisco',
+    bases: [BASES.obelisco],
     waypoints: [
-      { lat: -34.856, lon: -56.207, alt: 40 },
-      { lat: -34.8532, lon: -56.207, alt: 40 },
-      { lat: -34.8532, lon: -56.2036, alt: 40 },
-      { lat: -34.856, lon: -56.2036, alt: 40 },
+      { lat: -34.6015, lon: -58.3840, alt: 40, label: 'Cerrito' },
+      { lat: -34.6015, lon: -58.3792, alt: 40 },
+      { lat: -34.6060, lon: -58.3792, alt: 40 },
+      { lat: -34.6060, lon: -58.3840, alt: 40 },
     ],
   },
   {
-    name: 'Perímetro Sur',
-    description: 'Rectángulo sobre el sector sur del predio',
+    name: 'Corredor Corrientes',
+    description: 'Recorrido sobre la avenida, del Obelisco al este',
+    bases: [BASES.obelisco],
     waypoints: [
-      { lat: -34.8588, lon: -56.207, alt: 40 },
-      { lat: -34.8588, lon: -56.2038, alt: 40 },
-      { lat: -34.861, lon: -56.2038, alt: 40 },
-      { lat: -34.861, lon: -56.207, alt: 40 },
+      { lat: -34.6034, lon: -58.3800, alt: 45 },
+      { lat: -34.6029, lon: -58.3760, alt: 45 },
+      { lat: -34.6024, lon: -58.3720, alt: 45 },
+      { lat: -34.6019, lon: -58.3690, alt: 45, label: 'Alem' },
     ],
   },
   {
-    name: 'Acceso Este',
-    description: 'Recorrido sobre el camino de acceso',
+    name: 'Circuito Retiro',
+    description: 'Perímetro de la plaza y la estación',
+    bases: [BASES.retiro],
     waypoints: [
-      { lat: -34.8575, lon: -56.2015, alt: 45 },
-      { lat: -34.8548, lon: -56.2015, alt: 45 },
-      { lat: -34.8548, lon: -56.1985, alt: 45 },
-      { lat: -34.8575, lon: -56.1985, alt: 45 },
-      { lat: -34.859, lon: -56.2, alt: 45 },
+      { lat: -34.5905, lon: -58.3765, alt: 50 },
+      { lat: -34.5905, lon: -58.3722, alt: 50 },
+      { lat: -34.5948, lon: -58.3722, alt: 50 },
+      { lat: -34.5948, lon: -58.3765, alt: 50 },
+    ],
+  },
+  {
+    name: 'Bosques de Palermo',
+    description: 'Vuelta a los lagos',
+    bases: [BASES.palermo],
+    waypoints: [
+      { lat: -34.5708, lon: -58.4162, alt: 55 },
+      { lat: -34.5708, lon: -58.4082, alt: 55 },
+      { lat: -34.5766, lon: -58.4082, alt: 55 },
+      { lat: -34.5766, lon: -58.4162, alt: 55 },
+      { lat: -34.5735, lon: -58.4120, alt: 55, label: 'Rosedal' },
     ],
   },
 ];
@@ -107,14 +133,20 @@ for (const d of drones) {
 }
 
 for (const r of routes) {
-  const exists = db.prepare('SELECT 1 FROM patrol_routes WHERE name = ?').get(r.name);
-  if (!exists) {
-    db.prepare('INSERT INTO patrol_routes (name, description, waypoints) VALUES (?, ?, ?)').run(
-      r.name,
-      r.description,
-      JSON.stringify(r.waypoints),
-    );
-    console.log(`Ruta creada: ${r.name} (${r.waypoints.length} waypoints)`);
+  const ya = db.prepare('SELECT id FROM patrol_routes WHERE name = ?').get(r.name) as { id: number } | undefined;
+  let routeId = ya?.id;
+  if (!routeId) {
+    const info = db
+      .prepare('INSERT INTO patrol_routes (name, description, waypoints) VALUES (?, ?, ?)')
+      .run(r.name, r.description, JSON.stringify(r.waypoints));
+    routeId = Number(info.lastInsertRowid);
+    console.log(`Ruta creada: ${r.name} (${r.waypoints.length} nodos)`);
+  }
+  // Sin esto la demostración arranca con todas las bases vacías y ningún dron
+  // tiene una sola ruta para patrullar.
+  for (const b of r.bases) {
+    db.prepare('INSERT OR IGNORE INTO base_routes (base_id, route_id) VALUES (?, ?)').run(idDeBase(b), routeId);
+    console.log(`  asignada a ${b.name}`);
   }
 }
 

@@ -24,8 +24,9 @@ import org.robolectric.annotation.Config
 class SimulatedDroneControllerTest {
 
     private companion object {
-        const val BASE_LAT = -34.8565
-        const val BASE_LON = -56.2075
+        // El punto en el que arranca el dron simulado: el Obelisco.
+        const val BASE_LAT = -34.6037
+        const val BASE_LON = -58.3816
         const val M_POR_GRADO_LAT = 111_320.0
     }
 
