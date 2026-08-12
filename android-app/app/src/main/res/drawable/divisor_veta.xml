@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Línea de veta de 1dp: separa filas sin cebra ni sombras. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <size android:height="@dimen/borde_veta" />
+    <solid android:color="@color/veta" />
+</shape>

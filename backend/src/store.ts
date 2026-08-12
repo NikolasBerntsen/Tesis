@@ -1,6 +1,7 @@
+import { randomBytes } from 'node:crypto';
 import { db } from './db';
 
-export type Role = 'drone' | 'operator' | 'supervisor' | 'admin';
+export type Role = 'drone' | 'field_operator' | 'operator' | 'supervisor' | 'admin';
 
 export interface UserRow {
   id: number;
@@ -13,6 +14,8 @@ export interface UserRow {
   base_lon: number | null;
   active: number;
   can_control: number;
+  deleted_at: string | null;
+  deleted_by: string | null;
 }
 
 /** Vista pública de un usuario humano (sin hash de contraseña). */
@@ -21,17 +24,60 @@ export interface UserView {
   role: Role;
   active: boolean;
   canControl: boolean;
+  deletedAt: string | null;
 }
 
 export function toUserView(u: UserRow): UserView {
-  return { username: u.username, role: u.role, active: !!u.active, canControl: !!u.can_control };
+  return {
+    username: u.username,
+    role: u.role,
+    active: !!u.active,
+    canControl: !!u.can_control,
+    deletedAt: u.deleted_at,
+  };
+}
+
+/** Base a la que vuelve un dron; se dibuja como cuadrado azul en los mapas. */
+export interface DroneBase {
+  name: string;
+  lat: number;
+  lon: number;
 }
 
 /** Identidad persistente de un dron: lo que no cambia de una conexión a otra. */
 export interface DroneIdentity {
   droneId: string;
   displayName: string;
-  base: { name: string; lat: number; lon: number } | null;
+  base: DroneBase | null;
+}
+
+/** Fila cruda de la tabla `drones`: el dron como activo del sistema. */
+export interface DroneAsset {
+  id: number;
+  hash: string;
+  display_name: string;
+  model: string;
+  active: number;
+  base_name: string | null;
+  base_lat: number | null;
+  base_lon: number | null;
+  created_at: string;
+  created_by: string | null;
+  deleted_at: string | null;
+  deleted_by: string | null;
+}
+
+/** Vista pública del activo: el `hash` ES el droneId de todo el protocolo. */
+export interface DroneAssetView {
+  hash: string;
+  displayName: string;
+  model: string;
+  active: boolean;
+  base: DroneBase | null;
+  createdAt: string;
+  createdBy: string | null;
+  deletedAt: string | null;
+  deletedBy: string | null;
 }
 
 /** `label` es el apodo opcional del nodo, para identificar zonas puntuales. */
@@ -76,15 +122,26 @@ export interface EventRow {
   meta: string | null;
 }
 
+// ---- Usuarios ----
+
+/** Fila cruda, INCLUIDOS los borrados lógicamente (el login necesita distinguirlos). */
 export function getUser(username: string): UserRow | undefined {
   return db.prepare('SELECT * FROM users WHERE username = ?').get(username) as UserRow | undefined;
 }
 
-/** Usuarios humanos (sin cuentas de dron). Con maxRole se filtra por rango. */
-export function listUsers(roles: Role[]): UserView[] {
+/** Solo el usuario que puede operar: ni desactivado ni borrado. */
+export function getActiveUser(username: string): UserRow | undefined {
+  return db
+    .prepare('SELECT * FROM users WHERE username = ? AND active = 1 AND deleted_at IS NULL')
+    .get(username) as UserRow | undefined;
+}
+
+/** Usuarios humanos de los roles pedidos. Los borrados solo salen si se piden. */
+export function listUsers(roles: Role[], opts: { includeDeleted?: boolean } = {}): UserView[] {
   const marks = roles.map(() => '?').join(',');
+  const filtroBorrados = opts.includeDeleted ? '' : ' AND deleted_at IS NULL';
   const rows = db
-    .prepare(`SELECT * FROM users WHERE role IN (${marks}) ORDER BY role, username`)
+    .prepare(`SELECT * FROM users WHERE role IN (${marks})${filtroBorrados} ORDER BY role, username`)
     .all(...roles) as UserRow[];
   return rows.map(toUserView);
 }
@@ -125,42 +182,177 @@ export function updateUser(username: string, patch: UserPatch): { before: UserVi
   return { before, after: toUserView(getUser(username)!) };
 }
 
-export function deleteUser(username: string): UserView | undefined {
+/**
+ * Borrado lógico: la fila queda para que el historial siga teniendo sentido y
+ * el username no se pueda reusar. Devuelve undefined si ya estaba borrado.
+ */
+export function softDeleteUser(username: string, deletedBy: string): { before: UserView; after: UserView } | undefined {
   const row = getUser(username);
-  if (!row) return undefined;
-  db.prepare('DELETE FROM users WHERE username = ?').run(username);
-  return toUserView(row);
+  if (!row || row.deleted_at) return undefined;
+  const before = toUserView(row);
+  db.prepare('UPDATE users SET deleted_at = ?, deleted_by = ? WHERE username = ?').run(
+    new Date().toISOString(),
+    deletedBy,
+    username,
+  );
+  return { before, after: toUserView(getUser(username)!) };
 }
 
-function toDroneIdentity(u: UserRow): DroneIdentity {
+/** Deshace el borrado lógico. Devuelve undefined si el usuario no estaba borrado. */
+export function restoreUser(username: string): { before: UserView; after: UserView } | undefined {
+  const row = getUser(username);
+  if (!row || !row.deleted_at) return undefined;
+  const before = toUserView(row);
+  db.prepare('UPDATE users SET deleted_at = NULL, deleted_by = NULL WHERE username = ?').run(username);
+  return { before, after: toUserView(getUser(username)!) };
+}
+
+// ---- Drones como activos ----
+
+function toDroneBase(d: { base_name: string | null; base_lat: number | null; base_lon: number | null }): DroneBase | null {
+  return d.base_lat != null && d.base_lon != null
+    ? { name: d.base_name ?? 'Base', lat: d.base_lat, lon: d.base_lon }
+    : null;
+}
+
+export function toDroneAssetView(d: DroneAsset): DroneAssetView {
   return {
-    droneId: u.username,
-    displayName: u.display_name ?? u.username,
-    base:
-      u.base_lat != null && u.base_lon != null
-        ? { name: u.base_name ?? 'Base', lat: u.base_lat, lon: u.base_lon }
-        : null,
+    hash: d.hash,
+    displayName: d.display_name,
+    model: d.model,
+    active: !!d.active,
+    base: toDroneBase(d),
+    createdAt: d.created_at,
+    createdBy: d.created_by,
+    deletedAt: d.deleted_at,
+    deletedBy: d.deleted_by,
   };
 }
 
-export function getDroneIdentity(droneId: string): DroneIdentity | undefined {
-  const u = db.prepare("SELECT * FROM users WHERE username = ? AND role = 'drone'").get(droneId) as UserRow | undefined;
-  return u ? toDroneIdentity(u) : undefined;
+function toDroneIdentity(d: DroneAsset): DroneIdentity {
+  return { droneId: d.hash, displayName: d.display_name, base: toDroneBase(d) };
 }
 
-export function listDroneIdentities(): DroneIdentity[] {
-  const rows = db.prepare("SELECT * FROM users WHERE role = 'drone' ORDER BY username").all() as UserRow[];
-  return rows.map(toDroneIdentity);
+export interface DroneInput {
+  displayName: string;
+  model?: string;
+  base?: DroneBase | null;
+}
+
+/**
+ * Da de alta el activo. El hash son 16 bytes al azar en hexa: es lo único que
+ * viaja en el QR, así que tiene que ser imposible de adivinar.
+ */
+export function createDrone(input: DroneInput, createdBy: string): DroneAssetView {
+  const hash = randomBytes(16).toString('hex');
+  db.prepare(
+    `INSERT INTO drones (hash, display_name, model, base_name, base_lat, base_lon, created_at, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    hash,
+    input.displayName,
+    input.model ?? '',
+    input.base?.name ?? null,
+    input.base?.lat ?? null,
+    input.base?.lon ?? null,
+    new Date().toISOString(),
+    createdBy,
+  );
+  return getDrone(hash)!;
+}
+
+/** Busca por hash SIN filtrar borrados: quien llama decide si un 404 o un 410. */
+export function getDrone(hash: string): DroneAssetView | undefined {
+  const row = db.prepare('SELECT * FROM drones WHERE hash = ?').get(hash) as DroneAsset | undefined;
+  return row ? toDroneAssetView(row) : undefined;
+}
+
+export function listDrones(opts: { includeDeleted?: boolean } = {}): DroneAssetView[] {
+  const filtroBorrados = opts.includeDeleted ? '' : 'WHERE deleted_at IS NULL';
+  const rows = db
+    .prepare(`SELECT * FROM drones ${filtroBorrados} ORDER BY display_name COLLATE NOCASE, id`)
+    .all() as DroneAsset[];
+  return rows.map(toDroneAssetView);
+}
+
+export interface DronePatch {
+  displayName?: string;
+  model?: string;
+  active?: boolean;
+  /** `null` borra la base; `undefined` la deja como está. */
+  base?: DroneBase | null;
+}
+
+/** Aplica el cambio sobre un dron vivo y devuelve el antes y el después, para el log. */
+export function updateDrone(hash: string, patch: DronePatch): { before: DroneAssetView; after: DroneAssetView } | undefined {
+  const before = getDrone(hash);
+  if (!before || before.deletedAt) return undefined;
+
+  db.prepare(
+    `UPDATE drones SET
+       display_name = COALESCE(?, display_name),
+       model = COALESCE(?, model),
+       active = COALESCE(?, active)
+     WHERE hash = ?`,
+  ).run(
+    patch.displayName ?? null,
+    patch.model ?? null,
+    patch.active === undefined ? null : patch.active ? 1 : 0,
+    hash,
+  );
+
+  // La base va aparte porque COALESCE no distingue "no la toques" de "borrala".
+  if (patch.base !== undefined) {
+    db.prepare('UPDATE drones SET base_name = ?, base_lat = ?, base_lon = ? WHERE hash = ?').run(
+      patch.base?.name ?? null,
+      patch.base?.lat ?? null,
+      patch.base?.lon ?? null,
+      hash,
+    );
+  }
+
+  return { before, after: getDrone(hash)! };
+}
+
+/** Borrado lógico: el historial sigue apuntando al hash. Undefined si ya estaba borrado. */
+export function softDeleteDrone(hash: string, deletedBy: string): DroneAssetView | undefined {
+  const info = db
+    .prepare('UPDATE drones SET deleted_at = ?, deleted_by = ? WHERE hash = ? AND deleted_at IS NULL')
+    .run(new Date().toISOString(), deletedBy, hash);
+  if (info.changes === 0) return undefined;
+  return getDrone(hash);
+}
+
+/** Deshace el borrado lógico. Undefined si el dron no existe o no estaba borrado. */
+export function restoreDrone(hash: string): DroneAssetView | undefined {
+  const info = db
+    .prepare('UPDATE drones SET deleted_at = NULL, deleted_by = NULL WHERE hash = ? AND deleted_at IS NOT NULL')
+    .run(hash);
+  if (info.changes === 0) return undefined;
+  return getDrone(hash);
+}
+
+/**
+ * Identidad del dron para el protocolo. Los borrados no existen para nadie; los
+ * inactivos sí, porque la consola tiene que poder mostrarlos y reactivarlos.
+ */
+export function getDroneIdentity(droneId: string): DroneIdentity | undefined {
+  const row = db.prepare('SELECT * FROM drones WHERE hash = ? AND deleted_at IS NULL').get(droneId) as
+    | DroneAsset
+    | undefined;
+  return row ? toDroneIdentity(row) : undefined;
 }
 
 /** Renombra un dron. Devuelve la identidad ya actualizada, o undefined si no existe. */
 export function renameDrone(droneId: string, displayName: string): DroneIdentity | undefined {
   const info = db
-    .prepare("UPDATE users SET display_name = ? WHERE username = ? AND role = 'drone'")
+    .prepare('UPDATE drones SET display_name = ? WHERE hash = ? AND deleted_at IS NULL')
     .run(displayName, droneId);
   if (info.changes === 0) return undefined;
   return getDroneIdentity(droneId);
 }
+
+// ---- Rutas de patrullaje ----
 
 export function getRoutes(): PatrolRoute[] {
   const rows = db.prepare('SELECT * FROM patrol_routes ORDER BY id').all() as {
@@ -189,6 +381,8 @@ export function setWaypointLabel(routeId: number, index: number, label: string):
   db.prepare('UPDATE patrol_routes SET waypoints = ? WHERE id = ?').run(JSON.stringify(route.waypoints), routeId);
   return route;
 }
+
+// ---- Registro ----
 
 /**
  * Registro central del sistema: TODA acción pasa por acá. `category` separa el
@@ -220,16 +414,6 @@ export function createLog(
   };
 }
 
-export function createEvent(
-  type: string,
-  source: string,
-  message: string,
-  droneId: string | null = null,
-  alertId: number | null = null,
-): EventRow {
-  return createLog('drone', type, source, message, { droneId, alertId });
-}
-
 /** Log de drones: lo que ven los operadores. */
 export function listEvents(limit = 200, droneId?: string): EventRow[] {
   if (droneId) {
@@ -240,13 +424,73 @@ export function listEvents(limit = 200, droneId?: string): EventRow[] {
   return db.prepare("SELECT * FROM events WHERE category = 'drone' ORDER BY id DESC LIMIT ?").all(limit) as EventRow[];
 }
 
-/** Log general del sistema (todas las categorías juntas), para el admin. */
-export function listLogs(limit = 200, category?: LogCategory): EventRow[] {
-  if (category) {
-    return db.prepare('SELECT * FROM events WHERE category = ? ORDER BY id DESC LIMIT ?').all(category, limit) as EventRow[];
-  }
-  return db.prepare('SELECT * FROM events ORDER BY id DESC LIMIT ?').all(limit) as EventRow[];
+/** Tamaños de página que ofrece la consola; cualquier otro cae al primero. */
+export const TAMANIOS_PAGINA = [25, 50, 75, 100] as const;
+
+/**
+ * Techo de paginación. El OFFSET se bindea como entero de SQLite: sin tope, un
+ * `page` disparatado (1e30) lo saca de rango y la consulta muere con "datatype
+ * mismatch". Más allá de este número no hay registros que ver de todos modos.
+ */
+const PAGINA_MAXIMA = 100_000;
+
+export interface LogQuery {
+  category?: LogCategory;
+  droneId?: string;
+  /** Texto libre: busca en mensaje, tipo y origen. */
+  q?: string;
+  page: number;
+  pageSize: number;
 }
+
+export interface LogPage {
+  items: EventRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/**
+ * Log general del sistema, para el admin. El filtro y el conteo se resuelven en
+ * SQL (dos consultas: una de COUNT y una con LIMIT/OFFSET) porque la tabla
+ * crece sin techo y traerla entera a memoria para paginarla no escala.
+ */
+export function listLogs(query: LogQuery): LogPage {
+  const pageSize = (TAMANIOS_PAGINA as readonly number[]).includes(query.pageSize)
+    ? query.pageSize
+    : TAMANIOS_PAGINA[0];
+  const pedida = Number.isFinite(query.page) && query.page >= 1 ? Math.floor(query.page) : 1;
+  const page = Math.min(pedida, PAGINA_MAXIMA);
+
+  const condiciones: string[] = [];
+  const params: (string | number)[] = [];
+
+  if (query.category) {
+    condiciones.push('category = ?');
+    params.push(query.category);
+  }
+  if (query.droneId) {
+    condiciones.push('drone_id = ?');
+    params.push(query.droneId);
+  }
+  if (query.q) {
+    // Los comodines que escriba el usuario se escapan: buscar "100%" no puede
+    // convertirse en un LIKE que matchee cualquier cosa.
+    const patron = `%${query.q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    condiciones.push(`(message LIKE ? ESCAPE '\\' OR type LIKE ? ESCAPE '\\' OR source LIKE ? ESCAPE '\\')`);
+    params.push(patron, patron, patron);
+  }
+
+  const where = condiciones.length ? `WHERE ${condiciones.join(' AND ')}` : '';
+  const total = (db.prepare(`SELECT COUNT(*) AS n FROM events ${where}`).get(...params) as { n: number }).n;
+  const items = db
+    .prepare(`SELECT * FROM events ${where} ORDER BY id DESC LIMIT ? OFFSET ?`)
+    .all(...params, pageSize, (page - 1) * pageSize) as EventRow[];
+
+  return { items, total, page, pageSize };
+}
+
+// ---- Alertas ----
 
 export function createAlert(
   type: 'PERSON' | 'VEHICLE',

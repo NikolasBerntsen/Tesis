@@ -41,6 +41,11 @@ describe('CameraTile', () => {
       expect(screen.getByText('BATERÍA BAJA')).toBeInTheDocument();
     });
 
+    it('el aviso de falla va engrosado para que no se lea tenue sobre la imagen', () => {
+      renderTile({ status: makeStatus({ signal: 'LOST' }) });
+      expect(screen.getByText('SEÑAL PERDIDA').tagName).toBe('STRONG');
+    });
+
     it('no muestra overlay en estado normal', () => {
       renderTile({ status: makeStatus() });
       expect(screen.queryByText('SEÑAL PERDIDA')).not.toBeInTheDocument();
@@ -83,6 +88,11 @@ describe('CameraTile', () => {
       expect(img.src).toContain('data:image/jpeg;base64,AAAA');
     });
 
+    it('encuadra la cámara en un marco de mármol con filo dorado', () => {
+      renderTile({ frame: 'AAAA' });
+      expect(document.querySelector('.hueco.filo-oro .tile-video img.video')).toBeInTheDocument();
+    });
+
     it('muestra el placeholder sin señal de video', () => {
       renderTile({ frame: null });
       expect(screen.getByText('Sin señal de video')).toBeInTheDocument();
@@ -102,12 +112,13 @@ describe('CameraTile', () => {
 
     it('muestra el contador de alertas pendientes cuando hay', () => {
       renderTile({ pendingAlerts: 3 });
-      expect(screen.getByText('3 alerta(s)')).toBeInTheDocument();
+      expect(screen.getByText('Alertas pendientes')).toBeInTheDocument();
+      expect(screen.getByText('3')).toBeInTheDocument();
     });
 
     it('no muestra contador de alertas cuando es 0', () => {
       renderTile({ pendingAlerts: 0 });
-      expect(screen.queryByText(/alerta\(s\)/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/alertas pendientes/i)).not.toBeInTheDocument();
     });
   });
 

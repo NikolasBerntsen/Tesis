@@ -76,25 +76,40 @@ quedan en `logs/` (modo nativo) o en `docker compose logs` (modo Docker).
 Credenciales de demo (creadas por el seed). **Cada dron tiene su propia cuenta**:
 es con ella que la app inicia sesión y se identifica ante el Comando Central.
 
-| Usuario | Contraseña | Rol | Nombre visible | Base |
-|---|---|---|---|---|
-| `operador` | `operador123` | Operador: ve y decide alertas, controla drones | — | — |
-| `supervisor` | `supervisor123` | Supervisor: gestiona operadores y su permiso de control | — | — |
-| `admin` | `admin123` | Administrador: usuarios y registro del sistema | — | — |
-| `drone1` | `drone123` | App de control | Alfa | Base Norte |
-| `drone2` | `drone123` | App de control | Bravo | Base Sur |
-| `drone3` | `drone123` | App de control | Charlie | Base Este |
+| Usuario | Contraseña | Rol |
+|---|---|---|
+| `campo` | `campo123` | Operador de campo: da de alta drones, genera sus QR y los empareja en el terreno. **Sesión efímera de 20 minutos** |
+| `operador` | `operador123` | Operador: ve y decide alertas, controla drones |
+| `supervisor` | `supervisor123` | Supervisor: gestiona operadores y los drones como activos |
+| `admin` | `admin123` | Administrador: usuarios y registro del sistema |
 
-El nombre visible se puede cambiar desde la app **y** desde el Comando Central;
-el cambio se propaga al otro lado.
+Los drones **ya no son cuentas con contraseña**: son activos del inventario. El
+seed carga tres (Alfa, Bravo y Charlie) con hashes fijos y los imprime en la
+consola al correr; esos hashes son el contenido de sus códigos QR, así se puede
+probar el emparejamiento sin generar stickers nuevos.
+
+El nombre visible del dron se puede cambiar desde la app **y** desde el Comando
+Central; el cambio se propaga al otro lado.
 
 ### App Android
 
 Abrir `android-app/` en Android Studio, elegir la variante **`mockDebug`** y
-correr. En la pantalla de la app, cargar:
+correr. La app arranca con la URL del Comando Central ya cargada
+(`https://tesis.144-22-138-149.sslip.io`); para probar contra un backend local,
+cambiarla por la IP de LAN que imprime `start.sh` al arrancar.
 
-- **Emulador**: `http://10.0.2.2:4000` y `ws://10.0.2.2:8765`
-- **Teléfono físico**: la IP de LAN que imprime `start.sh` al arrancar.
+El flujo es: **iniciar sesión como operador de campo** → **escanear el QR del
+dron** (el hash que imprime el seed) → elegir modo de operación.
+
+Para el enlace con el software de detección, el modo por defecto es **cable
+USB**: en la computadora que corre la detección hay que ejecutar una vez
+
+```bash
+adb reverse tcp:8765 tcp:8765
+```
+
+y tener la depuración USB activada en el teléfono. El detalle, y el modo de red
+como respaldo, están en `android-app/README.md` y en `docs/PROTOCOLS.md`.
 
 ### Levantar los servicios a mano
 

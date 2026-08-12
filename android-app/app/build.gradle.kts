@@ -63,6 +63,11 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
+    // Escaneo del QR del dron: trae su propia Activity de cámara, sin CameraX
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+    // Instantánea GPS del despliegue, para el registro del emparejamiento
+    implementation("com.google.android.gms:play-services-location:21.3.0")
+
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.13")
     testImplementation("androidx.test:core:1.6.1")

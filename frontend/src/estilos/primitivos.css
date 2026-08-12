@@ -1,0 +1,433 @@
+/* ============================================================================
+   PRIMITIVOS — tarjetas, botones, campos, tablas, pastillas
+   ========================================================================= */
+
+/* --- Tarjeta: un plano de mármol levemente levantado ---------------------- */
+.card {
+  position: relative;
+  padding: var(--e-5);
+  border: 1px solid var(--veta);
+  border-radius: var(--radio);
+  color: var(--tinta);
+  background-color: var(--marmol-0);
+  background-image: var(--piedra-cara);
+  box-shadow: var(--sombra-relieve);
+}
+
+.card > h2 {
+  position: relative;
+  margin: 0 0 var(--e-4);
+  font-size: var(--txt-md);
+  /* Título de tarjeta: hairline de veta debajo, como una línea grabada */
+  padding-bottom: var(--e-2);
+  border-bottom: 1px solid var(--veta);
+}
+/* Y donde la línea arranca, la piedra se abre: un tramito de oro */
+.card > h2::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: 38px;
+  height: 1px;
+  background: linear-gradient(90deg, var(--oro-oscuro) 0%, var(--oro-claro) 100%);
+}
+.card > h3,
+.card h3 {
+  margin: var(--e-5) 0 var(--e-2);
+  font-size: var(--txt-sm);
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  font-family: var(--fuente-cuerpo);
+  font-weight: 600;
+  color: var(--tinta-media);
+}
+
+/* Tarjeta seleccionada / destacada */
+.card.activa {
+  background-color: var(--marmol-0);
+  box-shadow: var(--sombra-flotante);
+}
+.card.activa::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: var(--filo);
+  background: var(--oro-lamina);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* Superficie hundida (paneles internos, cajas de datos) */
+.hueco {
+  background: var(--marmol-2);
+  border: 1px solid var(--veta);
+  border-radius: var(--radio-chico);
+  box-shadow: var(--sombra-hundida);
+  padding: var(--e-3);
+}
+
+/* --- Botones -------------------------------------------------------------- */
+button {
+  font-family: var(--fuente-cuerpo);
+  font-size: var(--txt-base);
+  font-weight: 500;
+  line-height: 1.2;
+  padding: 9px 18px;
+  border: 1px solid var(--veta-fuerte);
+  border-radius: var(--radio-chico);
+  color: var(--tinta);
+  background-color: var(--marmol-1);
+  background-image: linear-gradient(180deg, #FEFDFA 0%, var(--marmol-1) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), 0 1px 2px rgba(43, 38, 32, .06);
+  cursor: pointer;
+  transition: border-color var(--transicion), background-color var(--transicion),
+    box-shadow var(--transicion), color var(--transicion);
+}
+button:hover:not(:disabled) {
+  border-color: var(--oro); /* al pasar el mouse, la veta vira a oro */
+  background-image: linear-gradient(180deg, #FFFEFB 0%, var(--marmol-0) 100%);
+}
+button:active:not(:disabled) {
+  box-shadow: var(--sombra-hundida);
+  transform: translateY(.5px);
+}
+button:disabled {
+  color: var(--tinta-suave);
+  border-color: var(--veta);
+  background-image: none;
+  background-color: var(--marmol-2);
+  box-shadow: none;
+  cursor: default;
+}
+
+/* Primario: relleno de lámina dorada con tinta encima */
+button.primario,
+button[type='submit'],
+.login-card button {
+  border-color: var(--oro-oscuro);
+  color: var(--tinta);
+  font-weight: 600;
+  background-color: var(--oro);
+  background-image: var(--oro-lamina-relleno);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .55), 0 2px 6px -1px rgba(138, 106, 28, .35);
+}
+button.primario:hover:not(:disabled),
+button[type='submit']:hover:not(:disabled),
+.login-card button:hover:not(:disabled) {
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, .55), rgba(255, 255, 255, .22)),
+    var(--oro-lamina);
+  border-color: var(--oro-oscuro);
+}
+button.primario:disabled,
+button[type='submit']:disabled,
+.login-card button:disabled {
+  background-image: none;
+  background-color: var(--marmol-2);
+  border-color: var(--veta);
+  color: var(--tinta-suave);
+  box-shadow: none;
+}
+
+/* Fantasma: solo texto, para acciones de bajo peso */
+button.ghost {
+  background: transparent;
+  background-image: none;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--tinta-media);
+}
+button.ghost:hover:not(:disabled) {
+  color: var(--tinta);
+  border-color: var(--veta);
+  background: rgba(255, 255, 255, .6);
+}
+
+button.chico {
+  padding: 4px 11px;
+  font-size: var(--txt-sm);
+}
+
+/* Botones de decisión de alerta: el color entra por el borde, no por el fondo.
+   .resume (reanudar patrullaje) es el mismo gesto afirmativo: comparte receta. */
+button.validate,
+button.resume {
+  border-color: var(--ok);
+  color: var(--ok);
+  background-image: linear-gradient(180deg, #FDFEFC 0%, var(--ok-velo) 100%);
+}
+button.validate:hover:not(:disabled),
+button.resume:hover:not(:disabled) { background-color: var(--ok-velo); border-color: var(--ok); }
+
+button.dismiss {
+  border-color: var(--peligro);
+  color: var(--peligro);
+  background-image: linear-gradient(180deg, #FFFCFB 0%, var(--peligro-velo) 100%);
+}
+button.dismiss:hover:not(:disabled) { background-color: var(--peligro-velo); border-color: var(--peligro); }
+
+/* Activo/seleccionado: filo dorado + velo, nunca relleno macizo */
+button.active {
+  color: var(--tinta);
+  font-weight: 600;
+  border-color: transparent;
+  background-color: var(--marmol-0);
+  background-image: linear-gradient(180deg, #FFFFFF 0%, var(--oro-velo) 100%);
+  position: relative;
+  box-shadow: none;
+}
+button.active::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: var(--filo);
+  background: var(--oro-lamina);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* Botón de ícono heredado del tema viejo (lápiz del nombre editable) */
+button.icon {
+  padding: 3px 8px;
+  background: transparent;
+  background-image: none;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--tinta-suave);
+}
+button.icon:hover:not(:disabled) { color: var(--oro-oscuro); border-color: var(--veta); }
+
+/* --- Campos --------------------------------------------------------------- */
+input,
+select,
+textarea {
+  font-family: var(--fuente-cuerpo);
+  font-size: var(--txt-base);
+  color: var(--tinta);
+  padding: 8px 11px;
+  border: 1px solid var(--veta-fuerte);
+  border-radius: var(--radio-chico);
+  background-color: var(--marmol-0);
+  box-shadow: var(--sombra-hundida);
+  transition: border-color var(--transicion), box-shadow var(--transicion);
+}
+textarea {
+  line-height: var(--interlinea);
+  resize: vertical;
+  min-height: 84px;
+}
+select {
+  /* Flecha propia: trazo de 1.5px que hereda el gris de la tinta */
+  appearance: none;
+  padding-right: 30px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none' stroke='%235C544A' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+input:hover:not(:disabled),
+select:hover:not(:disabled),
+textarea:hover:not(:disabled) { border-color: var(--veta-fuerte); }
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--oro);
+  box-shadow: var(--sombra-hundida), 0 0 0 3px rgba(184, 145, 47, .22);
+}
+/* El campo ya se marca solo con el borde de oro y su halo: el anillo global de
+   :focus-visible encima le armaba un triple marco concéntrico. Las casillas y
+   los radios sí lo necesitan (no tienen borde propio que virar), así que
+   quedan afuera. */
+input:not([type='checkbox']):not([type='radio']):focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: none;
+}
+input:disabled,
+select:disabled,
+textarea:disabled {
+  background-color: var(--marmol-2);
+  color: var(--tinta-suave);
+  cursor: default;
+}
+input[type='checkbox'],
+input[type='radio'] {
+  accent-color: var(--oro-oscuro);
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  box-shadow: none;
+}
+
+label {
+  color: var(--tinta-media);
+}
+
+fieldset {
+  border: 1px solid var(--veta);
+  border-radius: var(--radio-chico);
+  padding: var(--e-3) var(--e-4);
+}
+legend {
+  font-size: var(--txt-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  font-weight: 600;
+  color: var(--tinta-media);
+  padding: 0 var(--e-2);
+}
+
+/* --- Tabla: placa grabada, sin cebra -------------------------------------- */
+.tabla {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.tabla th,
+.tabla td {
+  text-align: left;
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--veta);
+  vertical-align: middle;
+}
+.tabla thead th {
+  font-family: var(--fuente-cuerpo);
+  font-size: var(--txt-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  color: var(--tinta-media);
+  border-bottom: 1px solid var(--veta-fuerte);
+  padding-bottom: var(--e-2);
+  white-space: nowrap;
+}
+.tabla tbody tr { transition: background-color var(--transicion); }
+.tabla tbody tr:hover { background: rgba(255, 255, 255, .7); }
+.tabla tbody tr:last-child td { border-bottom: none; }
+
+/* Fila seleccionada: la piedra se abre en el borde izquierdo */
+.tabla tbody tr.seleccionada {
+  background: var(--oro-velo);
+  box-shadow: inset var(--filo) 0 0 0 var(--oro);
+}
+/* Fila de un registro borrado lógicamente */
+.tabla tbody tr.fila-eliminada td { color: var(--tinta-suave); }
+.tabla tbody tr.fila-eliminada td:first-child { text-decoration: line-through; }
+
+.tabla-envoltorio {
+  overflow-x: auto;
+  margin: 0 calc(var(--e-5) * -1);
+  padding: 0 var(--e-5);
+}
+
+/* --- Pastillas y distintivos ---------------------------------------------- */
+.badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: var(--txt-xs);
+  font-weight: 600;
+  letter-spacing: .02em;
+  border: 1px solid var(--veta-fuerte);
+  background: var(--marmol-2);
+  color: var(--tinta-media);
+}
+.badge.person { background: var(--peligro-velo); border-color: rgba(156, 59, 48, .4); color: var(--peligro); }
+.badge.vehicle { background: var(--alerta-velo); border-color: rgba(176, 122, 30, .45); color: var(--alerta-texto); }
+.badge.ok { background: var(--ok-velo); border-color: rgba(79, 122, 70, .4); color: var(--ok); }
+.badge.info { background: var(--info-velo); border-color: rgba(61, 96, 118, .4); color: var(--info); }
+.badge.oro {
+  border-color: var(--oro);
+  background: var(--oro-velo);
+  color: var(--oro-oscuro);
+}
+
+.badge-count {
+  display: inline-block;
+  min-width: 20px;
+  text-align: center;
+  background: var(--peligro);
+  color: var(--marmol-0);
+  border-radius: 999px;
+  font-size: var(--txt-xs);
+  font-weight: 700;
+  padding: 1px 7px;
+  vertical-align: middle;
+}
+
+/* Distintivo de categoría del registro: versalitas dentro de un rectángulo */
+.cat-badge {
+  display: inline-block;
+  font-size: var(--txt-xxs);
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: var(--radio-sello);
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  border: 1px solid transparent;
+}
+.cat-drone { background: var(--info-velo); border-color: rgba(61, 96, 118, .35); color: var(--info); }
+.cat-usuarios { background: var(--oro-velo); border-color: rgba(184, 145, 47, .4); color: var(--oro-oscuro); }
+.cat-sistema { background: var(--ok-velo); border-color: rgba(79, 122, 70, .35); color: var(--ok); }
+
+/* Punto de estado + texto */
+.estado {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--e-2);
+}
+.estado::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 13%, transparent);
+}
+
+/* Aviso en línea (errores de formulario, notas) */
+.aviso {
+  padding: var(--e-3) var(--e-4);
+  border-radius: var(--radio-chico);
+  border: 1px solid var(--veta-fuerte);
+  background: var(--marmol-2);
+  color: var(--tinta-media);
+  font-size: var(--txt-sm);
+}
+.aviso.malo { border-color: rgba(156, 59, 48, .45); background: var(--peligro-velo); color: var(--peligro); }
+.aviso.bueno { border-color: rgba(79, 122, 70, .45); background: var(--ok-velo); color: var(--ok); }
+
+/* Estado vacío */
+.vacio {
+  padding: var(--e-6) var(--e-4);
+  text-align: center;
+  color: var(--tinta-media);
+  font-family: var(--fuente-serif);
+  font-size: var(--txt-md);
+}
+
+/* Hash abreviado del dron + botón de copiar */
+.hash {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--e-2);
+  font-family: var(--fuente-mono);
+  font-size: var(--txt-sm);
+  color: var(--tinta-media);
+}
+.hash button {
+  padding: 2px 6px;
+  font-size: var(--txt-xs);
+  background: transparent;
+  background-image: none;
+  border-color: var(--veta);
+  box-shadow: none;
+}

@@ -63,4 +63,17 @@ describe('AlertsPanel', () => {
     render(<AlertsPanel alerts={[makeAlert()]} onDecide={() => {}} />);
     expect(screen.queryByText('Historial reciente')).not.toBeInTheDocument();
   });
+
+  it('abrevia el hash del dron y tolera que la alerta no lo traiga', () => {
+    const hash = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
+    render(
+      <AlertsPanel
+        alerts={[makeAlert({ id: 3, drone_id: hash }), makeAlert({ id: 4, drone_id: null })]}
+        onDecide={() => {}}
+      />,
+    );
+    expect(screen.getByText(/#3 · a1b2c3…8f90/)).toBeInTheDocument();
+    expect(screen.queryByText(hash)).not.toBeInTheDocument();
+    expect(screen.getByText(/#4 · —/)).toBeInTheDocument();
+  });
 });

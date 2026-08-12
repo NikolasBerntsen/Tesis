@@ -4,6 +4,6 @@
 
     <item
         android:id="@+id/action_renombrar"
-        android:title="Renombrar dron"
+        android:title="@string/main_renombrar"
         app:showAsAction="never" />
 </menu>

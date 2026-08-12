@@ -1,0 +1,232 @@
+/* ============================================================================
+   BASE — la piedra, la tipografía y el filo dorado
+   ========================================================================= */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--tinta);
+  font-family: var(--fuente-cuerpo);
+  font-size: var(--txt-base);
+  line-height: var(--interlinea);
+  -webkit-font-smoothing: antialiased;
+  /* La piedra: veta + grano + dos manchas de luz alta. Sin la iluminación
+     despareja el mármol se lee como cartulina. El fondo va un punto más hondo
+     que las tarjetas (mármol 1/2 contra 0/1) para que estas se levanten. */
+  background-color: var(--marmol-1);
+  background-image:
+    var(--grano-textura),
+    var(--veta-textura),
+    radial-gradient(120% 85% at 8% -18%, rgba(255, 255, 255, .95) 0%, rgba(255, 255, 255, 0) 58%),
+    radial-gradient(80% 55% at 100% 0%, rgba(253, 246, 232, .9) 0%, rgba(253, 246, 232, 0) 60%),
+    linear-gradient(166deg, var(--marmol-1) 0%, var(--marmol-2) 62%, var(--marmol-3) 100%);
+  background-attachment: fixed;
+}
+
+/* --- Tipografía ---------------------------------------------------------- */
+
+h1, h2, h3, h4 {
+  font-family: var(--fuente-serif);
+  font-weight: 400;
+  line-height: var(--interlinea-titulo);
+  letter-spacing: .005em;
+  color: var(--tinta);
+  margin: 0;
+}
+
+h1 { font-size: var(--txt-lg); }
+h2 { font-size: var(--txt-md); }
+h3 { font-size: var(--txt-base); }
+
+p { margin: 0 0 var(--e-3); }
+p:last-child { margin-bottom: 0; }
+
+a {
+  color: var(--oro-oscuro);
+  text-decoration-color: var(--oro-claro);
+  text-underline-offset: 3px;
+}
+a:hover { text-decoration-color: var(--oro); }
+
+strong { font-weight: 600; }
+
+.mono,
+code,
+kbd,
+samp {
+  font-family: var(--fuente-mono);
+  font-size: var(--txt-sm);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.01em;
+}
+
+/* Etiqueta grabada: versalitas espaciadas. Es LA marca del sistema. */
+.etiqueta,
+.versalita {
+  font-family: var(--fuente-cuerpo);
+  font-size: var(--txt-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  font-weight: 600;
+  color: var(--tinta-media);
+}
+
+/* Cifra clave: serif grande, como un número cincelado */
+.cifra {
+  font-family: var(--fuente-serif);
+  font-size: var(--txt-cifra);
+  line-height: 1.05;
+  font-variant-numeric: tabular-nums lining-nums;
+  color: var(--tinta);
+}
+.cifra-chica {
+  font-family: var(--fuente-serif);
+  font-size: var(--txt-lg);
+  font-variant-numeric: tabular-nums lining-nums;
+}
+.cifra-unidad {
+  font-family: var(--fuente-cuerpo);
+  font-size: var(--txt-sm);
+  color: var(--tinta-media);
+  margin-left: 2px;
+}
+
+/* Inscripción: un nombre propio se lee grabado, no rotulado. Hereda el cuerpo
+   del contexto (26px en el encabezado del detalle, 12.5px en la teja) y no fija
+   font-weight a propósito, para que el <strong> de la teja siga pesando. */
+.inscripcion {
+  font-family: var(--fuente-serif);
+  letter-spacing: .012em;
+}
+
+/* --- Colores de texto ---------------------------------------------------- */
+/* --tinta-suave no llega a AA sobre mármol: .muted usa --tinta-media. */
+.muted { color: var(--tinta-media); }
+.ok { color: var(--ok); }
+.warn { color: var(--alerta-texto); }
+.bad { color: var(--peligro); }
+.accent { color: var(--oro-oscuro); } /* el oro más oscuro es el único legible */
+
+/* --- Foco: SIEMPRE visible, anillo dorado -------------------------------- */
+:focus-visible {
+  outline: var(--filo) solid var(--oro);
+  outline-offset: 2px;
+  border-radius: var(--radio-chico);
+}
+/* Nada de outline:none sin reemplazo: si algún control lo apaga, este anillo
+   de respaldo lo vuelve a mostrar. */
+:focus:not(:focus-visible) { outline: none; }
+
+::selection {
+  background: var(--oro-claro);
+  color: var(--tinta);
+}
+
+::placeholder {
+  color: var(--tinta-suave);
+  opacity: 1;
+}
+
+/* --- Filo dorado --------------------------------------------------------- */
+/* Se resuelve con un ::after enmascarado y NO con border-image porque
+   border-image ignora border-radius: el degradé se escaparía por las esquinas
+   redondeadas de tarjetas y botones. Con la máscara el filo sigue el radio. */
+.filo-oro {
+  position: relative;
+}
+.filo-oro::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: var(--filo);
+  background: var(--oro-lamina);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* Hairline dorado: el filo cuando la piedra "se abre" en un solo borde */
+.filo-oro-inferior {
+  position: relative;
+}
+.filo-oro-inferior::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: var(--filo);
+  background: var(--oro-lamina);
+  border-radius: 2px;
+}
+
+/* --- Ornamento ----------------------------------------------------------- */
+/* Separador con filigrana: se adivina, no compite. Si se nota antes que el
+   dato de al lado, bajá la opacidad. */
+.regla-ornamental {
+  height: 20px;
+  border: 0;
+  margin: var(--e-5) auto;
+  width: min(260px, 62%);
+  background: var(--filigrana) center / contain no-repeat;
+  opacity: .32;
+}
+
+.regla {
+  height: 1px;
+  border: 0;
+  margin: var(--e-4) 0;
+  background: linear-gradient(90deg, transparent, var(--veta) 12%, var(--veta) 88%, transparent);
+}
+
+/* Marca de esquina: la ramita se insinúa abajo a la derecha, que es donde no
+   compite con el título ni con el dato.
+   `isolation` + z-index negativo la meten DEBAJO del contenido: sin eso la
+   ramita, por estar posicionada, se pinta encima de los botones que le quedan
+   cerca (pasaba con "Devolver al patrullaje"). */
+.con-esquina {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+.con-esquina::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  right: -10px;
+  bottom: -10px;
+  width: 104px;
+  height: 104px;
+  background: var(--filigrana-esquina) no-repeat;
+  opacity: .09;
+  pointer-events: none;
+}
+
+/* --- Movimiento ---------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

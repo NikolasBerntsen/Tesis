@@ -1,0 +1,463 @@
+/* ============================================================================
+   VISTAS — piezas propias del tablero: estado, video, alertas, registro,
+   cámaras, mapa y control manual
+   ========================================================================= */
+
+/* --- Ficha de estado del dron --------------------------------------------- */
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--e-4) var(--e-5);
+}
+.status-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-1);
+}
+/* La etiqueta de cada dato va en versalitas y el valor en serif: placa grabada */
+.status-grid > div > span:first-child {
+  font-size: var(--txt-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  font-weight: 600;
+  color: var(--tinta-media);
+}
+.status-grid > div > strong {
+  font-family: var(--fuente-serif);
+  font-size: var(--txt-md);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+/* Medidor: un hairline con relleno de lámina. No es una barra de progreso de
+   dashboard, es la línea donde la piedra se abre a lo largo del nivel. */
+.medidor {
+  width: 100%;
+  height: 2px;
+  margin-top: var(--e-1);
+  border-radius: 999px;
+  background: var(--marmol-3);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .7);
+  overflow: hidden;
+}
+.medidor-relleno {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--oro-lamina);
+  transition: width var(--transicion);
+}
+
+/* El color y el fondo los pone button.resume en primitivos.css: acá va sólo
+   lo que es de esta vista (ocupa el ancho de la tarjeta). */
+.resume {
+  margin-top: var(--e-4);
+  width: 100%;
+}
+
+/* --- Video ---------------------------------------------------------------- */
+.video {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
+  display: block;
+  border-radius: var(--radio-chico);
+  border: 1px solid var(--veta);
+  background: var(--marmol-3);
+  box-shadow: var(--sombra-hundida);
+}
+.video.placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--tinta-media);
+  font-family: var(--fuente-serif);
+  font-size: var(--txt-md);
+  background-image: var(--grano-textura);
+}
+.snapshot {
+  width: 100%;
+  border-radius: var(--radio-chico);
+  border: 1px solid var(--veta);
+  display: block;
+}
+
+/* --- Alertas -------------------------------------------------------------- */
+.alert.pending {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-3);
+  padding: var(--e-4);
+  margin-bottom: var(--e-3);
+  border: 1px solid rgba(156, 59, 48, .5);
+  border-radius: var(--radio-chico);
+  background: linear-gradient(180deg, #FFFDFC 0%, var(--peligro-velo) 100%);
+}
+.alert-head {
+  display: flex;
+  gap: var(--e-3);
+  align-items: center;
+  flex-wrap: wrap;
+}
+.alert-actions {
+  display: flex;
+  gap: var(--e-3);
+}
+.alert-actions button { flex: 1; }
+
+.alert.decided {
+  display: flex;
+  gap: var(--e-3);
+  align-items: center;
+  padding: var(--e-2) 0;
+  border-bottom: 1px solid var(--veta);
+  font-size: var(--txt-sm);
+}
+.alert.decided:last-child { border-bottom: none; }
+
+/* Franja de alertas pendientes, visible desde cualquier vista */
+.alert-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--e-3);
+  padding: var(--e-3) var(--e-4);
+  border: 1px solid rgba(156, 59, 48, .45);
+  border-radius: var(--radio-chico);
+  background: linear-gradient(180deg, #FFFCFB 0%, var(--peligro-velo) 100%);
+  box-shadow: var(--sombra-suave);
+}
+.alert-strip > strong {
+  color: var(--peligro);
+  font-family: var(--fuente-serif);
+  font-weight: 400;
+  font-size: var(--txt-md);
+}
+.alert-chip {
+  padding: 3px 11px;
+  font-size: var(--txt-sm);
+  border-radius: 999px;
+  border-color: rgba(156, 59, 48, .4);
+  background: rgba(255, 255, 255, .75);
+  background-image: none;
+  box-shadow: none;
+}
+
+/* --- Registro de eventos --------------------------------------------------- */
+.log-card .log {
+  max-height: 420px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.log {
+  display: flex;
+  flex-direction: column;
+}
+.log-row {
+  display: grid;
+  grid-template-columns: 84px 180px 1fr;
+  gap: var(--e-3);
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--veta);
+  align-items: baseline;
+  transition: background-color var(--transicion);
+}
+/* La fila de rótulos vive fuera del contenedor que scrollea (es hija directa
+   de la tarjeta): se la marca con la veta fuerte, igual que el thead de .tabla */
+.log-card > .log-row { border-bottom-color: var(--veta-fuerte); }
+.log-row:last-child { border-bottom: none; }
+.log-row:hover { background: rgba(255, 255, 255, .7); }
+.log-row-general { grid-template-columns: 150px 88px 180px 1fr; }
+.event-type {
+  font-weight: 600;
+  color: var(--tinta-media);
+}
+.event-type.bad { color: var(--peligro); }
+.event-type.warn { color: var(--alerta-texto); }
+.log-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--e-3);
+  margin-bottom: var(--e-3);
+}
+/* Fila del registro que se puede abrir en el pop-up */
+.log-row.cliqueable { cursor: pointer; }
+.log-row.cliqueable:hover { background: var(--oro-velo); }
+.log-row.cliqueable:focus-visible {
+  outline: var(--filo) solid var(--oro);
+  outline-offset: -2px;
+}
+
+details.meta summary {
+  cursor: pointer;
+  color: var(--tinta-media);
+  font-size: var(--txt-sm);
+}
+details.meta pre {
+  font-family: var(--fuente-mono);
+  font-size: var(--txt-xs);
+  background: var(--marmol-2);
+  border: 1px solid var(--veta);
+  padding: var(--e-3);
+  border-radius: var(--radio-chico);
+  overflow-x: auto;
+}
+
+/* --- Grilla de cámaras ----------------------------------------------------- */
+.camera-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--e-5);
+}
+.camera-tile {
+  position: relative;
+  padding: var(--e-3);
+  border: 1px solid var(--veta);
+  border-radius: var(--radio);
+  cursor: pointer;
+  background-color: var(--marmol-0);
+  background-image: var(--piedra-cara);
+  box-shadow: var(--sombra-relieve);
+  transition: box-shadow var(--transicion), border-color var(--transicion);
+}
+.camera-tile:hover {
+  border-color: var(--oro);
+  box-shadow: var(--sombra-flotante);
+}
+.tile-info {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-1);
+  margin-top: var(--e-3);
+}
+.tile-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--e-3);
+  align-items: center;
+  font-size: var(--txt-sm);
+}
+.tile-row.muted { color: var(--tinta-media); }
+/* Primera fila: el nombre manda y no se parte. Si compite de igual a igual con
+   el estado, un rótulo largo ("Volviendo a base…") lo corta al medio y el
+   lápiz queda colgando en el hueco. */
+.tile-info > .tile-row:first-child {
+  flex-wrap: wrap;
+  align-items: baseline;
+}
+.tile-info > .tile-row:first-child > .editable-name { flex: none; }
+.tile-info > .tile-row:first-child > .estado {
+  margin-left: auto;
+  text-align: right;
+}
+.tile-video { position: relative; }
+.tile-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radio-chico);
+  background: rgba(227, 220, 206, .72);
+  backdrop-filter: blur(1px);
+}
+.tile-overlay span {
+  color: var(--peligro);
+  font-family: var(--fuente-serif);
+  font-weight: 400;
+  font-size: var(--txt-lg);
+  letter-spacing: var(--versalita);
+  text-transform: uppercase;
+}
+.tile-esquina {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  font-size: var(--txt-xxs);
+  font-weight: 700;
+  letter-spacing: var(--versalita);
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: var(--radio-sello);
+  background: rgba(251, 250, 247, .88);
+  border: 1px solid var(--veta);
+}
+.esquina-verde { color: var(--ok); }
+.esquina-gris { color: var(--tinta-media); }
+
+/* --- Mapa ------------------------------------------------------------------ */
+/* Leyenda: los cuatro símbolos en versalitas, cada uno del color de su marca */
+.mapa-leyenda {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--e-2) var(--e-5);
+  margin-top: var(--e-3);
+}
+.mapa-leyenda span {
+  font-size: var(--txt-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  font-weight: 600;
+}
+
+.map {
+  height: 420px;
+  border-radius: var(--radio-chico);
+  border: 1px solid var(--veta);
+  background: var(--marmol-2);
+  box-shadow: var(--sombra-hundida);
+}
+.leaflet-container { font: inherit; }
+.mapa-head {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--e-3);
+  flex-wrap: wrap;
+  padding-bottom: var(--e-2);
+  margin-bottom: var(--e-4);
+  /* El hairline pasa a la fila entera —título y botón— para que esta tarjeta
+     lea igual que las que sólo tienen h2. */
+  border-bottom: 1px solid var(--veta);
+}
+.mapa-head::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: 38px;
+  height: 1px;
+  background: linear-gradient(90deg, var(--oro-oscuro) 0%, var(--oro-claro) 100%);
+}
+.mapa-head h2 { margin: 0; border: 0; padding: 0; }
+.mapa-head h2::after { display: none; }
+
+/* Los marcadores son SVG inline (ver DronesMap.tsx). Leaflet le pone a todo
+   div-icon un recuadro blanco con borde gris: hay que sacárselo o el medallón
+   dorado aparece dentro de una cajita de fábrica. */
+.drone-pin-icon,
+.base-icon {
+  background: none;
+  border: 0;
+}
+/* La etiqueta de distancia la viste DronesMap con los tokens, igual que el
+   resto de las etiquetas; acá va sólo lo que el JS no puede: sacarle la
+   flechita, y un mármol de respaldo por si el vestido no llega. */
+.distance-tooltip {
+  background: var(--marmol-0);
+  border: 1px solid var(--veta);
+  color: var(--tinta);
+  font-size: var(--txt-xs);
+  font-weight: 600;
+  padding: 3px 9px;
+}
+.distance-tooltip::before { display: none; }
+
+/* Nodos de patrullaje */
+.wp-popup {
+  position: relative;
+  /* Ancho fijo para los dos modos: Leaflet mide la burbuja al fijar el
+     contenido y no la recalcula al pasar a edición. */
+  min-width: 215px;
+  padding-bottom: var(--e-1);
+  padding-right: 20px;
+}
+.wp-nombre { margin-top: var(--e-1); }
+.wp-form { display: none; }
+.wp-popup.editando .wp-form { display: flex; gap: var(--e-2); margin-top: var(--e-2); }
+.wp-popup.editando .wp-nombre { display: none; }
+.wp-form .wp-alias { width: 130px; padding: 4px 7px; }
+.wp-form .wp-save { padding: 4px 11px; font-size: var(--txt-sm); }
+.wp-edit {
+  position: absolute;
+  right: -6px;
+  bottom: -4px;
+  padding: 2px 5px;
+  border: none;
+  background: none;
+  background-image: none;
+  box-shadow: none;
+  color: var(--tinta-suave);
+  font-size: var(--txt-base);
+  line-height: 1;
+  cursor: pointer;
+}
+.wp-edit:hover { color: var(--oro-oscuro); }
+.wp-popup.editando .wp-edit { color: var(--oro-oscuro); }
+.wp-acciones {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-2);
+  margin-top: var(--e-3);
+}
+.wp-acciones button { padding: 4px 11px; font-size: var(--txt-sm); }
+.wp-acciones .wp-force { border-color: var(--peligro); color: var(--peligro); }
+.wp-acciones .wp-continue { border-color: var(--ok); color: var(--ok); }
+
+/* --- Patrullaje y control manual ------------------------------------------- */
+.ruta-controles {
+  display: flex;
+  gap: var(--e-2);
+  flex-wrap: wrap;
+}
+.ruta-controles select {
+  flex: 1;
+  min-width: 160px;
+}
+.control-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-3);
+}
+/* Plato hundido: el pad es la pieza más táctil de la consola y tiene que
+   leerse como un instrumento embutido en la piedra. Ancho al contenido, si no
+   queda una losa vacía ocupando toda la tarjeta. */
+.pad-plato {
+  width: max-content;
+  margin: 0 auto;
+  padding: var(--e-4) var(--e-5);
+  background: var(--marmol-2);
+  border: 1px solid var(--veta);
+  border-radius: var(--radio-chico);
+  box-shadow: var(--sombra-hundida);
+}
+.pad {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--e-2);
+}
+.pad > div { display: flex; gap: 44px; }
+.pad button {
+  width: 46px;
+  height: 40px;
+  padding: 0;
+  font-size: var(--txt-md);
+  display: grid;
+  place-items: center;
+}
+
+/* --- Nombre editable -------------------------------------------------------- */
+.editable-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--e-2);
+}
+/* Editar un nombre no lo convierte en un campo de formulario: se mantiene la
+   serif y aparece el renglón, dorado mientras se escribe. min-width:0 deja que
+   el campo achique dentro de la teja; si no, empuja el estado a otra línea. */
+.editable-name input {
+  width: 150px;
+  min-width: 0;
+  padding: 2px 1px;
+  font-size: var(--txt-base);
+  font-family: var(--fuente-serif);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: inset 0 -1px 0 var(--veta-fuerte);
+}
+.editable-name input:focus {
+  box-shadow: inset 0 -2px 0 var(--oro);
+}

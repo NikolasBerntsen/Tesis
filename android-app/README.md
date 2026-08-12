@@ -3,10 +3,25 @@
 App que corre en el dispositivo Android conectado al **DJI RC-N2** y ejecuta la
 lógica de patrullaje (`patrol/PatrolManager.kt`).
 
-Tiene dos pantallas: una de **login**, donde se cargan las direcciones y la
-cuenta del dron y se elige el modo de operación, y la **principal**, con el
-estado del dron, la ruta a patrullar y —solo en modo prueba— los controles de
-simulación. El registro local de eventos vive en el menú lateral.
+Tiene tres pantallas:
+
+1. **Login** (`LoginActivity`) — entra la *persona* que despliega el dron: el
+   operador de campo, o un supervisor/admin, con su cuenta del Comando Central.
+   La URL del Comando Central viene precargada
+   (`https://tesis.144-22-138-149.sslip.io`) y es editable.
+2. **Menú de campo** (`FieldMenuActivity`) — quién inició sesión, la cuenta
+   regresiva de la sesión efímera y las tres acciones: escanear el QR del dron,
+   configurar el enlace y cerrar sesión.
+3. **Principal** (`MainActivity`) — estado del dron, ruta a patrullar y —solo en
+   modo prueba— los controles de simulación. El registro local de eventos vive
+   en el menú lateral.
+
+**El dron no tiene cuenta.** Se identifica con el hash de 32 hexadecimales del
+QR pegado en su fuselaje: al escanearlo, la app llama a `POST /api/drones/pair`
+con ese hash y la ubicación del momento, recibe el token del dron y **cierra la
+sesión del operador de campo**. De la pantalla principal en adelante la app
+habla como máquina, no como persona. La sesión del operador dura 20 minutos: si
+vence antes de terminar, se vuelve al login con el aviso correspondiente.
 
 ## Flavors
 
@@ -38,8 +53,10 @@ solo cambia la implementación de `DroneController` que inyecta `ControllerFacto
 2. Correr en un emulador. La única variante disponible es `mockDebug`, así que no
    hay nada que elegir.
 3. Con el backend y el detection-mock levantados (ver README raíz), en la app:
-   - URLs por defecto (`10.0.2.2` = localhost del host desde el emulador), usuario
-     y contraseña del dron (`drone1` / `drone123`) → **Iniciar sesión**.
+   - **Login**: la URL del Comando Central ya viene cargada; entrar con la cuenta
+     del operador de campo → **Iniciar sesión**.
+   - **Menú de campo** → **Escanear QR del dron**. El QR lo imprime la consola
+     web desde la vista *Drones*, y su contenido es solo el hash.
    - Elegir **Modo prueba** (muestra los controles de simulación) o **Despliegue**.
      El modo viaja en el campo `mode` de cada `status`.
    - Elegir ruta → **Comenzar patrullaje**.
@@ -48,7 +65,48 @@ solo cambia la implementación de `DroneController` que inyecta `ControllerFacto
    - El menú ⋮ tiene **Renombrar dron**; el nombre también se actualiza solo si
      lo cambia el operador desde el Comando Central.
 
-En un teléfono físico, reemplazar `10.0.2.2` por la IP LAN de la laptop.
+En el emulador la cámara y el GPS son simulados (controles extendidos →
+*Camera* y *Location*). Si no hay ubicación el emparejamiento procede igual y el
+registro queda con `ubicacion: null`: el despliegue no se frena por el GPS.
+
+## Enlace con la computadora de detección
+
+El celular va montado en el control y la detección corre en la laptop. Hay dos
+modos, elegibles en **Menú de campo → Configuración del enlace**.
+
+### CABLE (el que viene por defecto)
+
+Túnel de ADB sobre el mismo cable USB que une el celular con la laptop. Es el
+recomendado porque no depende de la red ni de qué IP le tocó a cada uno.
+
+1. En el celular: *Opciones de desarrollador* → **Depuración USB** activada.
+2. Enchufar el cable y aceptar la huella RSA que aparece en el celular.
+3. En la laptop, una vez por cada sesión de ADB:
+
+   ```bash
+   adb reverse tcp:8765 tcp:8765
+   ```
+
+   Con eso el `localhost:8765` del celular sale por el cable hacia el
+   `localhost:8765` de la laptop, que es donde escucha la detección.
+4. En la app no hay nada que escribir: la URL es fija, `ws://127.0.0.1:8765/phone`.
+
+El `adb reverse` se pierde al desenchufar el cable o al reiniciar el servidor de
+ADB, y hay que volver a correrlo. Si la detección no engancha, la pantalla
+principal lo dice con todas las letras (incluido el recordatorio del
+`adb reverse`) en vez de quedarse muda.
+
+### RED (respaldo)
+
+URL manual `ws://<ip-de-la-laptop>:8765` —la app le agrega el `/phone`—. Sirve
+cuando no hay depuración USB; con anclaje USB la laptop suele quedar en
+`192.168.42.x`.
+
+> **Solo funciona en compilaciones `debug`.** El Comando Central va por HTTPS,
+> así que la *network security config* de release prohíbe el texto plano salvo
+> contra `127.0.0.1`/`localhost`, que es el túnel del cable; la IP de la laptop
+> no se puede declarar de antemano. `src/debug/res/xml/network_security_config.xml`
+> lo habilita para el banco de pruebas y las salidas de campo.
 
 ## Flavor dji — estado y pasos pendientes
 
@@ -76,16 +134,26 @@ KeyManager y estructura la navegación. Antes de volar hace falta:
 ./gradlew testMockDebugUnitTest
 ```
 
-Incluye un smoke test de arranque con Robolectric que crea `LoginActivity` (la
-pantalla inicial) y `MainActivity` en las APIs 26, 30 y 34. Si algo revienta al
-abrir la app, el test falla con el stack trace en vez de dejarte un cierre
-silencioso en el dispositivo.
+| Suite | Qué cubre |
+|---|---|
+| `LoginActivityLaunchTest` | Smoke test de arranque de `LoginActivity` y `MainActivity` en las APIs 26, 30 y 34 —si algo revienta al abrir la app, el test falla con el stack trace en vez de dejarte un cierre silencioso en el dispositivo— más la URL del Comando Central precargada y los avisos de vuelta al login |
+| `FieldMenuActivityTest` | Cuenta regresiva de la sesión efímera, las tres acciones y la vuelta al login cuando vence o se cierra |
+| `SesionDeCampoTest` | Vencimiento del JWT del operador de campo y roles habilitados para emparejar |
+| `PreferenciasEnlaceTest` | URL del Comando Central por defecto y modo CABLE de fábrica |
+| `HashDeDronTest` | Filtro del contenido del QR: 32 hexadecimales y nada más |
+| `DetectionClientTest` | Armado de la URL del enlace en CABLE y en RED |
+| `SimulatedDroneControllerTest` | Navegación, rumbo y drenaje de batería del dron simulado |
+
+Las dos últimas de la lista corren en la JVM pelada, sin Robolectric.
 
 ## Estructura
 
 ```
 app/src/main/java/com/tesis/dronepatrol/
-├── LoginActivity.kt         Login con la cuenta del dron + elección de modo
+├── LoginActivity.kt         Login del operador de campo contra el Comando Central
+├── FieldMenuActivity.kt     Menú de campo: QR del dron, enlace y cierre de sesión
+├── SesionDeCampo.kt         Sesión efímera del operador (el JWT vive en el proceso)
+├── Config.kt                URLs por defecto + preferencias del enlace
 ├── MainActivity.kt          Estado, selección de ruta, simulación y registro
 ├── model/Models.kt          Waypoint, PatrolRoute, Telemetry, PatrolState
 ├── drone/DroneController.kt Interfaz que abstrae el dron
@@ -94,4 +162,5 @@ app/src/main/java/com/tesis/dronepatrol/
 └── comms/                   Clientes WS: Comando Central y software de detección
 app/src/mock/  → ControllerFactory (simulador)
 app/src/dji/   → ControllerFactory + DjiApplication + DjiDroneController (MSDK v5)
+app/src/debug/ → network security config permisiva (habilita el modo RED en pruebas)
 ```

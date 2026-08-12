@@ -1,18 +1,29 @@
+import { createHash } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { db } from './db';
 
-// Usuarios y rutas de demostración. Ejecutar con: npm run seed
+// Usuarios, drones y rutas de demostración. Ejecutar con: npm run seed
 const humans = [
+  { username: 'campo', password: 'campo123', role: 'field_operator' },
   { username: 'operador', password: 'operador123', role: 'operator' },
   { username: 'supervisor', password: 'supervisor123', role: 'supervisor' },
   { username: 'admin', password: 'admin123', role: 'admin' },
 ];
 
-// Cada dron tiene su propia cuenta (con ella inicia sesión la app) y su base.
+/**
+ * Hash determinista SOLO para los drones de demostración: así el seed es
+ * idempotente y los QR de prueba que se imprimieron una vez siguen sirviendo
+ * después de recrear la base. Los drones reales se dan de alta desde la consola,
+ * que genera el hash con randomBytes.
+ */
+function hashDemo(semilla: string): string {
+  return createHash('sha256').update(`tesis-demo:${semilla}`).digest('hex').slice(0, 32);
+}
+
 const drones = [
-  { username: 'drone1', password: 'drone123', displayName: 'Alfa',   base: { name: 'Base Norte',  lat: -34.8565, lon: -56.2075 } },
-  { username: 'drone2', password: 'drone123', displayName: 'Bravo',  base: { name: 'Base Sur',    lat: -34.8600, lon: -56.2050 } },
-  { username: 'drone3', password: 'drone123', displayName: 'Charlie', base: { name: 'Base Este',  lat: -34.8575, lon: -56.2010 } },
+  { semilla: 'alfa',    displayName: 'Alfa',    model: 'DJI Mini 3',  base: { name: 'Base Norte', lat: -34.8565, lon: -56.2075 } },
+  { semilla: 'bravo',   displayName: 'Bravo',   model: 'DJI Mini 3',  base: { name: 'Base Sur',   lat: -34.86,   lon: -56.205  } },
+  { semilla: 'charlie', displayName: 'Charlie', model: 'DJI Air 3',   base: { name: 'Base Este',  lat: -34.8575, lon: -56.201  } },
 ];
 
 const routes = [
@@ -44,7 +55,7 @@ const routes = [
       { lat: -34.8548, lon: -56.2015, alt: 45 },
       { lat: -34.8548, lon: -56.1985, alt: 45 },
       { lat: -34.8575, lon: -56.1985, alt: 45 },
-      { lat: -34.8590, lon: -56.2000, alt: 45 },
+      { lat: -34.859, lon: -56.2, alt: 45 },
     ],
   },
 ];
@@ -52,39 +63,35 @@ const routes = [
 for (const h of humans) {
   const exists = db.prepare('SELECT 1 FROM users WHERE username = ?').get(h.username);
   if (!exists) {
-    db.prepare('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)').run(
+    db.prepare('INSERT INTO users (username, password_hash, role, can_control) VALUES (?, ?, ?, ?)').run(
       h.username,
       bcrypt.hashSync(h.password, 10),
       h.role,
+      // El operador de campo despliega drones, no los pilotea
+      h.role === 'field_operator' ? 0 : 1,
     );
     console.log(`Usuario creado: ${h.username} (${h.role})`);
   }
 }
 
+console.log('Drones de demostración (el contenido del QR es el hash):');
 for (const d of drones) {
-  const exists = db.prepare('SELECT 1 FROM users WHERE username = ?').get(d.username);
-  if (!exists) {
-    db.prepare(
-      `INSERT INTO users (username, password_hash, role, display_name, base_name, base_lat, base_lon)
-       VALUES (?, ?, 'drone', ?, ?, ?, ?)`,
-    ).run(d.username, bcrypt.hashSync(d.password, 10), d.displayName, d.base.name, d.base.lat, d.base.lon);
-    console.log(`Dron creado: ${d.username} ("${d.displayName}") en ${d.base.name}`);
-  } else {
-    // Base de datos anterior al multi-dron: se completan los campos que falten
-    // sin pisar un nombre que el usuario ya haya cambiado.
-    const info = db
-      .prepare(
-        `UPDATE users
-            SET display_name = COALESCE(display_name, ?),
-                base_name    = COALESCE(base_name, ?),
-                base_lat     = COALESCE(base_lat, ?),
-                base_lon     = COALESCE(base_lon, ?)
-          WHERE username = ? AND role = 'drone'
-            AND (display_name IS NULL OR base_lat IS NULL OR base_lon IS NULL OR base_name IS NULL)`,
-      )
-      .run(d.displayName, d.base.name, d.base.lat, d.base.lon, d.username);
-    if (info.changes > 0) console.log(`Dron completado: ${d.username} ("${d.displayName}") en ${d.base.name}`);
+  const hash = hashDemo(d.semilla);
+  // Si la base venía del esquema viejo, la migración ya creó este dron con otro
+  // hash: se respeta el existente en vez de duplicarlo.
+  const existente = db
+    .prepare('SELECT hash FROM drones WHERE hash = ? OR display_name = ?')
+    .get(hash, d.displayName) as { hash: string } | undefined;
+
+  if (existente) {
+    console.log(`  ${d.displayName.padEnd(8)} ${existente.hash}  (ya existía)`);
+    continue;
   }
+  db.prepare(
+    `INSERT INTO drones (hash, display_name, model, base_name, base_lat, base_lon, created_at, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'seed')`,
+  ).run(hash, d.displayName, d.model, d.base.name, d.base.lat, d.base.lon, new Date().toISOString());
+  console.log(`  ${d.displayName.padEnd(8)} ${hash}  (${d.model}, ${d.base.name})`);
 }
 
 for (const r of routes) {

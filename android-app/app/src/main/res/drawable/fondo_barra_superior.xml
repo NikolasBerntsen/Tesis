@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Barra superior: mármol al ras y un filo de oro de 1dp abajo en lugar de la
+     sombra dura del Material por defecto. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/marmol_0" />
+    <item android:gravity="bottom">
+        <shape android:shape="rectangle">
+            <size android:height="@dimen/borde_veta" />
+            <gradient
+                android:angle="0"
+                android:centerColor="@color/oro"
+                android:endColor="@color/oro_lamina_reflejo"
+                android:startColor="@color/oro_oscuro"
+                android:type="linear" />
+        </shape>
+    </item>
+</layer-list>

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Medidas del sistema de diseño. La interfaz respira: los espacios son
+     generosos y los radios chicos, para que el mármol se lea como una placa. -->
+<resources>
+
+    <dimen name="radio">10dp</dimen>
+    <dimen name="radio_chico">6dp</dimen>
+
+    <dimen name="borde_veta">1dp</dimen>
+    <dimen name="grosor_filo">2dp</dimen>
+
+    <!-- Apenas 1dp: la sombra tiene que insinuarse, no recortar la tarjeta -->
+    <dimen name="elevacion_tarjeta">1dp</dimen>
+
+    <dimen name="espacio_chico">8dp</dimen>
+    <dimen name="espacio_medio">14dp</dimen>
+    <dimen name="espacio">16dp</dimen>
+    <dimen name="espacio_grande">24dp</dimen>
+
+    <dimen name="alto_boton">48dp</dimen>
+    <dimen name="grosor_barra_progreso">8dp</dimen>
+    <dimen name="icono">24dp</dimen>
+
+</resources>

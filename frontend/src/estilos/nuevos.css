@@ -1,0 +1,528 @@
+/* ============================================================================
+   PRIMITIVOS NUEVOS — los usa el lote que reescribe las vistas.
+   Cada bloque documenta el marcado que espera; no inventen clases nuevas.
+   ========================================================================= */
+
+/* ---------------------------------------------------------------------------
+   MODAL — diálogo centrado con velo.
+   <div class="modal-fondo" onClick={cerrar}>
+     <div class="modal-caja" role="dialog" aria-modal="true" aria-labelledby="…"
+          onClick={frenar}>
+       <header class="modal-cabecera">
+         <h2 id="…" class="modal-titulo">Título</h2>
+         <button class="modal-cerrar" aria-label="Cerrar">…</button>
+       </header>
+       <div class="modal-cuerpo"> … </div>
+       <footer class="modal-pie"> … </footer>
+     </div>
+   </div>
+   (.modal es alias de .modal-fondo, por si el marcado la usa suelta.)
+------------------------------------------------------------------------------ */
+.modal,
+.modal-fondo {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: var(--e-5);
+  background: var(--velo-modal);
+  backdrop-filter: blur(2px);
+  animation: velo-entra 180ms ease-out;
+}
+@keyframes velo-entra { from { opacity: 0; } to { opacity: 1; } }
+
+.modal-caja {
+  position: relative;
+  width: min(720px, 100%);
+  max-height: min(86vh, 900px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--veta);
+  border-radius: var(--radio-grande);
+  background-color: var(--marmol-0);
+  background-image: var(--piedra-cara);
+  box-shadow: var(--sombra-flotante);
+  animation: caja-entra 200ms cubic-bezier(.2, .8, .3, 1);
+}
+@keyframes caja-entra {
+  from { opacity: 0; transform: translateY(10px) scale(.985); }
+  to { opacity: 1; transform: none; }
+}
+/* Filo dorado en el canto superior: la piedra abierta donde se corta la caja */
+.modal-caja::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--filo);
+  background: var(--oro-lamina);
+}
+.modal-ancho { width: min(1000px, 100%); }
+
+.modal-cabecera {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--e-4);
+  padding: var(--e-5) var(--e-6) var(--e-3);
+  border-bottom: 1px solid var(--veta);
+}
+.modal-titulo {
+  margin: 0;
+  font-family: var(--fuente-serif);
+  font-size: var(--txt-lg);
+  font-weight: 400;
+}
+.modal-subtitulo {
+  margin: var(--e-1) 0 0;
+  font-size: var(--txt-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  color: var(--tinta-media);
+}
+.modal-cerrar {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: transparent;
+  background-image: none;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--tinta-media);
+}
+.modal-cerrar:hover:not(:disabled) {
+  border-color: var(--oro);
+  color: var(--tinta);
+  background: rgba(255, 255, 255, .8);
+}
+.modal-cuerpo {
+  padding: var(--e-5) var(--e-6);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-4);
+}
+.modal-pie {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--e-3);
+  padding: var(--e-4) var(--e-6) var(--e-5);
+  border-top: 1px solid var(--veta);
+  background: rgba(255, 255, 255, .5);
+}
+
+/* Lista de clave/valor para el detalle del registro (meta.detalle) */
+.datos {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) 1fr;
+  gap: var(--e-2) var(--e-5);
+  margin: 0;
+}
+.datos dt {
+  font-size: var(--txt-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  font-weight: 600;
+  color: var(--tinta-media);
+  padding-top: 2px;
+}
+.datos dd { margin: 0; }
+
+/* ---------------------------------------------------------------------------
+   COMPARACIÓN antes/después — dos columnas con una flecha en el medio.
+   <div class="comparacion">
+     <div class="comparacion-col"><span class="comparacion-titulo">Antes</span>
+       <dl class="datos"><dt>…</dt><dd class="cambiado">…</dd></dl></div>
+     <div class="comparacion-flecha" aria-hidden="true">→</div>
+     <div class="comparacion-col comparacion-despues"> … </div>
+   </div>
+   Sólo los campos que cambiaron llevan .cambiado.
+------------------------------------------------------------------------------ */
+.comparacion {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: stretch;
+  gap: var(--e-4);
+}
+.comparacion-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-3);
+  padding: var(--e-4);
+  border: 1px solid var(--veta);
+  border-radius: var(--radio-chico);
+  background: var(--marmol-2);
+  box-shadow: var(--sombra-hundida);
+  min-width: 0;
+}
+/* La columna "después" es la que importa: mármol claro y filo dorado */
+.comparacion-despues {
+  position: relative;
+  background: var(--marmol-0);
+  border-color: transparent;
+  box-shadow: none;
+}
+.comparacion-despues::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: var(--filo);
+  background: var(--oro-lamina);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+.comparacion-titulo {
+  font-size: var(--txt-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  font-weight: 600;
+  color: var(--tinta-media);
+}
+.comparacion-flecha {
+  align-self: center;
+  font-family: var(--fuente-serif);
+  font-size: var(--txt-xl);
+  line-height: 1;
+  color: var(--oro-oscuro);
+  padding: 0 var(--e-1);
+}
+/* Campo que efectivamente cambió: el resaltado abraza al texto y no rellena la
+   columna, si no el valor parece un campo de formulario. */
+.cambiado {
+  display: inline-block;
+  justify-self: start; /* dentro de .datos es un ítem de grilla: si no, se estira */
+  width: fit-content;
+  font-weight: 600;
+  color: var(--tinta);
+  padding: 1px 7px;
+  border-radius: var(--radio-sello);
+  background: var(--oro-velo);
+  box-shadow: inset 0 -2px 0 rgba(184, 145, 47, .55);
+}
+.comparacion-col .sin-cambio { color: var(--tinta-media); }
+@media (max-width: 640px) {
+  .comparacion { grid-template-columns: 1fr; }
+  .comparacion-flecha { transform: rotate(90deg); }
+}
+
+/* ---------------------------------------------------------------------------
+   PAGINADOR
+   <nav class="paginador" aria-label="Paginación">
+     <div class="paginador-botones"><button class="chico">…</button>…</div>
+     <span class="paginador-info">Página 2 de 9 · 214 registros</span>
+     <div class="paginador-botones"> … </div>
+   </nav>
+------------------------------------------------------------------------------ */
+.paginador {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--e-4);
+  flex-wrap: wrap;
+  padding-top: var(--e-3);
+  border-top: 1px solid var(--veta);
+}
+.paginador-botones {
+  display: flex;
+  gap: var(--e-2);
+}
+.paginador-botones button {
+  min-width: 34px;
+  padding: 4px 10px;
+  font-size: var(--txt-sm);
+  font-variant-numeric: tabular-nums;
+}
+.paginador-info {
+  font-family: var(--fuente-serif);
+  font-size: var(--txt-base);
+  color: var(--tinta-media);
+  font-variant-numeric: tabular-nums lining-nums;
+}
+.paginador-info strong { color: var(--tinta); font-weight: 400; }
+
+/* ---------------------------------------------------------------------------
+   ÍCONO-BOTÓN — botón redondo de solo ícono (SVG de trazo 1.5, currentColor).
+   <button class="icono-boton" aria-label="Actualizar"><svg …/></button>
+   Agregale .girando mientras carga.
+------------------------------------------------------------------------------ */
+.icono-boton {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--tinta-media);
+  border-color: var(--veta-fuerte);
+}
+.icono-boton:hover:not(:disabled) {
+  color: var(--oro-oscuro);
+  border-color: var(--oro);
+}
+.icono-boton svg {
+  width: 17px;
+  height: 17px;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  fill: none;
+}
+.icono-boton.chico { width: 26px; height: 26px; }
+.icono-boton.chico svg { width: 14px; height: 14px; }
+.girando svg { animation: girar 900ms linear infinite; }
+@keyframes girar { to { transform: rotate(360deg); } }
+
+/* ---------------------------------------------------------------------------
+   SWITCH — interruptor activo/inactivo.
+   <label class="switch"><input type="checkbox" …>
+     <span class="switch-pista"></span><span class="switch-texto">Activo</span>
+   </label>
+   El <input> queda visualmente oculto pero accesible: el foco se dibuja en la
+   pista, así el teclado nunca se queda sin anillo.
+------------------------------------------------------------------------------ */
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--e-2);
+  cursor: pointer;
+  font-size: var(--txt-sm);
+  color: var(--tinta-media);
+}
+.switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  margin: 0;
+  pointer-events: none;
+}
+.switch-pista {
+  position: relative;
+  flex: none;
+  width: 38px;
+  height: 21px;
+  border-radius: 999px;
+  border: 1px solid var(--veta-fuerte);
+  background: var(--marmol-2);
+  box-shadow: var(--sombra-hundida);
+  transition: background var(--transicion), border-color var(--transicion);
+}
+.switch-pista::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--marmol-0);
+  border: 1px solid var(--veta);
+  box-shadow: 0 1px 2px rgba(43, 38, 32, .22);
+  transition: transform var(--transicion), background var(--transicion);
+}
+.switch input:checked + .switch-pista {
+  border-color: var(--oro-oscuro);
+  background: var(--oro-lamina);
+}
+.switch input:checked + .switch-pista::after {
+  transform: translateX(17px);
+  background: var(--marmol-0);
+  border-color: rgba(255, 255, 255, .8);
+}
+.switch input:focus-visible + .switch-pista {
+  outline: var(--filo) solid var(--oro);
+  outline-offset: 2px;
+}
+.switch input:disabled + .switch-pista { opacity: .5; cursor: default; }
+.switch-texto { user-select: none; }
+
+/* ---------------------------------------------------------------------------
+   TOGGLE-ELIMINADOS — "Ver eliminados / Ocultar eliminados".
+   Es un botón normal; con .activo queda con filo dorado.
+   <button class="toggle-eliminados activo">Ocultar eliminados</button>
+------------------------------------------------------------------------------ */
+.toggle-eliminados {
+  font-size: var(--txt-sm);
+  padding: 5px 13px;
+  color: var(--tinta-media);
+  background: transparent;
+  background-image: none;
+  border-color: var(--veta);
+  box-shadow: none;
+}
+.toggle-eliminados:hover:not(:disabled) { border-color: var(--oro); color: var(--tinta); }
+.toggle-eliminados.activo {
+  position: relative;
+  color: var(--tinta);
+  font-weight: 600;
+  border-color: transparent;
+  background-image: linear-gradient(180deg, #FFFFFF 0%, var(--oro-velo) 100%);
+}
+.toggle-eliminados.activo::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: var(--filo);
+  background: var(--oro-lamina);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------------------------
+   TABS — pestañas del registro (Todos / Drones / Usuarios / Sistema).
+   <div class="tabs" role="tablist">
+     <button role="tab" aria-selected="true" class="active">Todos</button> … </div>
+   El subrayado dorado marca la pestaña activa (filo, no relleno).
+------------------------------------------------------------------------------ */
+.tabs {
+  display: flex;
+  gap: var(--e-1);
+  border-bottom: 1px solid var(--veta);
+}
+.tabs button {
+  position: relative;
+  padding: 8px 16px 10px;
+  border: 0;
+  border-radius: var(--radio-chico) var(--radio-chico) 0 0;
+  background: transparent;
+  background-image: none;
+  box-shadow: none;
+  color: var(--tinta-media);
+  font-size: var(--txt-sm);
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  font-weight: 600;
+}
+.tabs button:hover:not(:disabled) {
+  color: var(--tinta);
+  background: rgba(255, 255, 255, .7);
+}
+.tabs button.active,
+.tabs button[aria-selected='true'] {
+  color: var(--tinta);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0) 40%, var(--oro-velo) 100%);
+}
+/* Subrayado de lámina: monta sobre la línea de veta del contenedor.
+   Hay que anular el anillo enmascarado que trae button.active::after, si no el
+   `inset:0` de aquella regla estira este pseudo-elemento a toda la pestaña. */
+.tabs button.active::after,
+.tabs button[aria-selected='true']::after {
+  content: '';
+  position: absolute;
+  inset: auto 6px -1px 6px;
+  height: var(--filo);
+  padding: 0;
+  border-radius: 2px;
+  background: var(--oro-lamina);
+  -webkit-mask: none;
+  mask: none;
+}
+
+/* ---------------------------------------------------------------------------
+   VISTA-ALTA — armazón de una vista que ocupa toda la altura útil y scrollea
+   por dentro (el Registro). El contenedor manda; el cuerpo scrollea.
+   <section class="vista-alta"><header/> <div class="vista-alta-cuerpo"/> <footer/></section>
+------------------------------------------------------------------------------ */
+.vista-alta {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: var(--e-4);
+}
+.vista-alta-cuerpo {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* ---------------------------------------------------------------------------
+   QR-STICKER — tarjeta imprimible del dron.
+   <div class="qr-sticker"><div class="qr-sticker-marco"><canvas/img/></div>
+     <p class="qr-sticker-nombre">Alfa</p>
+     <p class="qr-sticker-modelo">DJI Mini 4</p>
+     <p class="qr-sticker-hash mono">a1b2c3…9f0</p></div>
+   En pantalla es una placa de mármol; al imprimir se lava (ver impresion.css).
+------------------------------------------------------------------------------ */
+.qr-sticker {
+  width: 268px;
+  margin: 0 auto;
+  padding: var(--e-5) var(--e-4) var(--e-4);
+  text-align: center;
+  border: 1px solid var(--veta);
+  border-radius: var(--radio);
+  background-color: var(--marmol-0);
+  background-image: var(--grano-textura), linear-gradient(180deg, #FFFFFF 0%, var(--marmol-1) 100%);
+  box-shadow: var(--sombra-relieve);
+}
+.qr-sticker-marco {
+  display: grid;
+  place-items: center;
+  padding: var(--e-3);
+  background: #FFFFFF;
+  border: 1px solid var(--veta);
+  border-radius: var(--radio-chico);
+}
+.qr-sticker-marco canvas,
+.qr-sticker-marco img,
+.qr-sticker-marco svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 200px;
+  image-rendering: pixelated; /* el QR no se debe suavizar al escalar */
+}
+.qr-sticker-nombre {
+  margin: var(--e-4) 0 0;
+  font-family: var(--fuente-serif);
+  font-size: var(--txt-md);
+  line-height: 1.25;
+}
+.qr-sticker-modelo {
+  margin: 2px 0 0;
+  font-size: var(--txt-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  color: var(--tinta-media);
+}
+.qr-sticker-hash {
+  margin: var(--e-3) 0 0;
+  font-family: var(--fuente-mono);
+  font-size: var(--txt-xxs);
+  color: var(--tinta-media);
+  word-break: break-all;
+}
+
+/* ---------------------------------------------------------------------------
+   MAPA-MINI — mapa Leaflet chico dentro del pop-up del registro.
+------------------------------------------------------------------------------ */
+.mapa-mini {
+  height: 190px;
+  width: 100%;
+  border-radius: var(--radio-chico);
+  border: 1px solid var(--veta);
+  background: var(--marmol-2);
+  box-shadow: var(--sombra-hundida);
+  overflow: hidden;
+}
+.mapa-mini-coords {
+  margin-top: var(--e-2);
+  font-family: var(--fuente-mono);
+  font-size: var(--txt-sm);
+  color: var(--tinta-media);
+}

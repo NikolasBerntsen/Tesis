@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Brillo del metal: se apoya como "foreground" sobre el relleno de oro para
+     que el botón principal se lea como lámina y no como color plano. Las alfas
+     son mínimas porque el velo también pasa por encima del texto y no puede
+     comerse el contraste; en el centro, donde va la etiqueta, es transparente. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:angle="270"
+        android:centerColor="#00FFFFFF"
+        android:endColor="#0D2B2620"
+        android:startColor="#1AFFFFFF"
+        android:type="linear" />
+    <corners android:radius="@dimen/radio_chico" />
+</shape>

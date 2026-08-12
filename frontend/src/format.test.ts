@@ -5,6 +5,7 @@ import {
   formatDistance,
   initials,
   signalClass,
+  fechaYHora,
   STATE_LABELS,
   stateLabel,
   time,
@@ -114,8 +115,22 @@ describe('formatDistance', () => {
 });
 
 describe('time', () => {
-  it('formatea un timestamp ISO a hora local', () => {
+  it('formatea un timestamp ISO a la hora local en 24 h', () => {
     const iso = '2024-01-01T12:34:56.000Z';
-    expect(time(iso)).toBe(new Date(iso).toLocaleTimeString());
+    expect(time(iso)).toBe(new Date(iso).toLocaleTimeString('es-AR', { hour12: false }));
+    // Con el navegador en inglés salía "12:34:56 PM" en una interfaz castellana
+    expect(time(iso)).toMatch(/^\d{1,2}:\d{2}:\d{2}$/);
+  });
+});
+
+describe('fechaYHora', () => {
+  it('muestra la fecha además de la hora, para el registro que pagina años', () => {
+    expect(fechaYHora('2024-01-04T15:30:00.000Z')).toMatch(/^\d{2}\/\d{2}\/\d{2}, \d{2}:\d{2}:\d{2}$/);
+    // Dos eventos a siete meses de distancia ya no se leen iguales
+    expect(fechaYHora('2024-08-04T15:30:00.000Z')).not.toBe(fechaYHora('2024-01-04T15:30:00.000Z'));
+  });
+
+  it('devuelve el timestamp crudo si la fila trae una fecha rota', () => {
+    expect(fechaYHora('una fecha rota')).toBe('una fecha rota');
   });
 });

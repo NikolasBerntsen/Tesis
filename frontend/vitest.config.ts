@@ -31,10 +31,13 @@ export default mergeConfig(
           'src/test/**',
           'src/**/*.test.{ts,tsx}',
         ],
+        // Pegados a la cobertura real (99.7 / 95.2) con un margen chico: la
+        // idea es que una funcionalidad sin tests rompa el CI, no que pase.
         thresholds: {
-          lines: 80,
-          functions: 80,
-          statements: 80,
+          lines: 97,
+          functions: 94,
+          statements: 97,
+          branches: 92,
         },
       },
     },

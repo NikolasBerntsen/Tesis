@@ -1,14 +1,39 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api, getUsername } from '../api';
-import type { Alert, Drone, DroneStatus, EventRow, Me, PatrolRoute } from '../types';
+import { api, getRole, getUsername } from '../api';
+import type { Alert, Drone, DroneStatus, EventRow, Me, NovedadDron, PatrolRoute, RolConsola } from '../types';
 import { useWebSocket } from '../useWebSocket';
 import Dashboard from './Dashboard';
 import DroneDetail from './DroneDetail';
+import DronesView from './DronesView';
 import LogsView from './LogsView';
 import UsersView from './UsersView';
 
 const MAX_EVENTS = 300;
 const TICK_MS = 1000;
+
+type Seccion = 'operacion' | 'drones' | 'usuarios' | 'registro';
+
+/**
+ * Qué secciones ve cada rol, en el orden en que aparecen en la barra. La
+ * primera de la lista es la pantalla de trabajo con la que arranca.
+ * El operador de campo no tiene tablero a propósito: el backend no le manda
+ * telemetría, ni video, ni alertas, ni eventos, así que un tablero le quedaría
+ * vacío y cada pedido le volvería con un 403.
+ */
+const SECCIONES: Record<RolConsola, readonly Seccion[]> = {
+  field_operator: ['drones'],
+  operator: ['operacion'],
+  supervisor: ['operacion', 'drones', 'usuarios'],
+  admin: ['operacion', 'drones', 'usuarios', 'registro'],
+};
+
+/** "Operación" es la flota en vivo; "Drones" es el registro de activos. */
+const ETIQUETA: Record<Seccion, string> = {
+  operacion: 'Operación',
+  drones: 'Drones',
+  usuarios: 'Usuarios',
+  registro: 'Registro',
+};
 
 export default function Console({ onLogout }: { onLogout: () => void }) {
   const [drones, setDrones] = useState<Drone[]>([]);
@@ -19,16 +44,27 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
   const [routes, setRoutes] = useState<PatrolRoute[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [me, setMe] = useState<Me | null>(null);
-  // 'drones' | 'usuarios' | 'registro'
-  const [seccion, setSeccion] = useState<'drones' | 'usuarios' | 'registro'>('drones');
+  const [seccion, setSeccion] = useState<Seccion>('operacion');
+  // Última novedad de un activo llegada por el canal en vivo: DronesView la
+  // mezcla en su tabla y así se entera de las altas, bajas, conexiones y
+  // renombres hechos desde otra consola o desde la app.
+  const [novedadDron, setNovedadDron] = useState<NovedadDron | null>(null);
   // Los status de cada dron llegan a destiempo: se acumulan acá y se vuelcan
   // al estado en un único tick, así todos los marcadores se mueven a la vez.
   const statusBuffer = useRef<Record<string, DroneStatus>>({});
 
+  // El rol de la sesión sirve para pintar la barra sin esperar a /me; el que
+  // manda es el que informa el backend, y si difieren la sección se corrige sola.
+  const rol = me?.role ?? getRole() ?? 'operator';
+  const secciones = SECCIONES[rol];
+  const abierta = secciones.includes(seccion) ? seccion : secciones[0];
+  const deCampo = rol === 'field_operator';
+
   useEffect(() => {
+    if (deCampo) return;
     const id = setInterval(() => setStatuses({ ...statusBuffer.current }), TICK_MS);
     return () => clearInterval(id);
-  }, []);
+  }, [deCampo]);
 
   const connected = useWebSocket((msg) => {
     switch (msg.type) {
@@ -49,15 +85,24 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
         break;
       case 'drone_online':
         upsertDrone(msg.drone);
+        setNovedadDron({ tipo: 'ficha', drone: msg.drone });
         break;
       case 'drone_offline':
         upsertDrone(msg.drone);
-        delete statusBuffer.current[msg.drone.droneId];
-        setFrames((prev) => {
-          const next = { ...prev };
-          delete next[msg.drone.droneId];
-          return next;
-        });
+        olvidarTelemetria(msg.drone.droneId);
+        setNovedadDron({ tipo: 'ficha', drone: msg.drone });
+        break;
+      case 'drone_updated':
+        // El mismo mensaje trae altas, ediciones, bajas y restauraciones. Un
+        // activo eliminado sale de la operación, pero igual viaja a la vista de
+        // activos, que es la única que sabe si hay que seguir mostrándolo.
+        if (msg.drone.deletedAt) {
+          setDrones((prev) => prev.filter((d) => d.droneId !== msg.drone.droneId));
+          olvidarTelemetria(msg.drone.droneId);
+        } else {
+          upsertDrone(msg.drone);
+        }
+        setNovedadDron({ tipo: 'ficha', drone: msg.drone });
         break;
       case 'route_updated':
         setRoutes((prev) => prev.map((r) => (r.id === msg.route.id ? msg.route : r)));
@@ -71,13 +116,22 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
         setDrones((prev) =>
           prev.map((d) => (d.droneId === msg.droneId ? { ...d, displayName: msg.displayName } : d)),
         );
+        // El renombre iniciado desde la app no viene acompañado de `drone_updated`
+        setNovedadDron({ tipo: 'renombre', droneId: msg.droneId, displayName: msg.displayName });
         break;
     }
   });
 
+  useEffect(() => {
+    api<Me>('/me').then(setMe).catch(console.error);
+  }, []);
+
   // Se recarga al montar y en cada reconexión: mientras el WebSocket estuvo
   // caído pudieron conectarse o desconectarse drones y llegar alertas nuevas.
+  // Se espera a saber quién soy porque al operador de campo no hay que pedirle
+  // nada de esto: DronesView se trae su propia lista de activos.
   useEffect(() => {
+    if (!me || me.role === 'field_operator') return;
     api<Drone[]>('/drones')
       .then((list) => {
         setDrones(list);
@@ -88,8 +142,7 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
       .catch(console.error);
     api<Alert[]>('/alerts').then(setAlerts).catch(console.error);
     api<PatrolRoute[]>('/routes').then(setRoutes).catch(console.error);
-    api<Me>('/me').then(setMe).catch(console.error);
-  }, [connected]);
+  }, [connected, me]);
 
   // Apodo de un nodo de patrullaje. El backend responde con la ruta completa y
   // además emite route_updated, así que las demás consolas también se enteran.
@@ -113,6 +166,16 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
     );
   }
 
+  /** Un dron que se fue no tiene nada que seguir dibujando en el tablero. */
+  function olvidarTelemetria(droneId: string) {
+    delete statusBuffer.current[droneId];
+    setFrames((prev) => {
+      const next = { ...prev };
+      delete next[droneId];
+      return next;
+    });
+  }
+
   async function rename(droneId: string, displayName: string) {
     try {
       upsertDrone(await api<Drone>(`/drones/${droneId}`, { method: 'PATCH', body: JSON.stringify({ displayName }) }));
@@ -129,41 +192,48 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
     return count;
   }, [alerts]);
 
-  const selected = seccion === 'drones' ? (drones.find((d) => d.droneId === selectedId) ?? null) : null;
-  const rol = me?.role ?? 'operator';
+  const selected = abierta === 'operacion' ? (drones.find((d) => d.droneId === selectedId) ?? null) : null;
 
   return (
     <div className="dashboard">
       <header className="topbar">
         <h1>Comando Central</h1>
         <nav className="topnav">
-          <button className={seccion === 'drones' ? 'active' : ''} onClick={() => setSeccion('drones')}>
-            Drones
-          </button>
-          {(rol === 'supervisor' || rol === 'admin') && (
-            <button className={seccion === 'usuarios' ? 'active' : ''} onClick={() => setSeccion('usuarios')}>
-              Usuarios
+          {secciones.map((s) => (
+            <button
+              key={s}
+              className={abierta === s ? 'active' : ''}
+              aria-current={abierta === s ? 'page' : undefined}
+              onClick={() => setSeccion(s)}
+            >
+              {ETIQUETA[s]}
             </button>
-          )}
-          {rol === 'admin' && (
-            <button className={seccion === 'registro' ? 'active' : ''} onClick={() => setSeccion('registro')}>
-              Registro
-            </button>
-          )}
+          ))}
         </nav>
         <div className="topbar-right">
-          <span className={connected ? 'conn ok' : 'conn bad'}>
-            {connected ? '● conectado' : '● sin conexión'}
+          {/* El operador de campo entra a una consola recortada: conviene que lo
+              lea, y no que lo deduzca de que no hay más botones. */}
+          {deCampo && <span className="badge oro">Sesión de campo</span>}
+          {/* El punto lo dibuja .estado con currentColor: en la interfaz no hay
+              caracteres decorativos, y así el punto toma el verde o el rojo. */}
+          <span className={`conn estado versalita ${connected ? 'ok' : 'bad'}`} aria-live="polite">
+            {connected ? 'conectado' : 'sin conexión'}
           </span>
           <span className="username">{getUsername()}</span>
-          <button className="ghost" onClick={onLogout}>
+          <button className="ghost versalita" onClick={onLogout}>
             Salir
           </button>
         </div>
       </header>
-      {seccion === 'usuarios' && me ? (
+      {!me ? (
+        <main className="page-main">
+          <p className="vacio">Cargando la consola…</p>
+        </main>
+      ) : abierta === 'drones' ? (
+        <DronesView me={me} novedad={novedadDron} />
+      ) : abierta === 'usuarios' ? (
         <UsersView me={me} />
-      ) : seccion === 'registro' ? (
+      ) : abierta === 'registro' ? (
         <LogsView />
       ) : selected ? (
         <DroneDetail

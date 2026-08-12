@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- El borde del botón secundario es veta y vira a oro cuando se lo toca: ese
+     es el "filo dorado" del sistema de diseño. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:color="@color/veta" android:state_enabled="false" />
+    <item android:color="@color/oro" android:state_pressed="true" />
+    <item android:color="@color/oro" android:state_focused="true" />
+    <item android:color="@color/oro" android:state_hovered="true" />
+    <item android:color="@color/veta_fuerte" />
+</selector>

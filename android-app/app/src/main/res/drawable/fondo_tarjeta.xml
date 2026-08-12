@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Tarjeta de mármol para contenedores que no son MaterialCardView (el menú
+     lateral, los diálogos): la tarjeta de verdad se configura por estilo. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/marmol_1" />
+            <corners android:radius="@dimen/radio" />
+            <stroke
+                android:width="@dimen/borde_veta"
+                android:color="@color/veta" />
+        </shape>
+    </item>
+    <item
+        android:bottom="@dimen/borde_veta"
+        android:drawable="@drawable/veta_marmol"
+        android:left="@dimen/borde_veta"
+        android:right="@dimen/borde_veta"
+        android:top="@dimen/borde_veta" />
+</layer-list>

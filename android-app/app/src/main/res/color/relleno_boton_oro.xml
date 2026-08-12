@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Relleno del botón principal. Deshabilitado se apaga a mármol gastado: el
+     oro se reserva para lo que se puede tocar. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:color="@color/marmol_3" android:state_enabled="false" />
+    <item android:color="@color/oro" />
+</selector>

@@ -1,34 +1,44 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { db } from '../../src/db';
+import { limpiarBase } from '../helpers';
 import {
   toUserView,
+  toDroneAssetView,
   getUser,
+  getActiveUser,
   listUsers,
   createUser,
   updateUser,
-  deleteUser,
+  softDeleteUser,
+  restoreUser,
+  createDrone,
+  getDrone,
+  listDrones,
+  updateDrone,
+  softDeleteDrone,
+  restoreDrone,
   getDroneIdentity,
-  listDroneIdentities,
   renameDrone,
   getRoutes,
   getRoute,
   setWaypointLabel,
   createLog,
-  createEvent,
   listEvents,
   listLogs,
+  TAMANIOS_PAGINA,
   createAlert,
   getAlert,
   listAlerts,
   decideAlert,
+  type DroneAsset,
   type UserRow,
 } from '../../src/store';
 
 // Inserta un usuario crudo en la base (sin pasar por la API).
 function insertUser(over: Partial<UserRow> & { username: string }) {
   db.prepare(
-    `INSERT INTO users (username, password_hash, role, display_name, base_name, base_lat, base_lon, active, can_control)
-     VALUES (@username, @password_hash, @role, @display_name, @base_name, @base_lat, @base_lon, @active, @can_control)`,
+    `INSERT INTO users (username, password_hash, role, display_name, base_name, base_lat, base_lon, active, can_control, deleted_at)
+     VALUES (@username, @password_hash, @role, @display_name, @base_name, @base_lat, @base_lon, @active, @can_control, @deleted_at)`,
   ).run({
     password_hash: 'x',
     role: 'operator',
@@ -38,6 +48,7 @@ function insertUser(over: Partial<UserRow> & { username: string }) {
     base_lon: null,
     active: 1,
     can_control: 1,
+    deleted_at: null,
     ...over,
   });
 }
@@ -50,9 +61,7 @@ function insertRoute(name: string, waypoints: object[]) {
 }
 
 // Los tests comparten la base en memoria del archivo: se limpia antes de cada uno.
-beforeEach(() => {
-  db.exec('DELETE FROM events; DELETE FROM alerts; DELETE FROM patrol_routes; DELETE FROM users; DELETE FROM sqlite_sequence;');
-});
+beforeEach(limpiarBase);
 
 describe('store — usuarios', () => {
   it('toUserView convierte flags 0/1 a booleanos y oculta el hash', () => {
@@ -67,35 +76,45 @@ describe('store — usuarios', () => {
       base_lon: null,
       active: 1,
       can_control: 0,
+      deleted_at: null,
+      deleted_by: null,
     });
-    expect(view).toEqual({ username: 'ana', role: 'supervisor', active: true, canControl: false });
+    expect(view).toEqual({ username: 'ana', role: 'supervisor', active: true, canControl: false, deletedAt: null });
     expect(view).not.toHaveProperty('password_hash');
   });
 
-  it('getUser devuelve la fila o undefined', () => {
+  it('getUser devuelve la fila (incluso borrada) y getActiveUser no', () => {
     insertUser({ username: 'juan', role: 'admin' });
+    insertUser({ username: 'ida', deleted_at: '2020-01-01T00:00:00.000Z' });
+    insertUser({ username: 'apagada', active: 0 });
+
     expect(getUser('juan')?.role).toBe('admin');
     expect(getUser('nadie')).toBeUndefined();
+    expect(getUser('ida')).toBeDefined();
+
+    expect(getActiveUser('juan')).toBeDefined();
+    expect(getActiveUser('ida')).toBeUndefined();
+    expect(getActiveUser('apagada')).toBeUndefined();
   });
 
-  it('listUsers filtra por los roles pedidos y ordena', () => {
+  it('listUsers filtra por los roles pedidos, ordena y esconde los borrados', () => {
     insertUser({ username: 'op1', role: 'operator' });
     insertUser({ username: 'sup1', role: 'supervisor' });
     insertUser({ username: 'adm1', role: 'admin' });
-    insertUser({ username: 'drx', role: 'drone' });
+    insertUser({ username: 'campo1', role: 'field_operator' });
+    insertUser({ username: 'exop', role: 'operator', deleted_at: '2020-01-01T00:00:00.000Z' });
 
-    const soloOperadores = listUsers(['operator']);
-    expect(soloOperadores.map((u) => u.username)).toEqual(['op1']);
+    expect(listUsers(['operator']).map((u) => u.username)).toEqual(['op1']);
+    expect(listUsers(['operator'], { includeDeleted: true }).map((u) => u.username)).toEqual(['exop', 'op1']);
 
-    const humanos = listUsers(['operator', 'supervisor', 'admin']);
-    expect(humanos.map((u) => u.username).sort()).toEqual(['adm1', 'op1', 'sup1']);
-    expect(humanos.some((u) => u.username === 'drx')).toBe(false);
+    const humanos = listUsers(['field_operator', 'operator', 'supervisor', 'admin']);
+    expect(humanos.map((u) => u.username).sort()).toEqual(['adm1', 'campo1', 'op1', 'sup1']);
   });
 
   it('createUser inserta y devuelve la vista con canControl', () => {
     const conControl = createUser('c1', 'h', 'operator', true);
-    expect(conControl).toEqual({ username: 'c1', role: 'operator', active: true, canControl: true });
-    const sinControl = createUser('c2', 'h', 'supervisor', false);
+    expect(conControl).toEqual({ username: 'c1', role: 'operator', active: true, canControl: true, deletedAt: null });
+    const sinControl = createUser('c2', 'h', 'field_operator', false);
     expect(sinControl.canControl).toBe(false);
     expect(getUser('c1')).toBeDefined();
   });
@@ -116,65 +135,151 @@ describe('store — usuarios', () => {
     const r = updateUser('u2', { active: false, passwordHash: 'nuevo' });
     expect(r?.after.active).toBe(false);
     expect(getUser('u2')?.password_hash).toBe('nuevo');
+    // y vuelve a activarse
+    expect(updateUser('u2', { active: true })?.after.active).toBe(true);
   });
 
   it('updateUser sobre un usuario inexistente devuelve undefined', () => {
     expect(updateUser('fantasma', { active: false })).toBeUndefined();
   });
 
-  it('deleteUser devuelve la vista borrada, o undefined si no existía', () => {
+  it('softDeleteUser marca deleted_at, deja la fila y no se puede repetir', () => {
     createUser('borrar', 'h', 'operator', true);
-    expect(deleteUser('borrar')?.username).toBe('borrar');
-    expect(getUser('borrar')).toBeUndefined();
-    expect(deleteUser('borrar')).toBeUndefined();
+    const r = softDeleteUser('borrar', 'admin');
+    expect(r?.before.deletedAt).toBeNull();
+    expect(r?.after.deletedAt).toBeTruthy();
+    // la fila queda: el username sigue ocupado
+    expect(getUser('borrar')).toBeDefined();
+    expect(getUser('borrar')?.deleted_by).toBe('admin');
+    expect(softDeleteUser('borrar', 'admin')).toBeUndefined();
+    expect(softDeleteUser('fantasma', 'admin')).toBeUndefined();
+  });
+
+  it('restoreUser deshace el borrado lógico y solo aplica sobre borrados', () => {
+    createUser('vuelve', 'h', 'operator', true);
+    expect(restoreUser('vuelve')).toBeUndefined();
+    softDeleteUser('vuelve', 'admin');
+    const r = restoreUser('vuelve');
+    expect(r?.before.deletedAt).toBeTruthy();
+    expect(r?.after.deletedAt).toBeNull();
+    expect(getUser('vuelve')?.deleted_by).toBeNull();
+    expect(restoreUser('fantasma')).toBeUndefined();
   });
 });
 
-describe('store — drones', () => {
-  it('getDroneIdentity arma base y displayName cuando están completos', () => {
-    insertUser({
-      username: 'drone1',
-      role: 'drone',
-      display_name: 'Alfa',
+describe('store — drones como activos', () => {
+  it('createDrone genera un hash de 32 hexa y devuelve la vista completa', () => {
+    const d = createDrone({ displayName: 'Alfa', model: 'DJI Mini 3', base: { name: 'Base Norte', lat: -34.85, lon: -56.2 } }, 'campo');
+    expect(d.hash).toMatch(/^[0-9a-f]{32}$/);
+    expect(d.displayName).toBe('Alfa');
+    expect(d.model).toBe('DJI Mini 3');
+    expect(d.active).toBe(true);
+    expect(d.base).toEqual({ name: 'Base Norte', lat: -34.85, lon: -56.2 });
+    expect(d.createdBy).toBe('campo');
+    expect(d.deletedAt).toBeNull();
+
+    // dos altas seguidas no comparten hash
+    const otro = createDrone({ displayName: 'Bravo' }, 'campo');
+    expect(otro.hash).not.toBe(d.hash);
+    expect(otro.model).toBe('');
+    expect(otro.base).toBeNull();
+  });
+
+  it('toDroneAssetView deja la base en null si falta lat o lon', () => {
+    const fila: DroneAsset = {
+      id: 1,
+      hash: 'abc',
+      display_name: 'X',
+      model: '',
+      active: 0,
       base_name: 'Base Norte',
       base_lat: -34.85,
-      base_lon: -56.2,
+      base_lon: null,
+      created_at: '2020-01-01T00:00:00.000Z',
+      created_by: null,
+      deleted_at: null,
+      deleted_by: null,
+    };
+    expect(toDroneAssetView(fila).base).toBeNull();
+    expect(toDroneAssetView(fila).active).toBe(false);
+    // sin nombre de base, cae a "Base"
+    expect(toDroneAssetView({ ...fila, base_name: null, base_lon: -56.2 }).base).toEqual({ name: 'Base', lat: -34.85, lon: -56.2 });
+  });
+
+  it('getDrone devuelve el dron AUNQUE esté borrado; listDrones lo esconde', () => {
+    const vivo = createDrone({ displayName: 'Vivo' }, 'campo');
+    const muerto = createDrone({ displayName: 'Muerto' }, 'campo');
+    softDeleteDrone(muerto.hash, 'supervisor');
+
+    expect(getDrone(muerto.hash)?.deletedAt).toBeTruthy();
+    expect(getDrone('no-existe')).toBeUndefined();
+    expect(listDrones().map((d) => d.hash)).toEqual([vivo.hash]);
+    expect(listDrones({ includeDeleted: true }).map((d) => d.displayName)).toEqual(['Muerto', 'Vivo']);
+  });
+
+  it('updateDrone aplica solo lo pedido y devuelve antes/después', () => {
+    const d = createDrone({ displayName: 'Alfa', model: 'M1', base: { name: 'Norte', lat: 1, lon: 2 } }, 'campo');
+    const r = updateDrone(d.hash, { displayName: 'Alfa-2' });
+    expect(r?.before.displayName).toBe('Alfa');
+    expect(r?.after.displayName).toBe('Alfa-2');
+    // lo que no se manda no se toca
+    expect(r?.after.model).toBe('M1');
+    expect(r?.after.base).toEqual({ name: 'Norte', lat: 1, lon: 2 });
+
+    expect(updateDrone(d.hash, { active: false })?.after.active).toBe(false);
+    expect(updateDrone(d.hash, { model: 'M2' })?.after.model).toBe('M2');
+  });
+
+  it('updateDrone con base:null la borra y con un objeto la reemplaza', () => {
+    const d = createDrone({ displayName: 'Alfa', base: { name: 'Norte', lat: 1, lon: 2 } }, 'campo');
+    expect(updateDrone(d.hash, { base: { name: 'Sur', lat: 3, lon: 4 } })?.after.base).toEqual({ name: 'Sur', lat: 3, lon: 4 });
+    expect(updateDrone(d.hash, { base: null })?.after.base).toBeNull();
+  });
+
+  it('updateDrone y renameDrone no tocan drones borrados ni inexistentes', () => {
+    const d = createDrone({ displayName: 'Alfa' }, 'campo');
+    softDeleteDrone(d.hash, 'supervisor');
+    expect(updateDrone(d.hash, { displayName: 'X' })).toBeUndefined();
+    expect(renameDrone(d.hash, 'X')).toBeUndefined();
+    expect(updateDrone('fantasma', { displayName: 'X' })).toBeUndefined();
+    expect(renameDrone('fantasma', 'X')).toBeUndefined();
+  });
+
+  it('softDeleteDrone y restoreDrone son idempotentes (undefined si es un no-op)', () => {
+    const d = createDrone({ displayName: 'Alfa' }, 'campo');
+    expect(restoreDrone(d.hash)).toBeUndefined();
+    const borrado = softDeleteDrone(d.hash, 'supervisor');
+    expect(borrado?.deletedAt).toBeTruthy();
+    expect(borrado?.deletedBy).toBe('supervisor');
+    expect(softDeleteDrone(d.hash, 'supervisor')).toBeUndefined();
+    const restaurado = restoreDrone(d.hash);
+    expect(restaurado?.deletedAt).toBeNull();
+    expect(restaurado?.deletedBy).toBeNull();
+    expect(softDeleteDrone('fantasma', 'supervisor')).toBeUndefined();
+    expect(restoreDrone('fantasma')).toBeUndefined();
+  });
+
+  it('getDroneIdentity excluye borrados pero NO inactivos', () => {
+    const activo = createDrone({ displayName: 'Alfa', base: { name: 'Base Norte', lat: -34.85, lon: -56.2 } }, 'campo');
+    const inactivo = createDrone({ displayName: 'Bravo' }, 'campo');
+    const borrado = createDrone({ displayName: 'Charlie' }, 'campo');
+    updateDrone(inactivo.hash, { active: false });
+    softDeleteDrone(borrado.hash, 'supervisor');
+
+    expect(getDroneIdentity(activo.hash)).toEqual({
+      droneId: activo.hash,
+      displayName: 'Alfa',
+      base: { name: 'Base Norte', lat: -34.85, lon: -56.2 },
     });
-    const id = getDroneIdentity('drone1');
-    expect(id).toEqual({ droneId: 'drone1', displayName: 'Alfa', base: { name: 'Base Norte', lat: -34.85, lon: -56.2 } });
+    expect(getDroneIdentity(inactivo.hash)?.displayName).toBe('Bravo');
+    expect(getDroneIdentity(borrado.hash)).toBeUndefined();
+    expect(getDroneIdentity('fantasma')).toBeUndefined();
   });
 
-  it('displayName cae al username y base.name a "Base" si faltan', () => {
-    insertUser({ username: 'drone2', role: 'drone', display_name: null, base_name: null, base_lat: 1, base_lon: 2 });
-    const id = getDroneIdentity('drone2');
-    expect(id?.displayName).toBe('drone2');
-    expect(id?.base).toEqual({ name: 'Base', lat: 1, lon: 2 });
-  });
-
-  it('base es null si falta lat o lon', () => {
-    insertUser({ username: 'drone3', role: 'drone', base_lat: 1, base_lon: null });
-    expect(getDroneIdentity('drone3')?.base).toBeNull();
-  });
-
-  it('getDroneIdentity no devuelve usuarios que no son drones', () => {
-    insertUser({ username: 'humano', role: 'operator' });
-    expect(getDroneIdentity('humano')).toBeUndefined();
-    expect(getDroneIdentity('inexistente')).toBeUndefined();
-  });
-
-  it('listDroneIdentities lista solo drones ordenados', () => {
-    insertUser({ username: 'dz', role: 'drone' });
-    insertUser({ username: 'da', role: 'drone' });
-    insertUser({ username: 'op', role: 'operator' });
-    expect(listDroneIdentities().map((d) => d.droneId)).toEqual(['da', 'dz']);
-  });
-
-  it('renameDrone actualiza el displayName y devuelve undefined si no es dron', () => {
-    insertUser({ username: 'drone1', role: 'drone', display_name: 'Alfa' });
-    expect(renameDrone('drone1', 'Alfa-2')?.displayName).toBe('Alfa-2');
-    expect(renameDrone('noexiste', 'X')).toBeUndefined();
-    insertUser({ username: 'op', role: 'operator' });
-    expect(renameDrone('op', 'X')).toBeUndefined();
+  it('renameDrone actualiza el displayName y devuelve la identidad nueva', () => {
+    const d = createDrone({ displayName: 'Alfa' }, 'campo');
+    expect(renameDrone(d.hash, 'Alfa-2')?.displayName).toBe('Alfa-2');
+    expect(getDrone(d.hash)?.displayName).toBe('Alfa-2');
   });
 });
 
@@ -225,15 +330,9 @@ describe('store — logs y eventos', () => {
     expect(ev2.alert_id).toBeNull();
   });
 
-  it('createEvent es un atajo de categoría drone', () => {
-    const ev = createEvent('DRONE_CONNECTED', 'backend', 'conectado', 'drone1', null);
-    expect(ev.category).toBe('drone');
-    expect(ev.drone_id).toBe('drone1');
-  });
-
   it('listEvents solo trae categoría drone y filtra por droneId', () => {
-    createEvent('A', 'backend', 'm', 'drone1');
-    createEvent('B', 'backend', 'm', 'drone2');
+    createLog('drone', 'A', 'backend', 'm', { droneId: 'd1' });
+    createLog('drone', 'B', 'backend', 'm', { droneId: 'd2' });
     createLog('usuarios', 'USER_CREATED', 'admin', 'm');
     createLog('sistema', 'LOGIN', 'admin', 'm');
 
@@ -241,36 +340,105 @@ describe('store — logs y eventos', () => {
     expect(todos.every((e) => e.category === 'drone')).toBe(true);
     expect(todos).toHaveLength(2);
 
-    const soloD1 = listEvents(500, 'drone1');
+    const soloD1 = listEvents(500, 'd1');
     expect(soloD1).toHaveLength(1);
-    expect(soloD1[0].drone_id).toBe('drone1');
+    expect(soloD1[0].drone_id).toBe('d1');
   });
 
   it('listEvents respeta el límite y ordena por id descendente', () => {
-    for (let i = 0; i < 5; i++) createEvent('E', 'backend', `m${i}`, 'drone1');
-    const dos = listEvents(2, 'drone1');
+    for (let i = 0; i < 5; i++) createLog('drone', 'E', 'backend', `m${i}`, { droneId: 'd1' });
+    const dos = listEvents(2, 'd1');
     expect(dos).toHaveLength(2);
     expect(dos[0].message).toBe('m4');
   });
+});
 
-  it('listLogs junta todas las categorías o filtra por una', () => {
-    createEvent('A', 'backend', 'm', 'drone1');
-    createLog('usuarios', 'USER_CREATED', 'admin', 'm');
-    createLog('sistema', 'LOGIN', 'admin', 'm');
+describe('store — registro paginado (listLogs)', () => {
+  beforeEach(() => {
+    for (let i = 1; i <= 30; i++) createLog('drone', 'DRONE_CONNECTED', 'backend', `dron ${i}`, { droneId: 'd1' });
+    for (let i = 1; i <= 5; i++) createLog('usuarios', 'USER_CREATED', 'admin', `usuario ${i}`);
+    createLog('sistema', 'LOGIN', 'admin', 'admin inició sesión');
+  });
 
-    const general = listLogs(500);
-    const cats = new Set(general.map((l) => l.category));
-    expect(cats).toEqual(new Set(['drone', 'usuarios', 'sistema']));
+  it('pagina con el tamaño pedido y devuelve el total sin paginar', () => {
+    const p1 = listLogs({ page: 1, pageSize: 25 });
+    expect(p1.items).toHaveLength(25);
+    expect(p1.total).toBe(36);
+    expect(p1.page).toBe(1);
+    expect(p1.pageSize).toBe(25);
+    // más reciente primero
+    expect(p1.items[0].type).toBe('LOGIN');
 
-    const soloUsuarios = listLogs(500, 'usuarios');
-    expect(soloUsuarios.every((l) => l.category === 'usuarios')).toBe(true);
-    expect(soloUsuarios).toHaveLength(1);
+    const p2 = listLogs({ page: 2, pageSize: 25 });
+    expect(p2.items).toHaveLength(11);
+    expect(p2.total).toBe(36);
+    // no se repiten filas entre páginas
+    const ids = new Set([...p1.items, ...p2.items].map((e) => e.id));
+    expect(ids.size).toBe(36);
+  });
+
+  it('acepta los cuatro tamaños del contrato y cae a 25 con cualquier otro', () => {
+    expect(TAMANIOS_PAGINA).toEqual([25, 50, 75, 100]);
+    for (const n of TAMANIOS_PAGINA) expect(listLogs({ page: 1, pageSize: n }).pageSize).toBe(n);
+    expect(listLogs({ page: 1, pageSize: 33 }).pageSize).toBe(25);
+    expect(listLogs({ page: 1, pageSize: 0 }).pageSize).toBe(25);
+    expect(listLogs({ page: 1, pageSize: Number.NaN }).pageSize).toBe(25);
+  });
+
+  it('sanea la página: menor a 1 o no finita cae a 1, y una página vacía no rompe', () => {
+    expect(listLogs({ page: 0, pageSize: 25 }).page).toBe(1);
+    expect(listLogs({ page: -7, pageSize: 25 }).page).toBe(1);
+    expect(listLogs({ page: Number.NaN, pageSize: 25 }).page).toBe(1);
+    expect(listLogs({ page: 1.9, pageSize: 25 }).page).toBe(1);
+    const lejos = listLogs({ page: 99, pageSize: 25 });
+    expect(lejos.items).toHaveLength(0);
+    expect(lejos.total).toBe(36);
+  });
+
+  // El OFFSET se bindea como entero de SQLite: sin techo, un page enorme
+  // reventaba la consulta en vez de devolver una página vacía.
+  it('una página disparatada se topea y responde vacía en vez de romper', () => {
+    for (const enorme of [1e19, 1e30, Number.MAX_SAFE_INTEGER]) {
+      const r = listLogs({ page: enorme, pageSize: 100 });
+      expect(r.items).toHaveLength(0);
+      expect(r.total).toBe(36);
+      expect(Number.isSafeInteger(r.page)).toBe(true);
+    }
+  });
+
+  it('filtra por categoría contando solo esa categoría', () => {
+    const usuarios = listLogs({ category: 'usuarios', page: 1, pageSize: 25 });
+    expect(usuarios.total).toBe(5);
+    expect(usuarios.items.every((e) => e.category === 'usuarios')).toBe(true);
+    expect(listLogs({ category: 'sistema', page: 1, pageSize: 25 }).total).toBe(1);
+    expect(listLogs({ category: 'drone', page: 1, pageSize: 25 }).total).toBe(30);
+  });
+
+  it('filtra por dron y por texto libre en mensaje, tipo y origen', () => {
+    createLog('drone', 'OTRO', 'backend', 'mensaje de otro dron', { droneId: 'd2' });
+    expect(listLogs({ droneId: 'd2', page: 1, pageSize: 25 }).total).toBe(1);
+    expect(listLogs({ q: 'dron 7', page: 1, pageSize: 25 }).total).toBe(1);
+    expect(listLogs({ q: 'USER_CREATED', page: 1, pageSize: 25 }).total).toBe(5);
+    expect(listLogs({ q: 'admin', page: 1, pageSize: 25 }).total).toBe(6);
+    // categoría y texto se combinan con AND
+    expect(listLogs({ category: 'usuarios', q: 'admin', page: 1, pageSize: 25 }).total).toBe(5);
+  });
+
+  it('escapa los comodines del texto buscado', () => {
+    createLog('sistema', 'RARO', 'x', 'batería al 100%');
+    createLog('sistema', 'RARO', 'x', 'batería al 10 por ciento');
+    // sin escape, "100%" en un LIKE traería las dos
+    expect(listLogs({ q: '100%', page: 1, pageSize: 25 }).total).toBe(1);
+    // el guion bajo es comodín de un carácter en SQL
+    createLog('sistema', 'RARO', 'x', 'nodo_1');
+    expect(listLogs({ q: 'nodo_1', page: 1, pageSize: 25 }).total).toBe(1);
+    expect(listLogs({ q: 'nodoX1', page: 1, pageSize: 25 }).total).toBe(0);
   });
 });
 
 describe('store — alertas', () => {
   it('createAlert crea PENDING y getAlert la recupera', () => {
-    const a = createAlert('PERSON', 'drone1', -34.8, -56.2, 'JPEG');
+    const a = createAlert('PERSON', 'd1', -34.8, -56.2, 'JPEG');
     expect(a.status).toBe('PENDING');
     expect(a.type).toBe('PERSON');
     expect(getAlert(a.id)?.snapshot).toBe('JPEG');

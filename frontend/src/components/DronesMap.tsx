@@ -12,9 +12,9 @@ export interface MapItem {
 }
 
 /**
- * Nodos de la ruta que se dibujan en la vista de detalle: rojos mientras están
- * pendientes y verdes una vez que el dron pasó por ellos. Al clickearlos se ve
- * el número de nodo y se les puede poner un apodo.
+ * Nodos de la ruta que se dibujan en la vista de detalle: en rojo óxido
+ * mientras están pendientes y en verde oliva una vez que el dron pasó por
+ * ellos. Al clickearlos se ve el número de nodo y se les puede poner un apodo.
  */
 export interface WaypointsLayer {
   route: PatrolRoute;
@@ -28,9 +28,28 @@ export interface WaypointsLayer {
   onContinue?: (index: number) => void;
 }
 
-const WP_PENDIENTE = '#e03131';
-const WP_VISITADO = '#2f9e44';
-const WP_STYLE: L.CircleMarkerOptions = { radius: 7, color: '#ffffff', weight: 2, fillOpacity: 1 };
+/* Leaflet pinta sus capas con colores pasados por JS, no con CSS: por eso la
+   paleta se repite acá. Son los mismos valores que los tokens de tokens.css. */
+const PALETA = {
+  marfil: '#FBFAF7', // --marmol-0
+  tinta: '#2B2620', // --tinta
+  tintaMedia: '#5C544A', // --tinta-media
+  oroClaro: '#F0E3B8',
+  oroMedio: '#D9BE6B',
+  oro: '#B8912F', // --oro
+  oroOscuro: '#8A6A1C', // --oro-oscuro
+  oliva: '#4F7A46', // --ok
+  oxido: '#9C3B30', // --peligro
+} as const;
+
+/* Las teselas de OpenStreetMap vienen a todo color y son lo que delata al
+   "mapa web genérico". Este lavado las deja en marfil: el mapa pasa a ser una
+   superficie de mármol más y el oro vuelve a ser lo único que brilla. */
+const LAVADO_MARMOL = 'grayscale(1) sepia(.34) saturate(.8) brightness(1.07) contrast(.92)';
+
+const WP_PENDIENTE = PALETA.oxido;
+const WP_VISITADO = PALETA.oliva;
+const WP_STYLE: L.CircleMarkerOptions = { radius: 7, color: PALETA.marfil, weight: 2, fillOpacity: 1 };
 
 interface Layers {
   base?: L.Marker;
@@ -57,14 +76,26 @@ function coneLatLngs(lat: number, lon: number, heading: number): L.LatLngTuple[]
   return points;
 }
 
+const CONE_STYLE: L.PolylineOptions = {
+  color: PALETA.oro,
+  weight: 1,
+  opacity: 0.5,
+  fillColor: PALETA.oro,
+  fillOpacity: 0.13,
+  interactive: false,
+};
+
 // En tierra no hay cámara que mostrar
 const EN_TIERRA = ['IDLE', 'LANDED'];
 
 const CENTER: L.LatLngTuple = [-34.8575, -56.2045];
+// Hilo grabado entre el dron y su base: es una referencia, no un dato de vuelo,
+// así que va en tinta apagada y no compite con los nodos ni con el medallón.
 const LINE_STYLE: L.PolylineOptions = {
-  color: '#e03131',
-  weight: 2,
-  dashArray: '6 6',
+  color: PALETA.tintaMedia,
+  weight: 1.5,
+  opacity: 0.55,
+  dashArray: '2 7',
   interactive: false,
 };
 
@@ -72,45 +103,97 @@ function esc(text: string): string {
   return text.replace(/[<>&"]/g, (c) => `&#${c.charCodeAt(0)};`);
 }
 
+/* --- Marcadores: SVG inline, sin depender de hojas de estilo ------------- */
+
+// Cada medallón trae su propio degradé, así que necesita un id único
+let secuenciaLamina = 0;
+
+/**
+ * El dron es lo único de oro macizo del mapa: un medallón de lámina dorada con
+ * las iniciales grabadas y una punta que marca la posición exacta.
+ */
 function droneIcon(name: string): L.DivIcon {
+  const id = `lamina-${++secuenciaLamina}`;
   return L.divIcon({
     className: 'drone-pin-icon',
-    html: `<div class="drone-pin"><span>${esc(initials(name))}</span></div>`,
-    iconSize: [28, 28],
-    iconAnchor: [14, 34],
-    popupAnchor: [0, -34],
+    html: `<svg width="34" height="42" viewBox="0 0 34 42" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="${PALETA.oroClaro}"/>
+          <stop offset=".28" stop-color="${PALETA.oroMedio}"/>
+          <stop offset=".55" stop-color="${PALETA.oro}"/>
+          <stop offset="1" stop-color="${PALETA.oroOscuro}"/>
+        </linearGradient>
+      </defs>
+      <path d="M17 40.6 11.7 28.4h10.6z" fill="url(#${id})" stroke="${PALETA.marfil}" stroke-width="1.6" stroke-linejoin="round"/>
+      <circle cx="17" cy="16.6" r="13" fill="url(#${id})" stroke="${PALETA.marfil}" stroke-width="2"/>
+      <text x="17" y="21" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="700" fill="${PALETA.tinta}">${esc(initials(name))}</text>
+    </svg>`,
+    iconSize: [34, 42],
+    iconAnchor: [17, 40],
+    popupAnchor: [0, -36],
   });
 }
 
+// La base es piedra tallada: un rombo de tinta con el reborde marfil
 const BASE_ICON = L.divIcon({
   className: 'base-icon',
-  html: '<div class="base-square"></div>',
-  iconSize: [16, 16],
-  iconAnchor: [8, 8],
-  popupAnchor: [0, -10],
+  html: `<svg width="22" height="22" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg">
+      <path d="M11 1.4 20.6 11 11 20.6 1.4 11z" fill="${PALETA.marfil}" stroke="${PALETA.tinta}" stroke-width="1.6" stroke-linejoin="round"/>
+      <path d="M11 6.6 15.4 11 11 15.4 6.6 11z" fill="${PALETA.tinta}"/>
+    </svg>`,
+  iconSize: [22, 22],
+  iconAnchor: [11, 11],
+  popupAnchor: [0, -12],
 });
+
+/* --- Globos y etiquetas --------------------------------------------------- */
+
+function ficha(filas: [string, string][]): string {
+  const cuerpo = filas.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+  return `<hr class="regla" style="margin:var(--e-3) 0"><dl class="datos">${cuerpo}</dl>`;
+}
+
+function titulo(etiqueta: string, nombre: string): string {
+  return `<span class="etiqueta">${etiqueta}</span>
+    <h4 style="font-size:var(--txt-md)">${esc(nombre)}</h4>`;
+}
 
 function dronePopup(item: MapItem): string {
   const s = item.status!;
-  return `<strong>${esc(item.displayName)}</strong>
-    <div>Batería: ${s.battery.toFixed(0)}%</div>
-    <div>Señal: ${s.signalPct}%</div>
-    <div>Nodo: ${waypointLabel(s)}</div>`;
+  return (
+    titulo('Dron', item.displayName) +
+    ficha([
+      ['Batería', `${s.battery.toFixed(0)}&#8239;%`],
+      ['Señal', `${s.signalPct}&#8239;%`],
+      ['Nodo', waypointLabel(s)],
+    ])
+  );
 }
 
 function basePopup(item: MapItem): string {
   const s = item.status;
-  return `<strong>${esc(item.base!.name)}</strong>
-    <div>Dron: ${esc(item.displayName)}</div>
-    <div>Batería: ${s ? `${s.battery.toFixed(0)}%` : 'sin datos'}</div>
-    <div>Señal: ${s ? `${s.signalPct}%` : 'sin datos'}</div>
-    <div>Nodo: ${s ? waypointLabel(s) : 'sin datos'}</div>`;
+  const sinDatos = '<span class="muted">sin datos</span>';
+  return (
+    titulo('Base', item.base!.name) +
+    ficha([
+      ['Dron', esc(item.displayName)],
+      ['Batería', s ? `${s.battery.toFixed(0)}&#8239;%` : sinDatos],
+      ['Señal', s ? `${s.signalPct}&#8239;%` : sinDatos],
+      ['Nodo', s ? waypointLabel(s) : sinDatos],
+    ])
+  );
 }
 
 /** Lo que se ve al pasar el mouse por encima del nodo. */
 function waypointTooltip(index: number, label?: string): string {
   return esc(label || `Nodo ${index + 1}`);
 }
+
+// Lápiz de trazo: el tema no admite glifos sueltos, no siguen el peso del dibujo
+const LAPIZ = `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
+    stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="display:block" aria-hidden="true">
+    <path d="M11.9 2.6 13.4 4.1 5 12.5 2.9 13.1 3.5 11z"/><path d="M10.4 4.1 11.9 5.6"/></svg>`;
 
 /**
  * El popup arranca mostrando el apodo; el lápiz de la esquina alterna al modo
@@ -127,20 +210,111 @@ function waypointPopup(
     (canForce ? '<button class="wp-force" type="button">Forzar ruta</button>' : '') +
     (canContinue ? '<button class="wp-continue" type="button">Continuar desde acá</button>' : '');
   return `<div class="wp-popup" data-label="${esc(label ?? '')}">
-      <strong>Nodo ${index + 1} de ${total}</strong>
-      <div class="wp-nombre">${label ? esc(label) : '<span class="muted">Sin apodo</span>'}</div>
+      <span class="etiqueta">Nodo ${index + 1} de ${total}</span>
+      <div class="wp-nombre">${
+        label ? `<h4 style="font-size:var(--txt-md)">${esc(label)}</h4>` : '<span class="muted">Sin apodo</span>'
+      }</div>
       <div class="wp-form">
         <input class="wp-alias" maxlength="40" placeholder="Apodo del nodo" value="${esc(label ?? '')}">
         <button class="wp-save" type="button">Guardar</button>
       </div>
       ${acciones ? `<div class="wp-acciones">${acciones}</div>` : ''}
-      <button class="wp-edit" type="button" title="Editar apodo" aria-label="Editar apodo">✎</button>
+      <button class="wp-edit" type="button" title="Editar apodo" aria-label="Editar apodo">${LAPIZ}</button>
     </div>`;
 }
 
 function setPopup(marker: L.Marker, html: string) {
   if (marker.getPopup()) marker.setPopupContent(html);
   else marker.bindPopup(html, { autoPan: false });
+}
+
+/* --- Vestir el mobiliario de Leaflet -------------------------------------- */
+/* Leaflet inyecta sus controles, globos y etiquetas fuera del alcance de las
+   hojas de la consola (son nodos suyos, con sus clases y sus grises de
+   fábrica). Se los viste acá, con los mismos tokens, para que el mapa no
+   desentone con la piedra. */
+
+function vestir(el: HTMLElement | null | undefined, estilos: Record<string, string>) {
+  if (!el) return;
+  for (const [prop, valor] of Object.entries(estilos)) el.style.setProperty(prop, valor);
+}
+
+const SVG_CRUZ = `<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor"
+    stroke-width="1.5" stroke-linecap="round" style="display:block" aria-hidden="true">
+    <path d="M4.2 4.2 11.8 11.8M11.8 4.2 4.2 11.8"/></svg>`;
+
+function vestirGlobo(popup: L.Popup) {
+  const el = popup.getElement();
+  if (!el) return;
+  vestir(el.querySelector<HTMLElement>('.leaflet-popup-content-wrapper'), {
+    background: 'var(--marmol-0)',
+    color: 'var(--tinta)',
+    border: '1px solid var(--veta)',
+    'border-radius': 'var(--radio)',
+    'box-shadow': 'var(--sombra-flotante)',
+  });
+  vestir(el.querySelector<HTMLElement>('.leaflet-popup-content'), {
+    margin: 'var(--e-4)',
+    'line-height': 'var(--interlinea)',
+  });
+  vestir(el.querySelector<HTMLElement>('.leaflet-popup-tip'), {
+    background: 'var(--marmol-0)',
+    'box-shadow': 'none',
+  });
+  const cerrar = el.querySelector<HTMLElement>('.leaflet-popup-close-button');
+  vestir(cerrar, { color: 'var(--tinta-suave)', display: 'grid', 'place-items': 'center' });
+  // Leaflet cierra con un "×" de texto y un rótulo en inglés: los dos se cambian
+  if (cerrar && !cerrar.querySelector('svg')) {
+    cerrar.setAttribute('aria-label', 'Cerrar');
+    cerrar.innerHTML = SVG_CRUZ;
+  }
+}
+
+function vestirEtiqueta(tooltip: L.Tooltip) {
+  vestir(tooltip.getElement(), {
+    background: 'var(--marmol-0)',
+    border: '1px solid var(--veta)',
+    'border-radius': 'var(--radio-chico)',
+    color: 'var(--tinta)',
+    'box-shadow': 'var(--sombra-suave)',
+    padding: '3px 9px',
+    'font-size': 'var(--txt-xs)',
+    'font-weight': '600',
+    'letter-spacing': 'var(--versalita)',
+    'text-transform': 'uppercase',
+  });
+}
+
+const SVG_MAS =
+  '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4.6v10.8M4.6 10h10.8" stroke-linecap="round"/></svg>';
+const SVG_MENOS = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4.6 10h10.8" stroke-linecap="round"/></svg>';
+
+function botonMapa(etiqueta: string, svg: string, alClickear: () => void): HTMLButtonElement {
+  const b = L.DomUtil.create('button', 'icono-boton') as HTMLButtonElement;
+  b.type = 'button';
+  b.title = etiqueta;
+  b.setAttribute('aria-label', etiqueta);
+  b.innerHTML = svg;
+  L.DomEvent.on(b, 'click', (ev) => {
+    L.DomEvent.stop(ev);
+    alClickear();
+  });
+  return b;
+}
+
+/** Reemplazo del control de zoom de fábrica por dos botones de mármol. */
+function controlZoom(map: L.Map): L.Control {
+  const control = new L.Control({ position: 'topleft' });
+  control.onAdd = () => {
+    const caja = L.DomUtil.create('div', 'leaflet-control');
+    vestir(caja, { display: 'flex', 'flex-direction': 'column', gap: 'var(--e-2)' });
+    caja.appendChild(botonMapa('Acercar', SVG_MAS, () => map.zoomIn()));
+    caja.appendChild(botonMapa('Alejar', SVG_MENOS, () => map.zoomOut()));
+    L.DomEvent.disableClickPropagation(caja);
+    L.DomEvent.disableScrollPropagation(caja);
+    return caja;
+  };
+  return control;
 }
 
 /**
@@ -196,11 +370,27 @@ export default function DronesMap({
   };
 
   useEffect(() => {
-    const map = L.map(containerRef.current!).setView(CENTER, 15);
+    const map = L.map(containerRef.current!, { zoomControl: false }).setView(CENTER, 15);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
       attribution: '&copy; OpenStreetMap',
     }).addTo(map);
+    vestir(map.getPane('tilePane'), { filter: LAVADO_MARMOL });
+    // Sin la banderita de fábrica: es lo único de color frío que quedaba
+    map.attributionControl.setPrefix('Leaflet');
+    vestir(map.attributionControl.getContainer(), {
+      background: 'var(--marmol-0)',
+      color: 'var(--tinta-media)',
+      'font-size': 'var(--txt-xxs)',
+      padding: '2px 8px',
+      'border-top': '1px solid var(--veta)',
+      'border-left': '1px solid var(--veta)',
+      'border-top-left-radius': 'var(--radio-chico)',
+    });
+    controlZoom(map).addTo(map);
+    // Un solo par de handlers alcanza: valen para cualquier globo o etiqueta
+    map.on('popupopen', (e) => vestirGlobo(e.popup));
+    map.on('tooltipopen', (e) => vestirEtiqueta(e.tooltip));
     mapRef.current = map;
     return () => {
       map.remove();
@@ -253,18 +443,8 @@ export default function DronesMap({
       const heading = item.status.heading;
       if (typeof heading === 'number' && !EN_TIERRA.includes(item.status.state)) {
         const pts = coneLatLngs(item.status.lat, item.status.lon, heading);
-        if (!l.cone) {
-          l.cone = L.polygon(pts, {
-            color: '#4da3ff',
-            weight: 1,
-            opacity: 0.4,
-            fillColor: '#4da3ff',
-            fillOpacity: 0.15,
-            interactive: false,
-          }).addTo(map);
-        } else {
-          l.cone.setLatLngs(pts);
-        }
+        if (!l.cone) l.cone = L.polygon(pts, CONE_STYLE).addTo(map);
+        else l.cone.setLatLngs(pts);
       } else if (l.cone) {
         l.cone.remove();
         l.cone = undefined;

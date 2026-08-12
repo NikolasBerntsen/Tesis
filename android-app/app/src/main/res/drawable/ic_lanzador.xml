@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ícono de la app. Reemplaza a @android:drawable/ic_menu_mylocation, que era
+     prestado del sistema y no tenía nada que ver con la estética. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_lanzador_fondo" />
+    <foreground android:drawable="@drawable/ic_lanzador_frente" />
+</adaptive-icon>

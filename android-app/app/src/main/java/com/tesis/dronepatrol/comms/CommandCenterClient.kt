@@ -2,7 +2,9 @@ package com.tesis.dronepatrol.comms
 
 import com.tesis.dronepatrol.model.DroneBase
 import com.tesis.dronepatrol.model.DroneProfile
+import com.tesis.dronepatrol.model.Emparejamiento
 import com.tesis.dronepatrol.model.PatrolRoute
+import com.tesis.dronepatrol.model.SesionOperador
 import com.tesis.dronepatrol.model.Waypoint
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
@@ -22,8 +24,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Cliente REST + WebSocket contra el Comando Central. Se autentica con JWT
- * (usuario con rol "drone") y reconecta solo si se cae el socket.
+ * Cliente REST + WebSocket contra el Comando Central. Lleva un solo JWT por vez:
+ * primero el del operador de campo (efímero, para emparejar) y después el del
+ * dron, que es con el que se abre el WebSocket. Reconecta solo si se cae el socket.
  */
 class CommandCenterClient(private val scope: CoroutineScope) {
 
@@ -50,10 +53,13 @@ class CommandCenterClient(private val scope: CoroutineScope) {
     private var ws: WebSocket? = null
     private var wantConnected = false
 
-    /** Solo autentica y guarda el JWT; el WebSocket se abre aparte con [connect]. */
-    suspend fun login(baseUrl: String, username: String, password: String) {
-        this.baseUrl = baseUrl.trimEnd('/')
-        token = withContext(Dispatchers.IO) {
+    /**
+     * Autentica al operador de campo y guarda su JWT efímero. No abre el
+     * WebSocket: eso pasa recién cuando el cliente toma la identidad del dron.
+     */
+    suspend fun login(baseUrl: String, username: String, password: String): SesionOperador =
+        withContext(Dispatchers.IO) {
+            this@CommandCenterClient.baseUrl = baseUrl.trim().trimEnd('/')
             val body = JSONObject().put("username", username).put("password", password)
             val res: Response = http.newCall(
                 Request.Builder()
@@ -62,11 +68,100 @@ class CommandCenterClient(private val scope: CoroutineScope) {
                     .build(),
             ).execute()
             res.use {
-                if (it.code == 401) error("Usuario o contraseña incorrectos")
-                if (!it.isSuccessful) error("Login falló: HTTP ${it.code}")
-                JSONObject(it.body!!.string()).getString("token")
+                val cuerpo = it.body?.string().orEmpty()
+                if (it.code == 401) error(errorDelCuerpo(cuerpo) ?: "Usuario o contraseña incorrectos")
+                if (!it.isSuccessful) error(errorDelCuerpo(cuerpo) ?: "El login falló: HTTP ${it.code}")
+                val o = JSONObject(cuerpo)
+                token = o.getString("token")
+                val usuario = o.optJSONObject("user")
+                SesionOperador(
+                    username = usuario?.optString("username").orEmpty().ifEmpty { username },
+                    role = usuario?.optString("role").orEmpty(),
+                    expiresIn = o.optLong("expiresIn", 0L),
+                )
             }
         }
+
+    /**
+     * Empareja el dron del QR con el JWT del operador de campo. La ubicación es
+     * opcional: si el operador no dio permiso de GPS el emparejamiento igual
+     * procede y el registro queda sin coordenadas.
+     */
+    suspend fun emparejarDron(
+        hash: String,
+        lat: Double? = null,
+        lon: Double? = null,
+        accuracyM: Double? = null,
+        deviceModel: String = "",
+    ): Emparejamiento = withContext(Dispatchers.IO) {
+        val body = JSONObject()
+            .put("hash", hash)
+            .put("lat", lat ?: JSONObject.NULL)
+            .put("lon", lon ?: JSONObject.NULL)
+            .put("accuracyM", accuracyM ?: JSONObject.NULL)
+            .put("deviceModel", deviceModel)
+        val res = http.newCall(
+            Request.Builder()
+                .url("$baseUrl/api/drones/pair")
+                .header("Authorization", "Bearer $token")
+                .post(body.toString().toRequestBody(json))
+                .build(),
+        ).execute()
+        res.use {
+            val cuerpo = it.body?.string().orEmpty()
+            when {
+                it.code == 401 -> error("La sesión del operador de campo venció: iniciá sesión de nuevo")
+                it.code == 403 -> error(errorDelCuerpo(cuerpo) ?: "El dron está inactivo o no lo podés emparejar")
+                it.code == 404 -> error(errorDelCuerpo(cuerpo) ?: "Ese QR no corresponde a ningún dron registrado")
+                !it.isSuccessful -> error(errorDelCuerpo(cuerpo) ?: "El emparejamiento falló: HTTP ${it.code}")
+            }
+            val o = JSONObject(cuerpo)
+            Emparejamiento(token = o.getString("token"), drone = fichaDeDron(o.getJSONObject("drone")))
+        }
+    }
+
+    /**
+     * El cliente pasa a hablar como el dron recién emparejado y descarta el JWT
+     * del operador de campo: su sesión efímera termina acá. [baseUrl] vacía deja
+     * la que ya estaba.
+     */
+    fun usarTokenDeDron(token: String, baseUrl: String = "") {
+        if (baseUrl.isNotBlank()) this.baseUrl = baseUrl.trim().trimEnd('/')
+        this.token = token
+    }
+
+    /**
+     * Le avisa al Comando Central que la sesión se cierra, para que el cierre
+     * quede en el registro con su motivo. Va a la buena de Dios: en el campo la
+     * conexión se corta sola, y si el aviso no llega el JWT se descarta igual y
+     * la sesión efímera muere por vencimiento.
+     */
+    private fun avisarCierre(motivo: String) {
+        val urlBase = baseUrl
+        val jwt = token
+        if (urlBase.isEmpty() || jwt.isEmpty()) return
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                http.newCall(
+                    Request.Builder()
+                        .url("$urlBase/api/auth/logout")
+                        .header("Authorization", "Bearer $jwt")
+                        .post(JSONObject().put("motivo", motivo).toString().toRequestBody(json))
+                        .build(),
+                ).execute().close()
+            }
+        }
+    }
+
+    /**
+     * Cierra la sesión: avisa al Comando Central, corta el socket y tira el JWT.
+     * Sin [motivo] no se avisa (sirve para descartar una sesión que nunca llegó
+     * a abrirse, como la de un rol sin permiso).
+     */
+    fun cerrarSesion(motivo: String = "") {
+        if (motivo.isNotEmpty()) avisarCierre(motivo)
+        disconnect()
+        token = ""
     }
 
     fun connect() {
@@ -82,7 +177,7 @@ class CommandCenterClient(private val scope: CoroutineScope) {
         connected.value = false
     }
 
-    /** Ficha del dron autenticado: nombre visible y base a la que vuelve. */
+    /** Ficha del dron autenticado: nombre visible, modelo y base a la que vuelve. */
     suspend fun fetchProfile(): DroneProfile = withContext(Dispatchers.IO) {
         val res = http.newCall(
             Request.Builder()
@@ -93,13 +188,8 @@ class CommandCenterClient(private val scope: CoroutineScope) {
         res.use {
             if (!it.isSuccessful) error("No se pudo leer la ficha del dron: HTTP ${it.code}")
             val o = JSONObject(it.body!!.string())
-            if (o.optString("role") != "drone") error("La cuenta no es de un dron")
-            val base = o.optJSONObject("base")
-            DroneProfile(
-                droneId = o.getString("droneId"),
-                displayName = o.getString("displayName"),
-                base = base?.let { b -> DroneBase(b.getString("name"), b.getDouble("lat"), b.getDouble("lon")) },
-            )
+            if (o.optString("role") != "drone") error("El token no es de un dron")
+            fichaDeDron(o)
         }
     }
 
@@ -128,10 +218,35 @@ class CommandCenterClient(private val scope: CoroutineScope) {
         }
     }
 
+    /**
+     * El dron llega por `hash`, `droneId` o `username` según de dónde venga la
+     * ficha (POST /api/drones/pair o GET /api/me): todos son el mismo hash.
+     */
+    private fun fichaDeDron(o: JSONObject): DroneProfile {
+        val base = o.optJSONObject("base")
+        return DroneProfile(
+            hash = listOf("hash", "droneId", "username")
+                .firstNotNullOfOrNull { clave -> o.optString(clave).takeIf { valor -> valor.isNotBlank() } }
+                ?: error("La ficha del dron no trae su identificador"),
+            displayName = o.optString("displayName"),
+            model = o.optString("model"),
+            base = base?.let { b -> DroneBase(b.getString("name"), b.getDouble("lat"), b.getDouble("lon")) },
+        )
+    }
+
+    /** El backend contesta los errores como {"error": "..."}; si no, null. */
+    private fun errorDelCuerpo(cuerpo: String): String? =
+        runCatching { JSONObject(cuerpo).optString("error").takeIf { it.isNotBlank() } }.getOrNull()
+
+    /** El socket sigue el esquema de la base: si es https, va por wss. */
+    private fun urlDelWebSocket(): String {
+        val esquema = if (baseUrl.startsWith("http://", ignoreCase = true)) "ws://" else "wss://"
+        return esquema + baseUrl.substringAfter("://", baseUrl) + "/ws?token=$token"
+    }
+
     private fun openWebSocket() {
-        val wsUrl = baseUrl.replaceFirst("http", "ws") + "/ws?token=$token"
         ws = http.newWebSocket(
-            Request.Builder().url(wsUrl).build(),
+            Request.Builder().url(urlDelWebSocket()).build(),
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     connected.value = true

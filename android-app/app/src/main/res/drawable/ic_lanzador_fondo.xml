@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Fondo del ícono: la placa de mármol. Acá la veta se sube un poco de alfa
+     porque a 48dp la del fondo de la app directamente no existiría. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="@color/marmol_1"
+        android:pathData="M0,0h108v108h-108z" />
+    <path
+        android:pathData="M-4,26 C22,14 38,44 62,34 C82,26 92,8 112,16"
+        android:strokeAlpha="0.10"
+        android:strokeColor="@color/veta_fuerte"
+        android:strokeWidth="2.5" />
+    <path
+        android:pathData="M-4,84 C24,72 40,98 64,90 C86,82 96,96 112,90"
+        android:strokeAlpha="0.09"
+        android:strokeColor="@color/veta_fuerte"
+        android:strokeWidth="2" />
+    <path
+        android:pathData="M-4,30 C22,18 38,48 62,38 C82,30 92,12 112,20"
+        android:strokeAlpha="0.10"
+        android:strokeColor="@color/oro_lamina_medio"
+        android:strokeWidth="1.5" />
+</vector>

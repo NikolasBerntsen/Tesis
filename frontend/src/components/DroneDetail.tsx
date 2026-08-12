@@ -12,6 +12,27 @@ import LiveVideo from './LiveVideo';
 // "Retomar ruta" y "Continuar desde acá" en los nodos.
 const INTERRUMPIDO = ['MANUAL', 'FORCED', 'PAUSED'];
 
+const TRAZO = {
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeWidth: 1.5,
+  strokeLinecap: 'round',
+  strokeLinejoin: 'round',
+  'aria-hidden': true,
+} as const;
+
+/**
+ * Flecha del pad de control. Se dibuja una sola vez y se rota por rumbo con un
+ * `transform` del SVG: así los cuatro botones comparten el mismo trazo grabado.
+ */
+function Flecha({ rumbo }: { rumbo: number }) {
+  return (
+    <svg width="22" height="22" viewBox="0 0 18 18" {...TRAZO}>
+      <path d="M9 14.6V4.2M4.4 8.8 9 4.2l4.6 4.6" transform={`rotate(${rumbo} 9 9)`} />
+    </svg>
+  );
+}
+
 export default function DroneDetail({
   me,
   drone,
@@ -123,33 +144,48 @@ export default function DroneDetail({
     <main className="detail-main">
       <div className="detail-head">
         <button className="ghost" onClick={onBack}>
-          ← Volver al dashboard
+          <svg width="15" height="15" viewBox="0 0 16 16" {...TRAZO} style={{ verticalAlign: '-2px' }}>
+            <path d="M13 8H3.4M7.4 3.4 3 8l4.4 4.6" />
+          </svg>{' '}
+          Volver a Drones
         </button>
         <h2>
           <EditableName name={drone.displayName} onRename={onRename} />
         </h2>
-        <span className={drone.online ? 'ok' : 'muted'}>{drone.online ? 'En vuelo' : 'Desconectado'}</span>
-        {controlador && <span className="badge person">Control manual: {controlador}</span>}
-        {error && <span className="bad">{error}</span>}
+        <span className={`estado ${drone.online ? 'ok' : 'muted'}`}>
+          {drone.online ? 'En vuelo' : 'Desconectado'}
+        </span>
+        {controlador && <span className="badge oro">Control manual: {controlador}</span>}
       </div>
+      {/* El error va en su propia línea: dentro del encabezado empujaba el nombre */}
+      {error && (
+        <p className="aviso malo" role="alert">
+          {error}
+        </p>
+      )}
       <div className="grid">
         <section className="col">
           <DroneStatusCard status={status} onResumePatrol={retomar} />
 
-          <div className="card patrol-card">
+          <div className="card">
             <h2>Patrullaje</h2>
-            <p className="muted">
-              Ruta actual:{' '}
+            <div className="hueco">
+              <div className="etiqueta">Ruta actual</div>
               {rutaActiva ? (
-                <strong className="accent">
+                <div className="cifra-chica accent">
                   {rutaActiva.name} · nodo {(status?.waypointIndex ?? 0) + 1} de {rutaActiva.waypoints.length}
-                </strong>
+                </div>
               ) : (
-                'ninguna'
+                <div className="muted">Ninguna</div>
               )}
-            </p>
+            </div>
+            <hr className="regla" />
             <div className="ruta-controles">
-              <select value={rutaElegida} onChange={(e) => setRutaElegida(e.target.value ? Number(e.target.value) : '')}>
+              <select
+                aria-label="Ruta de patrullaje"
+                value={rutaElegida}
+                onChange={(e) => setRutaElegida(e.target.value ? Number(e.target.value) : '')}
+              >
                 <option value="">Elegir ruta…</option>
                 {routes.map((r) => (
                   <option key={r.id} value={r.id}>
@@ -157,7 +193,7 @@ export default function DroneDetail({
                   </option>
                 ))}
               </select>
-              <button onClick={comenzarRuta} disabled={!rutaElegida || !drone.online}>
+              <button className="primario" onClick={comenzarRuta} disabled={!rutaElegida || !drone.online}>
                 Comenzar
               </button>
               <button onClick={interrumpirRuta} disabled={!drone.online || status?.state !== 'PATROLLING'}>
@@ -167,22 +203,34 @@ export default function DroneDetail({
           </div>
 
           {puedeControlar && (
-            <div className="card">
+            <div className="card con-esquina">
               <h2>Control del dron</h2>
               {!controlador && (
-                <button onClick={tomarControl} disabled={!drone.online}>
+                <button className="primario" onClick={tomarControl} disabled={!drone.online}>
                   Tomar control manual
                 </button>
               )}
               {soyControlador && (
                 <div className="control-panel">
-                  <div className="pad">
-                    <button title="Norte" onClick={mover(0)}>▲</button>
-                    <div>
-                      <button title="Oeste" onClick={mover(270)}>◀</button>
-                      <button title="Este" onClick={mover(90)}>▶</button>
+                  {/* Plato hundido: el pad es la pieza más táctil de la consola
+                      y tiene que leerse como un instrumento grabado en la piedra */}
+                  <div className="pad-plato">
+                    <div className="pad">
+                      <button title="Norte" aria-label="Mover al norte" onClick={mover(0)}>
+                        <Flecha rumbo={0} />
+                      </button>
+                      <div>
+                        <button title="Oeste" aria-label="Mover al oeste" onClick={mover(270)}>
+                          <Flecha rumbo={270} />
+                        </button>
+                        <button title="Este" aria-label="Mover al este" onClick={mover(90)}>
+                          <Flecha rumbo={90} />
+                        </button>
+                      </div>
+                      <button title="Sur" aria-label="Mover al sur" onClick={mover(180)}>
+                        <Flecha rumbo={180} />
+                      </button>
                     </div>
-                    <button title="Sur" onClick={mover(180)}>▼</button>
                   </div>
                   <p className="muted">Cada toque desplaza el dron 25 m en esa dirección.</p>
                   <button className="resume" onClick={soltarControl}>
@@ -218,6 +266,12 @@ export default function DroneDetail({
               </button>
             </div>
             <DronesMap items={items} alwaysShowLine waypoints={waypoints} />
+            <div className="mapa-leyenda">
+              <span className="estado accent">Dron</span>
+              <span className="estado">Base</span>
+              <span className="estado bad">Nodo pendiente</span>
+              <span className="estado ok">Nodo recorrido</span>
+            </div>
           </div>
           <LiveVideo frame={frame} />
           <EventLog events={events} />

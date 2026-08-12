@@ -48,8 +48,16 @@ describe('LoginForm', () => {
     await userEvent.type(screen.getByLabelText('Contraseña'), 'mala');
     await userEvent.click(screen.getByRole('button', { name: 'Ingresar' }));
 
-    expect(await screen.findByText('Credenciales inválidas')).toBeInTheDocument();
+    // El error se anuncia solo (role=alert): el foco se queda en el campo.
+    expect(await screen.findByRole('alert')).toHaveTextContent('Credenciales inválidas');
     expect(onLogin).not.toHaveBeenCalled();
+  });
+
+  it('arma la placa de ingreso: título, subtítulo y filigrana separadora', () => {
+    const { container } = render(<LoginForm onLogin={() => {}} />);
+    expect(screen.getByRole('heading', { name: 'Comando Central' })).toBeInTheDocument();
+    expect(screen.getByText('Sistema de patrullaje con drones')).toBeInTheDocument();
+    expect(container.querySelector('.login-card .regla-ornamental')).not.toBeNull();
   });
 
   it('muestra un error genérico si lo lanzado no es un Error', async () => {

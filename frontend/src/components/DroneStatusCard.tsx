@@ -1,6 +1,20 @@
 import { batteryClass, signalClass, stateLabel, waypointLabel } from '../format';
 import type { DroneStatus } from '../types';
 
+/**
+ * Hairline con relleno dorado en lugar de una barra de progreso: el nivel se
+ * capta de un vistazo sin leer la cifra. Queda fuera del árbol de
+ * accesibilidad porque la cifra de arriba ya dice exactamente lo mismo.
+ */
+function Medidor({ pct }: { pct: number }) {
+  const nivel = Math.min(100, Math.max(0, pct));
+  return (
+    <div className="medidor" aria-hidden="true">
+      <span className="medidor-relleno" style={{ width: `${nivel}%` }} />
+    </div>
+  );
+}
+
 export default function DroneStatusCard({
   status,
   onResumePatrol,
@@ -10,45 +24,79 @@ export default function DroneStatusCard({
 }) {
   if (!status) {
     return (
-      <div className="card">
+      <div className="card con-esquina">
         <h2>Estado del dron</h2>
-        <p className="muted">Sin datos — el dron todavía no reportó estado.</p>
+        <p className="vacio">Sin datos — el dron todavía no reportó estado.</p>
       </div>
     );
   }
+
+  const sinSenal = status.signal !== 'OK';
+  const recorrido = status.waypointTotal
+    ? ((status.waypointIndex + 1) / status.waypointTotal) * 100
+    : 0;
+
   return (
     <div className="card">
       <h2>Estado del dron</h2>
+
+      {/* Las tres cifras que el operador mira primero: van grabadas en grande
+          y con la unidad chica, para que se lean antes que nada. */}
       <div className="status-grid">
         <div>
-          <span className="muted">Estado</span>
+          <span>Batería</span>
+          <span className={`cifra ${batteryClass(status.battery)}`}>
+            {status.battery.toFixed(0)}
+            <span className="cifra-unidad versalita">%</span>
+          </span>
+          <Medidor pct={status.battery} />
+        </div>
+        <div>
+          <span>Señal RC</span>
+          {sinSenal ? (
+            <span className="cifra-chica estado bad">PERDIDA</span>
+          ) : (
+            <span className={`cifra ${signalClass(status.signalPct)}`}>
+              {status.signalPct}
+              <span className="cifra-unidad versalita">%</span>
+            </span>
+          )}
+          <Medidor pct={sinSenal ? 0 : status.signalPct} />
+        </div>
+        <div>
+          <span>Nodo</span>
+          {status.waypointTotal > 0 ? (
+            <>
+              <span className="cifra">{waypointLabel(status)}</span>
+              <Medidor pct={recorrido} />
+            </>
+          ) : (
+            /* Sin ruta cargada la raya no es un dato: en cuerpo de cifra
+               parecería un separador grabado, así que va chica y apagada. */
+            <span className="cifra-chica muted">{waypointLabel(status)}</span>
+          )}
+        </div>
+      </div>
+
+      <hr className="regla-ornamental" />
+
+      <div className="status-grid">
+        <div>
+          <span>Estado</span>
           <strong className={status.state === 'ORBITING' ? 'accent' : ''}>{stateLabel(status.state)}</strong>
         </div>
         <div>
-          <span className="muted">Batería</span>
-          <strong className={batteryClass(status.battery)}>{status.battery.toFixed(0)}%</strong>
+          <span>Modo</span>
+          <strong>{status.mode}</strong>
         </div>
         <div>
-          <span className="muted">Señal RC</span>
-          <strong className={status.signal === 'OK' ? signalClass(status.signalPct) : 'bad'}>
-            {status.signal === 'OK' ? `${status.signalPct}%` : 'PERDIDA'}
-          </strong>
-        </div>
-        <div>
-          <span className="muted">Nodo del patrullaje</span>
-          <strong>{waypointLabel(status)}</strong>
-        </div>
-        <div>
-          <span className="muted">Posición</span>
+          <span>Posición</span>
           <strong>
             {status.lat.toFixed(5)}, {status.lon.toFixed(5)}
           </strong>
         </div>
-        <div>
-          <span className="muted">Modo</span>
-          <strong>{status.mode}</strong>
-        </div>
       </div>
+
       {status.state === 'ORBITING' && (
         <button className="resume" onClick={onResumePatrol}>
           Reanudar patrullaje

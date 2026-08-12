@@ -10,7 +10,7 @@ describe('EditableName', () => {
     expect(screen.getByTitle('Renombrar dron')).toBeInTheDocument();
   });
 
-  it('entra en edición y guarda un nombre nuevo con el botón ✓', async () => {
+  it('entra en edición y guarda un nombre nuevo con el botón de guardar', async () => {
     const onRename = vi.fn();
     render(<EditableName name="Alfa" onRename={onRename} />);
     await userEvent.click(screen.getByTitle('Renombrar dron'));
@@ -62,7 +62,7 @@ describe('EditableName', () => {
     expect(screen.getByText('Alfa')).toBeInTheDocument();
   });
 
-  it('cancela con el botón ✕', async () => {
+  it('cancela con el botón de cancelar', async () => {
     const onRename = vi.fn();
     render(<EditableName name="Alfa" onRename={onRename} />);
     await userEvent.click(screen.getByTitle('Renombrar dron'));

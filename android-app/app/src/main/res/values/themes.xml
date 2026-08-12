@@ -1,24 +1,296 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.DronePatrol" parent="Theme.Material3.DayNight.NoActionBar" />
+    <!-- "Mármol y oro". La app es clara a propósito: no hay tema oscuro, así que
+         el tema hereda de Light y no de DayNight (con DayNight el sistema nos
+         daba una paleta oscura que rompía toda la estética). -->
+    <style name="Theme.DronePatrol" parent="Theme.Material3.Light.NoActionBar">
 
-    <!-- Título que va arriba de cada campo del formulario de login -->
+        <!-- El oro que Material usa como color de texto (botones de texto,
+             cursores, enlaces) tiene que ser el oscuro: es el único de la
+             familia que llega a AA sobre mármol (4.8:1). -->
+        <item name="colorPrimary">@color/oro_oscuro</item>
+        <item name="colorOnPrimary">@color/marmol_0</item>
+        <item name="colorPrimaryContainer">@color/oro_claro</item>
+        <item name="colorOnPrimaryContainer">@color/tinta</item>
+
+        <item name="colorSecondary">@color/tinta_media</item>
+        <item name="colorOnSecondary">@color/marmol_0</item>
+        <item name="colorSecondaryContainer">@color/marmol_2</item>
+        <item name="colorOnSecondaryContainer">@color/tinta</item>
+
+        <item name="colorTertiary">@color/estado_info</item>
+        <item name="colorOnTertiary">@color/marmol_0</item>
+        <item name="colorTertiaryContainer">@color/estado_info_tenue</item>
+        <item name="colorOnTertiaryContainer">@color/tinta</item>
+
+        <item name="colorError">@color/estado_peligro</item>
+        <item name="colorOnError">@color/marmol_0</item>
+        <item name="colorErrorContainer">@color/estado_peligro_tenue</item>
+        <item name="colorOnErrorContainer">@color/estado_peligro</item>
+
+        <!-- Superficies: la ventana es la placa de mármol, las tarjetas van un
+             tono por encima -->
+        <item name="android:colorBackground">@color/marmol_0</item>
+        <item name="colorOnBackground">@color/tinta</item>
+        <item name="colorSurface">@color/marmol_1</item>
+        <item name="colorOnSurface">@color/tinta</item>
+        <item name="colorSurfaceVariant">@color/marmol_2</item>
+        <item name="colorOnSurfaceVariant">@color/tinta_media</item>
+        <item name="colorSurfaceDim">@color/marmol_2</item>
+        <item name="colorSurfaceBright">@color/marmol_0</item>
+        <item name="colorSurfaceContainerLowest">@color/marmol_0</item>
+        <item name="colorSurfaceContainerLow">@color/marmol_1</item>
+        <item name="colorSurfaceContainer">@color/marmol_1</item>
+        <item name="colorSurfaceContainerHigh">@color/marmol_2</item>
+        <item name="colorSurfaceContainerHighest">@color/marmol_3</item>
+        <item name="colorSurfaceInverse">@color/tinta</item>
+        <item name="colorOnSurfaceInverse">@color/marmol_0</item>
+
+        <!-- Todo borde de la interfaz es una veta de la piedra -->
+        <item name="colorOutline">@color/veta_fuerte</item>
+        <item name="colorOutlineVariant">@color/veta</item>
+
+        <item name="colorControlNormal">@color/tinta_media</item>
+        <item name="colorControlActivated">@color/oro_oscuro</item>
+        <item name="colorControlHighlight">@color/pulsacion_oro</item>
+
+        <item name="android:textColorPrimary">@color/tinta</item>
+        <item name="android:textColorSecondary">@color/tinta_media</item>
+        <item name="android:textColorTertiary">@color/tinta_suave</item>
+        <item name="android:textColorHint">@color/tinta_suave</item>
+        <item name="android:textColorLink">@color/oro_oscuro</item>
+        <item name="android:textColorHighlight">@color/oro_claro</item>
+
+        <!-- La veta del mármol vive en el fondo de ventana; las tarjetas quedan
+             lisas para que la piedra se lea como una placa pulida -->
+        <item name="android:windowBackground">@drawable/fondo_marmol</item>
+        <item name="android:statusBarColor">@color/marmol_0</item>
+        <item name="android:navigationBarColor">@color/marmol_0</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+
+        <!-- Títulos con serif; el resto de la tipografía la deja Material -->
+        <item name="textAppearanceHeadlineSmall">@style/TextAppearance.DronePatrol.Titulo</item>
+        <item name="textAppearanceTitleLarge">@style/TextAppearance.DronePatrol.TituloSeccion</item>
+
+        <!-- Widgets por defecto: así un layout nuevo ya sale con la estética -->
+        <item name="materialCardViewStyle">@style/Widget.DronePatrol.Tarjeta</item>
+        <item name="materialButtonStyle">@style/Widget.DronePatrol.Boton</item>
+        <item name="materialButtonOutlinedStyle">@style/Widget.DronePatrol.Boton.Secundario</item>
+        <item name="borderlessButtonStyle">@style/Widget.DronePatrol.Boton.Texto</item>
+        <item name="textInputStyle">@style/Widget.DronePatrol.CampoTexto</item>
+        <item name="toolbarStyle">@style/Widget.DronePatrol.BarraSuperior</item>
+        <item name="appBarLayoutStyle">@style/Widget.DronePatrol.BarraSuperior.Contenedor</item>
+        <item name="linearProgressIndicatorStyle">@style/Widget.DronePatrol.BarraProgreso</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.DronePatrol.Dialogo</item>
+    </style>
+
+    <!-- ==================== Tipografía ==================== -->
+
+    <!-- Los títulos van en serif: es lo que le da el aire señorial. Sirven tanto
+         de textAppearance como de style suelto sobre un TextView. -->
+    <style name="TextAppearance.DronePatrol.Titulo" parent="TextAppearance.Material3.HeadlineSmall">
+        <item name="android:fontFamily">serif</item>
+        <item name="fontFamily">serif</item>
+        <item name="android:textColor">@color/tinta</item>
+        <item name="android:letterSpacing">0</item>
+    </style>
+
+    <style name="TextAppearance.DronePatrol.TituloSeccion" parent="TextAppearance.Material3.TitleLarge">
+        <item name="android:fontFamily">serif</item>
+        <item name="fontFamily">serif</item>
+        <item name="android:textColor">@color/tinta</item>
+        <item name="android:letterSpacing">0</item>
+    </style>
+
+    <!-- Cifra clave (batería, cuenta regresiva de la sesión efímera) -->
+    <style name="TextAppearance.DronePatrol.Cifra" parent="TextAppearance.Material3.HeadlineMedium">
+        <item name="android:fontFamily">serif</item>
+        <item name="fontFamily">serif</item>
+        <item name="android:textColor">@color/tinta</item>
+        <item name="android:letterSpacing">0</item>
+    </style>
+
+    <!-- Versalitas: encabezados de tarjeta y etiquetas de campo -->
+    <style name="TextAppearance.DronePatrol.Versalita" parent="TextAppearance.Material3.LabelSmall">
+        <item name="android:textSize">12sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textAllCaps">true</item>
+        <item name="android:letterSpacing">0.08</item>
+        <item name="android:textColor">@color/tinta_media</item>
+    </style>
+
+    <style name="TextAppearance.DronePatrol.Cuerpo" parent="TextAppearance.Material3.BodyMedium">
+        <item name="android:textColor">@color/tinta</item>
+    </style>
+
+    <style name="TextAppearance.DronePatrol.Apagado" parent="TextAppearance.Material3.BodySmall">
+        <item name="android:textSize">13sp</item>
+        <item name="android:textColor">@color/tinta_media</item>
+    </style>
+
+    <!-- Monoespaciada para hashes y marcas de tiempo -->
+    <style name="TextAppearance.DronePatrol.Mono" parent="TextAppearance.Material3.BodySmall">
+        <item name="android:fontFamily">monospace</item>
+        <item name="fontFamily">monospace</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:letterSpacing">0.02</item>
+        <item name="android:textColor">@color/tinta_media</item>
+    </style>
+
+    <!-- ==================== Widgets ==================== -->
+
+    <style name="Widget.DronePatrol.Tarjeta" parent="Widget.Material3.CardView.Outlined">
+        <item name="cardBackgroundColor">@color/marmol_1</item>
+        <item name="strokeColor">@color/veta</item>
+        <item name="strokeWidth">@dimen/borde_veta</item>
+        <item name="cardCornerRadius">@dimen/radio</item>
+        <item name="cardElevation">@dimen/elevacion_tarjeta</item>
+    </style>
+
+    <!-- Tarjeta activa o seleccionada: filo de oro, nunca relleno dorado -->
+    <style name="Widget.DronePatrol.Tarjeta.Filo" parent="Widget.DronePatrol.Tarjeta">
+        <item name="strokeColor">@color/oro</item>
+        <item name="strokeWidth">@dimen/grosor_filo</item>
+    </style>
+
+    <!-- Botón principal: lámina de oro con texto tinta (5.1:1). Los insets van
+         en cero para que el velo metálico calce exacto con el relleno. -->
+    <style name="Widget.DronePatrol.Boton" parent="Widget.Material3.Button">
+        <item name="backgroundTint">@color/relleno_boton_oro</item>
+        <item name="android:textColor">@color/texto_boton_oro</item>
+        <item name="android:foreground">@drawable/velo_metalico</item>
+        <item name="iconTint">@color/texto_boton_oro</item>
+        <item name="rippleColor">@color/pulsacion_tinta</item>
+        <item name="cornerRadius">@dimen/radio_chico</item>
+        <item name="elevation">0dp</item>
+        <item name="android:stateListAnimator">@null</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+        <item name="android:minHeight">@dimen/alto_boton</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:letterSpacing">0.02</item>
+    </style>
+
+    <!-- Botón secundario: mármol con borde de veta que vira a oro al tocarlo -->
+    <style name="Widget.DronePatrol.Boton.Secundario" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="backgroundTint">@color/marmol_1</item>
+        <item name="strokeColor">@color/borde_boton_secundario</item>
+        <item name="strokeWidth">@dimen/borde_veta</item>
+        <item name="android:textColor">@color/texto_boton_secundario</item>
+        <item name="iconTint">@color/texto_boton_secundario</item>
+        <item name="rippleColor">@color/pulsacion_oro</item>
+        <item name="cornerRadius">@dimen/radio_chico</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+        <item name="android:minHeight">@dimen/alto_boton</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:letterSpacing">0.02</item>
+    </style>
+
+    <style name="Widget.DronePatrol.Boton.Texto" parent="Widget.Material3.Button.TextButton">
+        <item name="android:textColor">@color/oro_oscuro</item>
+        <item name="iconTint">@color/oro_oscuro</item>
+        <item name="rippleColor">@color/pulsacion_oro</item>
+        <item name="cornerRadius">@dimen/radio_chico</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+        <item name="android:textAllCaps">false</item>
+    </style>
+
+    <style name="Widget.DronePatrol.Boton.Dialogo" parent="Widget.Material3.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/oro_oscuro</item>
+        <item name="rippleColor">@color/pulsacion_oro</item>
+        <item name="android:textAllCaps">false</item>
+    </style>
+
+    <style name="Widget.DronePatrol.CampoTexto" parent="Widget.Material3.TextInputLayout.OutlinedBox">
+        <item name="boxBackgroundColor">@color/marmol_0</item>
+        <item name="boxStrokeColor">@color/borde_campo</item>
+        <item name="boxStrokeErrorColor">@color/estado_peligro</item>
+        <item name="boxStrokeWidth">@dimen/borde_veta</item>
+        <item name="boxStrokeWidthFocused">@dimen/grosor_filo</item>
+        <item name="boxCornerRadiusTopStart">@dimen/radio_chico</item>
+        <item name="boxCornerRadiusTopEnd">@dimen/radio_chico</item>
+        <item name="boxCornerRadiusBottomStart">@dimen/radio_chico</item>
+        <item name="boxCornerRadiusBottomEnd">@dimen/radio_chico</item>
+        <item name="hintTextColor">@color/oro_oscuro</item>
+        <item name="android:textColorHint">@color/tinta_suave</item>
+        <item name="endIconTint">@color/tinta_media</item>
+    </style>
+
+    <style name="Widget.DronePatrol.CampoTexto.Menu" parent="Widget.Material3.TextInputLayout.OutlinedBox.ExposedDropdownMenu">
+        <item name="boxBackgroundColor">@color/marmol_0</item>
+        <item name="boxStrokeColor">@color/borde_campo</item>
+        <item name="boxStrokeWidth">@dimen/borde_veta</item>
+        <item name="boxStrokeWidthFocused">@dimen/grosor_filo</item>
+        <item name="boxCornerRadiusTopStart">@dimen/radio_chico</item>
+        <item name="boxCornerRadiusTopEnd">@dimen/radio_chico</item>
+        <item name="boxCornerRadiusBottomStart">@dimen/radio_chico</item>
+        <item name="boxCornerRadiusBottomEnd">@dimen/radio_chico</item>
+        <item name="hintTextColor">@color/oro_oscuro</item>
+        <item name="android:textColorHint">@color/tinta_suave</item>
+        <item name="endIconTint">@color/tinta_media</item>
+    </style>
+
+    <!-- La barra superior se apoya sobre la ventana y se separa con un filo de
+         oro de 1dp en lugar de la sombra dura del Material por defecto -->
+    <style name="Widget.DronePatrol.BarraSuperior" parent="Widget.Material3.Toolbar">
+        <item name="android:background">@drawable/fondo_barra_superior</item>
+        <item name="titleTextColor">@color/tinta</item>
+        <item name="subtitleTextColor">@color/tinta_media</item>
+        <item name="navigationIconTint">@color/tinta_media</item>
+    </style>
+
+    <style name="Widget.DronePatrol.BarraSuperior.Contenedor" parent="Widget.Material3.AppBarLayout">
+        <item name="android:background">@android:color/transparent</item>
+        <item name="elevation">0dp</item>
+        <item name="liftOnScroll">false</item>
+    </style>
+
+    <!-- El oro claro sobre mármol no llega a 3:1 y la barra transmite
+         información (batería, señal), así que la barra va en oro oscuro -->
+    <style name="Widget.DronePatrol.BarraProgreso" parent="Widget.Material3.LinearProgressIndicator">
+        <item name="indicatorColor">@color/oro_oscuro</item>
+        <item name="trackColor">@color/marmol_3</item>
+        <item name="trackThickness">@dimen/grosor_barra_progreso</item>
+        <item name="trackCornerRadius">4dp</item>
+    </style>
+
+    <!-- Línea de veta para separar bloques (alto y color ya resueltos) -->
+    <style name="Widget.DronePatrol.Divisor" parent="">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">@dimen/borde_veta</item>
+        <item name="android:background">@color/veta</item>
+    </style>
+
+    <style name="ThemeOverlay.DronePatrol.Dialogo" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorSurface">@color/marmol_1</item>
+        <item name="colorSurfaceContainerHigh">@color/marmol_1</item>
+        <item name="android:colorBackground">@color/marmol_1</item>
+        <item name="colorOnSurface">@color/tinta</item>
+        <item name="buttonBarPositiveButtonStyle">@style/Widget.DronePatrol.Boton.Dialogo</item>
+        <item name="buttonBarNegativeButtonStyle">@style/Widget.DronePatrol.Boton.Dialogo</item>
+        <item name="buttonBarNeutralButtonStyle">@style/Widget.DronePatrol.Boton.Dialogo</item>
+    </style>
+
+    <!-- ==================== Estilos heredados de los layouts ==================== -->
+
+    <!-- Título que va arriba de cada campo del formulario -->
     <style name="EtiquetaCampo">
         <item name="android:layout_width">wrap_content</item>
         <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_marginTop">14dp</item>
+        <item name="android:layout_marginTop">@dimen/espacio_medio</item>
         <item name="android:layout_marginBottom">4dp</item>
-        <item name="android:textSize">14sp</item>
-        <item name="android:textStyle">bold</item>
+        <item name="android:textAppearance">@style/TextAppearance.DronePatrol.Versalita</item>
     </style>
 
     <style name="TituloTarjeta">
         <item name="android:layout_width">wrap_content</item>
         <item name="android:layout_height">wrap_content</item>
-        <item name="android:textSize">12sp</item>
-        <item name="android:textStyle">bold</item>
-        <item name="android:letterSpacing">0.08</item>
-        <item name="android:textColor">?attr/colorPrimary</item>
+        <item name="android:layout_marginBottom">@dimen/espacio_chico</item>
+        <item name="android:textAppearance">@style/TextAppearance.DronePatrol.Versalita</item>
     </style>
 
 </resources>

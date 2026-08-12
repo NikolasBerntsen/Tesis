@@ -1,5 +1,132 @@
 <resources>
     <string name="app_name">Drone Patrol</string>
+    <string name="cancelar">Cancelar</string>
+    <string name="guardar">Guardar</string>
+
+    <!-- Roles del Comando Central -->
+    <string name="rol_operador_campo">operador de campo</string>
+    <string name="rol_operador">operador</string>
+    <string name="rol_supervisor">supervisor</string>
+    <string name="rol_admin">administrador</string>
+    <string name="rol_dron">dron</string>
+
+    <!-- Login del operador de campo -->
+    <string name="login_titulo">Patrullaje con drones</string>
+    <string name="login_subtitulo">Identificate como operador de campo ante el Comando Central</string>
+    <string name="login_url_comando_central">URL del Comando Central</string>
+    <string name="login_usuario">Usuario</string>
+    <string name="login_usuario_pista">operador.campo</string>
+    <string name="login_password">Contraseña</string>
+    <string name="login_password_pista">Contraseña de tu cuenta</string>
+    <string name="login_entrar">Iniciar sesión</string>
+    <string name="login_ayuda_roles">Solo pueden desplegar drones el operador de campo, el supervisor y el administrador. El dron se identifica con el QR pegado en su fuselaje, no con una cuenta.</string>
+    <string name="login_faltan_datos">Completá la URL del Comando Central, el usuario y la contraseña.</string>
+    <string name="login_verificando">Verificando credenciales…</string>
+    <string name="login_fallo">No se pudo iniciar sesión: %1$s</string>
+    <string name="login_rol_sin_permiso">Tu cuenta es de %1$s y no puede emparejar drones. Entrá con un operador de campo, un supervisor o un administrador.</string>
+
+    <!-- Avisos que se muestran al volver al login -->
+    <string name="aviso_sesion_vencida">Se venció la sesión del operador de campo. Iniciá sesión de nuevo.</string>
+    <string name="aviso_sesion_cerrada">Cerraste la sesión.</string>
+    <string name="aviso_cambio_comando_central">Cambiaste la URL del Comando Central: iniciá sesión de nuevo.</string>
+
+    <!-- Menú de campo -->
+    <string name="menu_campo_titulo">Menú de campo</string>
+    <string name="menu_campo_sesion">SESIÓN DE CAMPO</string>
+    <string name="menu_campo_quien">%1$s · %2$s</string>
+    <string name="menu_campo_restante">TIEMPO RESTANTE DE LA SESIÓN</string>
+    <string name="menu_campo_restante_ayuda">La sesión del operador de campo es efímera a propósito: cuando llega a cero hay que volver a entrar.</string>
+    <string name="menu_campo_escanear">Escanear QR del dron</string>
+    <string name="menu_campo_escanear_ayuda">Apuntá al sticker pegado en el dron: con ese código se lo empareja y queda listo para desplegar.</string>
+    <string name="menu_campo_configuracion">Configuración del enlace</string>
+    <string name="menu_campo_cerrar_sesion">Cerrar sesión</string>
+
+    <!-- Escaneo del QR y emparejamiento -->
+    <string name="qr_pista">Encuadrá el QR del dron</string>
+    <string name="qr_invalido">Ese QR no es de un dron de este sistema</string>
+    <string name="qr_cancelado">Escaneo cancelado.</string>
+    <string name="permiso_camara_denegado">Sin permiso de cámara no se puede escanear el QR del dron.</string>
+    <string name="gps_buscando">Tomando la ubicación…</string>
+    <string name="gps_sin_ubicacion">Sin ubicación: el emparejamiento sigue igual, pero en el registro va a quedar sin coordenadas.</string>
+    <string name="emparejando">Emparejando el dron…</string>
+    <string name="emparejamiento_fallo">No se pudo emparejar: %1$s</string>
+
+    <!-- Elección del modo de operación -->
+    <string name="modo_titulo">Dron emparejado</string>
+    <string name="modo_con_ubicacion">Ubicación del despliegue registrada.</string>
+    <string name="modo_sin_ubicacion">Queda registrado sin ubicación.</string>
+    <string name="modo_pregunta">¿Cómo vas a operar?</string>
+    <string name="modo_prueba">Modo prueba</string>
+    <string name="modo_prueba_ayuda">Con los controles de simulación a mano.</string>
+    <string name="modo_despliegue">Despliegue</string>
+    <string name="modo_despliegue_ayuda">Operación real: la pantalla principal no muestra controles de simulación.</string>
+
+    <!-- Configuración del enlace -->
+    <string name="enlace_titulo">Configuración del enlace</string>
+    <string name="enlace_modo">¿Por dónde llega la detección?</string>
+    <string name="enlace_cable">Por cable USB (recomendado)</string>
+    <string name="enlace_cable_ayuda">En la laptop, con la depuración USB activada, corré una vez: adb reverse tcp:8765 tcp:8765. No depende de la red.</string>
+    <string name="enlace_red">Por red</string>
+    <string name="enlace_red_ayuda">Respaldo: la app va a la IP de la laptop. Con anclaje USB suele quedar en 192.168.42.x.</string>
+    <string name="enlace_url_deteccion">URL del software de detección</string>
+    <string name="enlace_falta_url_red">Falta la URL de la laptop: en modo por red no hay detección hasta que la cargues.</string>
+
+    <!-- Pantalla principal -->
     <string name="abrir_registro">Abrir el registro local</string>
     <string name="cerrar_registro">Cerrar el registro local</string>
+    <string name="main_subtitulo">%1$s · %2$s</string>
+    <string name="main_modo_prueba">Modo prueba</string>
+    <string name="main_modo_despliegue">Despliegue</string>
+    <string name="main_estado">ESTADO</string>
+    <string name="main_conectando">Conectando con el Comando Central…</string>
+    <string name="main_error_conexion">Error de conexión: %1$s</string>
+    <string name="main_reintentar">Reintentar</string>
+    <string name="main_sin_enlace">Comando Central: sin enlace, reintentando…</string>
+    <string name="main_bateria">Batería</string>
+    <string name="main_bateria_pct">%1$d %%</string>
+    <string name="main_senal">Señal RC</string>
+    <string name="main_senal_ok">OK · %1$d %%</string>
+    <string name="main_senal_perdida">PERDIDA</string>
+    <string name="main_sin_dato">—</string>
+    <string name="main_deteccion_conectada">Detección: enlace por %1$s activo</string>
+    <string name="main_deteccion_esperando">Detección: enlazando por %1$s…</string>
+    <string name="main_deteccion_fallo">Detección: %1$s</string>
+    <string name="main_enlace_cable">cable USB</string>
+    <string name="main_enlace_red">red</string>
+    <string name="main_patrullaje">PATRULLAJE</string>
+    <string name="main_ruta">Ruta de patrullaje</string>
+    <string name="main_sin_rutas_cargadas">Sin rutas cargadas</string>
+    <string name="main_sin_rutas">Sin rutas disponibles</string>
+    <string name="main_comenzar_patrullaje">Comenzar patrullaje</string>
+    <string name="main_simulacion">SIMULACIÓN</string>
+    <string name="main_simulacion_ayuda">Controles para forzar las situaciones de la demo.</string>
+    <string name="main_forzar_bateria">Forzar batería baja</string>
+    <string name="main_recargar_bateria">Recargar batería</string>
+    <string name="main_simular_perdida_senal">Simular pérdida de señal</string>
+    <string name="main_registro_local">Registro local</string>
+    <string name="main_registro_local_ayuda">Últimos eventos de este dron</string>
+    <string name="main_registro_vacio">Sin eventos todavía.</string>
+    <string name="main_renombrar">Renombrar dron</string>
+    <string name="main_nombre_visible">Nombre visible</string>
+
+    <!-- Estados del patrullaje -->
+    <string name="estado_idle">En base</string>
+    <string name="estado_patrullando">Patrullando</string>
+    <string name="estado_orbitando">Orbitando objetivo</string>
+    <string name="estado_rth_senal">Volviendo a base (pérdida de señal)</string>
+    <string name="estado_rth_bateria">Volviendo a base (batería baja)</string>
+    <string name="estado_aterrizado">Aterrizado</string>
+    <string name="estado_pausado">Patrulla interrumpida</string>
+    <string name="estado_manual">Control manual</string>
+    <string name="estado_forzado">Desvío a nodo</string>
+
+    <plurals name="main_rutas_conectado">
+        <item quantity="one">Comando Central: conectado · %1$d ruta</item>
+        <item quantity="other">Comando Central: conectado · %1$d rutas</item>
+    </plurals>
+
+    <plurals name="main_waypoints">
+        <item quantity="one">%1$d waypoint</item>
+        <item quantity="other">%1$d waypoints</item>
+    </plurals>
 </resources>
