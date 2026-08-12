@@ -10,6 +10,8 @@ import {
   requireAuth,
   requireRoles,
   type AuthedRequest,
+  type LoginResult,
+  type Sesion,
 } from '../../src/auth';
 import { config } from '../../src/config';
 import { db } from '../../src/db';
@@ -20,6 +22,12 @@ function crearUsuario(username: string, password: string, role: Role, active = 1
   db.prepare(
     'INSERT INTO users (username, password_hash, role, active, can_control) VALUES (?, ?, ?, ?, ?)',
   ).run(username, bcrypt.hashSync(password, 4), role, active, canControl);
+}
+
+/** Estrecha el resultado del login a la sesión, o hace fallar el test. */
+function sesionDe(r: LoginResult): Sesion {
+  if (!r.ok) throw new Error(`el login no debería haber sido rechazado (${r.motivo})`);
+  return r;
 }
 
 function logsDeSistema() {
@@ -77,45 +85,46 @@ describe('auth — login', () => {
   });
 
   it('login correcto devuelve token + user + expiresIn y registra LOGIN', () => {
-    const r = login('operador', 'operador123');
-    expect(r).not.toBeNull();
-    expect(r!.user).toEqual({ username: 'operador', role: 'operator' });
-    expect(r!.expiresIn).toBe(ttlEnSegundos(config.tokenTtl));
-    const payload = jwt.verify(r!.token, config.jwtSecret) as jwt.JwtPayload;
+    const r = sesionDe(login('operador', 'operador123'));
+    expect(r.user).toEqual({ username: 'operador', role: 'operator' });
+    expect(r.expiresIn).toBe(ttlEnSegundos(config.tokenTtl));
+    const payload = jwt.verify(r.token, config.jwtSecret) as jwt.JwtPayload;
     expect(payload.sub).toBe('operador');
     expect(payload.role).toBe('operator');
     expect(logsDeSistema().some((l) => l.type === 'LOGIN')).toBe(true);
   });
 
   it('la sesión del operador de campo es efímera: 20 minutos', () => {
-    const r = login('campo', 'campo123');
-    expect(r!.user.role).toBe('field_operator');
-    expect(r!.expiresIn).toBe(ttlEnSegundos(config.tokenTtlField));
+    const r = sesionDe(login('campo', 'campo123'));
+    expect(r.user.role).toBe('field_operator');
+    expect(r.expiresIn).toBe(ttlEnSegundos(config.tokenTtlField));
     // el exp del JWT coincide con el expiresIn informado
-    const payload = jwt.verify(r!.token, config.jwtSecret) as jwt.JwtPayload;
+    const payload = jwt.verify(r.token, config.jwtSecret) as jwt.JwtPayload;
     expect(payload.exp! - payload.iat!).toBe(ttlEnSegundos(config.tokenTtlField));
   });
 
-  it('contraseña incorrecta devuelve null y registra LOGIN_FAILED', () => {
-    expect(login('operador', 'mala')).toBeNull();
+  it('contraseña incorrecta rechaza por credenciales y registra LOGIN_FAILED', () => {
+    expect(login('operador', 'mala')).toEqual({ ok: false, motivo: 'credenciales' });
     expect(logsDeSistema().some((l) => l.type === 'LOGIN_FAILED')).toBe(true);
   });
 
-  it('usuario inexistente devuelve null y registra LOGIN_FAILED', () => {
-    expect(login('nadie', 'x')).toBeNull();
+  it('usuario inexistente rechaza por credenciales y registra LOGIN_FAILED', () => {
+    expect(login('nadie', 'x')).toEqual({ ok: false, motivo: 'credenciales' });
     expect(logsDeSistema().some((l) => l.type === 'LOGIN_FAILED' && l.message.includes('nadie'))).toBe(true);
   });
 
-  it('cuenta desactivada devuelve null y registra LOGIN_REJECTED', () => {
-    expect(login('suspendido', 'clave123')).toBeNull();
+  it('cuenta desactivada rechaza con ese motivo y registra LOGIN_REJECTED', () => {
+    expect(login('suspendido', 'clave123')).toEqual({ ok: false, motivo: 'desactivada' });
     const rechazo = logsDeSistema().find((l) => l.type === 'LOGIN_REJECTED');
     expect(rechazo?.message).toMatch(/desactivada/i);
   });
 
-  it('cuenta eliminada devuelve null y el rechazo dice que fue eliminada', () => {
+  // El motivo tiene que sobrevivir hasta la respuesta: al usuario hay que
+  // poder decirle que la cuenta ya no está, no que se equivocó de contraseña.
+  it('cuenta eliminada rechaza con motivo propio y el registro dice que fue eliminada', () => {
     crearUsuario('exempleado', 'clave123', 'operator');
     db.prepare("UPDATE users SET deleted_at = '2024-01-01T00:00:00.000Z' WHERE username = 'exempleado'").run();
-    expect(login('exempleado', 'clave123')).toBeNull();
+    expect(login('exempleado', 'clave123')).toEqual({ ok: false, motivo: 'eliminada' });
     const rechazo = logsDeSistema().find((l) => l.type === 'LOGIN_REJECTED');
     expect(rechazo?.message).toMatch(/eliminada/i);
   });

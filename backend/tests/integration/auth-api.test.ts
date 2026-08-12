@@ -46,6 +46,35 @@ describe('integración — login, /me y cierre de sesión', () => {
     expect(r.status).toBe(401);
   });
 
+  // El motivo del rechazo llega al cliente: la app de campo tiene que poder
+  // decir "tu cuenta ya no está" en vez de mandar a reescribir la contraseña.
+  it('el rechazo distingue credenciales, cuenta eliminada y cuenta desactivada', async () => {
+    const adm = await login(srv.base, 'admin', CREDS.admin);
+    for (const username of ['ex1', 'ex2']) {
+      await api(srv.base, '/api/users', adm, {
+        method: 'POST',
+        body: JSON.stringify({ username, password: 'clave123', role: 'operator' }),
+      });
+    }
+    await api(srv.base, '/api/users/ex1', adm, { method: 'DELETE' });
+    await api(srv.base, '/api/users/ex2', adm, { method: 'PATCH', body: JSON.stringify({ active: false }) });
+
+    const intento = (username: string, password: string) =>
+      api(srv.base, '/api/auth/login', null, { method: 'POST', body: JSON.stringify({ username, password }) });
+
+    const mala = await intento('ex1', 'equivocada');
+    expect(mala.status).toBe(401);
+    expect(mala.body.error).toBe('Credenciales inválidas');
+
+    const eliminada = await intento('ex1', 'clave123');
+    expect(eliminada.status).toBe(401);
+    expect(eliminada.body.error).toMatch(/eliminada/i);
+
+    const desactivada = await intento('ex2', 'clave123');
+    expect(desactivada.status).toBe(401);
+    expect(desactivada.body.error).toMatch(/desactivada/i);
+  });
+
   it('login sin username/password (body inválido) da 400', async () => {
     const r = await api(srv.base, '/api/auth/login', null, { method: 'POST', body: JSON.stringify({ username: 'x' }) });
     expect(r.status).toBe(400);

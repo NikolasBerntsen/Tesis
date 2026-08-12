@@ -343,13 +343,6 @@ export function getDroneIdentity(droneId: string): DroneIdentity | undefined {
   return row ? toDroneIdentity(row) : undefined;
 }
 
-export function listDroneIdentities(): DroneIdentity[] {
-  const rows = db
-    .prepare('SELECT * FROM drones WHERE deleted_at IS NULL ORDER BY display_name COLLATE NOCASE, id')
-    .all() as DroneAsset[];
-  return rows.map(toDroneIdentity);
-}
-
 /** Renombra un dron. Devuelve la identidad ya actualizada, o undefined si no existe. */
 export function renameDrone(droneId: string, displayName: string): DroneIdentity | undefined {
   const info = db
@@ -421,16 +414,6 @@ export function createLog(
   };
 }
 
-export function createEvent(
-  type: string,
-  source: string,
-  message: string,
-  droneId: string | null = null,
-  alertId: number | null = null,
-): EventRow {
-  return createLog('drone', type, source, message, { droneId, alertId });
-}
-
 /** Log de drones: lo que ven los operadores. */
 export function listEvents(limit = 200, droneId?: string): EventRow[] {
   if (droneId) {
@@ -443,6 +426,13 @@ export function listEvents(limit = 200, droneId?: string): EventRow[] {
 
 /** Tamaños de página que ofrece la consola; cualquier otro cae al primero. */
 export const TAMANIOS_PAGINA = [25, 50, 75, 100] as const;
+
+/**
+ * Techo de paginación. El OFFSET se bindea como entero de SQLite: sin tope, un
+ * `page` disparatado (1e30) lo saca de rango y la consulta muere con "datatype
+ * mismatch". Más allá de este número no hay registros que ver de todos modos.
+ */
+const PAGINA_MAXIMA = 100_000;
 
 export interface LogQuery {
   category?: LogCategory;
@@ -469,7 +459,8 @@ export function listLogs(query: LogQuery): LogPage {
   const pageSize = (TAMANIOS_PAGINA as readonly number[]).includes(query.pageSize)
     ? query.pageSize
     : TAMANIOS_PAGINA[0];
-  const page = Number.isFinite(query.page) && query.page >= 1 ? Math.floor(query.page) : 1;
+  const pedida = Number.isFinite(query.page) && query.page >= 1 ? Math.floor(query.page) : 1;
+  const page = Math.min(pedida, PAGINA_MAXIMA);
 
   const condiciones: string[] = [];
   const params: (string | number)[] = [];

@@ -55,6 +55,25 @@ describe('integración — ABM de usuarios', () => {
     expect(r.body.canControl).toBe(false);
   });
 
+  // El alta fuerza el invariante; el PATCH tenía que hacer lo mismo o el flag
+  // terminaba mintiendo en /api/me y en la lista de usuarios.
+  it('a un operador de campo no se le puede encender canControl por PATCH', async () => {
+    await api(srv.base, '/api/users', adm, {
+      method: 'POST',
+      body: JSON.stringify({ username: 'campo3', password: 'clave123', role: 'field_operator' }),
+    });
+    const r = await api(srv.base, '/api/users/campo3', adm, { method: 'PATCH', body: JSON.stringify({ canControl: true }) });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(/no controla drones/i);
+    expect((await api(srv.base, '/api/users?includeDeleted=1', adm)).body.find((u: any) => u.username === 'campo3').canControl).toBe(
+      false,
+    );
+    // apagarlo (que ya está apagado) no es un error
+    expect(
+      (await api(srv.base, '/api/users/campo3', adm, { method: 'PATCH', body: JSON.stringify({ canControl: false }) })).status,
+    ).toBe(200);
+  });
+
   it('alta inválida: username corto/ilegal 400, password corta 400, rol inválido 400, duplicado 409', async () => {
     expect(
       (await api(srv.base, '/api/users', adm, { method: 'POST', body: JSON.stringify({ username: 'ab', password: 'clave123' }) }))

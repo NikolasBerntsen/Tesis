@@ -18,13 +18,11 @@ import {
   softDeleteDrone,
   restoreDrone,
   getDroneIdentity,
-  listDroneIdentities,
   renameDrone,
   getRoutes,
   getRoute,
   setWaypointLabel,
   createLog,
-  createEvent,
   listEvents,
   listLogs,
   TAMANIOS_PAGINA,
@@ -278,14 +276,6 @@ describe('store — drones como activos', () => {
     expect(getDroneIdentity('fantasma')).toBeUndefined();
   });
 
-  it('listDroneIdentities ordena por nombre y omite los borrados', () => {
-    createDrone({ displayName: 'Zulu' }, 'campo');
-    createDrone({ displayName: 'alfa' }, 'campo');
-    const fuera = createDrone({ displayName: 'Bravo' }, 'campo');
-    softDeleteDrone(fuera.hash, 'supervisor');
-    expect(listDroneIdentities().map((d) => d.displayName)).toEqual(['alfa', 'Zulu']);
-  });
-
   it('renameDrone actualiza el displayName y devuelve la identidad nueva', () => {
     const d = createDrone({ displayName: 'Alfa' }, 'campo');
     expect(renameDrone(d.hash, 'Alfa-2')?.displayName).toBe('Alfa-2');
@@ -340,15 +330,9 @@ describe('store — logs y eventos', () => {
     expect(ev2.alert_id).toBeNull();
   });
 
-  it('createEvent es un atajo de categoría drone', () => {
-    const ev = createEvent('DRONE_CONNECTED', 'backend', 'conectado', 'abc123', null);
-    expect(ev.category).toBe('drone');
-    expect(ev.drone_id).toBe('abc123');
-  });
-
   it('listEvents solo trae categoría drone y filtra por droneId', () => {
-    createEvent('A', 'backend', 'm', 'd1');
-    createEvent('B', 'backend', 'm', 'd2');
+    createLog('drone', 'A', 'backend', 'm', { droneId: 'd1' });
+    createLog('drone', 'B', 'backend', 'm', { droneId: 'd2' });
     createLog('usuarios', 'USER_CREATED', 'admin', 'm');
     createLog('sistema', 'LOGIN', 'admin', 'm');
 
@@ -362,7 +346,7 @@ describe('store — logs y eventos', () => {
   });
 
   it('listEvents respeta el límite y ordena por id descendente', () => {
-    for (let i = 0; i < 5; i++) createEvent('E', 'backend', `m${i}`, 'd1');
+    for (let i = 0; i < 5; i++) createLog('drone', 'E', 'backend', `m${i}`, { droneId: 'd1' });
     const dos = listEvents(2, 'd1');
     expect(dos).toHaveLength(2);
     expect(dos[0].message).toBe('m4');
@@ -371,7 +355,7 @@ describe('store — logs y eventos', () => {
 
 describe('store — registro paginado (listLogs)', () => {
   beforeEach(() => {
-    for (let i = 1; i <= 30; i++) createEvent('DRONE_CONNECTED', 'backend', `dron ${i}`, 'd1');
+    for (let i = 1; i <= 30; i++) createLog('drone', 'DRONE_CONNECTED', 'backend', `dron ${i}`, { droneId: 'd1' });
     for (let i = 1; i <= 5; i++) createLog('usuarios', 'USER_CREATED', 'admin', `usuario ${i}`);
     createLog('sistema', 'LOGIN', 'admin', 'admin inició sesión');
   });
@@ -411,6 +395,17 @@ describe('store — registro paginado (listLogs)', () => {
     expect(lejos.total).toBe(36);
   });
 
+  // El OFFSET se bindea como entero de SQLite: sin techo, un page enorme
+  // reventaba la consulta en vez de devolver una página vacía.
+  it('una página disparatada se topea y responde vacía en vez de romper', () => {
+    for (const enorme of [1e19, 1e30, Number.MAX_SAFE_INTEGER]) {
+      const r = listLogs({ page: enorme, pageSize: 100 });
+      expect(r.items).toHaveLength(0);
+      expect(r.total).toBe(36);
+      expect(Number.isSafeInteger(r.page)).toBe(true);
+    }
+  });
+
   it('filtra por categoría contando solo esa categoría', () => {
     const usuarios = listLogs({ category: 'usuarios', page: 1, pageSize: 25 });
     expect(usuarios.total).toBe(5);
@@ -420,7 +415,7 @@ describe('store — registro paginado (listLogs)', () => {
   });
 
   it('filtra por dron y por texto libre en mensaje, tipo y origen', () => {
-    createEvent('OTRO', 'backend', 'mensaje de otro dron', 'd2');
+    createLog('drone', 'OTRO', 'backend', 'mensaje de otro dron', { droneId: 'd2' });
     expect(listLogs({ droneId: 'd2', page: 1, pageSize: 25 }).total).toBe(1);
     expect(listLogs({ q: 'dron 7', page: 1, pageSize: 25 }).total).toBe(1);
     expect(listLogs({ q: 'USER_CREATED', page: 1, pageSize: 25 }).total).toBe(5);

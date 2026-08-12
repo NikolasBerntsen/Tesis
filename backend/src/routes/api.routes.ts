@@ -8,7 +8,7 @@ import {
   type DroneAssetView, type DroneBase, type DronePatch, type LogCategory, type Role,
 } from '../store';
 import {
-  broadcastDroneUpdated, broadcastOperators, droneCard, getController, kickDrone, listDroneCards,
+  broadcastDroneUpdated, broadcastOperators, droneCard, getController, kickDrone, kickUser, listDroneCards,
   metaDron, releaseAllControlledBy, releaseControl, sendToDrone, takeControl,
 } from '../ws';
 
@@ -23,6 +23,16 @@ function flag(valor: unknown): boolean {
 
 function esSupervisorOMas(role: Role): boolean {
   return ROLE_RANK[role] >= ROLE_RANK.supervisor;
+}
+
+/**
+ * Techo y piso de un límite que va a terminar en un LIMIT de SQL. Un valor no
+ * numérico no puede llegar al bind: SQLite corta con "datatype mismatch" y el
+ * cliente se come un 500 en vez de la página por defecto.
+ */
+function leerLimite(raw: unknown, porDefecto: number, techo: number): number {
+  const n = Math.floor(Number(raw));
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, techo) : porDefecto;
 }
 
 type LecturaBase = { ok: true; base: DroneBase | null } | { ok: false; error: string };
@@ -295,8 +305,12 @@ apiRouter.post('/drones/:droneId/route/start', requireAuth('operator'), (req: Au
   if (!getDroneIdentity(droneId)) return res.status(404).json({ error: 'Dron inexistente' });
   const route = getRoute(Number(req.body?.routeId));
   if (!route) return res.status(404).json({ error: 'Ruta inexistente' });
+  // Con Number a secas, un fromIndex de basura da NaN y ninguna comparación lo
+  // atrapa: la orden salía con "desde el nodo NaN".
   const fromIndex = Number(req.body?.fromIndex ?? 0);
-  if (fromIndex < 0 || fromIndex >= route.waypoints.length) return res.status(400).json({ error: 'fromIndex fuera de rango' });
+  if (!Number.isInteger(fromIndex) || fromIndex < 0 || fromIndex >= route.waypoints.length) {
+    return res.status(400).json({ error: 'fromIndex debe ser un nodo de la ruta' });
+  }
   const holder = checkNotControlledByOther(droneId, req.user!);
   if (holder) return res.status(409).json({ error: `El dron está controlado por ${holder}` });
 
@@ -484,7 +498,7 @@ apiRouter.post('/alerts/:id/decision', requireAuth('operator'), (req: AuthedRequ
 // ---- Logs ----
 
 apiRouter.get('/events', requireAuth('operator'), (req, res) => {
-  const limit = Math.min(Number(req.query.limit ?? 200), 1000);
+  const limit = leerLimite(req.query.limit, 200, 1000);
   res.json(listEvents(limit, req.query.droneId ? String(req.query.droneId) : undefined));
 });
 
@@ -550,7 +564,14 @@ apiRouter.patch('/users/:username', requireAuth('supervisor'), (req: AuthedReque
   if (!esAdmin && target.role !== 'operator') return res.status(403).json({ error: 'Un supervisor solo administra operadores' });
 
   const patch: { canControl?: boolean; active?: boolean; passwordHash?: string } = {};
-  if (req.body?.canControl !== undefined) patch.canControl = Boolean(req.body.canControl);
+  if (req.body?.canControl !== undefined) {
+    // El mismo invariante que impone el alta: el operador de campo despliega
+    // drones, no los pilotea, y por PATCH tampoco puede pasar a hacerlo.
+    if (target.role === 'field_operator' && Boolean(req.body.canControl)) {
+      return res.status(400).json({ error: 'El operador de campo no controla drones' });
+    }
+    patch.canControl = Boolean(req.body.canControl);
+  }
   if (esAdmin && req.body?.active !== undefined) patch.active = Boolean(req.body.active);
   if (esAdmin && typeof req.body?.password === 'string' && req.body.password.length >= 6) {
     patch.passwordHash = bcrypt.hashSync(req.body.password, 10);
@@ -562,6 +583,9 @@ apiRouter.patch('/users/:username', requireAuth('supervisor'), (req: AuthedReque
   if (patch.canControl === false || patch.active === false) {
     releaseAllControlledBy(username, req.user!.sub, patch.active === false ? 'cuenta desactivada' : 'control suspendido');
   }
+  // Y la desactivación además le cierra la consola: el token que tiene en el
+  // navegador sigue siendo válido, así que el corte va explícito.
+  if (patch.active === false) kickUser(username, 'Cuenta desactivada');
   const cambios = Object.keys(patch).filter((k) => k !== 'passwordHash');
   if (patch.passwordHash) cambios.push('password');
   const ev = createLog(
@@ -586,6 +610,7 @@ apiRouter.delete('/users/:username', requireAuth('admin'), (req: AuthedRequest, 
   releaseAllControlledBy(username, req.user!.sub, 'usuario eliminado');
   const result = softDeleteUser(username, req.user!.sub);
   if (!result) return res.status(409).json({ error: 'El usuario ya estaba eliminado' });
+  kickUser(username, 'Cuenta eliminada');
 
   const ev = createLog('usuarios', 'USER_DELETED', req.user!.sub, `${req.user!.sub} eliminó el usuario ${username}`, {
     meta: { antes: result.before, despues: result.after },

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { WebSocket } from 'ws';
 import {
-  seed, startServer, login, api, connectWs, wsCloseCode, mkStatus, wait, tokenDeDron,
+  seed, startServer, login, api, connectWs, wsCloseCode, mkStatus, wait, tokenDeDron, tokenHumano,
   CREDS, DRON, type TestServer, type WsClient,
 } from '../helpers';
 
@@ -253,6 +253,59 @@ describe('integración — hub WebSocket multi-dron', () => {
     await api(srv.base, `/api/drones/${DRON.alfa}`, sup, { method: 'PATCH', body: JSON.stringify({ active: false }) });
     expect(await cerrado).toBe(4403);
     await api(srv.base, `/api/drones/${DRON.alfa}`, sup, { method: 'PATCH', body: JSON.stringify({ active: true }) });
+  });
+
+  // El registro de usuarios es del admin, igual que GET /api/logs: por el canal
+  // en vivo tampoco puede filtrarse al resto de las consolas.
+  it('los eventos de usuarios llegan al admin y no al operador', async () => {
+    const opWs = await conn(op);
+    const admWs = await conn(adm);
+    await wait(50);
+    const alta = await api(srv.base, '/api/users', adm, {
+      method: 'POST',
+      body: JSON.stringify({ username: 'mirame', password: 'clave123', role: 'operator' }),
+    });
+    expect(alta.status).toBe(201);
+    await admWs.waitFor((m) => m.type === 'event' && m.event.type === 'USER_CREATED');
+
+    // el evento de dron que viene después sí lo ven los dos: sirve de barrera
+    const d1 = await conn(alfaTok);
+    d1.ws.send(JSON.stringify({ type: 'event', eventType: 'LANDED', message: 'barrera' }));
+    await opWs.waitFor((m) => m.type === 'event' && m.event.message === 'barrera');
+    expect(opWs.got.some((m) => m.type === 'event' && m.event.category === 'usuarios')).toBe(false);
+  });
+
+  it('desactivar o eliminar a un usuario le cierra la consola en el acto', async () => {
+    for (const [username, metodo, cuerpo] of [
+      ['wskick1', 'PATCH', JSON.stringify({ active: false })],
+      ['wskick2', 'DELETE', undefined],
+    ] as [string, string, string | undefined][]) {
+      await api(srv.base, '/api/users', adm, {
+        method: 'POST',
+        body: JSON.stringify({ username, password: 'clave123', role: 'operator' }),
+      });
+      const tok = (await login(srv.base, username, 'clave123'))!;
+      const c = await conn(tok);
+      const cerrado = cierreDe(c);
+      await api(srv.base, `/api/users/${username}`, adm, { method: metodo, body: cuerpo });
+      expect(await cerrado, username).toBe(4403);
+    }
+  });
+
+  // El JWT no se revoca del lado del servidor: si el socket no se revalidara,
+  // una sesión vencida seguiría recibiendo el video y las alertas.
+  it('una sesión vencida deja de recibir el flujo en vivo', async () => {
+    const c = await conn(tokenHumano('operador', 'operator', 2));
+    // un token sin vencimiento (jwt.verify los acepta) no se corta nunca
+    const eterno = await conn(tokenHumano('operador', 'operator'));
+    const cerrado = cierreDe(c);
+    const d1 = await conn(alfaTok);
+    await wait(2200);
+
+    d1.ws.send(JSON.stringify({ type: 'video_frame', jpegBase64: 'FRAME-TARDE', ts: 9 }));
+    expect(await cerrado).toBe(4401);
+    expect(c.got.some((m) => m.type === 'video_frame')).toBe(false);
+    await eterno.waitFor((m) => m.type === 'video_frame' && m.jpegBase64 === 'FRAME-TARDE');
   });
 
   it('eliminar un dron conectado le cierra el socket y avisa a las consolas', async () => {

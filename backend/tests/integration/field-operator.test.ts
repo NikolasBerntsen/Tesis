@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import jwt from 'jsonwebtoken';
-import { seed, startServer, login, api, connectWs, CREDS, DRON, type TestServer } from '../helpers';
+import {
+  seed, startServer, login, api, connectWs, mkStatus, tokenDeDron, wait, CREDS, DRON, type TestServer,
+} from '../helpers';
 import { config } from '../../src/config';
 
 // El operador de campo hace el primer despliegue y se va: sesión efímera, alta
@@ -99,5 +101,39 @@ describe('integración — sesión efímera del operador de campo', () => {
     const alta = await api(srv.base, '/api/drones', tok, { method: 'POST', body: JSON.stringify({ displayName: 'Aviso' }) });
     await ws.waitFor((m) => m.type === 'drone_updated' && m.drone.hash === alta.body.hash);
     await ws.close();
+  });
+
+  // El canal en vivo tiene que negar lo mismo que niega la API REST: sin el
+  // filtro por rol, el operador de campo recibía el video, las alertas con su
+  // captura y hasta el registro de usuarios que el contrato reserva al admin.
+  it('el WebSocket del operador de campo no filtra video, alertas ni eventos', async () => {
+    const dron = await connectWs(srv.wsUrl, tokenDeDron(DRON.alfa));
+    dron.ws.send(mkStatus({ battery: 77 }));
+    await wait(100);
+
+    // se conecta DESPUÉS del status: tampoco tiene que llegarle el estado inicial
+    const tok = (await login(srv.base, 'campo', CREDS.campo))!;
+    const campo = await connectWs(srv.wsUrl, tok);
+    const opWs = await connectWs(srv.wsUrl, (await login(srv.base, 'operador', CREDS.operador))!);
+
+    dron.ws.send(JSON.stringify({ type: 'video_frame', jpegBase64: 'FRAME-PRIVADO', ts: 3 }));
+    dron.ws.send(JSON.stringify({ type: 'alert_request', alertType: 'PERSON', snapshotBase64: 'SNAP-PRIVADO' }));
+    await api(srv.base, '/api/users', adm, {
+      method: 'POST',
+      body: JSON.stringify({ username: 'espiado', password: 'clave123', role: 'operator' }),
+    });
+    // el alta de un dron sí le corresponde, y hace de barrera: si llegó esto,
+    // todo lo anterior ya se difundió
+    const alta = await api(srv.base, '/api/drones', tok, { method: 'POST', body: JSON.stringify({ displayName: 'Barrera' }) });
+    await campo.waitFor((m) => m.type === 'drone_updated' && m.drone.hash === alta.body.hash);
+    await opWs.waitFor((m) => m.type === 'video_frame' && m.jpegBase64 === 'FRAME-PRIVADO');
+    await opWs.waitFor((m) => m.type === 'alert_created');
+
+    for (const prohibido of ['status', 'video_frame', 'alert_created', 'event']) {
+      expect(campo.got.some((m) => m.type === prohibido), prohibido).toBe(false);
+    }
+    await campo.close();
+    await opWs.close();
+    await dron.close();
   });
 });

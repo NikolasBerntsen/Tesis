@@ -2,10 +2,12 @@ import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { createHash } from 'node:crypto';
 import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 import { WebSocket } from 'ws';
 import { db } from '../src/db';
 import { createServer } from '../src/app';
 import { signDroneToken } from '../src/auth';
+import { config } from '../src/config';
 import type { Role } from '../src/store';
 import type { DroneCard } from '../src/ws';
 
@@ -204,6 +206,16 @@ export async function emparejar(base: string, token: string, hash: string): Prom
  */
 export function tokenDeDron(hash: string): string {
   return signDroneToken(hash);
+}
+
+/**
+ * Token humano con el vencimiento que pida el test: sirve para ejercitar qué
+ * pasa con una sesión que caduca con el socket ya abierto. Sin `expiresIn` se
+ * firma sin vencimiento, que es el otro caso que jwt.verify acepta.
+ */
+export function tokenHumano(username: string, role: Role, expiresIn?: number): string {
+  const opciones = (expiresIn === undefined ? {} : { expiresIn }) as jwt.SignOptions;
+  return jwt.sign({ sub: username, role }, config.jwtSecret, opciones);
 }
 
 export interface WsClient {

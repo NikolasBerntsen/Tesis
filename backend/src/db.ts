@@ -175,6 +175,10 @@ if (dronesVacia) {
       );
       const reapuntarEventos = db.prepare('UPDATE events SET drone_id = ? WHERE drone_id = ?');
       const reapuntarAlertas = db.prepare('UPDATE alerts SET drone_id = ? WHERE drone_id = ?');
+      // El origen también se reapunta: la cuenta se borra de `users` y su
+      // nombre queda libre para una persona nueva, así que dejar el username
+      // viejo en `source` haría pasar eventos de máquina por actividad humana.
+      const reapuntarOrigen = db.prepare('UPDATE events SET source = ? WHERE source = ?');
       const creadoEn = new Date().toISOString();
 
       for (const c of cuentas) {
@@ -182,6 +186,7 @@ if (dronesVacia) {
         insertar.run(hash, c.display_name ?? c.username, c.active ? 1 : 0, c.base_name, c.base_lat, c.base_lon, creadoEn);
         reapuntarEventos.run(hash, c.username);
         reapuntarAlertas.run(hash, c.username);
+        reapuntarOrigen.run(hash, c.username);
       }
       db.prepare("DELETE FROM users WHERE role = 'drone'").run();
     });

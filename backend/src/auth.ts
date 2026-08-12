@@ -15,6 +15,8 @@ export const ROLE_RANK: Record<Role, number> = {
 export interface TokenPayload {
   sub: string;
   role: Role;
+  /** Epoch en segundos que pone jsonwebtoken; el hub lo usa para revalidar sockets. */
+  exp?: number;
 }
 
 /** Identidad efectiva de la request: rol y flags leídos EN VIVO de la base. */
@@ -24,12 +26,21 @@ export interface AuthedUser {
   canControl: boolean;
 }
 
-export interface LoginResult {
+export interface Sesion {
   token: string;
   /** Segundos de vida del token: la app de campo muestra la cuenta regresiva. */
   expiresIn: number;
   user: { username: string; role: Role };
 }
+
+/**
+ * Por qué se rechazó un inicio de sesión. El motivo viaja hasta la respuesta
+ * porque no es lo mismo equivocarse de contraseña que tener la cuenta dada de
+ * baja: al usuario de campo hay que poder explicarle por qué no entra.
+ */
+export type MotivoRechazo = 'credenciales' | 'eliminada' | 'desactivada';
+
+export type LoginResult = ({ ok: true } & Sesion) | { ok: false; motivo: MotivoRechazo };
 
 const SEGUNDOS_POR_UNIDAD: Record<string, number> = { s: 1, m: 60, h: 3600, d: 86400 };
 
@@ -59,23 +70,23 @@ export function signDroneToken(hash: string): string {
   return firmar(hash, 'drone').token;
 }
 
-export function login(username: string, password: string): LoginResult | null {
+export function login(username: string, password: string): LoginResult {
   const user = getUser(username);
   if (!user || !bcrypt.compareSync(password, user.password_hash)) {
     createLog('sistema', 'LOGIN_FAILED', username, `Intento de inicio de sesión fallido para "${username}"`);
-    return null;
+    return { ok: false, motivo: 'credenciales' };
   }
   if (user.deleted_at) {
     createLog('sistema', 'LOGIN_REJECTED', username, `Inicio de sesión rechazado: la cuenta "${username}" fue eliminada`);
-    return null;
+    return { ok: false, motivo: 'eliminada' };
   }
   if (!user.active) {
     createLog('sistema', 'LOGIN_REJECTED', username, `Inicio de sesión rechazado: la cuenta "${username}" está desactivada`);
-    return null;
+    return { ok: false, motivo: 'desactivada' };
   }
   const { token, expiresIn } = firmar(user.username, user.role);
   createLog('sistema', 'LOGIN', username, `${username} inició sesión (${user.role})`);
-  return { token, expiresIn, user: { username: user.username, role: user.role } };
+  return { ok: true, token, expiresIn, user: { username: user.username, role: user.role } };
 }
 
 export function verifyToken(token: string): TokenPayload | null {

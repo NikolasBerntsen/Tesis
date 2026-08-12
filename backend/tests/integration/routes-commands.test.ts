@@ -64,17 +64,23 @@ describe('integración — comandos de ruta y renombres', () => {
     ).toBe(400);
   });
 
-  // BUG en src/routes/api.routes.ts (líneas 298-299): `Number(fromIndex)` da NaN
-  // cuando el cuerpo trae basura, y ninguna de las dos comparaciones (`< 0`,
-  // `>= length`) es verdadera con NaN, así que la validación lo deja pasar: al
-  // dron le llega `fromIndex: null` y el registro queda con "desde el nodo NaN".
-  // Debería validarse con Number.isInteger. No lo arreglo: api.routes.ts no es mío.
-  it.skip('un fromIndex no numérico debería dar 400', async () => {
-    const r = await api(srv.base, `/api/drones/${DRON.alfa}/route/start`, op, {
+  // Con Number a secas, un fromIndex de basura pasaba como NaN y la orden salía
+  // con "desde el nodo NaN".
+  it('un fromIndex que no sea un nodo entero da 400', async () => {
+    for (const malo of ['x', 'dos', 1.5, {}]) {
+      const r = await api(srv.base, `/api/drones/${DRON.alfa}/route/start`, op, {
+        method: 'POST',
+        body: JSON.stringify({ routeId: 1, fromIndex: malo }),
+      });
+      expect(r.status, JSON.stringify(malo)).toBe(400);
+    }
+    // un entero en texto sigue sirviendo: el cuerpo puede venir de un formulario
+    const ok = await api(srv.base, `/api/drones/${DRON.alfa}/route/start`, op, {
       method: 'POST',
-      body: JSON.stringify({ routeId: 1, fromIndex: 'x' }),
+      body: JSON.stringify({ routeId: 1, fromIndex: '2' }),
     });
-    expect(r.status).toBe(400);
+    expect(ok.status).toBe(200);
+    await alfa.waitFor((m) => m.type === 'start_route' && m.fromIndex === 2);
   });
 
   it('interrumpir patrullaje llega al dron; dron inexistente 404', async () => {

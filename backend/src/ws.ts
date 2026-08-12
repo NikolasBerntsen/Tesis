@@ -3,22 +3,69 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { verifyToken } from './auth';
 import {
   createAlert, createLog, getActiveUser, getDrone, getDroneIdentity, listDrones, renameDrone,
-  type DroneAssetView, type DroneBase,
+  type DroneAssetView, type DroneBase, type EventRow, type Role,
 } from './store';
+
+/** Todo lo que sale hacia las consolas lleva `type`: es lo que decide quién lo ve. */
+export interface MensajeHub {
+  type: string;
+  [clave: string]: unknown;
+}
+
+/** Consola conectada. El rol y el vencimiento se guardan para revalidarla. */
+interface SesionConsola {
+  username: string;
+  role: Role;
+  /** Epoch en segundos del JWT; infinito si el token no lleva vencimiento. */
+  expiraEn: number;
+}
 
 // Hub central. Soporta varios drones a la vez: cada conexión de dron se guarda
 // bajo su droneId (el hash del token de emparejamiento), y los mensajes del
 // operador se dirigen al dron concreto en vez de a todos.
-const operators = new Map<WebSocket, string>(); // socket -> username
+const operators = new Map<WebSocket, SesionConsola>();
 const drones = new Map<string, WebSocket>();
-const lastStatus = new Map<string, Record<string, unknown>>();
+const lastStatus = new Map<string, MensajeHub>();
 
 // Control manual: un solo usuario por dron a la vez
 const controlledBy = new Map<string, string>(); // droneId -> username
 
-export function broadcastOperators(msg: object) {
+// Novedades del dron como ACTIVO: alta, baja, renombre y conexión. Es lo único
+// del canal en vivo que le toca al operador de campo, que entra a la consola
+// nada más que a dar de alta drones y emparejarlos.
+const TIPOS_DE_ACTIVO = new Set(['drone_updated', 'drone_online', 'drone_offline', 'drone_renamed']);
+
+/**
+ * El canal en vivo respeta los mismos permisos que la API REST: sin esto un
+ * operador de campo recibía por WebSocket el video, las alertas y el registro
+ * de usuarios que sus propias requests reciben con un 403.
+ */
+function puedeVer(sesion: SesionConsola, msg: MensajeHub): boolean {
+  if (sesion.role === 'field_operator') return TIPOS_DE_ACTIVO.has(msg.type);
+  // El registro de usuarios y de sistema es del admin, igual que GET /api/logs
+  if (msg.type === 'event') {
+    return (msg.event as EventRow | undefined)?.category === 'drone' || sesion.role === 'admin';
+  }
+  return true;
+}
+
+/**
+ * El JWT no se revoca del lado del servidor, así que un socket abierto podría
+ * sobrevivir al vencimiento de su sesión: se controla antes de cada envío y se
+ * corta ahí mismo.
+ */
+function sesionVigente(ws: WebSocket, sesion: SesionConsola): boolean {
+  if (Date.now() < sesion.expiraEn * 1000) return true;
+  ws.close(4401, 'Sesión vencida');
+  return false;
+}
+
+export function broadcastOperators(msg: MensajeHub) {
   const data = JSON.stringify(msg);
-  for (const ws of operators.keys()) if (ws.readyState === WebSocket.OPEN) ws.send(data);
+  for (const [ws, sesion] of operators) {
+    if (!sesionVigente(ws, sesion) || !puedeVer(sesion, msg)) continue;
+    if (ws.readyState === WebSocket.OPEN) ws.send(data);
+  }
 }
 
 /** Envía un mensaje a un dron concreto. Devuelve false si no está conectado. */
@@ -52,6 +99,21 @@ export function kickDrone(hash: string, motivo: string): boolean {
   if (!ws) return false;
   ws.close(4403, motivo);
   return true;
+}
+
+/**
+ * Espejo de kickDrone para las personas: corta las consolas abiertas de una
+ * cuenta que se desactiva o se elimina. Sin esto el socket ya establecido
+ * seguiría recibiendo el flujo en vivo aunque la API le responda 403.
+ */
+export function kickUser(username: string, motivo: string): number {
+  let cerradas = 0;
+  for (const [ws, sesion] of operators) {
+    if (sesion.username !== username) continue;
+    ws.close(4403, motivo);
+    cerradas += 1;
+  }
+  return cerradas;
 }
 
 /** Ficha completa de un dron: identidad + activo + online + estado + control. */
@@ -208,7 +270,7 @@ function handleDroneMessage(droneId: string, raw: string) {
 
   switch (msg.type) {
     case 'status': {
-      const status: Record<string, unknown> = {
+      const status: MensajeHub = {
         ...msg,
         type: 'status',
         droneId,
@@ -327,19 +389,27 @@ export function setupWebSocket(server: Server) {
       return;
     }
 
-    if (!getActiveUser(payload.sub)) {
+    const cuenta = getActiveUser(payload.sub);
+    if (!cuenta) {
       ws.close(4403, 'Cuenta desactivada o eliminada');
       return;
     }
-    operators.set(ws, payload.sub);
+    // El rol sale de la base y no del token, como en requireAuth: el canal en
+    // vivo tiene que filtrar con el rol que la cuenta tiene AHORA.
+    const sesion: SesionConsola = {
+      username: cuenta.username,
+      role: cuenta.role,
+      expiraEn: payload.exp ?? Number.POSITIVE_INFINITY,
+    };
+    operators.set(ws, sesion);
     // Estado inicial: el operador pinta el dashboard sin esperar al próximo tick
-    for (const status of lastStatus.values()) ws.send(JSON.stringify(status));
+    for (const status of lastStatus.values()) if (puedeVer(sesion, status)) ws.send(JSON.stringify(status));
     ws.on('close', () => {
       operators.delete(ws);
       // Si era la última conexión de ese usuario, no puede seguir controlando
-      const sigueConectado = [...operators.values()].includes(payload.sub);
+      const sigueConectado = [...operators.values()].some((s) => s.username === sesion.username);
       if (!sigueConectado) {
-        releaseAllControlledBy(payload.sub, payload.sub, 'el usuario se desconectó del Comando Central');
+        releaseAllControlledBy(sesion.username, sesion.username, 'el usuario se desconectó del Comando Central');
       }
     });
   });

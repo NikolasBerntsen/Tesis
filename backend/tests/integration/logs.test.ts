@@ -117,16 +117,15 @@ describe('integración — registro paginado', () => {
     expect((await api(srv.base, '/api/logs', null)).status).toBe(401);
   });
 
-  // BUG en src/store.ts (listLogs, línea 472): `page` solo se sanea contra
-  // Number.isFinite y `>= 1`, así que un número enorme pasa el filtro y el
-  // OFFSET resultante se va del rango de enteros seguros de SQLite; el bind
-  // falla con "datatype mismatch" y la ruta responde 500. Debería topearse el
-  // page (o el OFFSET) a un entero seguro. No lo arreglo: store.ts no es mío.
-  it.skip('una página absurdamente grande no debería romper el servidor', async () => {
-    const r = await logs('?page=1e30&pageSize=25');
-    expect(r.status).toBe(200);
-    expect(r.body.items).toHaveLength(0);
-    expect(r.body.total).toBe(TOTAL);
+  // El OFFSET viaja a SQLite como entero: un page enorme lo sacaba de rango y
+  // la ruta respondía 500 en vez de una página vacía.
+  it('una página absurdamente grande no rompe el servidor', async () => {
+    for (const page of ['1e19', '1e30']) {
+      const r = await logs(`?page=${page}&pageSize=25`);
+      expect(r.status, page).toBe(200);
+      expect(r.body.items).toHaveLength(0);
+      expect(r.body.total).toBe(TOTAL);
+    }
   });
 });
 
@@ -156,14 +155,15 @@ describe('integración — log de drones (/api/events)', () => {
     expect((await api(srv.base, `/api/events?droneId=${DRON.bravo}`, op)).body).toHaveLength(0);
   });
 
-  // BUG en src/routes/api.routes.ts (línea 487): `Math.min(Number(limit), 1000)`
-  // devuelve NaN cuando el query no es numérico, y ese NaN se bindea al LIMIT
-  // de listEvents; better-sqlite3 corta con "datatype mismatch" y la ruta
-  // responde 500 en vez de caer al valor por defecto. No lo arreglo:
-  // api.routes.ts no es mío.
-  it.skip('un limit no numérico debería caer al valor por defecto, no dar 500', async () => {
-    const r = await api(srv.base, '/api/events?limit=abc', op);
-    expect(r.status).toBe(200);
-    expect(r.body).toHaveLength(5);
+  // Un limit de basura llegaba como NaN al LIMIT de SQL y la ruta respondía 500.
+  it('un limit inválido cae al valor por defecto y uno fraccionario se trunca', async () => {
+    for (const malo of ['abc', '', '0', '-3']) {
+      const r = await api(srv.base, `/api/events?limit=${malo}`, op);
+      expect(r.status, malo).toBe(200);
+      expect(r.body, malo).toHaveLength(5);
+    }
+    expect((await api(srv.base, '/api/events?limit=1.5', op)).body).toHaveLength(1);
+    // el techo se respeta igual: pedir de más no trae más de lo que hay
+    expect((await api(srv.base, '/api/events?limit=99999', op)).body).toHaveLength(5);
   });
 });

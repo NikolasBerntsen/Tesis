@@ -141,12 +141,12 @@ describe('integración — migración desde el esquema original', () => {
     expect(dron.model).toBe('');
     expect(dron.active).toBe(1);
 
-    // el evento del dron ahora apunta al hash
+    // el evento del dron ahora apunta al hash, y también su origen: la cuenta
+    // se borra de users y su nombre queda libre, así que dejar 'olddrone' en
+    // `source` haría que una persona nueva con ese nombre herede el historial
     const ev = db.prepare("SELECT * FROM events WHERE type = 'PATROL_STARTED'").get()!;
     expect(ev.drone_id).toBe(dron.hash);
-    // `source` conserva el username viejo a propósito: la migración solo
-    // reapunta drone_id, y el pop-up del registro muestra meta.drone
-    expect(ev.source).toBe('olddrone');
+    expect(ev.source).toBe(dron.hash);
   });
 });
 
@@ -271,8 +271,15 @@ describe('integración — migración desde el esquema intermedio (drones como c
     expect(db.prepare("SELECT drone_id FROM events WHERE type = 'DRONE_CONNECTED'").get()!.drone_id).toBe(alfa.hash);
     expect(db.prepare("SELECT drone_id FROM events WHERE type = 'LANDED'").get()!.drone_id).toBe(bravo.hash);
     expect(db.prepare('SELECT drone_id FROM alerts').get()!.drone_id).toBe(alfa.hash);
+    // el origen del evento que emitió el propio dron también pasa al hash: la
+    // cuenta se borra y el nombre queda libre para una persona nueva
+    expect(db.prepare("SELECT source FROM events WHERE type = 'LANDED'").get()!.source).toBe(bravo.hash);
+    // y lo que no era del dron queda intacto
+    expect(db.prepare("SELECT source FROM events WHERE type = 'DRONE_CONNECTED'").get()!.source).toBe('backend');
+
     // ningún registro quedó apuntando al username viejo
     expect(db.prepare("SELECT COUNT(*) AS n FROM events WHERE drone_id IN ('drone1','drone2')").get()!.n).toBe(0);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM events WHERE source IN ('drone1','drone2')").get()!.n).toBe(0);
     expect(db.prepare("SELECT COUNT(*) AS n FROM alerts WHERE drone_id IN ('drone1','drone2')").get()!.n).toBe(0);
   });
 
