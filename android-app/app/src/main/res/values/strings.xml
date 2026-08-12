@@ -129,4 +129,13 @@
         <item quantity="one">%1$d waypoint</item>
         <item quantity="other">%1$d waypoints</item>
     </plurals>
+    <string name="identificador_titulo">Escribir el identificador</string>
+    <string name="identificador_ayuda">Son los 32 caracteres que están impresos debajo del código QR del dron.</string>
+    <string name="identificador_pista">a3f9c1b27d5e4408f61a9c3e772b7e42</string>
+    <string name="menu_vista_operativa">Vista operativa</string>
+    <string name="menu_ver_logs">Ver registro</string>
+    <string name="menu_cerrar_sesion">Cerrar sesión</string>
+    <string name="main_btn_identificador">Escribir el identificador</string>
+    <string name="continuar">Continuar</string>
+    <string name="main_menu_titulo">Menú</string>
 </resources>

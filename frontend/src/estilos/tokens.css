@@ -6,15 +6,18 @@
    ========================================================================= */
 
 :root {
-  color-scheme: light; /* la consola es clara a propósito: sin tema oscuro */
+  color-scheme: light;
 
-  /* --- Piedra ----------------------------------------------------------- */
-  --marmol-0: #FBFAF7;   /* fondo de la página */
-  --marmol-1: #F5F2EC;   /* superficie de las tarjetas */
-  --marmol-2: #EDE8DE;   /* superficies hundidas: campos, encabezados */
-  --marmol-3: #E3DCCE;   /* piedra pulida: pastillas, franjas */
-  --veta: #D8CFBE;       /* bordes: la veta del mármol */
-  --veta-fuerte: #C4B8A2;
+  /* --- Piedra -----------------------------------------------------------
+     La piedra arranca por debajo del blanco puro: una pantalla grande llena de
+     #FFF cansa la vista en una guardia larga, que es como se usa esta consola.
+     El mármol real tampoco es blanco: es marfil. */
+  --marmol-0: #F1EDE4;   /* fondo de la página */
+  --marmol-1: #E9E4D9;   /* superficie de las tarjetas */
+  --marmol-2: #DFD9CB;   /* superficies hundidas: campos, encabezados */
+  --marmol-3: #D3CBB9;   /* piedra pulida: pastillas, franjas */
+  --veta: #C6BCA6;       /* bordes: la veta del mármol */
+  --veta-fuerte: #B0A38A;
 
   /* --- Tinta ------------------------------------------------------------ */
   --tinta: #2B2620;        /* texto principal, negro cálido */
@@ -34,13 +37,27 @@
     linear-gradient(135deg, #F0E3B8 0%, #D9BE6B 28%, #B8912F 55%, #8A6A1C 100%);
   --oro-velo: rgba(184, 145, 47, .10); /* fondo de lo seleccionado */
 
+  /* Cara de los controles. Estaba escrita con blancos literales dentro de
+     `button`, así que en obsidiana los botones salían plateados. */
+  --cara-boton: linear-gradient(180deg, #F8F5EE 0%, var(--marmol-1) 100%);
+  --filo-luz: rgba(255, 255, 255, .85);
+  --sombra-boton: 0 1px 2px rgba(43, 38, 32, .06);
+  /* Realce vítreo de las superficies. En claro es blanco; en obsidiana, un
+     marfil apenas insinuado: el blanco puro sobre negro se ve sucio. */
+  --realce-55: rgba(255, 255, 255, .55);
+  --realce-70: rgba(255, 255, 255, .7);
+  --realce-cara: #FFFFFF;
+  /* Luz rasante sobre la piedra, arriba a la izquierda, como en el relieve. */
+  --luz-rasante: rgba(255, 255, 255, .95);
+  --luz-alta: rgba(253, 246, 232, .9);
+
   /* --- Cara de la piedra ------------------------------------------------ */
   /* Todas las superficies levantadas (tarjetas, tejas, placa de ingreso,
      modales) comparten esta cara: si cada una arma su propio degradé, el
      mármol cambia de veta de una pieza a la otra y se nota. */
   --piedra-cara:
     var(--grano-textura),
-    linear-gradient(158deg, #FFFFFF 0%, var(--marmol-0) 50%, var(--marmol-1) 100%);
+    linear-gradient(158deg, #F8F5EE 0%, var(--marmol-0) 50%, var(--marmol-1) 100%);
 
   /* --- Estados (apagados, nunca saturados) ------------------------------ */
   --ok: #4F7A46;
@@ -115,8 +132,84 @@
   --grano-textura: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22%3E %3Cfilter id=%22g%22 x=%220%22 y=%220%22 width=%22100%25%22 height=%22100%25%22%3E %3CfeTurbulence type=%22fractalNoise%22 baseFrequency=%220.8%22 numOctaves=%222%22 seed=%225%22 stitchTiles=%22stitch%22/%3E %3CfeColorMatrix type=%22matrix%22 values=%220 0 0 0 0.31 0 0 0 0 0.27 0 0 0 0 0.20 0 0 0 0.05 -0.02%22/%3E %3C/filter%3E %3Crect width=%22200%22 height=%22200%22 filter=%22url(%23g)%22/%3E%3C/svg%3E");
   /* Filigrana: hojas y una flor, como el fondo tallado del bajorrelieve. Va
      siempre a opacidad baja: si se nota antes que el dato, está mal. */
-  --filigrana: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22260%22 height=%2222%22 viewBox=%220 0 260 22%22 fill=%22none%22 stroke=%22%238A6A1C%22 stroke-width=%221%22 stroke-linecap=%22round%22%3E %3Cpath d=%22M4 11h72%22/%3E%3Cpath d=%22M184 11h72%22/%3E %3Cpath d=%22M76 11c6-7 16-7 22 0-6 7-16 7-22 0z%22/%3E %3Cpath d=%22M184 11c-6-7-16-7-22 0 6 7 16 7 22 0z%22/%3E %3Cpath d=%22M98 11h8%22/%3E%3Cpath d=%22M154 11h8%22/%3E %3Cpath d=%22M106 11c4-4 10-4 14 0-4 4-10 4-14 0z%22/%3E %3Cpath d=%22M154 11c-4-4-10-4-14 0 4 4 10 4 14 0z%22/%3E %3Cpath d=%22M130 4l7 7-7 7-7-7z%22/%3E%3C/svg%3E");
-  --filigrana-esquina: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22104%22 height=%22104%22 viewBox=%220 0 104 104%22 fill=%22none%22 stroke=%22%238A6A1C%22 stroke-width=%221%22 stroke-linecap=%22round%22%3E %3Cpath d=%22M100 100C80 95 62 82 51 64 42 49 38 33 38 18%22/%3E %3Cpath d=%22M51 64c-11 2-20-2-24-11 10-3 19 1 24 11z%22/%3E %3Cpath d=%22M51 64c9-4 13-13 11-23-9 4-13 13-11 23z%22/%3E %3Cpath d=%22M68 79c-10 3-19 0-24-10 10-3 19 0 24 10z%22/%3E %3Cpath d=%22M74 88c8 1 14 5 16 12-8 1-14-4-16-12z%22/%3E %3Ccircle cx=%2238%22 cy=%2214%22 r=%223.5%22/%3E %3Cpath d=%22M38 10c0-6 5-9 9-7 2 5-3 8-9 7z%22/%3E %3Cpath d=%22M38 10c0-6-5-9-9-7-2 5 3 8 9 7z%22/%3E %3Cpath d=%22M34 17c-5-3-10-2-11 4 4 3 9 1 11-4z%22/%3E %3Cpath d=%22M42 17c5-3 10-2 11 4-4 3-9 1-11-4z%22/%3E %3Cpath d=%22M38 19c-3 5 0 10 5 11 1-5-1-9-5-11z%22/%3E%3C/svg%3E");
 
   --velo-modal: rgba(43, 38, 32, .30);
+}
+
+/* ============================================================================
+   MODO OSCURO — "obsidiana y oro"
+   La misma pieza, tallada en piedra negra: el oro no cambia de rol, sigue
+   apareciendo solo en los filos. Se activa con data-tema="oscuro" en <html>,
+   que fija App.tsx a partir de lo guardado o de la preferencia del sistema.
+   ========================================================================= */
+
+:root[data-tema='oscuro'] {
+  color-scheme: dark;
+
+  /* La obsidiana no es negro plano: tira a verde/marrón muy oscuro y tiene
+     brillo vítreo. Por eso los escalones son cálidos, no grises. */
+  --marmol-0: #14120F;   /* fondo de la página */
+  --marmol-1: #1D1A16;   /* superficie de las tarjetas */
+  --marmol-2: #262119;   /* superficies hundidas: campos, encabezados */
+  --marmol-3: #322B21;   /* piedra pulida: pastillas, franjas */
+  --veta: #3D3527;       /* bordes: la veta de la piedra */
+  --veta-fuerte: #554A36;
+
+  /* Sobre negro, el texto a blanco puro vibra: se queda en un marfil apagado. */
+  --tinta: #EDE6D6;
+  --tinta-media: #B6AB95;
+  --tinta-suave: #857B69;
+
+  /* El oro sube de luminosidad: el mismo #B8912F sobre obsidiana se apaga y
+     deja de leerse como metal. */
+  --oro: #D9B44F;
+  --oro-claro: #F2DC9C;
+  --oro-oscuro: #A8832A;
+  --oro-lamina: linear-gradient(135deg, #F6E7B4 0%, #DFC276 28%, #C39B34 55%, #8A6A1C 100%);
+  /* En oscuro la lámina no necesita lavarse con blanco: el texto que va encima
+     es tinta oscura y el contraste sobra. */
+  --oro-lamina-relleno: linear-gradient(135deg, #F6E7B4 0%, #DFC276 28%, #C39B34 55%, #8A6A1C 100%);
+  --oro-velo: rgba(217, 180, 79, .14);
+
+  --piedra-cara:
+    var(--grano-textura),
+    linear-gradient(158deg, #241F19 0%, var(--marmol-1) 52%, #17140F 100%);
+
+  /* Los estados suben de luminosidad por el mismo motivo que el oro. */
+  --ok: #7FA96F;
+  --alerta: #D9A441;
+  --alerta-texto: #E3B65F;
+  --peligro: #D2685A;
+  --info: #7FA8C4;
+  --ok-velo: rgba(127, 169, 111, .13);
+  --alerta-velo: rgba(217, 164, 65, .13);
+  --peligro-velo: rgba(210, 104, 90, .13);
+  --info-velo: rgba(127, 168, 196, .13);
+
+  /* Sobre negro la sombra no se ve: el relieve lo hace el filo de luz de
+     arriba, que es como se comporta la piedra pulida con luz rasante. */
+  --sombra-suave: 0 1px 0 rgba(255, 246, 224, .045), 0 10px 26px -14px rgba(0, 0, 0, .8);
+  --sombra-relieve:
+    inset 0 1px 0 rgba(255, 246, 224, .06),
+    0 1px 2px rgba(0, 0, 0, .5),
+    0 18px 40px -24px rgba(0, 0, 0, .9);
+  --sombra-flotante: 0 24px 60px -20px rgba(0, 0, 0, .85);
+  --sombra-hundida: inset 0 1px 3px rgba(0, 0, 0, .55);
+
+  --velo-modal: rgba(8, 7, 5, .68);
+
+  --cara-boton: linear-gradient(180deg, #2A2419 0%, var(--marmol-2) 100%);
+  --filo-luz: rgba(255, 246, 224, .07);
+  --sombra-boton: 0 1px 2px rgba(0, 0, 0, .45);
+  --realce-55: rgba(255, 246, 224, .05);
+  --realce-70: rgba(255, 246, 224, .045);
+  --realce-cara: #2E2820;
+  --luz-rasante: rgba(255, 246, 224, .025);
+  --luz-alta: rgba(255, 240, 214, .022);
+}
+
+/* La veta de la piedra se invierte: en la negra las aguas son claras. */
+:root[data-tema='oscuro'] {
+  --veta-textura: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22900%22 height=%22900%22%3E %3Cfilter id=%22v%22 x=%220%22 y=%220%22 width=%22100%25%22 height=%22100%25%22%3E %3CfeTurbulence type=%22fractalNoise%22 baseFrequency=%220.011 0.024%22 numOctaves=%224%22 seed=%229%22 stitchTiles=%22stitch%22/%3E %3CfeColorMatrix type=%22matrix%22 values=%220 0 0 0 0.85 0 0 0 0 0.78 0 0 0 0 0.60 0 0 0 0.028 -0.012%22/%3E %3C/filter%3E %3Crect width=%22900%22 height=%22900%22 filter=%22url(%23v)%22/%3E%3C/svg%3E");
+  --grano-textura: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22%3E %3Cfilter id=%22g%22 x=%220%22 y=%220%22 width=%22100%25%22 height=%22100%25%22%3E %3CfeTurbulence type=%22fractalNoise%22 baseFrequency=%220.8%22 numOctaves=%222%22 seed=%225%22 stitchTiles=%22stitch%22/%3E %3CfeColorMatrix type=%22matrix%22 values=%220 0 0 0 0.9 0 0 0 0 0.85 0 0 0 0 0.7 0 0 0 0.035 -0.014%22/%3E %3C/filter%3E %3Crect width=%22200%22 height=%22200%22 filter=%22url(%23g)%22/%3E%3C/svg%3E");
 }

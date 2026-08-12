@@ -82,8 +82,8 @@ button {
   border-radius: var(--radio-chico);
   color: var(--tinta);
   background-color: var(--marmol-1);
-  background-image: linear-gradient(180deg, #FEFDFA 0%, var(--marmol-1) 100%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), 0 1px 2px rgba(43, 38, 32, .06);
+  background-image: var(--cara-boton);
+  box-shadow: inset 0 1px 0 var(--filo-luz), var(--sombra-boton);
   cursor: pointer;
   transition: border-color var(--transicion), background-color var(--transicion),
     box-shadow var(--transicion), color var(--transicion);
@@ -114,13 +114,13 @@ button[type='submit'],
   font-weight: 600;
   background-color: var(--oro);
   background-image: var(--oro-lamina-relleno);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .55), 0 2px 6px -1px rgba(138, 106, 28, .35);
+  box-shadow: inset 0 1px 0 var(--realce-55), 0 2px 6px -1px rgba(138, 106, 28, .35);
 }
 button.primario:hover:not(:disabled),
 button[type='submit']:hover:not(:disabled),
 .login-card button:hover:not(:disabled) {
   background-image:
-    linear-gradient(180deg, rgba(255, 255, 255, .55), rgba(255, 255, 255, .22)),
+    linear-gradient(180deg, var(--realce-55), var(--realce-55)),
     var(--oro-lamina);
   border-color: var(--oro-oscuro);
 }
@@ -145,7 +145,7 @@ button.ghost {
 button.ghost:hover:not(:disabled) {
   color: var(--tinta);
   border-color: var(--veta);
-  background: rgba(255, 255, 255, .6);
+  background: var(--realce-55);
 }
 
 button.chico {
@@ -177,7 +177,7 @@ button.active {
   font-weight: 600;
   border-color: transparent;
   background-color: var(--marmol-0);
-  background-image: linear-gradient(180deg, #FFFFFF 0%, var(--oro-velo) 100%);
+  background-image: linear-gradient(180deg, var(--realce-cara) 0%, var(--oro-velo) 100%);
   position: relative;
   box-shadow: none;
 }
@@ -310,7 +310,7 @@ legend {
   white-space: nowrap;
 }
 .tabla tbody tr { transition: background-color var(--transicion); }
-.tabla tbody tr:hover { background: rgba(255, 255, 255, .7); }
+.tabla tbody tr:hover { background: var(--realce-70); }
 .tabla tbody tr:last-child td { border-bottom: none; }
 
 /* Fila seleccionada: la piedra se abre en el borde izquierdo */

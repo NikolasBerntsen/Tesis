@@ -65,7 +65,7 @@ describe('integración — sesión efímera del operador de campo', () => {
     expect(JSON.parse(r.body.event.meta).detalle.motivo).toBe('cierre de sesión');
   });
 
-  it('el operador de campo no opera drones ni ve alertas, eventos o usuarios', async () => {
+  it('el operador de campo no opera drones ni ve alertas, eventos o usuarios, pero sí nombra y reasigna base', async () => {
     const tok = (await login(srv.base, 'campo', CREDS.campo))!;
     const prohibidos: [string, string, string?][] = [
       ['POST', `/api/drones/${DRON.alfa}/control`],
@@ -74,7 +74,6 @@ describe('integración — sesión efímera del operador de campo', () => {
       ['POST', `/api/drones/${DRON.alfa}/resume`],
       ['POST', `/api/drones/${DRON.alfa}/goto`, JSON.stringify({ routeId: 1, index: 0 })],
       ['POST', `/api/drones/${DRON.alfa}/manual_move`, JSON.stringify({ bearing: 0, distanceM: 10 })],
-      ['PATCH', `/api/drones/${DRON.alfa}`, JSON.stringify({ displayName: 'Nope' })],
       ['DELETE', `/api/drones/${DRON.alfa}`],
       ['GET', '/api/alerts'],
       ['GET', '/api/events'],
@@ -85,6 +84,20 @@ describe('integración — sesión efímera del operador de campo', () => {
     for (const [method, path, body] of prohibidos) {
       const r = await api(srv.base, path, tok, { method, body });
       expect(r.status, `${method} ${path}`).toBe(403);
+    }
+
+    // Lo que SÍ puede: es quien está parado al lado del aparato cuando lo
+    // despliega, así que nombrarlo y asignarle base es su trabajo.
+    const permitido = await api(srv.base, `/api/drones/${DRON.alfa}`, tok, {
+      method: 'PATCH',
+      body: JSON.stringify({ displayName: 'Alfa en campo' }),
+    });
+    expect(permitido.status).toBe(200);
+
+    // pero el activo en sí sigue siendo de supervisor
+    for (const body of [{ model: 'Otro' }, { active: false }, { inventoryCode: 'INV-9' }]) {
+      const r = await api(srv.base, `/api/drones/${DRON.alfa}`, tok, { method: 'PATCH', body: JSON.stringify(body) });
+      expect(r.status, JSON.stringify(body)).toBe(403);
     }
   });
 
@@ -120,7 +133,7 @@ describe('integración — sesión efímera del operador de campo', () => {
     dron.ws.send(JSON.stringify({ type: 'alert_request', alertType: 'PERSON', snapshotBase64: 'SNAP-PRIVADO' }));
     await api(srv.base, '/api/users', adm, {
       method: 'POST',
-      body: JSON.stringify({ username: 'espiado', password: 'clave123', role: 'operator' }),
+      body: JSON.stringify({ username: 'espiado', fullName: 'Persona espiado', role: 'operator' }),
     });
     // el alta de un dron sí le corresponde, y hace de barrera: si llegó esto,
     // todo lo anterior ya se difundió

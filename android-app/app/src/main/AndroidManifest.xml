@@ -25,6 +25,7 @@
         tools:replace="android:usesCleartextTraffic,android:networkSecurityConfig">
         <activity
             android:name=".LoginActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -34,10 +35,20 @@
 
         <activity
             android:name=".FieldMenuActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:exported="false" />
 
         <activity
             android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:exported="false" />
+
+        <!-- El escáner de ZXing arranca apaisado por defecto, que para leer un
+             sticker pegado en un dron es incómodo: se fija vertical. -->
+        <activity
+            android:name="com.journeyapps.barcodescanner.CaptureActivity"
+            android:screenOrientation="portrait"
+            android:stateNotNeeded="true"
+            tools:replace="android:screenOrientation" />
     </application>
 </manifest>

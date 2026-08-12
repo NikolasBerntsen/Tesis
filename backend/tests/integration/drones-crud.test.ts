@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { seed, startServer, login, api, connectWs, crearDron, limpiarBase, CREDS, DRON, type TestServer, type WsClient } from '../helpers';
+import { seed, startServer, login, api, connectWs, crearBase, crearDron, limpiarBase, CREDS, DRON, type TestServer, type WsClient } from '../helpers';
 
 // Los drones como activos: alta desde el campo, edición, borrado lógico y
 // restauración, con la ficha (`DroneCard`) que consume la consola.
@@ -10,6 +10,8 @@ describe('integración — ABM de drones', () => {
   let sup = '';
   let adm = '';
   let operWs: WsClient;
+  let oeste: { id: number };
+  let sur: { id: number };
 
   beforeAll(async () => {
     seed();
@@ -19,6 +21,8 @@ describe('integración — ABM de drones', () => {
     sup = (await login(srv.base, 'supervisor', CREDS.supervisor))!;
     adm = (await login(srv.base, 'admin', CREDS.admin))!;
     operWs = await connectWs(srv.wsUrl, op);
+    oeste = await crearBase(srv.base, sup, { name: 'Base Oeste', lat: -34.85, lon: -56.21 });
+    sur = await crearBase(srv.base, sup, { name: 'Base Sur Nueva', lat: -34.87, lon: -56.22 });
   });
   afterAll(async () => {
     await operWs.close();
@@ -38,7 +42,7 @@ describe('integración — ABM de drones', () => {
   it('el operador de campo da de alta un dron y recibe el hash para el QR', async () => {
     const r = await api(srv.base, '/api/drones', campo, {
       method: 'POST',
-      body: JSON.stringify({ displayName: 'Delta', model: 'DJI Air 3', base: { name: 'Base Oeste', lat: -34.85, lon: -56.21 } }),
+      body: JSON.stringify({ displayName: 'Delta', model: 'DJI Air 3', inventoryCode: 'INV-0042', baseId: oeste.id }),
     });
     expect(r.status).toBe(201);
     expect(r.body.hash).toMatch(/^[0-9a-f]{32}$/);
@@ -50,6 +54,8 @@ describe('integración — ABM de drones', () => {
     expect(r.body.deletedAt).toBeNull();
     expect(r.body.online).toBe(false);
     expect(r.body.controlledBy).toBeNull();
+    expect(r.body.inventoryCode).toBe('INV-0042');
+    expect(r.body.baseId).toBe(oeste.id);
     expect(r.body.base).toEqual({ name: 'Base Oeste', lat: -34.85, lon: -56.21 });
 
     // la consola se entera sin repollear
@@ -62,11 +68,10 @@ describe('integración — ABM de drones', () => {
     expect(meta.despues).toEqual({
       displayName: 'Delta',
       model: 'DJI Air 3',
-      activo: true,
+      inventario: 'INV-0042',
+      operativo: true,
       eliminado: false,
       base: 'Base Oeste',
-      baseLat: -34.85,
-      baseLon: -56.21,
     });
     expect(ev.source).toBe('campo');
   });
@@ -77,29 +82,47 @@ describe('integración — ABM de drones', () => {
     expect(d.base).toBeNull();
   });
 
-  it('alta inválida: nombre vacío o largo, modelo largo y bases mal formadas dan 400', async () => {
+  it('alta inválida: nombre, modelo, inventario y base referenciada mal dan 400', async () => {
     const malos: object[] = [
       { displayName: '   ' },
       {},
       { displayName: 'x'.repeat(41) },
       { displayName: 'Ok', model: 'm'.repeat(41) },
-      { displayName: 'Ok', base: 'Base Norte' },
-      { displayName: 'Ok', base: { name: 'Norte' } },
-      { displayName: 'Ok', base: { lat: 'x', lon: 2 } },
-      { displayName: 'Ok', base: { lat: 91, lon: 2 } },
-      { displayName: 'Ok', base: { lat: 1, lon: 181 } },
-      { displayName: 'Ok', base: { name: 'b'.repeat(41), lat: 1, lon: 2 } },
+      { displayName: 'Ok', inventoryCode: 'i'.repeat(31) },
+      { displayName: 'Ok', baseId: 'Base Norte' },
+      { displayName: 'Ok', baseId: 0 },
+      { displayName: 'Ok', baseId: 1.5 },
+      // una base que no existe no se puede asignar
+      { displayName: 'Ok', baseId: 99999 },
     ];
     for (const body of malos) {
       const r = await api(srv.base, '/api/drones', sup, { method: 'POST', body: JSON.stringify(body) });
       expect(r.status, JSON.stringify(body)).toBe(400);
     }
-    // base sin nombre cae al nombre por defecto
-    const conDefault = await crearDron(srv.base, sup, { displayName: 'SinNombreDeBase', base: { name: '', lat: 1, lon: 2 } });
-    expect(conDefault.base).toEqual({ name: 'Base', lat: 1, lon: 2 });
-    // base explícitamente nula es válida
-    const sinBase = await crearDron(srv.base, sup, { displayName: 'SinBase', base: null });
+    // base explícitamente nula es válida: un dron puede no tener base asignada
+    const sinBase = await crearDron(srv.base, sup, { displayName: 'SinBase', baseId: null });
     expect(sinBase.base).toBeNull();
+    expect(sinBase.baseId).toBeNull();
+  });
+
+  it('no se puede asignar un dron a una base eliminada o desactivada', async () => {
+    const muerta = await crearBase(srv.base, sup, { name: 'Base Fantasma', lat: -34.9, lon: -56.3 });
+    await api(srv.base, `/api/bases/${muerta.id}`, sup, { method: 'DELETE' });
+    const rBorrada = await api(srv.base, '/api/drones', sup, {
+      method: 'POST',
+      body: JSON.stringify({ displayName: 'Huérfano', baseId: muerta.id }),
+    });
+    expect(rBorrada.status).toBe(400);
+    expect(rBorrada.body.error).toMatch(/eliminada/i);
+
+    const apagada = await crearBase(srv.base, sup, { name: 'Base Apagada', lat: -34.91, lon: -56.31 });
+    await api(srv.base, `/api/bases/${apagada.id}`, sup, { method: 'PATCH', body: JSON.stringify({ active: false }) });
+    const rInactiva = await api(srv.base, '/api/drones', sup, {
+      method: 'POST',
+      body: JSON.stringify({ displayName: 'Huérfano2', baseId: apagada.id }),
+    });
+    expect(rInactiva.status).toBe(400);
+    expect(rInactiva.body.error).toMatch(/no está activa/i);
   });
 
   it('el operador de consola no da de alta drones (permiso lateral, no jerárquico)', async () => {
@@ -134,20 +157,20 @@ describe('integración — ABM de drones', () => {
   });
 
   it('PATCH registra el antes y el después campo a campo', async () => {
-    const d = await crearDron(srv.base, sup, { displayName: 'Comparable', model: 'M1', base: { name: 'Norte', lat: 1, lon: 2 } });
+    const d = await crearDron(srv.base, sup, { displayName: 'Comparable', model: 'M1', baseId: oeste.id });
     await api(srv.base, `/api/drones/${d.hash}`, sup, {
       method: 'PATCH',
-      body: JSON.stringify({ displayName: 'Comparable-2', base: { name: 'Sur', lat: 3, lon: 4 } }),
+      body: JSON.stringify({ displayName: 'Comparable-2', baseId: sur.id }),
     });
 
     const meta = JSON.parse((await ultimoEvento('DRONE_UPDATED')).meta);
-    expect(meta.antes).toEqual({ displayName: 'Comparable', model: 'M1', activo: true, eliminado: false, base: 'Norte', baseLat: 1, baseLon: 2 });
-    expect(meta.despues).toEqual({ displayName: 'Comparable-2', model: 'M1', activo: true, eliminado: false, base: 'Sur', baseLat: 3, baseLon: 4 });
+    expect(meta.antes).toEqual({ displayName: 'Comparable', model: 'M1', inventario: '', operativo: true, eliminado: false, base: 'Base Oeste' });
+    expect(meta.despues).toEqual({ displayName: 'Comparable-2', model: 'M1', inventario: '', operativo: true, eliminado: false, base: 'Base Sur Nueva' });
   });
 
-  it('PATCH con base:null borra la base del dron', async () => {
-    const d = await crearDron(srv.base, sup, { displayName: 'SinBaseLuego', base: { name: 'Norte', lat: 1, lon: 2 } });
-    const r = await api(srv.base, `/api/drones/${d.hash}`, sup, { method: 'PATCH', body: JSON.stringify({ base: null }) });
+  it('PATCH con baseId:null desasigna la base del dron', async () => {
+    const d = await crearDron(srv.base, sup, { displayName: 'SinBaseLuego', baseId: oeste.id });
+    const r = await api(srv.base, `/api/drones/${d.hash}`, sup, { method: 'PATCH', body: JSON.stringify({ baseId: null }) });
     expect(r.status).toBe(200);
     expect(r.body.base).toBeNull();
   });
@@ -265,8 +288,10 @@ describe('integración — listado de drones', () => {
       droneId: DRON.alfa,
       displayName: 'Alfa',
       model: 'DJI Mini 3',
+      inventoryCode: '',
       active: true,
       deletedAt: null,
+      baseId: expect.any(Number),
       base: { name: 'Base Norte', lat: -34.8565, lon: -56.2075 },
       online: false,
       lastStatus: null,

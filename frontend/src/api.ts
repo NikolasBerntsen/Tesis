@@ -1,4 +1,5 @@
 import type {
+  BaseAsset,
   CamposMeta,
   Drone,
   EventRow,
@@ -140,6 +141,21 @@ export function traerDrones(opts: { incluirEliminados?: boolean } = {}): Promise
 
 export function traerUsuarios(opts: { incluirEliminados?: boolean } = {}): Promise<UserView[]> {
   return api<UserView[]>(`/users${armarQuery({ includeDeleted: opts.incluirEliminados ? 1 : undefined })}`);
+}
+
+export function traerBases(opts: { incluirEliminadas?: boolean; soloActivas?: boolean } = {}): Promise<BaseAsset[]> {
+  return api<BaseAsset[]>(
+    `/bases${armarQuery({
+      includeDeleted: opts.incluirEliminadas ? 1 : undefined,
+      soloActivas: opts.soloActivas ? 1 : undefined,
+    })}`,
+  );
+}
+
+export function buscarUsuarios(opts: { incluirEliminados?: boolean; q?: string } = {}): Promise<UserView[]> {
+  return api<UserView[]>(
+    `/users${armarQuery({ includeDeleted: opts.incluirEliminados ? 1 : undefined, q: opts.q || undefined })}`,
+  );
 }
 
 // ---- `meta` de los eventos ----

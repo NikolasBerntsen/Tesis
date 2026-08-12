@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { seed, startServer, login, api, emparejar, CREDS, DRON, type TestServer } from '../helpers';
+import { crearUsuario, seed, startServer, login, api, emparejar, CREDS, DRON, type TestServer } from '../helpers';
 
 describe('integración — login, /me y cierre de sesión', () => {
   let srv: TestServer;
@@ -41,7 +41,7 @@ describe('integración — login, /me y cierre de sesión', () => {
   it('login con contraseña incorrecta da 401', async () => {
     const r = await api(srv.base, '/api/auth/login', null, {
       method: 'POST',
-      body: JSON.stringify({ username: 'operador', password: 'mala' }),
+      body: JSON.stringify({ username: 'operador', password: 'equivocada' }),
     });
     expect(r.status).toBe(401);
   });
@@ -50,12 +50,8 @@ describe('integración — login, /me y cierre de sesión', () => {
   // decir "tu cuenta ya no está" en vez de mandar a reescribir la contraseña.
   it('el rechazo distingue credenciales, cuenta eliminada y cuenta desactivada', async () => {
     const adm = await login(srv.base, 'admin', CREDS.admin);
-    for (const username of ['ex1', 'ex2']) {
-      await api(srv.base, '/api/users', adm, {
-        method: 'POST',
-        body: JSON.stringify({ username, password: 'clave123', role: 'operator' }),
-      });
-    }
+    const ex1u = await crearUsuario(srv.base, adm!, { username: 'ex1' });
+    const ex2u = await crearUsuario(srv.base, adm!, { username: 'ex2' });
     await api(srv.base, '/api/users/ex1', adm, { method: 'DELETE' });
     await api(srv.base, '/api/users/ex2', adm, { method: 'PATCH', body: JSON.stringify({ active: false }) });
 
@@ -66,11 +62,11 @@ describe('integración — login, /me y cierre de sesión', () => {
     expect(mala.status).toBe(401);
     expect(mala.body.error).toBe('Credenciales inválidas');
 
-    const eliminada = await intento('ex1', 'clave123');
+    const eliminada = await intento('ex1', ex1u.password);
     expect(eliminada.status).toBe(401);
     expect(eliminada.body.error).toMatch(/eliminada/i);
 
-    const desactivada = await intento('ex2', 'clave123');
+    const desactivada = await intento('ex2', ex2u.password);
     expect(desactivada.status).toBe(401);
     expect(desactivada.body.error).toMatch(/desactivada/i);
   });
@@ -118,13 +114,9 @@ describe('integración — login, /me y cierre de sesión', () => {
 
   it('una cuenta desactivada no puede iniciar sesión y su token viejo deja de servir', async () => {
     const adm = await login(srv.base, 'admin', CREDS.admin);
-    const alta = await api(srv.base, '/api/users', adm, {
-      method: 'POST',
-      body: JSON.stringify({ username: 'temporal', password: 'temporal1', role: 'operator' }),
-    });
-    expect(alta.status).toBe(201);
+    const tmp0 = await crearUsuario(srv.base, adm!, { username: 'temporal' });
 
-    const tokViejo = await login(srv.base, 'temporal', 'temporal1');
+    const tokViejo = await login(srv.base, 'temporal', tmp0.password);
     expect(tokViejo).toBeTruthy();
 
     const desact = await api(srv.base, '/api/users/temporal', adm, {
@@ -135,7 +127,7 @@ describe('integración — login, /me y cierre de sesión', () => {
     expect(desact.body.active).toBe(false);
 
     // ya no inicia sesión
-    expect(await login(srv.base, 'temporal', 'temporal1')).toBeNull();
+    expect(await login(srv.base, 'temporal', tmp0.password)).toBeNull();
     // y el token que tenía deja de servir (flag active EN VIVO)
     const conViejo = await api(srv.base, '/api/me', tokViejo);
     expect(conViejo.status).toBe(403);

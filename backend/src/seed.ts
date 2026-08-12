@@ -4,10 +4,10 @@ import { db } from './db';
 
 // Usuarios, drones y rutas de demostración. Ejecutar con: npm run seed
 const humans = [
-  { username: 'campo', password: 'campo123', role: 'field_operator' },
-  { username: 'operador', password: 'operador123', role: 'operator' },
-  { username: 'supervisor', password: 'supervisor123', role: 'supervisor' },
-  { username: 'admin', password: 'admin123', role: 'admin' },
+  { username: 'campo', password: 'campo123', role: 'field_operator', fullName: 'Camila Ferreira' },
+  { username: 'operador', password: 'operador123', role: 'operator', fullName: 'Martín Olivera' },
+  { username: 'supervisor', password: 'supervisor123', role: 'supervisor', fullName: 'Lucía Sosa' },
+  { username: 'admin', password: 'admin123', role: 'admin', fullName: 'Diego Antúnez' },
 ];
 
 /**
@@ -63,8 +63,9 @@ const routes = [
 for (const h of humans) {
   const exists = db.prepare('SELECT 1 FROM users WHERE username = ?').get(h.username);
   if (!exists) {
-    db.prepare('INSERT INTO users (username, password_hash, role, can_control) VALUES (?, ?, ?, ?)').run(
+    db.prepare('INSERT INTO users (username, full_name, password_hash, role, can_control) VALUES (?, ?, ?, ?, ?)').run(
       h.username,
+      h.fullName,
       bcrypt.hashSync(h.password, 10),
       h.role,
       // El operador de campo despliega drones, no los pilotea
@@ -72,6 +73,17 @@ for (const h of humans) {
     );
     console.log(`Usuario creado: ${h.username} (${h.role})`);
   }
+}
+
+/** Las bases son un activo propio: se dan de alta una vez y los drones apuntan. */
+function idDeBase(b: { name: string; lat: number; lon: number }): number {
+  const ya = db.prepare('SELECT id FROM bases WHERE name = ? AND deleted_at IS NULL').get(b.name) as { id: number } | undefined;
+  if (ya) return ya.id;
+  const info = db
+    .prepare("INSERT INTO bases (name, lat, lon, created_at, created_by) VALUES (?, ?, ?, ?, 'seed')")
+    .run(b.name, b.lat, b.lon, new Date().toISOString());
+  console.log(`Base creada: ${b.name}`);
+  return Number(info.lastInsertRowid);
 }
 
 console.log('Drones de demostración (el contenido del QR es el hash):');
@@ -88,9 +100,9 @@ for (const d of drones) {
     continue;
   }
   db.prepare(
-    `INSERT INTO drones (hash, display_name, model, base_name, base_lat, base_lon, created_at, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'seed')`,
-  ).run(hash, d.displayName, d.model, d.base.name, d.base.lat, d.base.lon, new Date().toISOString());
+    `INSERT INTO drones (hash, display_name, model, inventory_code, base_id, created_at, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, 'seed')`,
+  ).run(hash, d.displayName, d.model, `INV-${d.semilla.toUpperCase()}`, idDeBase(d.base), new Date().toISOString());
   console.log(`  ${d.displayName.padEnd(8)} ${hash}  (${d.model}, ${d.base.name})`);
 }
 

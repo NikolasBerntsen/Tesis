@@ -184,3 +184,27 @@ describe('DroneDetail', () => {
     }
   });
 });
+
+describe('DroneDetail — distribución y previsualización de la ruta', () => {
+  it('el estado va arriba de la grilla, no adentro de una columna', () => {
+    renderDetail();
+    const container = document.body;
+    const estado = container.querySelector('.status-grid');
+    const grilla = container.querySelector('.grid-operacion');
+    expect(estado).toBeTruthy();
+    expect(grilla).toBeTruthy();
+    // el estado no está contenido en la grilla: la cruza por arriba
+    expect(grilla!.contains(estado!)).toBe(false);
+  });
+
+  it('el video queda en la columna ancha, junto al mapa', () => {
+    renderDetail();
+    const container = document.body;
+    const ancha = container.querySelector('.col-video');
+    expect(ancha).toBeTruthy();
+    // el video y la tarjeta de ubicación viven en la columna ancha; el mapa en
+    // sí está doblado en este archivo, así que se verifica su encabezado
+    expect(ancha!.querySelector('.video, .video.placeholder')).toBeTruthy();
+    expect(ancha!.querySelector('.mapa-head')).toBeTruthy();
+  });
+});

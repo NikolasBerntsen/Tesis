@@ -76,6 +76,10 @@ export default function QrDronModal({ dron, onCerrar }: { dron: Drone; onCerrar:
           </div>
           <p className="qr-sticker-nombre">{dron.displayName}</p>
           {dron.model && <p className="qr-sticker-modelo">{dron.model}</p>}
+          {/* El número de inventario va impreso al lado del código, no adentro:
+              en el QR viaja solo el hash, para que la foto de un sticker no
+              revele nada del sistema. */}
+          {dron.inventoryCode && <p className="qr-sticker-inventario">Inventario {dron.inventoryCode}</p>}
           <p className="qr-sticker-hash mono">{dron.hash}</p>
         </div>
       </div>

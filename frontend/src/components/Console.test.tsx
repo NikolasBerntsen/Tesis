@@ -97,10 +97,11 @@ describe('Console', () => {
     // El enlace se dibuja con .estado (punto de currentColor), sin el carácter
     // decorativo que traía el texto.
     expect(screen.getByText('conectado')).toHaveClass('conn', 'estado', 'ok');
-    // Un operador sólo tiene su pantalla de trabajo: ni activos, ni usuarios,
-    // ni registro.
+    // El operador arranca en su pantalla de trabajo. Ve el inventario y las
+    // bases para ubicarse, pero no administra usuarios ni lee el registro.
     expect(screen.getByRole('button', { name: 'Operación' })).toHaveClass('active');
-    expect(screen.queryByRole('button', { name: 'Drones' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Drones' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Bases' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Usuarios' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Registro' })).not.toBeInTheDocument();
   });

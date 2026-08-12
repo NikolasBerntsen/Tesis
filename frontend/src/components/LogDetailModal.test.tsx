@@ -258,8 +258,15 @@ describe('LogDetailModal', () => {
     expect(screen.getByText('3')).toBeInTheDocument();
     expect(document.querySelector('time')).toHaveTextContent('una fecha rota');
     expect(await screen.findByText('OTRO')).toBeInTheDocument();
-    // Origen, modelo, motivo y las coordenadas de la alerta quedan en guión
-    expect(screen.getAllByText('—').length).toBe(4);
+    // Origen, modelo, motivo y las coordenadas de la alerta quedan en guión.
+    // Se verifica campo por campo y no contando guiones en todo el documento:
+    // el conteo dependía de cómo el entorno formatea una fecha inválida, así
+    // que pasaba local y fallaba en el CI.
+    for (const etiqueta of ['Origen', 'Modelo', 'Motivo', 'Coordenadas']) {
+      const dt = [...document.querySelectorAll('dt')].find((n) => n.textContent === etiqueta);
+      expect(dt, etiqueta).toBeTruthy();
+      expect(dt!.nextElementSibling).toHaveTextContent('—');
+    }
   });
 
   it('se cierra con la cruz, con el pie, con el velo y con Escape, pero no al tocar la caja', async () => {

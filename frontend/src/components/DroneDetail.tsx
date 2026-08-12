@@ -124,13 +124,18 @@ export default function DroneDetail({
   const mover = (bearing: number) => () =>
     llamar(`/drones/${drone.droneId}/manual_move`, { method: 'POST', body: JSON.stringify({ bearing, distanceM: 25 }) });
 
-  // La ruta que se dibuja: la activa, o la elegida en el selector si no hay vuelo
+  // La ruta que se dibuja: la activa, o la elegida en el selector si no hay
+  // vuelo. En ese segundo caso es una PREVISUALIZACIÓN: todavía no se ordenó
+  // nada, así que sus nodos se pintan distinto para no confundirlos con los de
+  // un patrullaje en curso.
   const rutaMapa = rutaActiva ?? routes.find((r) => r.id === rutaElegida) ?? null;
+  const previsualizando = !rutaActiva && rutaMapa !== null;
   const waypoints = useMemo<WaypointsLayer | null>(() => {
     if (!rutaMapa) return null;
     return {
       route: rutaMapa,
       visitedIndex: rutaActiva ? (status?.waypointIndex ?? -1) : -1,
+      preview: previsualizando,
       onLabel: (index, label) => onWaypointLabel(rutaMapa.id, index, label),
       canForce: puedeControlar && drone.online && (!controlador || soyControlador || esSupervisor),
       canContinue: interrumpido,
@@ -163,10 +168,36 @@ export default function DroneDetail({
           {error}
         </p>
       )}
-      <div className="grid">
-        <section className="col">
-          <DroneStatusCard status={status} onResumePatrol={retomar} />
+      {/* El estado es lo primero que se mira y no compite con nada: cruza todo
+          el ancho arriba. Debajo, el video manda sobre el mapa —es donde pasa
+          lo que hay que decidir— y el resto queda en la columna angosta. */}
+      <DroneStatusCard status={status} onResumePatrol={retomar} />
 
+      <div className="grid-operacion">
+        <section className="col col-video">
+          <LiveVideo frame={frame} />
+          <div className="card">
+            <div className="mapa-head">
+              <h2>Ubicación</h2>
+              <button
+                onClick={retomar}
+                disabled={!drone.online || !interrumpido}
+                title="Vuelve al patrullaje desde el último nodo recorrido"
+              >
+                Retomar ruta
+              </button>
+            </div>
+            <DronesMap items={items} alwaysShowLine waypoints={waypoints} />
+            <div className="mapa-leyenda">
+              <span className="estado accent">Dron</span>
+              <span className="estado">Base</span>
+              <span className="estado bad">Nodo pendiente</span>
+              <span className="estado ok">Nodo recorrido</span>
+              {previsualizando && <span className="estado info">Ruta a comenzar</span>}
+            </div>
+          </div>
+        </section>
+        <section className="col">
           <div className="card">
             <h2>Patrullaje</h2>
             <div className="hueco">
@@ -252,28 +283,6 @@ export default function DroneDetail({
           )}
 
           <AlertsPanel alerts={droneAlerts} onDecide={decide} />
-        </section>
-        <section className="col">
-          <div className="card">
-            <div className="mapa-head">
-              <h2>Ubicación</h2>
-              <button
-                onClick={retomar}
-                disabled={!drone.online || !interrumpido}
-                title="Vuelve al patrullaje desde el último nodo recorrido"
-              >
-                Retomar ruta
-              </button>
-            </div>
-            <DronesMap items={items} alwaysShowLine waypoints={waypoints} />
-            <div className="mapa-leyenda">
-              <span className="estado accent">Dron</span>
-              <span className="estado">Base</span>
-              <span className="estado bad">Nodo pendiente</span>
-              <span className="estado ok">Nodo recorrido</span>
-            </div>
-          </div>
-          <LiveVideo frame={frame} />
           <EventLog events={events} />
         </section>
       </div>

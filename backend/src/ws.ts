@@ -123,8 +123,12 @@ export interface DroneCard {
   droneId: string;
   displayName: string;
   model: string;
+  /** Número de inventario con el que la organización identifica al aparato. */
+  inventoryCode: string;
+  /** `active` es el estado operativo: un dron no operativo no puede conectarse. */
   active: boolean;
   deletedAt: string | null;
+  baseId: number | null;
   base: DroneBase | null;
   online: boolean;
   lastStatus: Record<string, unknown> | null;
@@ -134,6 +138,8 @@ export interface DroneCard {
 function cardDesdeActivo(d: DroneAssetView): DroneCard {
   return {
     hash: d.hash,
+    inventoryCode: d.inventoryCode,
+    baseId: d.baseId,
     droneId: d.hash,
     displayName: d.displayName,
     model: d.model,

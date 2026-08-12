@@ -2,13 +2,13 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import UsersView from './UsersView';
-import { api, traerUsuarios } from '../api';
+import { api, buscarUsuarios } from '../api';
 import { makeMe, makeUser } from '../test/fixtures';
 import type { RolConsola, UserView } from '../types';
 
-vi.mock('../api', () => ({ api: vi.fn(), traerUsuarios: vi.fn() }));
+vi.mock('../api', () => ({ api: vi.fn(), buscarUsuarios: vi.fn() }));
 const apiMock = vi.mocked(api);
-const traerMock = vi.mocked(traerUsuarios);
+const traerMock = vi.mocked(buscarUsuarios);
 
 const BORRADO = '2024-03-01T10:00:00.000Z';
 
@@ -31,7 +31,7 @@ function servir(...listas: UserView[][]) {
 
 beforeEach(() => {
   apiMock.mockReset();
-  apiMock.mockResolvedValue({});
+  apiMock.mockResolvedValue({ username: 'nuevo', password: 'ABCD-EFGH-JKLM-NPQR' });
   traerMock.mockReset();
   traerMock.mockResolvedValue([makeUser()]);
 });
@@ -51,7 +51,7 @@ describe('UsersView', () => {
     montar();
 
     expect(await screen.findByText('oper1')).toBeInTheDocument();
-    expect(traerMock).toHaveBeenCalledWith({ incluirEliminados: false });
+    expect(traerMock).toHaveBeenCalledWith({ incluirEliminados: false, q: '' });
     // Los roles aparecen también en el <select> del alta, por eso se acota a la celda.
     expect(screen.getByText('Operador', { selector: 'td' })).toBeInTheDocument();
     expect(screen.getByText('Supervisor', { selector: 'td' })).toBeInTheDocument();
@@ -249,7 +249,7 @@ describe('UsersView', () => {
       expect(screen.queryByText('oper1')).not.toBeInTheDocument();
 
       await userEvent.click(screen.getByRole('button', { name: 'Ver eliminados' }));
-      await waitFor(() => expect(traerMock).toHaveBeenLastCalledWith({ incluirEliminados: true }));
+      await waitFor(() => expect(traerMock).toHaveBeenLastCalledWith({ incluirEliminados: true, q: '' }));
 
       await screen.findByText('oper1');
       const eliminada = within(fila('oper1'));
@@ -261,7 +261,7 @@ describe('UsersView', () => {
 
       // Y el toggle vuelve a esconderlos.
       await userEvent.click(screen.getByRole('button', { name: 'Ocultar eliminados' }));
-      await waitFor(() => expect(traerMock).toHaveBeenLastCalledWith({ incluirEliminados: false }));
+      await waitFor(() => expect(traerMock).toHaveBeenLastCalledWith({ incluirEliminados: false, q: '' }));
     });
 
     it('el admin restaura a un usuario eliminado', async () => {
@@ -281,7 +281,7 @@ describe('UsersView', () => {
       await screen.findByText('oper1');
 
       await userEvent.click(screen.getByRole('button', { name: 'Ver eliminados' }));
-      await waitFor(() => expect(traerMock).toHaveBeenLastCalledWith({ incluirEliminados: true }));
+      await waitFor(() => expect(traerMock).toHaveBeenLastCalledWith({ incluirEliminados: true, q: '' }));
 
       expect(await screen.findByText('Eliminado')).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Restaurar' })).not.toBeInTheDocument();
@@ -296,14 +296,16 @@ describe('UsersView', () => {
 
       const usuario = within(alta).getByLabelText('Usuario');
       await userEvent.type(usuario, 'nuevo1');
-      await userEvent.type(within(alta).getByLabelText('Contraseña'), 'secreta');
+      await userEvent.type(within(alta).getByLabelText('Nombre y apellido'), 'Persona Nueva');
       await userEvent.selectOptions(within(alta).getByLabelText('Rol'), 'supervisor');
       await userEvent.click(within(alta).getByRole('button', { name: 'Crear' }));
 
       await waitFor(() =>
-        expect(apiMock).toHaveBeenCalledWith('/users', {
-          method: 'POST',
-          body: JSON.stringify({ username: 'nuevo1', password: 'secreta', role: 'supervisor', canControl: true }),
+        expect(JSON.parse(apiMock.mock.calls.at(-1)![1].body)).toEqual({
+          username: 'nuevo1',
+          fullName: 'Persona Nueva',
+          role: 'supervisor',
+          canControl: true,
         }),
       );
       await waitFor(() => expect((usuario as HTMLInputElement).value).toBe(''));
@@ -324,13 +326,15 @@ describe('UsersView', () => {
       expect(screen.getByText(/sólo los da de alta y los empareja por QR/)).toBeInTheDocument();
 
       await userEvent.type(within(alta).getByLabelText('Usuario'), 'campo1');
-      await userEvent.type(within(alta).getByLabelText('Contraseña'), 'secreta');
+      await userEvent.type(within(alta).getByLabelText('Nombre y apellido'), 'Persona Nueva');
       await userEvent.click(within(alta).getByRole('button', { name: 'Crear' }));
 
       await waitFor(() =>
-        expect(apiMock).toHaveBeenCalledWith('/users', {
-          method: 'POST',
-          body: JSON.stringify({ username: 'campo1', password: 'secreta', role: 'field_operator', canControl: false }),
+        expect(JSON.parse(apiMock.mock.calls.at(-1)![1].body)).toEqual({
+          username: 'campo1',
+          fullName: 'Persona Nueva',
+          role: 'field_operator',
+          canControl: false,
         }),
       );
       // Al volver a un rol que sí opera, la casilla se rehabilita.
@@ -346,7 +350,7 @@ describe('UsersView', () => {
       const alta = await screen.findByRole('form', { name: 'Crear usuario' });
 
       await userEvent.type(within(alta).getByLabelText('Usuario'), 'oper1');
-      await userEvent.type(within(alta).getByLabelText('Contraseña'), 'secreta');
+      await userEvent.type(within(alta).getByLabelText('Nombre y apellido'), 'Persona Nueva');
       await userEvent.click(within(alta).getByRole('button', { name: 'Crear' }));
 
       expect(await screen.findByRole('alert')).toHaveTextContent('El nombre de usuario ya está en uso');

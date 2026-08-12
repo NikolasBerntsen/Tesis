@@ -19,6 +19,8 @@ export interface MapItem {
 export interface WaypointsLayer {
   route: PatrolRoute;
   visitedIndex: number;
+  /** Ruta elegida pero todavía no ordenada: sus nodos van en otro color. */
+  preview?: boolean;
   onLabel: (index: number, label: string) => void;
   /** Mostrar "Forzar ruta" en el popup (requiere autorización de control). */
   canForce?: boolean;
@@ -40,14 +42,25 @@ const PALETA = {
   oroOscuro: '#8A6A1C', // --oro-oscuro
   oliva: '#4F7A46', // --ok
   oxido: '#9C3B30', // --peligro
+  info: '#3D6076', // --info
 } as const;
 
-/* Las teselas de OpenStreetMap vienen a todo color y son lo que delata al
-   "mapa web genérico". Este lavado las deja en marfil: el mapa pasa a ser una
-   superficie de mármol más y el oro vuelve a ser lo único que brilla. */
-const LAVADO_MARMOL = 'grayscale(1) sepia(.34) saturate(.8) brightness(1.07) contrast(.92)';
+/* El mapa se deja con sus colores propios: lavarlo a marfil lo volvía lindo y
+   difícil de leer, y un mapa es una herramienta de orientación antes que una
+   superficie decorativa. Los marcadores sí siguen la estética, que es lo que
+   distingue a esta consola de cualquier mapa web.
+   En modo oscuro se atenúa apenas: una lámina blanca a pantalla completa en
+   una guardia nocturna encandila. */
+const ATENUAR_OSCURO = 'brightness(.82) contrast(1.04)';
+
+function filtroDeTeselas(): string {
+  return document.documentElement.dataset.tema === 'oscuro' ? ATENUAR_OSCURO : 'none';
+}
 
 const WP_PENDIENTE = PALETA.oxido;
+/* Los nodos de una ruta elegida pero todavía no ordenada: se ven, se pueden
+   inspeccionar, y no se confunden con los de un patrullaje en curso. */
+const WP_PREVIO = PALETA.info;
 const WP_VISITADO = PALETA.oliva;
 const WP_STYLE: L.CircleMarkerOptions = { radius: 7, color: PALETA.marfil, weight: 2, fillOpacity: 1 };
 
@@ -375,7 +388,7 @@ export default function DronesMap({
       maxZoom: 19,
       attribution: '&copy; OpenStreetMap',
     }).addTo(map);
-    vestir(map.getPane('tilePane'), { filter: LAVADO_MARMOL });
+    vestir(map.getPane('tilePane'), { filter: filtroDeTeselas() });
     // Sin la banderita de fábrica: es lo único de color frío que quedaba
     map.attributionControl.setPrefix('Leaflet');
     vestir(map.attributionControl.getContainer(), {
@@ -531,7 +544,12 @@ export default function DronesMap({
       const marker = wpMarkersRef.current[i];
       if (!marker) return;
       marker.setLatLng([wp.lat, wp.lon]);
-      marker.setStyle({ fillColor: i <= (waypoints?.visitedIndex ?? -1) ? WP_VISITADO : WP_PENDIENTE });
+      const color = waypoints?.preview
+        ? WP_PREVIO
+        : i <= (waypoints?.visitedIndex ?? -1)
+          ? WP_VISITADO
+          : WP_PENDIENTE;
+      marker.setStyle({ fillColor: color });
       marker.setTooltipContent(waypointTooltip(i, wp.label));
       // Si está abierto no se toca: reemplazar el HTML borraría lo que se esté tipeando
       if (!marker.isPopupOpen()) {

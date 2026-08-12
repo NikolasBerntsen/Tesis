@@ -295,3 +295,84 @@ describe('integración — migración desde el esquema intermedio (drones como c
     db = db2;
   });
 });
+
+describe('integración — migración de las bases embebidas en los drones', () => {
+  let tmpFile = '';
+  let db: DbLike;
+
+  beforeAll(async () => {
+    tmpFile = archivoTemporal('migracion-bases');
+
+    // Esquema con los drones ya como activos pero con la base todavía embebida
+    // en cada fila: es el estado de producción antes de este cambio.
+    const old = new Database(tmpFile);
+    old.exec(`
+      CREATE TABLE drones (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        hash         TEXT NOT NULL UNIQUE,
+        display_name TEXT NOT NULL,
+        model        TEXT NOT NULL DEFAULT '',
+        active       INTEGER NOT NULL DEFAULT 1,
+        base_name    TEXT,
+        base_lat     REAL,
+        base_lon     REAL,
+        created_at   TEXT NOT NULL,
+        created_by   TEXT,
+        deleted_at   TEXT,
+        deleted_by   TEXT
+      );
+    `);
+    const alta = old.prepare(
+      `INSERT INTO drones (hash, display_name, base_name, base_lat, base_lon, created_at)
+       VALUES (?, ?, ?, ?, ?, '2024-01-01T00:00:00.000Z')`,
+    );
+    // dos drones comparten base y uno tiene otra; un cuarto no tiene ninguna
+    alta.run('a'.repeat(32), 'Alfa', 'Base Norte', -34.85, -56.2);
+    alta.run('b'.repeat(32), 'Bravo', 'Base Norte', -34.85, -56.2);
+    alta.run('c'.repeat(32), 'Charlie', 'Base Sur', -34.9, -56.1);
+    alta.run('d'.repeat(32), 'Delta', null, null, null);
+    old.close();
+
+    db = await abrirConMigraciones(tmpFile);
+  });
+
+  afterAll(() => {
+    db.close();
+    fs.rmSync(tmpFile, { force: true });
+  });
+
+  it('promueve cada base distinta a una fila de `bases`, sin duplicar las compartidas', () => {
+    const bases = db.prepare('SELECT name, lat, lon, created_by FROM bases ORDER BY name').all() as Fila[];
+    expect(bases).toEqual([
+      { name: 'Base Norte', lat: -34.85, lon: -56.2, created_by: 'migracion' },
+      { name: 'Base Sur', lat: -34.9, lon: -56.1, created_by: 'migracion' },
+    ]);
+  });
+
+  it('apunta cada dron a su base, y los dos que la compartían quedan en la misma', () => {
+    const filas = db
+      .prepare('SELECT display_name, base_id FROM drones ORDER BY display_name')
+      .all() as { display_name: string; base_id: number | null }[];
+    const porNombre = Object.fromEntries(filas.map((f) => [f.display_name, f.base_id]));
+
+    expect(porNombre.Alfa).toBe(porNombre.Bravo);
+    expect(porNombre.Charlie).not.toBe(porNombre.Alfa);
+    // el dron sin base no inventa una
+    expect(porNombre.Delta).toBeNull();
+  });
+
+  it('agrega el número de inventario vacío y no pierde el nombre ni el estado', () => {
+    const alfa = db.prepare("SELECT * FROM drones WHERE display_name = 'Alfa'").get() as Fila;
+    expect(alfa.inventory_code).toBe('');
+    expect(alfa.active).toBe(1);
+    expect(alfa.hash).toBe('a'.repeat(32));
+  });
+
+  it('es idempotente: reabrir la base no vuelve a promover', async () => {
+    db.close();
+    const otra = await abrirConMigraciones(tmpFile);
+    expect((otra.prepare('SELECT COUNT(*) AS n FROM bases').get() as { n: number }).n).toBe(2);
+    otra.close();
+    db = await abrirConMigraciones(tmpFile);
+  });
+});
