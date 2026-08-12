@@ -28,11 +28,13 @@ export default defineConfig({
       include: ['src/**/*.ts'],
       // index.ts y seed.ts son entrypoints/datos, no lógica a testear.
       exclude: ['src/index.ts', 'src/seed.ts'],
+      // Pegados a la cobertura real (99.8 / 97.2) con un margen chico: la idea
+      // es que una funcionalidad sin tests rompa el CI, no que quede pasando.
       thresholds: {
-        lines: 85,
-        functions: 85,
-        statements: 85,
-        branches: 75,
+        lines: 97,
+        functions: 97,
+        statements: 97,
+        branches: 94,
       },
     },
   },
