@@ -130,8 +130,36 @@ class CommandCenterClient(private val scope: CoroutineScope) {
         this.token = token
     }
 
-    /** Cierra la sesión: corta el socket y tira el JWT que tenga cargado. */
-    fun cerrarSesion() {
+    /**
+     * Le avisa al Comando Central que la sesión se cierra, para que el cierre
+     * quede en el registro con su motivo. Va a la buena de Dios: en el campo la
+     * conexión se corta sola, y si el aviso no llega el JWT se descarta igual y
+     * la sesión efímera muere por vencimiento.
+     */
+    private fun avisarCierre(motivo: String) {
+        val urlBase = baseUrl
+        val jwt = token
+        if (urlBase.isEmpty() || jwt.isEmpty()) return
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                http.newCall(
+                    Request.Builder()
+                        .url("$urlBase/api/auth/logout")
+                        .header("Authorization", "Bearer $jwt")
+                        .post(JSONObject().put("motivo", motivo).toString().toRequestBody(json))
+                        .build(),
+                ).execute().close()
+            }
+        }
+    }
+
+    /**
+     * Cierra la sesión: avisa al Comando Central, corta el socket y tira el JWT.
+     * Sin [motivo] no se avisa (sirve para descartar una sesión que nunca llegó
+     * a abrirse, como la de un rol sin permiso).
+     */
+    fun cerrarSesion(motivo: String = "") {
+        if (motivo.isNotEmpty()) avisarCierre(motivo)
         disconnect()
         token = ""
     }

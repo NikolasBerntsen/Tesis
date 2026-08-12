@@ -88,7 +88,7 @@ class FieldMenuActivity : AppCompatActivity() {
             getString(R.string.menu_campo_quien, SesionDeCampo.usuario, etiquetaDeRol(this, SesionDeCampo.rol))
         binding.btnEscanear.setOnClickListener { escanearQr() }
         binding.btnConfiguracion.setOnClickListener { configurarEnlace() }
-        binding.btnCerrarSesion.setOnClickListener { volverAlLogin(getString(R.string.aviso_sesion_cerrada)) }
+        binding.btnCerrarSesion.setOnClickListener { volverAlLogin(getString(R.string.aviso_sesion_cerrada), SesionDeCampo.Motivo.MANUAL) }
 
         // Salir con "atrás" también cierra la sesión: el JWT del operador no se
         // queda vivo en el proceso esperando a que alguien reabra la app.
@@ -96,7 +96,7 @@ class FieldMenuActivity : AppCompatActivity() {
             this,
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
-                    SesionDeCampo.cerrar()
+                    SesionDeCampo.cerrar(SesionDeCampo.Motivo.SALIDA)
                     finish()
                 }
             },
@@ -108,7 +108,7 @@ class FieldMenuActivity : AppCompatActivity() {
     /** La sesión puede haber vencido mientras la pantalla estaba en segundo plano. */
     override fun onResume() {
         super.onResume()
-        if (!SesionDeCampo.vigente) volverAlLogin(getString(R.string.aviso_sesion_vencida))
+        if (!SesionDeCampo.vigente) volverAlLogin(getString(R.string.aviso_sesion_vencida), SesionDeCampo.Motivo.VENCIDA)
     }
 
     private fun llevarLaCuentaRegresiva() {
@@ -116,7 +116,7 @@ class FieldMenuActivity : AppCompatActivity() {
             while (isActive) {
                 val restante = SesionDeCampo.restanteMs()
                 if (restante == 0L) {
-                    volverAlLogin(getString(R.string.aviso_sesion_vencida))
+                    volverAlLogin(getString(R.string.aviso_sesion_vencida), SesionDeCampo.Motivo.VENCIDA)
                     return@launch
                 }
                 val segundos = restante / 1_000
@@ -127,7 +127,7 @@ class FieldMenuActivity : AppCompatActivity() {
     }
 
     private fun escanearQr() {
-        if (!SesionDeCampo.vigente) return volverAlLogin(getString(R.string.aviso_sesion_vencida))
+        if (!SesionDeCampo.vigente) return volverAlLogin(getString(R.string.aviso_sesion_vencida), SesionDeCampo.Motivo.VENCIDA)
         if (tienePermiso(Manifest.permission.CAMERA)) abrirEscaner() else pedirCamara.launch(Manifest.permission.CAMERA)
     }
 
@@ -154,7 +154,7 @@ class FieldMenuActivity : AppCompatActivity() {
     }
 
     private fun emparejar(hash: String) {
-        val cliente = SesionDeCampo.cliente ?: return volverAlLogin(getString(R.string.aviso_sesion_vencida))
+        val cliente = SesionDeCampo.cliente ?: return volverAlLogin(getString(R.string.aviso_sesion_vencida), SesionDeCampo.Motivo.VENCIDA)
         binding.btnEscanear.isEnabled = false
         binding.txtEstado.text = getString(R.string.gps_buscando)
         lifecycleScope.launch {
@@ -174,7 +174,7 @@ class FieldMenuActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 val motivo = e.message.orEmpty()
                 if (!SesionDeCampo.vigente || motivo.contains(MOTIVO_SESION_VENCIDA)) {
-                    volverAlLogin(getString(R.string.aviso_sesion_vencida))
+                    volverAlLogin(getString(R.string.aviso_sesion_vencida), SesionDeCampo.Motivo.VENCIDA)
                 } else {
                     binding.txtEstado.text = getString(R.string.emparejamiento_fallo, motivo)
                 }
@@ -242,7 +242,7 @@ class FieldMenuActivity : AppCompatActivity() {
      */
     private fun desplegar(emparejamiento: Emparejamiento, modo: String) {
         val dron = emparejamiento.drone
-        SesionDeCampo.cerrar()
+        SesionDeCampo.cerrar(SesionDeCampo.Motivo.EMPAREJAMIENTO)
         startActivity(
             Intent(this, MainActivity::class.java)
                 .putExtra(MainActivity.EXTRA_DRONE_TOKEN, emparejamiento.token)
@@ -292,12 +292,12 @@ class FieldMenuActivity : AppCompatActivity() {
         // El JWT vale contra el Comando Central donde se pidió: si cambia la
         // dirección, la sesión que tenemos en la mano ya no sirve.
         if (url.isNotEmpty() && url != urlPrevia) {
-            volverAlLogin(getString(R.string.aviso_cambio_comando_central))
+            volverAlLogin(getString(R.string.aviso_cambio_comando_central), SesionDeCampo.Motivo.CAMBIO_SERVIDOR)
         }
     }
 
-    private fun volverAlLogin(aviso: String) {
-        SesionDeCampo.cerrar()
+    private fun volverAlLogin(aviso: String, motivo: String) {
+        SesionDeCampo.cerrar(motivo)
         startActivity(
             Intent(this, LoginActivity::class.java)
                 .putExtra(LoginActivity.EXTRA_AVISO, aviso)

@@ -15,6 +15,15 @@ import kotlinx.coroutines.SupervisorJob
  */
 object SesionDeCampo {
 
+    /** Por qué se cerró la sesión efímera. Viaja al registro del Comando Central. */
+    object Motivo {
+        const val MANUAL = "cierre manual"
+        const val VENCIDA = "sesión vencida"
+        const val EMPAREJAMIENTO = "emparejamiento completado"
+        const val SALIDA = "salida de la aplicación"
+        const val CAMBIO_SERVIDOR = "cambio de Comando Central"
+    }
+
     /** Roles que el Comando Central deja emparejar drones (ver contrato). */
     val ROLES_HABILITADOS = setOf("field_operator", "supervisor", "admin")
 
@@ -47,8 +56,8 @@ object SesionDeCampo {
         venceEnMs = SystemClock.elapsedRealtime() + segundos * 1_000
     }
 
-    fun cerrar() {
-        cliente?.cerrarSesion()
+    fun cerrar(motivo: String = "") {
+        cliente?.cerrarSesion(motivo)
         cliente = null
         usuario = ""
         rol = ""
