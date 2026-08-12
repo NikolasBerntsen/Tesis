@@ -65,7 +65,7 @@ describe('integración — jerarquía de roles', () => {
   it('un supervisor NO puede crear usuarios (necesita admin)', async () => {
     const r = await api(srv.base, '/api/users', sup, {
       method: 'POST',
-      body: JSON.stringify({ username: 'nuevo', password: 'clave123' }),
+      body: JSON.stringify({ username: 'nuevo', fullName: 'Persona nuevo' }),
     });
     expect(r.status).toBe(403);
   });

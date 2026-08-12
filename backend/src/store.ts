@@ -8,6 +8,7 @@ export interface UserRow {
   username: string;
   password_hash: string;
   role: Role;
+  full_name: string;
   display_name: string | null;
   base_name: string | null;
   base_lat: number | null;
@@ -21,6 +22,8 @@ export interface UserRow {
 /** Vista pública de un usuario humano (sin hash de contraseña). */
 export interface UserView {
   username: string;
+  /** Nombre y apellido de la persona. Vacío en las cuentas anteriores al cambio. */
+  fullName: string;
   role: Role;
   active: boolean;
   canControl: boolean;
@@ -30,6 +33,7 @@ export interface UserView {
 export function toUserView(u: UserRow): UserView {
   return {
     username: u.username,
+    fullName: u.full_name ?? '',
     role: u.role,
     active: !!u.active,
     canControl: !!u.can_control,
@@ -145,26 +149,74 @@ export function getActiveUser(username: string): UserRow | undefined {
 }
 
 /** Usuarios humanos de los roles pedidos. Los borrados solo salen si se piden. */
-export function listUsers(roles: Role[], opts: { includeDeleted?: boolean } = {}): UserView[] {
+/**
+ * `q` busca en un solo campo lo que el operador tenga a mano: usuario, nombre
+ * completo o rol. El rol se compara además contra su etiqueta en español, que
+ * es lo que la persona ve en pantalla y por lo tanto lo que va a tipear.
+ */
+const ETIQUETA_ROL: Record<string, string> = {
+  field_operator: 'operador de campo',
+  operator: 'operador',
+  supervisor: 'supervisor',
+  admin: 'administrador',
+};
+
+export function listUsers(roles: Role[], opts: { includeDeleted?: boolean; q?: string } = {}): UserView[] {
   const marks = roles.map(() => '?').join(',');
   const filtroBorrados = opts.includeDeleted ? '' : ' AND deleted_at IS NULL';
   const rows = db
     .prepare(`SELECT * FROM users WHERE role IN (${marks})${filtroBorrados} ORDER BY role, username`)
     .all(...roles) as UserRow[];
-  return rows.map(toUserView);
+
+  const q = (opts.q ?? '').trim().toLowerCase();
+  const filtradas = q
+    ? rows.filter((u) =>
+        u.username.toLowerCase().includes(q) ||
+        (u.full_name ?? '').toLowerCase().includes(q) ||
+        u.role.toLowerCase().includes(q) ||
+        (ETIQUETA_ROL[u.role] ?? '').includes(q))
+    : rows;
+  return filtradas.map(toUserView);
 }
 
-export function createUser(username: string, passwordHash: string, role: Role, canControl: boolean): UserView {
-  db.prepare('INSERT INTO users (username, password_hash, role, can_control) VALUES (?, ?, ?, ?)').run(
-    username,
-    passwordHash,
-    role,
-    canControl ? 1 : 0,
+/**
+ * Alfabeto sin caracteres que se confunden al dictarlos o al copiarlos de un
+ * papel: nada de O/0, I/l/1, ni de mayúsculas y minúsculas parecidas.
+ */
+const ALFABETO = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789abcdefghijkmnpqrstuvwxyz';
+
+/**
+ * Contraseña de 16 caracteres agrupada en bloques de cuatro. La genera el
+ * sistema porque es lo único que garantiza que nadie reutilice una que ya usa
+ * en otro lado: se muestra una sola vez y después solo queda su hash.
+ */
+export function generarContrasenia(): string {
+  const bytes = randomBytes(16);
+  const chars = Array.from(bytes, (b) => ALFABETO[b % ALFABETO.length]);
+  return [0, 4, 8, 12].map((i) => chars.slice(i, i + 4).join('')).join('-');
+}
+
+export interface UserInput {
+  username: string;
+  fullName: string;
+  passwordHash: string;
+  role: Role;
+  canControl: boolean;
+}
+
+export function createUser(input: UserInput): UserView {
+  db.prepare('INSERT INTO users (username, full_name, password_hash, role, can_control) VALUES (?, ?, ?, ?, ?)').run(
+    input.username,
+    input.fullName,
+    input.passwordHash,
+    input.role,
+    input.canControl ? 1 : 0,
   );
-  return toUserView(getUser(username)!);
+  return toUserView(getUser(input.username)!);
 }
 
 export interface UserPatch {
+  fullName?: string;
   active?: boolean;
   canControl?: boolean;
   passwordHash?: string;
@@ -177,11 +229,13 @@ export function updateUser(username: string, patch: UserPatch): { before: UserVi
   const before = toUserView(row);
   db.prepare(
     `UPDATE users SET
+       full_name = COALESCE(?, full_name),
        active = COALESCE(?, active),
        can_control = COALESCE(?, can_control),
        password_hash = COALESCE(?, password_hash)
      WHERE username = ?`,
   ).run(
+    patch.fullName ?? null,
     patch.active === undefined ? null : patch.active ? 1 : 0,
     patch.canControl === undefined ? null : patch.canControl ? 1 : 0,
     patch.passwordHash ?? null,

@@ -133,7 +133,7 @@ describe('integración — sesión efímera del operador de campo', () => {
     dron.ws.send(JSON.stringify({ type: 'alert_request', alertType: 'PERSON', snapshotBase64: 'SNAP-PRIVADO' }));
     await api(srv.base, '/api/users', adm, {
       method: 'POST',
-      body: JSON.stringify({ username: 'espiado', password: 'clave123', role: 'operator' }),
+      body: JSON.stringify({ username: 'espiado', fullName: 'Persona espiado', role: 'operator' }),
     });
     // el alta de un dron sí le corresponde, y hace de barrera: si llegó esto,
     // todo lo anterior ya se difundió

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { WebSocket } from 'ws';
 import {
+  crearUsuario,
   seed, startServer, login, api, connectWs, wsCloseCode, mkStatus, wait, tokenDeDron, tokenHumano,
   CREDS, DRON, type TestServer, type WsClient,
 } from '../helpers';
@@ -209,21 +210,15 @@ describe('integración — hub WebSocket multi-dron', () => {
     expect(await wsCloseCode(srv.wsUrl, 'token-basura')).toBe(4401);
 
     // usuario recién creado, con token, luego desactivado
-    await api(srv.base, '/api/users', adm, {
-      method: 'POST',
-      body: JSON.stringify({ username: 'wsdesac', password: 'wsdesac1', role: 'operator' }),
-    });
-    const tok = (await login(srv.base, 'wsdesac', 'wsdesac1'))!;
+    const creado = await crearUsuario(srv.base, adm, { username: 'wsdesac' });
+    const tok = (await login(srv.base, 'wsdesac', creado.password))!;
     await api(srv.base, '/api/users/wsdesac', adm, { method: 'PATCH', body: JSON.stringify({ active: false }) });
     expect(await wsCloseCode(srv.wsUrl, tok)).toBe(4403);
   });
 
   it('un usuario eliminado lógicamente tampoco puede abrir el WebSocket', async () => {
-    await api(srv.base, '/api/users', adm, {
-      method: 'POST',
-      body: JSON.stringify({ username: 'wsborrado', password: 'wsborrado1', role: 'operator' }),
-    });
-    const tok = (await login(srv.base, 'wsborrado', 'wsborrado1'))!;
+    const wsb0 = await crearUsuario(srv.base, adm, { username: 'wsborrado' });
+    const tok = (await login(srv.base, 'wsborrado', wsb0.password))!;
     await api(srv.base, '/api/users/wsborrado', adm, { method: 'DELETE' });
     expect(await wsCloseCode(srv.wsUrl, tok)).toBe(4403);
   });
@@ -263,7 +258,7 @@ describe('integración — hub WebSocket multi-dron', () => {
     await wait(50);
     const alta = await api(srv.base, '/api/users', adm, {
       method: 'POST',
-      body: JSON.stringify({ username: 'mirame', password: 'clave123', role: 'operator' }),
+      body: JSON.stringify({ username: 'mirame', fullName: 'Persona mirame', role: 'operator' }),
     });
     expect(alta.status).toBe(201);
     await admWs.waitFor((m) => m.type === 'event' && m.event.type === 'USER_CREATED');
@@ -280,11 +275,8 @@ describe('integración — hub WebSocket multi-dron', () => {
       ['wskick1', 'PATCH', JSON.stringify({ active: false })],
       ['wskick2', 'DELETE', undefined],
     ] as [string, string, string | undefined][]) {
-      await api(srv.base, '/api/users', adm, {
-        method: 'POST',
-        body: JSON.stringify({ username, password: 'clave123', role: 'operator' }),
-      });
-      const tok = (await login(srv.base, username, 'clave123'))!;
+      const creada = await crearUsuario(srv.base, adm, { username });
+      const tok = (await login(srv.base, username, creada.password))!;
       const c = await conn(tok);
       const cerrado = cierreDe(c);
       await api(srv.base, `/api/users/${username}`, adm, { method: metodo, body: cuerpo });

@@ -71,6 +71,7 @@ describe('store — usuarios', () => {
       username: 'ana',
       password_hash: 'secreto',
       role: 'supervisor',
+      full_name: 'Ana Pérez',
       display_name: null,
       base_name: null,
       base_lat: null,
@@ -80,7 +81,7 @@ describe('store — usuarios', () => {
       deleted_at: null,
       deleted_by: null,
     });
-    expect(view).toEqual({ username: 'ana', role: 'supervisor', active: true, canControl: false, deletedAt: null });
+    expect(view).toEqual({ username: 'ana', fullName: 'Ana Pérez', role: 'supervisor', active: true, canControl: false, deletedAt: null });
     expect(view).not.toHaveProperty('password_hash');
   });
 
@@ -113,15 +114,15 @@ describe('store — usuarios', () => {
   });
 
   it('createUser inserta y devuelve la vista con canControl', () => {
-    const conControl = createUser('c1', 'h', 'operator', true);
-    expect(conControl).toEqual({ username: 'c1', role: 'operator', active: true, canControl: true, deletedAt: null });
-    const sinControl = createUser('c2', 'h', 'field_operator', false);
+    const conControl = createUser({ username: 'c1', fullName: 'Persona c1', passwordHash: 'h', role: 'operator', canControl: true });
+    expect(conControl).toEqual({ username: 'c1', fullName: 'Persona c1', role: 'operator', active: true, canControl: true, deletedAt: null });
+    const sinControl = createUser({ username: 'c2', fullName: 'Persona c2', passwordHash: 'h', role: 'field_operator', canControl: false });
     expect(sinControl.canControl).toBe(false);
     expect(getUser('c1')).toBeDefined();
   });
 
   it('updateUser devuelve antes/después y respeta COALESCE (undefined no pisa)', () => {
-    createUser('u', 'hash-original', 'operator', true);
+    createUser({ username: 'u', fullName: 'Persona u', passwordHash: 'hash-original', role: 'operator', canControl: true });
     const r = updateUser('u', { canControl: false });
     expect(r?.before.canControl).toBe(true);
     expect(r?.after.canControl).toBe(false);
@@ -132,7 +133,7 @@ describe('store — usuarios', () => {
   });
 
   it('updateUser cambia active y password_hash cuando se piden', () => {
-    createUser('u2', 'viejo', 'operator', true);
+    createUser({ username: 'u2', fullName: 'Persona u2', passwordHash: 'viejo', role: 'operator', canControl: true });
     const r = updateUser('u2', { active: false, passwordHash: 'nuevo' });
     expect(r?.after.active).toBe(false);
     expect(getUser('u2')?.password_hash).toBe('nuevo');
@@ -145,7 +146,7 @@ describe('store — usuarios', () => {
   });
 
   it('softDeleteUser marca deleted_at, deja la fila y no se puede repetir', () => {
-    createUser('borrar', 'h', 'operator', true);
+    createUser({ username: 'borrar', fullName: 'Persona borrar', passwordHash: 'h', role: 'operator', canControl: true });
     const r = softDeleteUser('borrar', 'admin');
     expect(r?.before.deletedAt).toBeNull();
     expect(r?.after.deletedAt).toBeTruthy();
@@ -157,7 +158,7 @@ describe('store — usuarios', () => {
   });
 
   it('restoreUser deshace el borrado lógico y solo aplica sobre borrados', () => {
-    createUser('vuelve', 'h', 'operator', true);
+    createUser({ username: 'vuelve', fullName: 'Persona vuelve', passwordHash: 'h', role: 'operator', canControl: true });
     expect(restoreUser('vuelve')).toBeUndefined();
     softDeleteUser('vuelve', 'admin');
     const r = restoreUser('vuelve');

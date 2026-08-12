@@ -4,10 +4,10 @@ import { db } from './db';
 
 // Usuarios, drones y rutas de demostración. Ejecutar con: npm run seed
 const humans = [
-  { username: 'campo', password: 'campo123', role: 'field_operator' },
-  { username: 'operador', password: 'operador123', role: 'operator' },
-  { username: 'supervisor', password: 'supervisor123', role: 'supervisor' },
-  { username: 'admin', password: 'admin123', role: 'admin' },
+  { username: 'campo', password: 'campo123', role: 'field_operator', fullName: 'Camila Ferreira' },
+  { username: 'operador', password: 'operador123', role: 'operator', fullName: 'Martín Olivera' },
+  { username: 'supervisor', password: 'supervisor123', role: 'supervisor', fullName: 'Lucía Sosa' },
+  { username: 'admin', password: 'admin123', role: 'admin', fullName: 'Diego Antúnez' },
 ];
 
 /**
@@ -63,8 +63,9 @@ const routes = [
 for (const h of humans) {
   const exists = db.prepare('SELECT 1 FROM users WHERE username = ?').get(h.username);
   if (!exists) {
-    db.prepare('INSERT INTO users (username, password_hash, role, can_control) VALUES (?, ?, ?, ?)').run(
+    db.prepare('INSERT INTO users (username, full_name, password_hash, role, can_control) VALUES (?, ?, ?, ?, ?)').run(
       h.username,
+      h.fullName,
       bcrypt.hashSync(h.password, 10),
       h.role,
       // El operador de campo despliega drones, no los pilotea

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
-import { seed, startServer, login, api, connectWs, tokenDeDron, CREDS, DRON, type TestServer, type WsClient } from '../helpers';
+import { crearUsuario, seed, startServer, login, api, connectWs, tokenDeDron, CREDS, DRON, type TestServer, type WsClient } from '../helpers';
 
 // Control manual exclusivo: toma, movimiento, liberación (titular y forzada por
 // supervisor), y cómo la suspensión/desactivación cortan el control en el acto.
@@ -21,16 +21,10 @@ describe('integración — control manual exclusivo', () => {
     adm = (await login(srv.base, 'admin', CREDS.admin))!;
 
     // segundo operador con control y un operador sin control
-    await api(srv.base, '/api/users', adm, {
-      method: 'POST',
-      body: JSON.stringify({ username: 'oper2', password: 'oper2pass', role: 'operator', canControl: true }),
-    });
-    await api(srv.base, '/api/users', adm, {
-      method: 'POST',
-      body: JSON.stringify({ username: 'sincontrol', password: 'sincontrol1', role: 'operator', canControl: false }),
-    });
-    oper2 = (await login(srv.base, 'oper2', 'oper2pass'))!;
-    noControl = (await login(srv.base, 'sincontrol', 'sincontrol1'))!;
+    const dos = await crearUsuario(srv.base, adm, { username: 'oper2', canControl: true });
+    const sin = await crearUsuario(srv.base, adm, { username: 'sincontrol', canControl: false });
+    oper2 = (await login(srv.base, 'oper2', dos.password))!;
+    noControl = (await login(srv.base, 'sincontrol', sin.password))!;
 
     alfa = await connectWs(srv.wsUrl, tokenDeDron(DRON.alfa));
     operWs = await connectWs(srv.wsUrl, op);
@@ -226,11 +220,8 @@ describe('integración — control manual exclusivo', () => {
   });
 
   it('desactivar un usuario corta el control que tenía', async () => {
-    await api(srv.base, '/api/users', adm, {
-      method: 'POST',
-      body: JSON.stringify({ username: 'efimero', password: 'efimero1', role: 'operator', canControl: true }),
-    });
-    const efi = (await login(srv.base, 'efimero', 'efimero1'))!;
+    const efi0 = await crearUsuario(srv.base, adm, { username: 'efimero' });
+    const efi = (await login(srv.base, 'efimero', efi0.password))!;
     await api(srv.base, `/api/drones/${DRON.alfa}/control`, efi, { method: 'POST' });
     expect(await titular()).toBe('efimero');
 
@@ -240,11 +231,8 @@ describe('integración — control manual exclusivo', () => {
   });
 
   it('eliminar al usuario que tiene el control lo libera', async () => {
-    await api(srv.base, '/api/users', adm, {
-      method: 'POST',
-      body: JSON.stringify({ username: 'aborrar', password: 'aborrar1', role: 'operator', canControl: true }),
-    });
-    const tok = (await login(srv.base, 'aborrar', 'aborrar1'))!;
+    const abo0 = await crearUsuario(srv.base, adm, { username: 'aborrar' });
+    const tok = (await login(srv.base, 'aborrar', abo0.password))!;
     await api(srv.base, `/api/drones/${DRON.alfa}/control`, tok, { method: 'POST' });
     expect(await titular()).toBe('aborrar');
 

@@ -200,6 +200,24 @@ export interface EntradaDron {
   baseId?: number | null;
 }
 
+export interface EntradaUsuario {
+  username: string;
+  fullName?: string;
+  role?: string;
+  canControl?: boolean;
+}
+
+/**
+ * Da de alta un usuario y devuelve la contraseña que generó el sistema. Es la
+ * única forma de conocerla: no se elige y no se puede volver a leer.
+ */
+export async function crearUsuario(base: string, token: string, input: EntradaUsuario) {
+  const body = { fullName: `Persona ${input.username}`, role: 'operator', ...input };
+  const r = await api(base, '/api/users', token, { method: 'POST', body: JSON.stringify(body) });
+  if (r.status !== 201) throw new Error(`no se pudo crear el usuario: ${r.status} ${JSON.stringify(r.body)}`);
+  return r.body as { username: string; fullName: string; role: string; canControl: boolean; password: string };
+}
+
 export interface EntradaBase {
   name: string;
   lat: number;
