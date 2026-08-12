@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
+import { CENTRO_POR_DEFECTO, iconoBase, useFondo, vestirAtribucion } from '../mapa';
 import type { PatrolRoute, Waypoint } from '../types';
+import ConmutadorDeFondo from './ConmutadorDeFondo';
 import Modal from './Modal';
 
 /** Un nodo con identidad estable, para poder arrastrarlo sin que se confunda. */
@@ -23,10 +25,13 @@ const NODO_HECHO = '#4F7A46';
  */
 export default function EditorDeRuta({
   ruta,
+  base,
   onGuardar,
   onCerrar,
 }: {
   ruta?: PatrolRoute | null;
+  /** Si el editor se abrió desde una base, se la dibuja para tenerla de referencia. */
+  base?: { name: string; lat: number; lon: number } | null;
   onGuardar: (datos: { name: string; description: string; waypoints: Waypoint[] }) => Promise<void>;
   onCerrar: () => void;
 }) {
@@ -49,10 +54,22 @@ export default function EditorDeRuta({
 
   useEffect(() => {
     if (!caja.current || mapa.current) return;
-    const centro: [number, number] = nodos.length ? [nodos[0].lat, nodos[0].lon] : [-34.8565, -56.2075];
+    // Arranca donde el trabajo va a estar: el primer nodo si la ruta ya existe,
+    // la base si el editor se abrió desde una, y si no el centro de la ciudad.
+    const centro: L.LatLngTuple = nodos.length
+      ? [nodos[0].lat, nodos[0].lon]
+      : base
+        ? [base.lat, base.lon]
+        : CENTRO_POR_DEFECTO;
     const m = L.map(caja.current).setView(centro, 15);
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(m);
+    vestirAtribucion(m);
     m.on('click', (e: L.LeafletMouseEvent) => alClic.current(e.latlng.lat, e.latlng.lng));
+    // La base va en su propia capa: no se borra con cada redibujo de los nodos.
+    if (base) {
+      L.marker([base.lat, base.lon], { icon: iconoBase() })
+        .bindTooltip(base.name, { direction: 'top' })
+        .addTo(m);
+    }
     capa.current = L.layerGroup().addTo(m);
     mapa.current = m;
     setTimeout(() => m.invalidateSize(), 60);
@@ -62,6 +79,8 @@ export default function EditorDeRuta({
       capa.current = null;
     };
   }, []);
+
+  const [fondo, setFondo] = useFondo(mapa);
 
   // Redibuja nodos y tramos. Durante el repaso, el color dice hasta dónde llegó.
   useEffect(() => {
@@ -139,7 +158,7 @@ export default function EditorDeRuta({
   const completa = nombre.trim().length > 0 && nodos.length >= 2;
 
   return (
-    <Modal etiquetadoPor="titulo-editor-ruta" onCerrar={onCerrar}>
+    <Modal etiquetadoPor="titulo-editor-ruta" ancho onCerrar={onCerrar}>
       <header className="modal-cabecera">
         <h2 className="modal-titulo" id="titulo-editor-ruta">
           {ruta ? `Editar ${ruta.name}` : 'Nueva ruta de patrullaje'}
@@ -170,9 +189,22 @@ export default function EditorDeRuta({
         </p>
 
         <div className="editor-ruta-cuerpo">
-          <div className="mapa-elector" ref={caja} />
+          <div className="mapa-caja">
+            <ConmutadorDeFondo fondo={fondo} onCambiar={setFondo} />
+            <div className="mapa-elector" ref={caja} />
+          </div>
 
-          <ol className="lista-nodos">
+          <div className="nodos-columna">
+            {/* Encabezados: sin esto la altura era un 40 suelto que nadie tiene
+                por qué saber qué significa. */}
+            <div className="nodos-encabezado" aria-hidden="true">
+              <span className="nodo-orden">#</span>
+              <span>Apodo</span>
+              <span>Altura (m)</span>
+              <span className="nodo-coord">Coordenadas</span>
+              <span className="nodos-encabezado-acciones">Orden</span>
+            </div>
+            <ol className="lista-nodos">
             {nodos.length === 0 && <li className="muted">Todavía no hay nodos.</li>}
             {nodos.map((n, i) => (
               <li
@@ -227,7 +259,8 @@ export default function EditorDeRuta({
                 </button>
               </li>
             ))}
-          </ol>
+            </ol>
+          </div>
         </div>
       </div>
 

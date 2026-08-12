@@ -43,6 +43,10 @@ function responder(metodo: string, ruta: string, cuerpo: string): unknown {
   if (metodo === 'PATCH' && ruta.startsWith('/drones/')) return { ...dronesFix[0], ...JSON.parse(cuerpo) };
   if (ruta.startsWith('/drones')) return dronesFix;
   if (ruta.startsWith('/logs')) return { items: [], total: 0, page: 1, pageSize: 25 };
+  // Las rutas que la base del dron tiene habilitadas: son las que la vista de
+  // detalle ofrece en el selector.
+  if (/^\/bases\/\d+\/routes/.test(ruta)) return routesFix;
+  if (ruta.startsWith('/bases')) return [];
   if (ruta.startsWith('/routes')) return metodo === 'PATCH' ? routesFix[0] : routesFix;
   if (ruta.startsWith('/alerts') || ruta.startsWith('/users') || ruta.startsWith('/events')) return [];
   return {};
@@ -201,6 +205,48 @@ describe('Console', () => {
 
     expect(await screen.findByText('Charlie')).toBeInTheDocument();
     expect(rutas().filter((r) => r.startsWith('GET /drones'))).toHaveLength(pedidosPrevios);
+  });
+
+  it('base_updated actualiza la base de los drones que la tienen asignada', async () => {
+    dronesFix = [makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true, baseId: 4, base: { name: 'Base Vieja', lat: -34.6, lon: -58.4 } })];
+    render(<Console onLogout={() => {}} />);
+    await screen.findByText('Sin señal de video');
+    await userEvent.click(screen.getByText('Sin señal de video'));
+    await screen.findByRole('button', { name: /Volver a Drones/ });
+    // La tarjeta de estado sólo se dibuja con telemetría: el buffer se vuelca
+    // en el próximo tick.
+    fire({ type: 'status', ...makeStatus({ droneId: 'd1' }) });
+    const estado = (await screen.findByText('Modo y posición', undefined, { timeout: 3000 })).closest(
+      '.status-segundo-nivel',
+    ) as HTMLElement;
+    expect(within(estado).getByText('Base Vieja')).toBeInTheDocument();
+
+    // Mover o renombrar la base tiene que llegar a la ficha del dron sin
+    // recargar la consola entera.
+    act(() => {
+      wsHandler({ type: 'base_updated', base: { id: 4, name: 'Base Obelisco', lat: -34.6037, lon: -58.3816 } });
+    });
+
+    expect(await within(estado).findByText('Base Obelisco')).toBeInTheDocument();
+    expect(within(estado).queryByText('Base Vieja')).not.toBeInTheDocument();
+  });
+
+  it('una base ajena no toca la ficha del dron', async () => {
+    dronesFix = [makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true, baseId: 4, base: { name: 'Base Vieja', lat: -34.6, lon: -58.4 } })];
+    render(<Console onLogout={() => {}} />);
+    await screen.findByText('Sin señal de video');
+    await userEvent.click(screen.getByText('Sin señal de video'));
+    await screen.findByRole('button', { name: /Volver a Drones/ });
+    fire({ type: 'status', ...makeStatus({ droneId: 'd1' }) });
+    const estado = (await screen.findByText('Modo y posición', undefined, { timeout: 3000 })).closest(
+      '.status-segundo-nivel',
+    ) as HTMLElement;
+
+    act(() => {
+      wsHandler({ type: 'base_updated', base: { id: 99, name: 'Base Palermo', lat: -34.57, lon: -58.41 } });
+    });
+
+    expect(within(estado).getByText('Base Vieja')).toBeInTheDocument();
   });
 
   it('la conexión y el renombre de un dron también refrescan la tabla de activos', async () => {

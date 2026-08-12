@@ -1,7 +1,17 @@
 import L from 'leaflet';
 import { useEffect, useRef, useState } from 'react';
 import { formatDistance, initials, waypointLabel } from '../format';
+import {
+  CENTRO_POR_DEFECTO,
+  aplicarFondo,
+  crearFondos,
+  filtroDeTeselas,
+  iconoBase,
+  vestir,
+  type Fondo,
+} from '../mapa';
 import type { Base, DroneStatus, PatrolRoute } from '../types';
+import ConmutadorDeFondo from './ConmutadorDeFondo';
 
 export interface MapItem {
   droneId: string;
@@ -47,21 +57,7 @@ const PALETA = {
   ambar: '#F2C230', // el par negro/ámbar es el de mayor contraste posible
 } as const;
 
-/* El mapa se deja con sus colores propios: lavarlo a marfil lo volvía lindo y
-   difícil de leer, y un mapa es una herramienta de orientación antes que una
-   superficie decorativa. Los marcadores sí siguen la estética, que es lo que
-   distingue a esta consola de cualquier mapa web.
-   En modo oscuro se atenúa apenas: una lámina blanca a pantalla completa en
-   una guardia nocturna encandila. */
-const ATENUAR_OSCURO = 'brightness(.82) contrast(1.04)';
-
-function filtroDeTeselas(): string {
-  return document.documentElement.dataset.tema === 'oscuro' ? ATENUAR_OSCURO : 'none';
-}
-
 const WP_PENDIENTE = PALETA.oxido;
-/** Fondo del mapa: callejero o imagen satelital. */
-type Fondo = 'mapa' | 'satelite';
 
 /* Los nodos de una ruta elegida pero todavía no ordenada: se ven, se pueden
    inspeccionar, y no se confunden con los de un patrullaje en curso. */
@@ -106,7 +102,6 @@ const CONE_STYLE: L.PolylineOptions = {
 // En tierra no hay cámara que mostrar
 const EN_TIERRA = ['IDLE', 'LANDED'];
 
-const CENTER: L.LatLngTuple = [-34.8575, -56.2045];
 // Hilo grabado entre el dron y su base: es una referencia, no un dato de vuelo,
 // así que va en tinta apagada y no compite con los nodos ni con el medallón.
 const LINE_STYLE: L.PolylineOptions = {
@@ -152,23 +147,6 @@ function droneIcon(name: string): L.DivIcon {
     popupAnchor: [0, -36],
   });
 }
-
-/**
- * La base: el mismo rombo, ahora en negro y amarillo. Marfil sobre tinta se
- * perdía contra las teselas claras del mapa —y contra una vista de satélite se
- * perdía del todo—; este par es el de mayor contraste que existe y se distingue
- * sobre cualquier fondo, que es lo único que se le pide a un punto de retorno.
- */
-const BASE_ICON = L.divIcon({
-  className: 'base-icon',
-  html: `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-      <path d="M12 1.2 22.8 12 12 22.8 1.2 12z" fill="${PALETA.negro}" stroke="${PALETA.ambar}" stroke-width="2" stroke-linejoin="round"/>
-      <path d="M12 6.6 17.4 12 12 17.4 6.6 12z" fill="${PALETA.ambar}"/>
-    </svg>`,
-  iconSize: [24, 24],
-  iconAnchor: [12, 12],
-  popupAnchor: [0, -13],
-});
 
 /* --- Globos y etiquetas --------------------------------------------------- */
 
@@ -256,11 +234,6 @@ function setPopup(marker: L.Marker, html: string) {
    hojas de la consola (son nodos suyos, con sus clases y sus grises de
    fábrica). Se los viste acá, con los mismos tokens, para que el mapa no
    desentone con la piedra. */
-
-function vestir(el: HTMLElement | null | undefined, estilos: Record<string, string>) {
-  if (!el) return;
-  for (const [prop, valor] of Object.entries(estilos)) el.style.setProperty(prop, valor);
-}
 
 const SVG_CRUZ = `<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor"
     stroke-width="1.5" stroke-linecap="round" style="display:block" aria-hidden="true">
@@ -403,28 +376,15 @@ export default function DronesMap({
     const map = mapaRef.current;
     const capas = capasRef.current;
     if (!map || !capas) return;
-    for (const [nombre, capa] of Object.entries(capas)) {
-      if (nombre === fondo) capa.addTo(map);
-      else map.removeLayer(capa);
-    }
-    vestir(map.getPane('tilePane'), { filter: filtroDeTeselas() });
+    aplicarFondo(map, capas, fondo);
   }, [fondo]);
 
   useEffect(() => {
-    const map = L.map(containerRef.current!, { zoomControl: false }).setView(CENTER, 15);
+    const map = L.map(containerRef.current!, { zoomControl: false }).setView(CENTRO_POR_DEFECTO, 15);
     // Dos fondos: el callejero para ubicarse por calles y el satelital para
     // reconocer el terreno real —techos, arboledas, tinglados— que es lo que
     // hace falta al decidir dónde poner un nodo de patrullaje.
-    const capas: Record<Fondo, L.TileLayer> = {
-      mapa: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        attribution: '&copy; OpenStreetMap',
-      }),
-      satelite: L.tileLayer(
-        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-        { maxZoom: 19, attribution: 'Imágenes &copy; Esri' },
-      ),
-    };
+    const capas = crearFondos();
     capasRef.current = capas;
     capas[fondoRef.current].addTo(map);
     mapaRef.current = map;
@@ -448,6 +408,11 @@ export default function DronesMap({
     return () => {
       map.remove();
       mapRef.current = null;
+      // También estas dos: un mapa destruido se queda sin panes, y volver a
+      // colgarle una capa de fondo revienta adentro de Leaflet. Pasaba al
+      // desmontar y volver a montar la vista del dron.
+      mapaRef.current = null;
+      capasRef.current = null;
       layersRef.current.clear();
       // Los marcadores quedaron atados al mapa que se acaba de destruir: si no
       // se olvidan acá, al volver a montar se creen vigentes y no se redibujan.
@@ -472,7 +437,7 @@ export default function DronesMap({
       if (item.base) {
         const basePos: L.LatLngTuple = [item.base.lat, item.base.lon];
         if (!l.base) {
-          l.base = L.marker(basePos, { icon: BASE_ICON }).addTo(map);
+          l.base = L.marker(basePos, { icon: iconoBase() }).addTo(map);
           trackPopup(l.base, item.droneId);
         } else {
           l.base.setLatLng(basePos);
@@ -645,19 +610,7 @@ export default function DronesMap({
 
   return (
     <div className="mapa-caja">
-      <div className="mapa-fondos" role="group" aria-label="Fondo del mapa">
-        {(['mapa', 'satelite'] as const).map((f) => (
-          <button
-            key={f}
-            type="button"
-            className={fondo === f ? 'chico active' : 'chico'}
-            aria-pressed={fondo === f}
-            onClick={() => setFondo(f)}
-          >
-            {f === 'mapa' ? 'Mapa' : 'Satélite'}
-          </button>
-        ))}
-      </div>
+      <ConmutadorDeFondo fondo={fondo} onCambiar={setFondo} />
       <div className="map" ref={containerRef} />
     </div>
   );

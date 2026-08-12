@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import { api, traerRutas } from '../api';
+import { CENTRO_POR_DEFECTO, useFondo, vestirAtribucion } from '../mapa';
 import type { Me, PatrolRoute } from '../types';
+import ConmutadorDeFondo from './ConmutadorDeFondo';
 import EditorDeRuta from './EditorDeRuta';
 
 /** Mapa de sólo lectura con el recorrido de la ruta elegida. */
@@ -12,8 +14,8 @@ function MapaDeRuta({ ruta }: { ruta: PatrolRoute | null }) {
 
   useEffect(() => {
     if (!caja.current || mapa.current) return;
-    const m = L.map(caja.current).setView([-34.8565, -56.2075], 14);
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(m);
+    const m = L.map(caja.current).setView(CENTRO_POR_DEFECTO, 14);
+    vestirAtribucion(m);
     capa.current = L.layerGroup().addTo(m);
     mapa.current = m;
     setTimeout(() => m.invalidateSize(), 60);
@@ -23,6 +25,8 @@ function MapaDeRuta({ ruta }: { ruta: PatrolRoute | null }) {
       capa.current = null;
     };
   }, []);
+
+  const [fondo, setFondo] = useFondo(mapa);
 
   useEffect(() => {
     const grupo = capa.current;
@@ -48,7 +52,12 @@ function MapaDeRuta({ ruta }: { ruta: PatrolRoute | null }) {
     m.fitBounds(L.latLngBounds(puntos).pad(0.25));
   }, [ruta]);
 
-  return <div className="map" ref={caja} />;
+  return (
+    <div className="mapa-caja">
+      <ConmutadorDeFondo fondo={fondo} onCambiar={setFondo} />
+      <div className="map" ref={caja} />
+    </div>
+  );
 }
 
 /** Catálogo de rutas de patrullaje, con su recorrido dibujado en el mapa. */

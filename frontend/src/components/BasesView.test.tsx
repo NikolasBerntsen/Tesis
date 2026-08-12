@@ -3,6 +3,7 @@ import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { api, rutasDeBase, traerBases, traerRutas } from '../api';
 import { makeMe } from '../test/fixtures';
+import { estadoMapa, fondosPuestos, limpiarEstadoMapa } from '../test/dobleLeaflet';
 import BasesView from './BasesView';
 
 vi.mock('../api', async (original) => ({
@@ -12,36 +13,7 @@ vi.mock('../api', async (original) => ({
   traerRutas: vi.fn(async () => []),
   rutasDeBase: vi.fn(async () => []),
 }));
-// Leaflet no corre en jsdom: mide el contenedor y pinta lienzos. El doble deja
-// probar lo único que importa acá, que es el clic sobre el mapa.
-const { alClickear } = vi.hoisted(() => ({ alClickear: { fn: null as null | ((e: unknown) => void) } }));
-vi.mock('leaflet', () => {
-  const mapa = {
-    setView: () => mapa,
-    on: (_ev: string, fn: (e: unknown) => void) => {
-      alClickear.fn = fn;
-      return mapa;
-    },
-    remove: vi.fn(),
-    panTo: vi.fn(),
-    invalidateSize: vi.fn(),
-    fitBounds: vi.fn(),
-  };
-  const capa = { addTo: () => capa, bindTooltip: () => capa };
-  const grupo = { clearLayers: vi.fn(), addTo: () => grupo };
-  return {
-    default: {
-      map: () => mapa,
-      tileLayer: () => ({ addTo: vi.fn() }),
-      marker: () => ({ addTo: vi.fn(), setLatLng: vi.fn(), remove: vi.fn() }),
-      divIcon: () => ({}),
-      layerGroup: () => grupo,
-      polyline: () => capa,
-      circleMarker: () => capa,
-      latLngBounds: () => ({ pad: () => ({}) }),
-    },
-  };
-});
+vi.mock('leaflet', async () => (await import('../test/dobleLeaflet')).dobleLeaflet());
 
 const apiMock = vi.mocked(api);
 const basesMock = vi.mocked(traerBases);
@@ -62,7 +34,7 @@ function base(over: Partial<{ id: number; name: string; lat: number; lon: number
 describe('BasesView', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    alClickear.fn = null;
+    limpiarEstadoMapa();
   });
 
   it('lista las bases con sus coordenadas', async () => {
@@ -160,8 +132,8 @@ describe('BasesView', () => {
     await screen.findByText(/todavía no hay bases/i);
     await userEvent.click(screen.getByRole('button', { name: /nueva base/i }));
 
-    expect(alClickear.fn).not.toBeNull();
-    alClickear.fn!({ latlng: { lat: -34.123456, lng: -56.654321 } });
+    expect(estadoMapa.clic).not.toBeNull();
+    estadoMapa.clic!({ latlng: { lat: -34.123456, lng: -56.654321 } });
 
     expect(await screen.findByDisplayValue('-34.123456')).toBeInTheDocument();
     expect(screen.getByDisplayValue('-56.654321')).toBeInTheDocument();
@@ -241,7 +213,7 @@ describe('BasesView', () => {
 describe('BasesView — caminos que faltaban cubrir', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    alClickear.fn = null;
+    limpiarEstadoMapa();
   });
 
   it('el marcador sigue a la coordenada y se va si se borra', async () => {
@@ -315,7 +287,7 @@ describe('BasesView — caminos que faltaban cubrir', () => {
 describe('BasesView — asignar rutas apenas se da de alta la base', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    alClickear.fn = null;
+    limpiarEstadoMapa();
   });
 
   const nueva = { id: 5, name: 'Base Río', lat: -34.9, lon: -56.15, active: true, createdAt: '', createdBy: 'campo1', deletedAt: null };
@@ -418,7 +390,7 @@ describe('BasesView — asignar rutas apenas se da de alta la base', () => {
 describe('BasesView — rutas de una base que ya existe', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    alClickear.fn = null;
+    limpiarEstadoMapa();
   });
 
   function ruta(id: number, name: string, lat: number, lon: number) {
@@ -517,8 +489,8 @@ describe('BasesView — rutas de una base que ya existe', () => {
     await userEvent.type(within(editor).getByLabelText('Nombre'), 'Perímetro nuevo');
     // dos clics en el mapa: el editor toma el manejador al montarse
     act(() => {
-      alClickear.fn!({ latlng: { lat: -34.858, lng: -56.209 } });
-      alClickear.fn!({ latlng: { lat: -34.859, lng: -56.21 } });
+      estadoMapa.clic!({ latlng: { lat: -34.858, lng: -56.209 } });
+      estadoMapa.clic!({ latlng: { lat: -34.859, lng: -56.21 } });
     });
 
     apiMock.mockResolvedValue(ruta(7, 'Perímetro nuevo', -34.858, -56.209));
@@ -528,5 +500,56 @@ describe('BasesView — rutas de una base que ya existe', () => {
     // el editor se cierra y la ruta recién dibujada queda marcada en la base
     expect(screen.queryByRole('dialog', { name: /nueva ruta de patrullaje/i })).not.toBeInTheDocument();
     expect(await screen.findByRole('option', { name: /Perímetro nuevo/ })).toHaveAttribute('aria-selected', 'true');
+  });
+});
+
+describe('BasesView — mapas con doble fondo y la base como referencia', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    limpiarEstadoMapa();
+  });
+
+  it('el elector de coordenadas también ofrece la vista satelital', async () => {
+    basesMock.mockResolvedValue([]);
+    render(<BasesView me={CAMPO} />);
+    await screen.findByText(/todavía no hay bases/i);
+    await userEvent.click(screen.getByRole('button', { name: /nueva base/i }));
+
+    expect(fondosPuestos().some((u) => u.includes('openstreetmap'))).toBe(true);
+    await userEvent.click(screen.getByRole('button', { name: 'Satélite' }));
+    expect(fondosPuestos().some((u) => u.includes('World_Imagery'))).toBe(true);
+  });
+
+  it('el marcador de la base es el rombo negro y ámbar, no uno pintado con tokens', async () => {
+    basesMock.mockResolvedValue([]);
+    render(<BasesView me={CAMPO} />);
+    await screen.findByText(/todavía no hay bases/i);
+    await userEvent.click(screen.getByRole('button', { name: /nueva base/i }));
+    estadoMapa.clic!({ latlng: { lat: -34.6037, lng: -58.3816 } });
+
+    const marcador = await screen.findByDisplayValue('-34.603700');
+    expect(marcador).toBeInTheDocument();
+    const puesto = estadoMapa.puestas.find((c) => c.clase === 'marker');
+    const html = (puesto!.opciones!.icon as { icono: { html: string } }).icono.html;
+    expect(html).toContain('#14120F');
+    expect(html).not.toContain('var(--');
+  });
+
+  it('al dibujar una ruta desde una base, la base queda marcada en el mapa', async () => {
+    basesMock.mockResolvedValue([
+      { id: 1, name: 'Base Obelisco', lat: -34.6037, lon: -58.3816, active: true, createdAt: '', createdBy: 'admin1', deletedAt: null },
+    ]);
+    rutasMock.mockResolvedValue([]);
+    rutasDeBaseMock.mockResolvedValue([]);
+    render(<BasesView me={ADMIN} />);
+    await screen.findByText('Base Obelisco');
+    await userEvent.click(screen.getByRole('button', { name: 'Rutas' }));
+    await screen.findByRole('dialog', { name: /rutas de base obelisco/i });
+    limpiarEstadoMapa();
+    await userEvent.click(screen.getByRole('button', { name: /nueva ruta/i }));
+    await screen.findByRole('dialog', { name: /nueva ruta de patrullaje/i });
+
+    const marcador = estadoMapa.puestas.find((c) => c.clase === 'marker');
+    expect(marcador?.latlng).toEqual([-34.6037, -58.3816]);
   });
 });

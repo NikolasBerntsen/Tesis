@@ -44,8 +44,8 @@ class LoginActivityLaunchTest {
             .putExtra(MainActivity.EXTRA_DRONE_TOKEN, "token-de-prueba")
             .putExtra(MainActivity.EXTRA_DRONE_HASH, "0123456789abcdef0123456789abcdef")
             .putExtra(MainActivity.EXTRA_DISPLAY_NAME, "Alfa")
-            .putExtra(MainActivity.EXTRA_BASE_LAT, -34.8565)
-            .putExtra(MainActivity.EXTRA_BASE_LON, -56.2075)
+            .putExtra(MainActivity.EXTRA_BASE_LAT, -34.6037)
+            .putExtra(MainActivity.EXTRA_BASE_LON, -58.3816)
             .putExtra(MainActivity.EXTRA_MODE, "TEST")
 
         val controller = Robolectric.buildActivity(MainActivity::class.java, intent).setup()

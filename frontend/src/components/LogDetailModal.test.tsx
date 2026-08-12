@@ -1,31 +1,13 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import L from 'leaflet';
 import LogDetailModal from './LogDetailModal';
 import { api } from '../api';
 import { makeAlert, makeEvent } from '../test/fixtures';
+import { estadoMapa, fondosPuestos, limpiarEstadoMapa } from '../test/dobleLeaflet';
 
-// Leaflet dibuja contra el DOM real (teselas, tamaños): en jsdom se lo reemplaza
-// por un doble que registra las llamadas, que es lo único que se puede afirmar.
-const leaflet = vi.hoisted(() => {
-  const capa = { addTo: vi.fn(() => capa) };
-  const mapa = {
-    setView: vi.fn(() => mapa),
-    getPane: vi.fn(() => document.createElement('div')),
-    invalidateSize: vi.fn(),
-    remove: vi.fn(),
-    attributionControl: { setPrefix: vi.fn(), getContainer: vi.fn(() => document.createElement('div')) },
-  };
-  const L = {
-    map: vi.fn(() => mapa),
-    tileLayer: vi.fn(() => capa),
-    marker: vi.fn(() => capa),
-    circle: vi.fn(() => capa),
-    divIcon: vi.fn(() => ({})),
-  };
-  return { L, mapa, capa };
-});
-vi.mock('leaflet', () => ({ default: leaflet.L }));
+vi.mock('leaflet', async () => (await import('../test/dobleLeaflet')).dobleLeaflet());
 
 vi.mock('../api', async (importarOriginal) => ({
   ...(await importarOriginal<typeof import('../api')>()),
@@ -43,9 +25,7 @@ function abrir(over: Parameters<typeof makeEvent>[0] = {}) {
 describe('LogDetailModal', () => {
   beforeEach(() => {
     apiMock.mockReset();
-    leaflet.mapa.remove.mockClear();
-    leaflet.L.map.mockClear();
-    leaflet.L.circle.mockClear();
+    limpiarEstadoMapa();
   });
 
   it('muestra la cabecera con mensaje, categoría, tipo, fecha completa y origen', () => {
@@ -136,15 +116,17 @@ describe('LogDetailModal', () => {
     );
 
     expect(screen.getByTestId('mapa-ubicacion')).toBeInTheDocument();
-    expect(leaflet.L.map).toHaveBeenCalledTimes(1);
-    expect(leaflet.L.circle).toHaveBeenCalledWith([-34.857512, -56.204533], expect.objectContaining({ radius: 8.4 }));
+    expect(estadoMapa.mapasCreados).toBe(1);
+    expect(estadoMapa.puestas.filter((c) => c.clase === 'circle')).toEqual([
+      expect.objectContaining({ latlng: [-34.857512, -56.204533], opciones: expect.objectContaining({ radius: 8.4 }) }),
+    ]);
     expect(screen.getByText(/-34\.857512, -56\.204533/)).toHaveTextContent('precisión ±8 m');
     expect(screen.getByText('campo1')).toBeInTheDocument();
     expect(screen.getByText('Pixel 7')).toBeInTheDocument();
 
     // Sin esto el mapa se queda con sus listeners colgados y pierde memoria
     unmount();
-    expect(leaflet.mapa.remove).toHaveBeenCalledTimes(1);
+    expect(estadoMapa.mapasDestruidos).toBe(1);
   });
 
   it('trae la alerta y muestra la captura, el tipo y quién la resolvió', async () => {
@@ -251,7 +233,7 @@ describe('LogDetailModal', () => {
     });
 
     // Sin exactitud del GPS no hay radio que dibujar, sólo el marcador
-    expect(leaflet.L.circle).not.toHaveBeenCalled();
+    expect(estadoMapa.puestas.filter((c) => c.clase === 'circle')).toHaveLength(0);
     expect(screen.getByText('-34.900000, -56.200000')).not.toHaveTextContent('precisión');
     // El hash corto (una base migrada) se muestra entero: no hay nada que abreviar
     expect(screen.getByText('corto')).toBeInTheDocument();
@@ -309,7 +291,7 @@ describe('LogDetailModal', () => {
       meta: JSON.stringify({ ubicacion: { lat: -34.857512, lon: -56.204533, accuracyM: 8.4 } }),
     });
     const { rerender } = render(<LogDetailModal fila={fila} onCerrar={vi.fn()} />);
-    expect(leaflet.L.map).toHaveBeenCalledTimes(1);
+    expect(estadoMapa.mapasCreados).toBe(1);
 
     // La consola vuelca los status con un setInterval de 1 s y cada video_frame
     // suma otro render: el pop-up se re-renderiza con un `onCerrar` nuevo cada vez.
@@ -317,8 +299,8 @@ describe('LogDetailModal', () => {
 
     // Un mapa nuevo por render parpadea, descarta el arrastre del usuario y
     // repide las teselas a tile.openstreetmap.org sin parar.
-    expect(leaflet.L.map).toHaveBeenCalledTimes(1);
-    expect(leaflet.mapa.remove).not.toHaveBeenCalled();
+    expect(estadoMapa.mapasCreados).toBe(1);
+    expect(estadoMapa.mapasDestruidos).toBe(0);
   });
 
   it('no se cierra si el arrastre para seleccionar texto termina sobre el velo', async () => {
@@ -349,5 +331,48 @@ describe('LogDetailModal', () => {
     unmount();
     expect(fila).toHaveFocus();
     fila.remove();
+  });
+});
+
+describe('LogDetailModal — el mini mapa del emparejamiento', () => {
+  beforeEach(() => {
+    apiMock.mockReset();
+    limpiarEstadoMapa();
+  });
+
+  function abrirConUbicacion() {
+    render(
+      <LogDetailModal
+        fila={makeEvent({
+          type: 'DRONE_PAIRED',
+          meta: JSON.stringify({
+            por: 'campo1',
+            ubicacion: { lat: -34.6037, lon: -58.3816, accuracyM: 6 },
+          }),
+        })}
+        onCerrar={vi.fn()}
+      />,
+    );
+  }
+
+  it('tiene los dos fondos, como el resto de los mapas', async () => {
+    abrirConUbicacion();
+    expect(fondosPuestos().some((u) => u.includes('openstreetmap'))).toBe(true);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Satélite' }));
+    expect(fondosPuestos().some((u) => u.includes('World_Imagery'))).toBe(true);
+  });
+
+  it('se le puede hacer zoom: antes la altura de visualización estaba fija', () => {
+    abrirConUbicacion();
+    // El control va aparte del mapa porque el de fábrica rotula en inglés.
+    expect(L.control.zoom).toBeDefined();
+    expect(estadoMapa.mapasCreados).toBe(1);
+  });
+
+  it('ya no lava el mapa a mármol: se lee como cualquier otro', () => {
+    abrirConUbicacion();
+    const contenedor = screen.getByTestId('mapa-ubicacion');
+    expect(contenedor.parentElement).toHaveClass('mapa-caja');
   });
 });

@@ -6,8 +6,8 @@
 /* --- Ficha de estado del dron --------------------------------------------- */
 .status-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: var(--e-4) var(--e-5);
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: var(--e-3) var(--e-4);
 }
 .status-grid > div {
   display: flex;
@@ -24,10 +24,16 @@
 }
 .status-grid > div > strong {
   font-family: var(--fuente-serif);
-  font-size: var(--txt-md);
+  font-size: var(--txt-sm);
   font-weight: 400;
   font-variant-numeric: tabular-nums lining-nums;
 }
+/* Las cifras del estado van más chicas que en el resto de la consola: la
+   tarjeta cruza toda la pantalla y lo que se le pide es que deje lugar al
+   video y al mapa, no que grite. */
+.status-grid .cifra { font-size: var(--txt-cifra-chica); }
+.status-grid .cifra-chica { font-size: var(--txt-md); }
+.status-grid > div > span:first-child { font-size: var(--txt-xxs); }
 /* Medidor: un hairline con relleno de lámina. No es una barra de progreso de
    dashboard, es la línea donde la piedra se abre a lo largo del nivel. */
 .medidor {

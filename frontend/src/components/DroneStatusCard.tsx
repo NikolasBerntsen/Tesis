@@ -1,5 +1,5 @@
 import { batteryClass, signalClass, stateLabel, waypointLabel } from '../format';
-import type { DroneStatus } from '../types';
+import type { Base, DroneStatus } from '../types';
 
 /**
  * Hairline con relleno dorado en lugar de una barra de progreso: el nivel se
@@ -17,9 +17,12 @@ function Medidor({ pct }: { pct: number }) {
 
 export default function DroneStatusCard({
   status,
+  base,
   onResumePatrol,
 }: {
   status: DroneStatus | null;
+  /** Base de retorno del dron: de ella salen las rutas que puede patrullar. */
+  base?: Base | null;
   onResumePatrol: () => void;
 }) {
   if (!status) {
@@ -92,6 +95,21 @@ export default function DroneStatusCard({
           <div>
             <span>Modo</span>
             <strong>{status.mode}</strong>
+          </div>
+          {/* La base decide qué rutas puede volar este dron, así que tenerla a
+              mano evita ir hasta la vista de activos para saber cuál es. */}
+          <div>
+            <span>Base</span>
+            {base ? (
+              <>
+                <strong>{base.name}</strong>
+                <span className="muted mono">
+                  {base.lat.toFixed(5)}, {base.lon.toFixed(5)}
+                </span>
+              </>
+            ) : (
+              <strong className="muted">Sin base asignada</strong>
+            )}
           </div>
           <div>
             <span>Posición</span>

@@ -148,11 +148,17 @@
   flex-wrap: wrap;
 }
 /* Adentro de una fila las acciones van juntas y a la derecha: repartidas a lo
-   ancho de la celda se leen como si cada una fuera una columna distinta. */
+   ancho de la celda se leen como si cada una fuera una columna distinta.
+   Y va en `table-cell`, no en flex: un `td` en `display:flex` deja de ser celda
+   —el navegador le arma una celda anónima alrededor— y su borde inferior queda
+   a distinta altura que el de las celdas vecinas, así que la línea que separa
+   las filas se ve cortada en pedazos. */
 td.barra-acciones {
-  justify-content: flex-end;
-  gap: var(--e-2);
+  display: table-cell;
+  text-align: right;
+  white-space: nowrap;
 }
+td.barra-acciones > * + * { margin-left: var(--e-2); }
 
 /* --- Login: una placa de mármol sola en el centro ------------------------- */
 .login-wrapper {
@@ -260,19 +266,16 @@ td.barra-acciones {
    El estado cruza todo el ancho arriba (lo pone el propio componente, fuera de
    la grilla). Debajo, el video manda sobre el mapa —es donde pasa lo que hay
    que decidir— y la columna angosta queda para patrullaje, alertas y registro. */
+/* Patrullaje y control, debajo del par video/mapa. Con `auto-fit` la tarjeta
+   de patrullaje ocupa todo el ancho cuando el rol no puede pilotear y no queda
+   media pantalla vacía al lado. */
 .grid-operacion {
   display: grid;
-  grid-template-columns: 7fr 5fr;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: var(--e-4);
   align-items: start;
   margin-top: var(--e-4);
 }
-@media (max-width: 1100px) {
-  .grid-operacion { grid-template-columns: 1fr; }
-}
-/* El video pide todo el alto que le den: es la pieza que se mira. */
-.col-video .video { min-height: 340px; }
-.col-video .map { height: 380px; }
 
 /* El mapa de la flota ocupa el alto útil que sobra: antes quedaba angosto y
    largo dentro de una tarjeta de alto fijo, y en un predio grande eso obliga a
@@ -288,16 +291,25 @@ td.barra-acciones {
   min-height: 420px;
 }
 
-/* Video y ubicación a la misma altura: son las dos ventanas de lo que está
-   pasando y se miran juntas. Patrullaje y control quedan justo debajo. */
+/* Video y ubicación cruzan toda la pantalla, a la misma altura: son las dos
+   ventanas de lo que está pasando y se miran juntas. Patrullaje y control
+   quedan justo debajo, y el registro al pie. */
 .par-video-mapa {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: var(--e-4);
   align-items: stretch;
+  margin-top: var(--e-4);
 }
 @media (max-width: 900px) {
   .par-video-mapa { grid-template-columns: 1fr; }
 }
+/* Con el ancho completo disponible, las dos ventanas pueden ser más altas sin
+   empujar los controles fuera de la pantalla. */
 .par-video-mapa .video,
-.par-video-mapa .map { height: 300px; min-height: 300px; }
+.par-video-mapa .map { height: 420px; min-height: 420px; }
+@media (max-height: 900px) {
+  .par-video-mapa .video,
+  .par-video-mapa .map { height: 340px; min-height: 340px; }
+}
+.detail-main > .card + .par-video-mapa { margin-top: var(--e-4); }

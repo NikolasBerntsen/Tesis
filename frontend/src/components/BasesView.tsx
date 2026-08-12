@@ -1,20 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import L from 'leaflet';
 import { LEJOS_M, api, distanciaM, rutasDeBase, traerBases, traerRutas } from '../api';
+import { CENTRO_POR_DEFECTO, iconoBase, useFondo, vestirAtribucion } from '../mapa';
 import type { BaseAsset, Me, PatrolRoute } from '../types';
+import ConmutadorDeFondo from './ConmutadorDeFondo';
 import EditorDeRuta from './EditorDeRuta';
 import Modal from './Modal';
 
 type Formulario = { name: string; lat: string; lon: string };
 const VACIO: Formulario = { name: '', lat: '', lon: '' };
-
-/** Marcador de la base: el mismo lenguaje que usa el mapa de la flota. */
-const iconoBase = L.divIcon({
-  className: 'base-icon',
-  html: '<span class="base-marca"></span>',
-  iconSize: [18, 18],
-  iconAnchor: [9, 9],
-});
 
 function coordValida(v: string, tope: number): boolean {
   const n = Number(v);
@@ -34,8 +28,8 @@ function MapaElector({ lat, lon, onElegir }: { lat: number | null; lon: number |
 
   useEffect(() => {
     if (!caja.current || mapa.current) return;
-    const m = L.map(caja.current, { attributionControl: true, zoomControl: true }).setView([-34.8565, -56.2075], 14);
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(m);
+    const m = L.map(caja.current, { attributionControl: true, zoomControl: true }).setView(CENTRO_POR_DEFECTO, 14);
+    vestirAtribucion(m);
     m.on('click', (e: L.LeafletMouseEvent) => elegir.current(e.latlng.lat, e.latlng.lng));
     mapa.current = m;
     // Leaflet mide mal el contenedor si nace dentro de algo que recién se abre.
@@ -47,6 +41,8 @@ function MapaElector({ lat, lon, onElegir }: { lat: number | null; lon: number |
     };
   }, []);
 
+  const [fondo, setFondo] = useFondo(mapa);
+
   useEffect(() => {
     const m = mapa.current;
     if (!m) return;
@@ -56,11 +52,16 @@ function MapaElector({ lat, lon, onElegir }: { lat: number | null; lon: number |
       return;
     }
     if (marca.current) marca.current.setLatLng([lat, lon]);
-    else marca.current = L.marker([lat, lon], { icon: iconoBase }).addTo(m);
+    else marca.current = L.marker([lat, lon], { icon: iconoBase() }).addTo(m);
     m.panTo([lat, lon]);
   }, [lat, lon]);
 
-  return <div className="mapa-elector" ref={caja} />;
+  return (
+    <div className="mapa-caja">
+      <ConmutadorDeFondo fondo={fondo} onCambiar={setFondo} />
+      <div className="mapa-elector" ref={caja} />
+    </div>
+  );
 }
 
 /**
@@ -470,6 +471,7 @@ export default function BasesView({ me }: { me: Me }) {
       {editorAbierto && (
         <EditorDeRuta
           ruta={null}
+          base={asignando}
           onCerrar={() => setEditorAbierto(false)}
           onGuardar={async (datos) => {
             // Una ruta dibujada desde la base se asigna sola: es para esta base
