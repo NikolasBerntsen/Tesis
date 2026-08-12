@@ -202,6 +202,25 @@ describe('Console', () => {
     expect(rutas().filter((r) => r.startsWith('GET /drones'))).toHaveLength(pedidosPrevios);
   });
 
+  it('la conexión y el renombre de un dron también refrescan la tabla de activos', async () => {
+    meFix = makeMe({ username: 'super1', role: 'supervisor' });
+    dronesFix = [makeDrone({ hash: 'd1', droneId: 'd1', displayName: 'Alfa', online: false })];
+    render(<Console onLogout={() => {}} />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Drones' }));
+
+    const filaAlfa = (await screen.findByText('Alfa', { selector: 'div' })).closest('tr') as HTMLElement;
+    expect(within(filaAlfa).getByText('No')).toBeInTheDocument();
+
+    // El dron que se conecta emite `drone_online`, no `drone_updated`: sin esto
+    // la columna "En línea" quedaba congelada hasta salir y volver a la sección.
+    fire({ type: 'drone_online', drone: makeDrone({ hash: 'd1', droneId: 'd1', displayName: 'Alfa', online: true }) });
+    await waitFor(() => expect(within(filaAlfa).getByText('Sí')).toBeInTheDocument());
+
+    // Y el renombre iniciado desde la app llega solo, como `drone_renamed`
+    fire({ type: 'drone_renamed', droneId: 'd1', displayName: 'Bravo' });
+    expect(await screen.findByText('Bravo', { selector: 'div' })).toBeInTheDocument();
+  });
+
   it('un activo eliminado desaparece de la operación', async () => {
     meFix = makeMe({ username: 'admin1', role: 'admin' });
     render(<Console onLogout={() => {}} />);

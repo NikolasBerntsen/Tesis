@@ -76,6 +76,40 @@ describe('QrDronModal', () => {
     expect(onCerrar).toHaveBeenCalledTimes(4);
   });
 
+  it('no se cierra si el arrastre para copiar el hash termina sobre el velo', async () => {
+    const onCerrar = montar();
+    const velo = screen.getByRole('dialog').parentElement!;
+    const hash = screen.getByText(HASH);
+
+    // Seleccionar el hash para copiarlo y soltar apenas afuera de la caja
+    await userEvent.pointer([
+      { keys: '[MouseLeft>]', target: hash },
+      { target: velo },
+      { keys: '[/MouseLeft]', target: velo },
+    ]);
+
+    expect(onCerrar).not.toHaveBeenCalled();
+  });
+
+  it('atrapa el tabulador adentro del sticker', async () => {
+    montar();
+    const dialogo = await screen.findByRole('dialog');
+    expect(dialogo).toHaveFocus();
+
+    const cruz = screen.getByRole('button', { name: 'Cerrar el sticker' });
+    const imprimir = await screen.findByRole('button', { name: 'Imprimir sticker' });
+    await waitFor(() => expect(imprimir).toBeEnabled());
+
+    // Sin atrapar el foco, el tabulador se escapaba a la consola tapada por el
+    // velo y desde ahí se podía accionar lo que había atrás.
+    imprimir.focus();
+    await userEvent.tab();
+    expect(cruz).toHaveFocus();
+
+    await userEvent.tab({ shift: true });
+    expect(imprimir).toHaveFocus();
+  });
+
   it('avisa si no se pudo generar el código', async () => {
     generarQr.mockRejectedValue(new Error('sin canvas'));
     montar();

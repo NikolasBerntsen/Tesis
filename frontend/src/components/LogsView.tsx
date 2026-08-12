@@ -1,6 +1,6 @@
 import { useEffect, useState, type KeyboardEvent } from 'react';
 import { TAMANIOS_PAGINA, TAMANIO_PAGINA_POR_DEFECTO, traerLogs, type ParametrosLogs } from '../api';
-import { time } from '../format';
+import { fechaYHora } from '../format';
 import type { EventRow, PaginaLogs, TamanioPagina } from '../types';
 import LogDetailModal from './LogDetailModal';
 
@@ -57,7 +57,10 @@ export default function LogsView() {
       })
       .catch((e) => {
         if (!vigente) return;
-        setDatos(paginaVacia(tamanio, pagina));
+        // El total es lo único que sostiene al paginador: si un pedido fallido lo
+        // pusiera en cero, "Anterior" devolvería a la página 1 al que estaba en la
+        // última y no habría forma de volver a donde estaba.
+        setDatos((previo) => ({ items: [], total: previo.total, page: pagina, pageSize: tamanio }));
         setError(e instanceof Error ? e.message : String(e));
       })
       .finally(() => {
@@ -160,7 +163,9 @@ export default function LogsView() {
                   onClick={() => setAbierta(l)}
                   onKeyDown={(ev) => abrirConTeclado(ev, l)}
                 >
-                  <span className="muted mono">{time(l.ts)}</span>
+                  <time className="muted mono" dateTime={l.ts}>
+                    {fechaYHora(l.ts)}
+                  </time>
                   <span className={`cat-badge cat-${l.category}`}>{CATEGORIA[l.category]}</span>
                   <span className="event-type mono">{l.type}</span>
                   <span>{l.message}</span>

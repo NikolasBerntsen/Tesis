@@ -1,3 +1,4 @@
+import { time } from '../format';
 import type { EventRow } from '../types';
 
 // Tipos de evento que ameritan resaltarse en el log del operador
@@ -28,7 +29,7 @@ export default function EventLog({ events }: { events: EventRow[] }) {
         {events.map((e) => (
           <div key={e.id} className="log-row">
             <time className="muted mono" dateTime={e.ts}>
-              {new Date(e.ts).toLocaleTimeString()}
+              {time(e.ts)}
             </time>
             <span className={`event-type mono ${HIGHLIGHT[e.type] ?? ''}`}>{e.type}</span>
             <span>{e.message}</span>

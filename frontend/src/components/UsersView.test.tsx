@@ -58,7 +58,10 @@ describe('UsersView', () => {
     expect(screen.getByText('Administrador', { selector: 'td' })).toBeInTheDocument();
     expect(screen.getByText('Operador de campo', { selector: 'td' })).toBeInTheDocument();
     expect(screen.getByText('(vos)')).toBeInTheDocument();
-    expect(within(fila('campo1')).getByText('Suspendido')).toBeInTheDocument();
+    // El operador de campo no pilotea drones: el permiso no está suspendido, no
+    // corresponde, y el backend rechaza con un 400 cualquier intento de darlo.
+    expect(within(fila('campo1')).getByText('No aplica')).toBeInTheDocument();
+    expect(within(fila('campo1')).queryByRole('button', { name: 'Autorizar' })).not.toBeInTheDocument();
   });
 
   it('muestra el estado vacío cuando no hay a quién listar', async () => {
@@ -184,6 +187,25 @@ describe('UsersView', () => {
       await userEvent.click(fondo);
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
       expect(apiMock).not.toHaveBeenCalledWith('/users/oper1', { method: 'DELETE' });
+    });
+
+    it('no se cierra si el arrastre para seleccionar el texto termina en el fondo', async () => {
+      servir([makeUser({ username: 'admin1', role: 'admin' }), makeUser({ username: 'oper1' })]);
+      montar();
+      await screen.findByText('oper1');
+
+      await userEvent.click(within(fila('oper1')).getByRole('button', { name: 'Eliminar' }));
+      const dialogo = await screen.findByRole('dialog');
+      const fondo = dialogo.parentElement as HTMLElement;
+      const titulo = within(dialogo).getByRole('heading', { name: 'Eliminar a oper1' });
+
+      await userEvent.pointer([
+        { keys: '[MouseLeft>]', target: titulo },
+        { target: fondo },
+        { keys: '[/MouseLeft]', target: fondo },
+      ]);
+
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
     });
 
     it('el pop-up atrapa el foco y lo devuelve a la fila al cerrarse', async () => {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, getRole, getUsername } from '../api';
-import type { Alert, Drone, DroneStatus, EventRow, Me, PatrolRoute, RolConsola } from '../types';
+import type { Alert, Drone, DroneStatus, EventRow, Me, NovedadDron, PatrolRoute, RolConsola } from '../types';
 import { useWebSocket } from '../useWebSocket';
 import Dashboard from './Dashboard';
 import DroneDetail from './DroneDetail';
@@ -45,9 +45,10 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [me, setMe] = useState<Me | null>(null);
   const [seccion, setSeccion] = useState<Seccion>('operacion');
-  // Última ficha llegada por `drone_updated`: DronesView la mezcla en su tabla
-  // y así se entera de las altas y bajas hechas desde otra consola.
-  const [droneActualizado, setDroneActualizado] = useState<Drone | null>(null);
+  // Última novedad de un activo llegada por el canal en vivo: DronesView la
+  // mezcla en su tabla y así se entera de las altas, bajas, conexiones y
+  // renombres hechos desde otra consola o desde la app.
+  const [novedadDron, setNovedadDron] = useState<NovedadDron | null>(null);
   // Los status de cada dron llegan a destiempo: se acumulan acá y se vuelcan
   // al estado en un único tick, así todos los marcadores se mueven a la vez.
   const statusBuffer = useRef<Record<string, DroneStatus>>({});
@@ -84,10 +85,12 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
         break;
       case 'drone_online':
         upsertDrone(msg.drone);
+        setNovedadDron({ tipo: 'ficha', drone: msg.drone });
         break;
       case 'drone_offline':
         upsertDrone(msg.drone);
         olvidarTelemetria(msg.drone.droneId);
+        setNovedadDron({ tipo: 'ficha', drone: msg.drone });
         break;
       case 'drone_updated':
         // El mismo mensaje trae altas, ediciones, bajas y restauraciones. Un
@@ -99,7 +102,7 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
         } else {
           upsertDrone(msg.drone);
         }
-        setDroneActualizado(msg.drone);
+        setNovedadDron({ tipo: 'ficha', drone: msg.drone });
         break;
       case 'route_updated':
         setRoutes((prev) => prev.map((r) => (r.id === msg.route.id ? msg.route : r)));
@@ -113,6 +116,8 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
         setDrones((prev) =>
           prev.map((d) => (d.droneId === msg.droneId ? { ...d, displayName: msg.displayName } : d)),
         );
+        // El renombre iniciado desde la app no viene acompañado de `drone_updated`
+        setNovedadDron({ tipo: 'renombre', droneId: msg.droneId, displayName: msg.displayName });
         break;
     }
   });
@@ -225,7 +230,7 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
           <p className="vacio">Cargando la consola…</p>
         </main>
       ) : abierta === 'drones' ? (
-        <DronesView me={me} droneActualizado={droneActualizado} />
+        <DronesView me={me} novedad={novedadDron} />
       ) : abierta === 'usuarios' ? (
         <UsersView me={me} />
       ) : abierta === 'registro' ? (

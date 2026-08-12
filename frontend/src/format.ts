@@ -42,6 +42,29 @@ export function formatDistance(meters: number): string {
   return meters < 1000 ? `${Math.round(meters)} m` : `${(meters / 1000).toFixed(2)} km`;
 }
 
+/* El navegador puede estar en cualquier idioma; la interfaz es en castellano, y
+   sin locale fijo la misma hora salía "7:47:48 AM" en un Chrome en inglés. */
 export function time(ts: string): string {
-  return new Date(ts).toLocaleTimeString();
+  return new Date(ts).toLocaleTimeString('es-AR', { hour12: false });
+}
+
+const FECHA_Y_HORA: Intl.DateTimeFormatOptions = {
+  day: '2-digit',
+  month: '2-digit',
+  year: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+};
+
+/**
+ * Fecha y hora cortas. El registro general pagina el historial entero, y ahí
+ * dos filas separadas por meses se verían iguales si sólo se mostrara la hora.
+ */
+export function fechaYHora(ts: string): string {
+  const fecha = new Date(ts);
+  // Una fila vieja puede traer cualquier cosa en `ts`: se muestra crudo antes
+  // que un "Invalid Date".
+  return Number.isNaN(fecha.getTime()) ? ts : fecha.toLocaleString('es-AR', FECHA_Y_HORA);
 }

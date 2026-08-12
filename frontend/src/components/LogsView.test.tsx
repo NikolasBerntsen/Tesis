@@ -147,6 +147,50 @@ describe('LogsView', () => {
     expect(screen.queryByRole('button', { name: /Ver el detalle/ })).not.toBeInTheDocument();
   });
 
+  it('un pedido fallido no le borra el contexto al paginador', async () => {
+    traerLogsMock.mockResolvedValue(pagina([makeEvent()], { total: 200 }));
+    render(<LogsView />);
+    await waitFor(() => expect(traerLogsMock).toHaveBeenCalledTimes(1));
+
+    await userEvent.click(screen.getByRole('button', { name: 'Última' }));
+    await waitFor(() => expect(paginador()).toHaveTextContent('Página 8 de 8 · 200 registros'));
+
+    // Se corta la red justo cuando se pide actualizar
+    traerLogsMock.mockRejectedValue(new Error('Falló la base'));
+    await userEvent.click(screen.getByRole('button', { name: 'Actualizar' }));
+    expect(await screen.findByText('No se pudo traer el registro: Falló la base')).toBeInTheDocument();
+
+    // Poner el total en cero dejaba "Página 1 de 1 · 0 registros" y "Anterior"
+    // devolvía al principio del registro, sin forma de volver a donde estabas.
+    expect(paginador()).toHaveTextContent('Página 8 de 8 · 200 registros');
+    expect(screen.getByRole('button', { name: 'Siguiente' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Anterior' })).toBeEnabled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Anterior' }));
+    await waitFor(() => expect(traerLogsMock).toHaveBeenLastCalledWith({ category: '', page: 7, pageSize: 25 }));
+  });
+
+  it('cada fila lleva la fecha además de la hora, y en castellano', async () => {
+    traerLogsMock.mockResolvedValue(
+      pagina([
+        makeEvent({ id: 1, ts: '2024-01-04T15:30:00.000Z', message: 'el de enero' }),
+        makeEvent({ id: 2, ts: '2024-08-04T15:30:00.000Z', message: 'el de agosto' }),
+      ]),
+    );
+    render(<LogsView />);
+
+    await screen.findByText('el de enero');
+    const momentos = [...document.querySelectorAll('.log-row time')];
+    expect(momentos).toHaveLength(2);
+    for (const momento of momentos) {
+      // El registro pagina el historial entero: sin la fecha, dos eventos a
+      // meses de distancia se leían idénticos. Y nada de "3:30:00 PM".
+      expect(momento.textContent).toMatch(/^\d{2}\/\d{2}\/\d{2}, \d{2}:\d{2}:\d{2}$/);
+    }
+    expect(momentos[0].textContent).not.toBe(momentos[1].textContent);
+    expect(momentos[0]).toHaveAttribute('dateTime', '2024-01-04T15:30:00.000Z');
+  });
+
   it('abre el pop-up al clickear una fila y devuelve el foco al cerrarlo', async () => {
     traerLogsMock.mockResolvedValue(
       pagina([makeEvent({ id: 4, type: 'DRONE_UPDATED', message: 'se actualizó Alfa', meta: null })]),

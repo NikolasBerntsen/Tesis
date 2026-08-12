@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, traerDrones } from '../api';
-import type { Base, Drone, Me } from '../types';
+import type { Base, Drone, Me, NovedadDron } from '../types';
 import QrDronModal from './QrDronModal';
 
 const COLUMNAS = 6;
@@ -94,11 +94,12 @@ function CamposDron({ valor, onCambio }: { valor: Formulario; onCambio: (f: Form
 type PropsDronesView = {
   me: Me;
   /**
-   * Última ficha llegada por el mensaje `drone_updated` del WebSocket, que el
-   * backend emite en alta, edición, baja y restauración. La vista la mezcla en
-   * su lista: con eso se mantiene al día sin volver a consultar cada tanto.
+   * Última novedad del canal en vivo: la ficha entera de `drone_updated`
+   * (alta, edición, baja y restauración), `drone_online` y `drone_offline`, o
+   * el renombre que la app inicia con `set_name`. La vista la mezcla en su
+   * lista: con eso se mantiene al día sin volver a consultar cada tanto.
    */
-  droneActualizado?: Drone | null;
+  novedad?: NovedadDron | null;
 };
 
 /**
@@ -106,8 +107,9 @@ type PropsDronesView = {
  * Quién puede qué lo decide el backend; acá se esconde lo que no corresponde
  * para no ofrecer botones que sólo devolverían un 403.
  */
-export default function DronesView({ me, droneActualizado = null }: PropsDronesView) {
+export default function DronesView({ me, novedad = null }: PropsDronesView) {
   const [drones, setDrones] = useState<Drone[]>([]);
+  const [cargando, setCargando] = useState(true);
   const [error, setError] = useState('');
   const [verEliminados, setVerEliminados] = useState(false);
   const [nuevo, setNuevo] = useState<Formulario>(FORMULARIO_VACIO);
@@ -124,17 +126,26 @@ export default function DronesView({ me, droneActualizado = null }: PropsDronesV
   useEffect(() => {
     let vigente = true;
     setError('');
+    setCargando(true);
     traerDrones({ incluirEliminados: verEliminados })
       .then((lista) => vigente && setDrones(lista))
-      .catch((e) => vigente && setError(textoError(e)));
+      .catch((e) => vigente && setError(textoError(e)))
+      .finally(() => {
+        if (vigente) setCargando(false);
+      });
     return () => {
       vigente = false;
     };
   }, [verEliminados]);
 
   useEffect(() => {
-    if (droneActualizado) setDrones((prev) => upsert(prev, droneActualizado));
-  }, [droneActualizado]);
+    if (!novedad) return;
+    setDrones((prev) =>
+      novedad.tipo === 'ficha'
+        ? upsert(prev, novedad.drone)
+        : prev.map((d) => (d.hash === novedad.droneId ? { ...d, displayName: novedad.displayName } : d)),
+    );
+  }, [novedad]);
 
   useEffect(() => () => clearTimeout(temporizador.current), []);
 
@@ -227,9 +238,14 @@ export default function DronesView({ me, droneActualizado = null }: PropsDronesV
       )}
 
       <section className="card">
-        {visibles.length === 0 ? (
+        {/* Mientras el pedido viaja no se puede afirmar que no haya drones: ese
+            cartel es justo el que empuja a dar de alta uno que ya existe, y el
+            alta genera un hash nuevo, o sea un activo duplicado con su propio QR. */}
+        {cargando && visibles.length === 0 && <p className="vacio">Trayendo los drones…</p>}
+        {!cargando && !error && visibles.length === 0 && (
           <p className="vacio">Todavía no hay drones dados de alta.</p>
-        ) : (
+        )}
+        {visibles.length > 0 && (
           <div className="tabla-envoltorio">
             <table className="tabla">
               <thead>

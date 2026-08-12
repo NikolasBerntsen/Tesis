@@ -1,7 +1,7 @@
-import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
-import { createPortal } from 'react-dom';
+import { useEffect, useId, useState, type FormEvent } from 'react';
 import { api, traerUsuarios } from '../api';
 import type { Me, RolAsignable, RolConsola, UserView } from '../types';
+import Modal from './Modal';
 
 const ROL: Record<RolConsola, string> = {
   field_operator: 'Operador de campo',
@@ -23,9 +23,6 @@ const ICONO_CERRAR = {
   strokeLinecap: 'round',
   'aria-hidden': true,
 } as const;
-
-const FOCUSABLES =
-  'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 type Alta = { username: string; password: string; role: RolAsignable; canControl: boolean };
 
@@ -54,97 +51,44 @@ function ModalEliminar({
   onCancelar: () => void;
   onConfirmar: () => void;
 }) {
-  const caja = useRef<HTMLDivElement>(null);
   const idTitulo = useId();
   const idTexto = useId();
-  // En una ref para que el listener del teclado no se resuscriba en cada render
-  // sólo porque el padre le pasa una función nueva.
-  const cancelar = useRef(onCancelar);
-  cancelar.current = onCancelar;
 
-  useEffect(() => {
-    const previo = document.activeElement;
-    caja.current?.focus();
-    // El foco vuelve a la fila desde la que se pidió la baja.
-    return () => {
-      if (previo instanceof HTMLElement) previo.focus();
-    };
-  }, []);
-
-  // Va en `document` y no en el JSX porque el diálogo tiene que responder a
-  // Escape y atrapar el tabulador aun si el foco se escapó de la caja.
-  useEffect(() => {
-    function alTeclear(ev: KeyboardEvent) {
-      if (ev.key === 'Escape') {
-        cancelar.current();
-        return;
-      }
-      if (ev.key !== 'Tab' || !caja.current) return;
-      // Siempre están las tres formas de salir, así que la lista nunca va vacía.
-      const dentro = [...caja.current.querySelectorAll<HTMLElement>(FOCUSABLES)];
-      const primero = dentro[0];
-      const ultimo = dentro[dentro.length - 1];
-      const foco = document.activeElement;
-      const afuera = !caja.current.contains(foco);
-      if (ev.shiftKey && (foco === primero || foco === caja.current || afuera)) {
-        ev.preventDefault();
-        ultimo.focus();
-      } else if (!ev.shiftKey && (foco === ultimo || afuera)) {
-        ev.preventDefault();
-        primero.focus();
-      }
-    }
-    document.addEventListener('keydown', alTeclear);
-    return () => document.removeEventListener('keydown', alTeclear);
-  }, []);
-
-  return createPortal(
-    <div className="modal-fondo" onClick={onCancelar}>
-      <div
-        className="modal-caja"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={idTitulo}
-        aria-describedby={idTexto}
-        tabIndex={-1}
-        ref={caja}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="modal-cabecera">
-          <div>
-            <h2 className="modal-titulo" id={idTitulo}>
-              Eliminar a {usuario}
-            </h2>
-            <p className="modal-subtitulo">La baja se puede deshacer</p>
-          </div>
-          <button className="modal-cerrar" aria-label="Cerrar la confirmación" onClick={onCancelar}>
-            <svg {...ICONO_CERRAR}>
-              <path d="M4.2 4.2 11.8 11.8M11.8 4.2 4.2 11.8" />
-            </svg>
-          </button>
-        </header>
-
-        <div className="modal-cuerpo">
-          <p id={idTexto}>
-            La cuenta <strong>{usuario}</strong> deja de poder entrar a la consola y sale del listado.
-          </p>
-          <p className="muted">
-            El borrado es lógico: un administrador puede restaurarla más adelante desde “Ver eliminados”. Hasta
-            entonces el nombre de usuario sigue ocupado.
-          </p>
+  return (
+    <Modal etiquetadoPor={idTitulo} descritoPor={idTexto} onCerrar={onCancelar}>
+      <header className="modal-cabecera">
+        <div>
+          <h2 className="modal-titulo" id={idTitulo}>
+            Eliminar a {usuario}
+          </h2>
+          <p className="modal-subtitulo">La baja se puede deshacer</p>
         </div>
+        <button className="modal-cerrar" aria-label="Cerrar la confirmación" onClick={onCancelar}>
+          <svg {...ICONO_CERRAR}>
+            <path d="M4.2 4.2 11.8 11.8M11.8 4.2 4.2 11.8" />
+          </svg>
+        </button>
+      </header>
 
-        <footer className="modal-pie">
-          <button className="ghost" onClick={onCancelar}>
-            Cancelar
-          </button>
-          <button className="dismiss" onClick={onConfirmar}>
-            Eliminar
-          </button>
-        </footer>
+      <div className="modal-cuerpo">
+        <p id={idTexto}>
+          La cuenta <strong>{usuario}</strong> deja de poder entrar a la consola y sale del listado.
+        </p>
+        <p className="muted">
+          El borrado es lógico: un administrador puede restaurarla más adelante desde “Ver eliminados”. Hasta
+          entonces el nombre de usuario sigue ocupado.
+        </p>
       </div>
-    </div>,
-    document.body,
+
+      <footer className="modal-pie">
+        <button className="ghost" onClick={onCancelar}>
+          Cancelar
+        </button>
+        <button className="dismiss" onClick={onConfirmar}>
+          Eliminar
+        </button>
+      </footer>
+    </Modal>
   );
 }
 
@@ -250,8 +194,12 @@ export default function UsersView({ me }: { me: Me }) {
                 {visibles.map((u) => {
                   const esYo = u.username === me.username;
                   const eliminado = Boolean(u.deletedAt);
+                  // El operador de campo despliega drones pero no los pilotea: el
+                  // backend rechaza con un 400 cualquier intento de autorizarlo, así
+                  // que en su fila el permiso ni siquiera corresponde.
+                  const controlAplica = u.role !== 'field_operator';
                   // A una cuenta eliminada no se le toca nada: primero se restaura.
-                  const puedeTocarControl = !eliminado && !esYo && (esAdmin || u.role === 'operator');
+                  const puedeTocarControl = controlAplica && !eliminado && !esYo && (esAdmin || u.role === 'operator');
                   return (
                     <tr key={u.username} className={eliminado ? 'fila-eliminada' : undefined}>
                       <td>
@@ -260,13 +208,19 @@ export default function UsersView({ me }: { me: Me }) {
                       </td>
                       <td>{ROL[u.role]}</td>
                       <td>
-                        <span className={u.canControl ? 'ok' : 'bad'}>
-                          {u.canControl ? 'Autorizado' : 'Suspendido'}
-                        </span>{' '}
-                        {puedeTocarControl && (
-                          <button className="chico" onClick={patch(u.username, { canControl: !u.canControl })}>
-                            {u.canControl ? 'Suspender' : 'Autorizar'}
-                          </button>
+                        {controlAplica ? (
+                          <>
+                            <span className={u.canControl ? 'ok' : 'bad'}>
+                              {u.canControl ? 'Autorizado' : 'Suspendido'}
+                            </span>{' '}
+                            {puedeTocarControl && (
+                              <button className="chico" onClick={patch(u.username, { canControl: !u.canControl })}>
+                                {u.canControl ? 'Suspender' : 'Autorizar'}
+                              </button>
+                            )}
+                          </>
+                        ) : (
+                          <span className="muted">No aplica</span>
                         )}
                       </td>
                       <td>

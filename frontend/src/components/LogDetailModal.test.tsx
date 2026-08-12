@@ -296,6 +296,40 @@ describe('LogDetailModal', () => {
     expect(pie).toHaveFocus();
   });
 
+  it('no rehace el mini mapa cuando el padre vuelve a renderizar', () => {
+    const fila = makeEvent({
+      type: 'DRONE_PAIRED',
+      meta: JSON.stringify({ ubicacion: { lat: -34.857512, lon: -56.204533, accuracyM: 8.4 } }),
+    });
+    const { rerender } = render(<LogDetailModal fila={fila} onCerrar={vi.fn()} />);
+    expect(leaflet.L.map).toHaveBeenCalledTimes(1);
+
+    // La consola vuelca los status con un setInterval de 1 s y cada video_frame
+    // suma otro render: el pop-up se re-renderiza con un `onCerrar` nuevo cada vez.
+    for (let i = 0; i < 5; i++) rerender(<LogDetailModal fila={fila} onCerrar={vi.fn()} />);
+
+    // Un mapa nuevo por render parpadea, descarta el arrastre del usuario y
+    // repide las teselas a tile.openstreetmap.org sin parar.
+    expect(leaflet.L.map).toHaveBeenCalledTimes(1);
+    expect(leaflet.mapa.remove).not.toHaveBeenCalled();
+  });
+
+  it('no se cierra si el arrastre para seleccionar texto termina sobre el velo', async () => {
+    const { cerrar } = abrir({ message: 'un mensaje largo para seleccionar' });
+    const velo = screen.getByRole('dialog').parentElement!;
+    const titulo = screen.getByRole('heading', { name: 'un mensaje largo para seleccionar' });
+
+    // Apretar sobre el título, arrastrar para seleccionar y soltar un poco
+    // afuera: el `click` se dispara en el velo, que es el ancestro común.
+    await userEvent.pointer([
+      { keys: '[MouseLeft>]', target: titulo },
+      { target: velo },
+      { keys: '[/MouseLeft]', target: velo },
+    ]);
+
+    expect(cerrar).not.toHaveBeenCalled();
+  });
+
   it('devuelve el foco a la fila que lo abrió', async () => {
     const fila = document.createElement('div');
     fila.tabIndex = 0;

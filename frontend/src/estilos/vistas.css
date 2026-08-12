@@ -166,7 +166,7 @@
 .log-card > .log-row { border-bottom-color: var(--veta-fuerte); }
 .log-row:last-child { border-bottom: none; }
 .log-row:hover { background: rgba(255, 255, 255, .7); }
-.log-row-general { grid-template-columns: 84px 88px 180px 1fr; }
+.log-row-general { grid-template-columns: 150px 88px 180px 1fr; }
 .event-type {
   font-weight: 600;
   color: var(--tinta-media);

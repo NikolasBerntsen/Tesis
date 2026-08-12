@@ -71,6 +71,16 @@ export interface Drone {
   controlledBy: string | null;
 }
 
+/**
+ * Novedad de un activo llegada por el canal en vivo. `drone_updated`,
+ * `drone_online` y `drone_offline` traen la ficha entera; el renombre iniciado
+ * desde la app llega sólo con el nombre nuevo, así que se aplica encima de la
+ * ficha que la vista ya tenga.
+ */
+export type NovedadDron =
+  | { tipo: 'ficha'; drone: Drone }
+  | { tipo: 'renombre'; droneId: string; displayName: string };
+
 /** `label` es el apodo opcional que le pone el operador para identificar la zona. */
 export interface Waypoint {
   lat: number;

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import DronesView from './DronesView';
 import { api, traerDrones } from '../api';
 import { makeDrone, makeMe } from '../test/fixtures';
-import type { Drone, RolConsola } from '../types';
+import type { Drone, NovedadDron, RolConsola } from '../types';
 
 // El QR se dibuja en el navegador con `qrcode`; el modal se prueba aparte.
 const { generarQr } = vi.hoisted(() => ({ generarQr: vi.fn() }));
@@ -34,8 +34,13 @@ function bravo(over: Partial<Drone> = {}): Drone {
   });
 }
 
-function montar(role: RolConsola = 'admin', droneActualizado: Drone | null = null) {
-  return render(<DronesView me={makeMe({ username: 'admin1', role })} droneActualizado={droneActualizado} />);
+function montar(role: RolConsola = 'admin', novedad: NovedadDron | null = null) {
+  return render(<DronesView me={makeMe({ username: 'admin1', role })} novedad={novedad} />);
+}
+
+/** La misma vista con una novedad del canal en vivo recién llegada. */
+function conNovedad(novedad: NovedadDron) {
+  return <DronesView me={makeMe({ username: 'admin1', role: 'supervisor' })} novedad={novedad} />;
 }
 
 /** La fila de la tabla que corresponde a un dron, por su nombre visible. */
@@ -89,11 +94,13 @@ describe('DronesView', () => {
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
 
-  it('muestra el error si falla la carga', async () => {
+  it('muestra el error si falla la carga, sin contradecirlo con el estado vacío', async () => {
     traerMock.mockRejectedValue(new Error('Sin permiso'));
     montar();
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Sin permiso');
+    expect(screen.queryByText('Todavía no hay drones dados de alta.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Trayendo los drones…')).not.toBeInTheDocument();
   });
 
   it('copia el identificador completo, no el abreviado', async () => {
@@ -369,12 +376,7 @@ describe('DronesView', () => {
     const { rerender } = montar('supervisor');
     await screen.findByText('Alfa', { selector: 'div' });
 
-    rerender(
-      <DronesView
-        me={makeMe({ username: 'admin1', role: 'supervisor' })}
-        droneActualizado={alfa({ displayName: 'Alfa renombrado', online: false })}
-      />,
-    );
+    rerender(conNovedad({ tipo: 'ficha', drone: alfa({ displayName: 'Alfa renombrado', online: false }) }));
 
     expect(await screen.findByText('Alfa renombrado', { selector: 'div' })).toBeInTheDocument();
     expect(within(fila('Alfa renombrado')).getByText('No')).toBeInTheDocument();
@@ -385,9 +387,35 @@ describe('DronesView', () => {
     const { rerender } = montar('supervisor');
     await screen.findByText('Alfa', { selector: 'div' });
 
-    rerender(<DronesView me={makeMe({ username: 'admin1', role: 'supervisor' })} droneActualizado={bravo()} />);
+    rerender(conNovedad({ tipo: 'ficha', drone: bravo() }));
 
     expect(await screen.findByText('Bravo', { selector: 'div' })).toBeInTheDocument();
+  });
+
+  it('se entera de que un dron se conectó y de que lo renombraron desde la app', async () => {
+    const { rerender } = montar('supervisor');
+    await screen.findByText('Alfa', { selector: 'div' });
+    expect(within(fila('Alfa')).getByText('Sí')).toBeInTheDocument();
+
+    // `drone_online` y `drone_offline` traen la ficha entera
+    rerender(conNovedad({ tipo: 'ficha', drone: alfa({ online: false }) }));
+    await waitFor(() => expect(within(fila('Alfa')).getByText('No')).toBeInTheDocument());
+
+    // El renombre que inicia la app llega sólo con el nombre nuevo
+    rerender(conNovedad({ tipo: 'renombre', droneId: HASH_ALFA, displayName: 'Bravo' }));
+    expect(await screen.findByText('Bravo', { selector: 'div' })).toBeInTheDocument();
+    expect(screen.queryByText('Alfa', { selector: 'div' })).not.toBeInTheDocument();
+    // Y ninguna de las dos novedades vuelve a pedir la lista entera
+    expect(traerMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('no afirma que no hay drones mientras el pedido está en vuelo', async () => {
+    traerMock.mockReturnValue(new Promise(() => {}));
+    montar();
+
+    expect(await screen.findByText('Trayendo los drones…')).toBeInTheDocument();
+    // Ese cartel es el que empuja a dar de alta un dron que ya existe
+    expect(screen.queryByText('Todavía no hay drones dados de alta.')).not.toBeInTheDocument();
   });
 
   it('el operador de campo da de alta pero no toca el activo', async () => {

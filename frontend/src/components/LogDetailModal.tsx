@@ -1,7 +1,8 @@
 import L from 'leaflet';
-import { Fragment, useEffect, useId, useRef, useState } from 'react';
+import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { api, parsearMeta } from '../api';
 import type { Alert, CamposMeta, EventRow, MetaAlerta, MetaDron, MetaUbicacion, ValorMeta } from '../types';
+import Modal from './Modal';
 
 const CATEGORIA: Record<EventRow['category'], string> = {
   drone: 'Drones',
@@ -173,7 +174,10 @@ function MiniMapa({ ubicacion }: { ubicacion: MetaUbicacion }) {
       window.clearTimeout(remedir);
       mapa.remove();
     };
-  }, [ubicacion]);
+    // Las dependencias son los números y no el objeto `ubicacion`: el pop-up se
+    // re-renderiza una vez por segundo (el tick de status de la consola) y un
+    // mapa nuevo por render parpadea, pierde el arrastre y repide las teselas.
+  }, [ubicacion.lat, ubicacion.lon, ubicacion.accuracyM]);
 
   return (
     <div>
@@ -352,9 +356,6 @@ function BloqueAlerta({ referencia, conFicha }: { referencia: MetaAlerta; conFic
 
 /* --- Pop-up ---------------------------------------------------------------- */
 
-const FOCUSABLES =
-  'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
 const CRUZ = (
   <svg
     viewBox="0 0 16 16"
@@ -376,136 +377,87 @@ const CRUZ = (
  * tenga la forma esperada, y cada bloque aparece sólo si sobrevivió su clave.
  */
 export default function LogDetailModal({ fila, onCerrar }: { fila: EventRow; onCerrar: () => void }) {
-  const caja = useRef<HTMLDivElement>(null);
   const idTitulo = useId();
-  const meta = parsearMeta(fila.meta);
-  // En una ref para que el listener del teclado no se resuscriba en cada
-  // render sólo porque el padre le pasa una función nueva.
-  const cerrar = useRef(onCerrar);
-  cerrar.current = onCerrar;
-
-  useEffect(() => {
-    const previo = document.activeElement;
-    caja.current?.focus();
-    // El foco vuelve a la fila que abrió el pop-up: con el teclado, cerrar no
-    // puede dejarte de nuevo arriba de todo.
-    return () => {
-      if (previo instanceof HTMLElement) previo.focus();
-    };
-  }, []);
-
-  // Va en `document` y no en el JSX porque el diálogo tiene que responder a
-  // Escape y atrapar el tabulador aun si el foco se escapó de la caja.
-  useEffect(() => {
-    function alTeclear(ev: KeyboardEvent) {
-      if (ev.key === 'Escape') {
-        cerrar.current();
-        return;
-      }
-      if (ev.key !== 'Tab' || !caja.current) return;
-      // Siempre hay al menos las dos formas de cerrar, así que la lista no queda vacía.
-      const dentro = [...caja.current.querySelectorAll<HTMLElement>(FOCUSABLES)];
-      const primero = dentro[0];
-      const ultimo = dentro[dentro.length - 1];
-      const foco = document.activeElement;
-      const afuera = !caja.current.contains(foco);
-      if (ev.shiftKey && (foco === primero || foco === caja.current || afuera)) {
-        ev.preventDefault();
-        ultimo.focus();
-      } else if (!ev.shiftKey && (foco === ultimo || afuera)) {
-        ev.preventDefault();
-        primero.focus();
-      }
-    }
-    document.addEventListener('keydown', alTeclear);
-    return () => document.removeEventListener('keydown', alTeclear);
-  }, []);
+  // Memoizado porque parsearMeta arma objetos nuevos en cada llamada y
+  // `meta.ubicacion` es la dependencia del efecto que dibuja el mini mapa: sin
+  // esto, cada render del padre reconstruía el mapa entero.
+  const meta = useMemo(() => parsearMeta(fila.meta), [fila.meta]);
 
   // El origen de los eventos de dron es el hash: se muestra el nombre, que es
   // lo único que un humano puede reconocer.
   const origen = meta.drone && meta.drone.hash === fila.source ? meta.drone.displayName : fila.source;
 
   return (
-    <div className="modal-fondo" onClick={onCerrar}>
-      <div
-        className="modal-caja"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={idTitulo}
-        tabIndex={-1}
-        ref={caja}
-        onClick={(ev) => ev.stopPropagation()}
-      >
-        <header className="modal-cabecera">
-          <div>
-            <h2 className="modal-titulo" id={idTitulo}>
-              {fila.message}
-            </h2>
-            <p className="modal-subtitulo">
-              <span className={`cat-badge cat-${fila.category}`}>{CATEGORIA[fila.category]}</span>{' '}
-              <span className="mono">{fila.type}</span>
-            </p>
-          </div>
-          <button type="button" className="modal-cerrar" aria-label="Cerrar el detalle" onClick={onCerrar}>
-            {CRUZ}
-          </button>
-        </header>
-
-        <div className="modal-cuerpo">
-          <dl className="datos">
-            <dt>Fecha y hora</dt>
-            <dd>
-              <time dateTime={fila.ts}>{fechaHora(fila.ts)}</time>
-            </dd>
-            <dt>Origen</dt>
-            <dd>{origen || '—'}</dd>
-            {meta.por !== undefined && (
-              <>
-                <dt>Ejecutado por</dt>
-                <dd>{meta.por}</dd>
-              </>
-            )}
-            {meta.decision !== undefined && (
-              <>
-                <dt>Decisión</dt>
-                <dd>{valorLegible('decision', meta.decision)}</dd>
-              </>
-            )}
-            {meta.dispositivo !== undefined && (
-              <>
-                <dt>Dispositivo</dt>
-                <dd>{meta.dispositivo}</dd>
-              </>
-            )}
-          </dl>
-
-          {(meta.antes || meta.despues) && <Comparacion antes={meta.antes} despues={meta.despues} />}
-
-          {meta.ubicacion && (
-            <>
-              <h3 className="etiqueta">Ubicación registrada</h3>
-              <MiniMapa ubicacion={meta.ubicacion} />
-            </>
-          )}
-
-          {meta.alerta && <BloqueAlerta referencia={meta.alerta} conFicha={meta.drone !== undefined} />}
-
-          {meta.drone && <FichaDron drone={meta.drone} />}
-
-          {meta.detalle && (
-            <>
-              <h3 className="etiqueta">Detalle</h3>
-              <ListaDatos campos={meta.detalle} />
-            </>
-          )}
+    <Modal etiquetadoPor={idTitulo} onCerrar={onCerrar}>
+      <header className="modal-cabecera">
+        <div>
+          <h2 className="modal-titulo" id={idTitulo}>
+            {fila.message}
+          </h2>
+          <p className="modal-subtitulo">
+            <span className={`cat-badge cat-${fila.category}`}>{CATEGORIA[fila.category]}</span>{' '}
+            <span className="mono">{fila.type}</span>
+          </p>
         </div>
+        <button type="button" className="modal-cerrar" aria-label="Cerrar el detalle" onClick={onCerrar}>
+          {CRUZ}
+        </button>
+      </header>
 
-        <footer className="modal-pie">
-          <button type="button" onClick={onCerrar}>
-            Cerrar
-          </button>
-        </footer>
+      <div className="modal-cuerpo">
+        <dl className="datos">
+          <dt>Fecha y hora</dt>
+          <dd>
+            <time dateTime={fila.ts}>{fechaHora(fila.ts)}</time>
+          </dd>
+          <dt>Origen</dt>
+          <dd>{origen || '—'}</dd>
+          {meta.por !== undefined && (
+            <>
+              <dt>Ejecutado por</dt>
+              <dd>{meta.por}</dd>
+            </>
+          )}
+          {meta.decision !== undefined && (
+            <>
+              <dt>Decisión</dt>
+              <dd>{valorLegible('decision', meta.decision)}</dd>
+            </>
+          )}
+          {meta.dispositivo !== undefined && (
+            <>
+              <dt>Dispositivo</dt>
+              <dd>{meta.dispositivo}</dd>
+            </>
+          )}
+        </dl>
+
+        {(meta.antes || meta.despues) && <Comparacion antes={meta.antes} despues={meta.despues} />}
+
+        {meta.ubicacion && (
+          <>
+            <h3 className="etiqueta">Ubicación registrada</h3>
+            <MiniMapa ubicacion={meta.ubicacion} />
+          </>
+        )}
+
+        {meta.alerta && <BloqueAlerta referencia={meta.alerta} conFicha={meta.drone !== undefined} />}
+
+        {meta.drone && <FichaDron drone={meta.drone} />}
+
+        {meta.detalle && (
+          <>
+            <h3 className="etiqueta">Detalle</h3>
+            <ListaDatos campos={meta.detalle} />
+          </>
+        )}
       </div>
-    </div>
+
+      <footer className="modal-pie">
+        <button type="button" onClick={onCerrar}>
+          Cerrar
+        </button>
+      </footer>
+    </Modal>
   );
 }
