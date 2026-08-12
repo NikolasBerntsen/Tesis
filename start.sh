@@ -87,11 +87,11 @@ banner() {
   echo "    operador   / operador123     (consola web)"
   echo "    supervisor / supervisor123   (gestiona operadores)"
   echo "    admin      / admin123        (usuarios y registro)"
-  echo "    drone1/2/3 / drone123        (usados por la app Android)"
+  echo "    campo / campo123             (operador de campo, para la app Android)"
   echo
   echo "  ${BOLD}En la app Android${RESET} (Android Studio, variante mockDebug)"
   echo "    Emulador  → Comando Central: http://10.0.2.2:4000"
-  echo "                Detección:       ws://10.0.2.2:8765"
+  echo "                Detección por cable: adb reverse tcp:8765 tcp:8765"
   if [ -n "$ip" ]; then
     echo "    Teléfono  → Comando Central: http://$ip:4000"
     echo "                Detección:       ws://$ip:8765"

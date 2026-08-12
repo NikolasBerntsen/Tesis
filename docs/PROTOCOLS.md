@@ -4,22 +4,42 @@ Todos los enlaces usan WebSocket con mensajes JSON en texto. Los frames de video
 viajan como JPEG codificado en base64 (~640x360, calidad 60, ~2 fps) para
 mantener el MVP simple.
 
-El sistema soporta **varios drones simultáneos**. Cada dron se identifica con su
-propia cuenta (usuario/contraseña) y su `droneId` es el `username` de esa cuenta,
-tomado del JWT: nunca lo declara el cliente.
+El sistema soporta **varios drones simultáneos**. Un dron **no es una cuenta de
+usuario**: es un activo del inventario, identificado por un `hash` opaco de 32
+caracteres hexadecimales que se genera al darlo de alta. Ese hash es su
+`droneId` en todo el protocolo y sale del JWT de emparejamiento: nunca lo
+declara el cliente.
 
 ## Roles
 
-| Rol | Permisos |
-|---|---|
-| `drone` | Cuenta de máquina de la app de control |
-| `operator` | Consola: alertas, rutas, eventos de drones. **Controla drones solo si tiene el flag `canControl`** |
-| `supervisor` | Todo lo del operador + quitar el control manual a otro usuario + ver operadores y suspender/restaurar su flag `canControl` |
-| `admin` | Todo lo anterior + crear/eliminar/desactivar/reactivar usuarios + ver el registro general del sistema |
+| Rol | Rango | Permisos |
+|---|---|---|
+| `drone` | 0 | Token de máquina que la app obtiene al emparejarse por QR. No es una cuenta de usuario |
+| `field_operator` | 1 | **Operador de campo**: da de alta drones, genera sus QR y hace el emparejamiento en el terreno. No opera drones ni ve el registro. **Su sesión es efímera** |
+| `operator` | 2 | Consola: alertas, rutas, eventos de drones. **Controla drones solo si tiene el flag `canControl`** |
+| `supervisor` | 3 | Todo lo del operador + quitar el control manual a otro usuario + administrar operadores y los drones como activos |
+| `admin` | 4 | Todo lo anterior + administrar todos los usuarios + ver el registro general del sistema |
 
-Los permisos son jerárquicos (un rol incluye a los de menor rango). Los flags
-`active` y `canControl` se evalúan **en vivo** en cada request, no desde el JWT:
-suspender a un usuario surte efecto inmediato.
+Los permisos son jerárquicos por rango, salvo unos pocos que son **laterales**:
+el operador de campo puede dar de alta y emparejar drones, cosa que un operador
+común no hace. Esos casos se resuelven con una lista explícita de roles, no con
+el rango.
+
+Los flags `active` y `canControl`, el borrado lógico y el rol se evalúan **en
+vivo** en cada request y en cada envío por WebSocket, no desde el JWT:
+suspender, eliminar o degradar a un usuario surte efecto inmediato, aunque su
+token siga siendo criptográficamente válido.
+
+### Duración de la sesión según el rol
+
+| Rol | Duración | Por qué |
+|---|---|---|
+| `field_operator` | **20 minutos** | La sesión solo tiene que durar lo que dura la configuración. Se cierra sola al terminar el emparejamiento, y la app muestra la cuenta regresiva |
+| Resto de los humanos | 12 horas | Una jornada de trabajo |
+| `drone` | 30 días | Token de máquina que se emite al emparejar; el dron no tiene a nadie que reingrese credenciales |
+
+`POST /api/auth/login` devuelve `expiresIn` en segundos para que el cliente
+pueda mostrar el tiempo restante y cerrar la sesión por su cuenta.
 
 ## Control manual — bloqueo exclusivo
 
@@ -36,28 +56,102 @@ una `category`:
 
 | Categoría | Contenido |
 |---|---|
-| `drone` | Conexión/desconexión, patrullaje, alertas, batería, señal, control manual, cambios de ruta, renombres de dron y de nodos |
-| `usuarios` | Alta, baja, activación, suspensión y modificación de usuarios (con **antes y después** en `meta`) |
-| `sistema` | Inicios de sesión (exitosos y fallidos) |
+| `drone` | Alta, baja, edición y emparejamiento de drones; conexión/desconexión; patrullaje; alertas generadas y resueltas; batería; señal; control manual; cambios de ruta; renombres |
+| `usuarios` | Alta, baja lógica, restauración, activación, suspensión y modificación de usuarios, con **antes y después** |
+| `sistema` | Inicios de sesión (exitosos, fallidos y rechazados) y cierre de la sesión efímera del operador de campo |
 
 El **log general** (`GET /api/logs`, solo admin) devuelve todas las categorías
-juntas; el log de drones (`GET /api/events`, operador+) devuelve solo `drone`.
+juntas, **filtradas y paginadas en el servidor**; el log de drones
+(`GET /api/events`, operador+) devuelve solo `drone`.
+
+### La columna `meta`
+
+`meta` es JSON y guarda el detalle estructurado que la consola despliega al
+hacer clic en una entrada del registro. Las claves son siempre las mismas, así
+el pop-up sabe cómo pintar cada una sin conocer el tipo de evento:
+
+| Clave | Forma | Cómo se muestra |
+|---|---|---|
+| `antes` / `despues` | objetos planos con las mismas claves | Dos columnas comparadas con una flecha en el medio, resaltando solo lo que cambió |
+| `ubicacion` | `{lat, lon, accuracyM}` o `null` | Mini mapa con un marcador, más las coordenadas |
+| `alerta` | `{id, tipo, lat, lon, ts}` | Se trae la alerta completa con `GET /api/alerts/:id` y se muestra la captura del video |
+| `drone` | `{hash, displayName, model}` | Ficha compacta del dron |
+| `detalle` | objeto plano | Lista de clave/valor |
+
+La forma exacta por tipo de evento está en la tabla del final de este
+documento.
+
+### Trazabilidad de las detecciones
+
+Una detección deja **dos** entradas encadenadas por `alert_id`:
+
+1. `ALERT_CREATED` cuando el algoritmo de detección dispara la alerta: guarda el
+   tipo (persona o vehículo), las coordenadas GPS, el dron y la marca de tiempo,
+   y queda enlazada a la fila de `alerts`, que es la que tiene la **captura del
+   video** que disparó la detección.
+2. `ALERT_VALIDATED` o `ALERT_DISMISSED` cuando un operador la resuelve desde el
+   Comando Central: guarda **qué usuario** la marcó como válida o inválida y
+   cuándo, además del antes y el después del estado de la alerta.
 
 ## 0. Modelo de datos
 
-Cada cuenta de dron lleva asociados:
+### Drones: activos, no cuentas
+
+Un dron es una fila de la tabla `drones` que el Comando Central administra como
+cualquier otro activo del inventario:
 
 | Campo | Descripción |
 |---|---|
-| `droneId` | `username` de la cuenta. Inmutable, identifica al dron en todo el sistema |
+| `hash` | 32 hexadecimales generados al darlo de alta. **Es el `droneId` de todo el protocolo** y el único contenido del QR. Inmutable |
 | `displayName` | Nombre visible. **Editable desde la app y desde el Comando Central**, y el cambio se propaga al otro lado |
-| `base` | `{ name, lat, lon }`: la base a la que vuelve. Se dibuja como cuadrado azul en los mapas |
+| `model` | Modelo del aparato, a título informativo |
+| `active` | Si está en `false`, **se rechaza la conexión del dron** (y se corta la que tuviera abierta) |
+| `base` | `{name, lat, lon}`: la base a la que vuelve. Se dibuja como cuadrado azul en los mapas |
+| `deletedAt` / `deletedBy` | Borrado lógico: la fila nunca se elimina |
+
+En la interfaz el hash no se muestra entero nunca: se muestra el nombre y el
+hash abreviado (`a3f9c1…7e42`).
+
+### Borrado lógico
+
+**Nada se borra físicamente**, ni usuarios ni drones: se marca `deleted_at` y
+`deleted_by`. Un usuario eliminado no puede iniciar sesión, sus sockets se
+cierran en el acto y **sigue ocupando su nombre de usuario** (el `UNIQUE` se
+mantiene a propósito, para que el historial del registro nunca quede apuntando
+a un nombre que después reusó otra persona). De supervisor para arriba se puede
+listar lo eliminado y restaurarlo.
+
+### Rutas
 
 Cada waypoint de una ruta es `{ lat, lon, alt, label? }`. `label` es un apodo
 opcional que pone el operador para identificar zonas puntuales; se muestra al
 hacer clic sobre el nodo en el mapa de la vista de detalle. En ese mapa los
 nodos se pintan **rojos** mientras están pendientes y **verdes** una vez que el
 dron pasó por ellos (índice ≤ `waypointIndex` del `status`).
+
+## 0.b Emparejamiento por QR
+
+Reemplaza al viejo inicio de sesión del dron con usuario y contraseña.
+
+1. Desde el Comando Central, un operador de campo (o un supervisor) **da de alta
+   el dron**. El backend genera su `hash`.
+2. La consola dibuja el QR **con el hash como único contenido** y lo imprime
+   como sticker, que se pega en el aparato. El QR no lleva nombre, modelo, base
+   ni ningún otro dato: si alguien lo fotografía, no aprende nada del sistema.
+3. En el campo, el operador **inicia sesión en la app** (sesión efímera de 20
+   minutos) y escanea el sticker.
+4. La app llama a `POST /api/drones/pair` con el hash **y la ubicación GPS del
+   operador en ese momento**. El backend valida que el dron exista, no esté
+   eliminado y esté activo, y devuelve un **token de rol `drone`** con el que la
+   app se conecta al WebSocket.
+5. El emparejamiento queda registrado (`DRONE_PAIRED`) con quién lo hizo, desde
+   dónde y con qué dispositivo. La sesión del operador de campo **se cierra ahí
+   mismo** (`FIELD_SESSION_CLOSED`).
+
+Por qué el hash suelto no alcanza para hacerse pasar por un dron: el
+emparejamiento **exige un JWT válido de operador de campo**. El sticker es un
+identificador, no una credencial. Aun así, si un dron se compromete se lo
+desactiva desde la consola y su conexión se corta en el acto.
 
 ## 1. App de control (celular) → Comando Central
 
@@ -118,6 +212,7 @@ Conexión: `ws://<backend>:4000/ws?token=<JWT>` (rol `operator`).
 | `alert_created` | Alerta nueva (fila completa, incluye snapshot) |
 | `alert_updated` | Alerta con decisión tomada |
 | `drone_online` / `drone_offline` | `drone` (ficha completa del dron) |
+| `drone_updated` | `drone` (ficha completa); se emite al dar de alta, editar, eliminar o restaurar un activo, para que la vista de Drones se refresque sin repreguntar |
 | `drone_renamed` | `droneId, displayName` |
 | `route_updated` | `route` (ruta completa); se emite al cambiar el apodo de un nodo |
 | `control_changed` | `droneId, controlledBy` (username o `null`) |
@@ -125,11 +220,46 @@ Conexión: `ws://<backend>:4000/ws?token=<JWT>` (rol `operator`).
 Al conectarse, el operador recibe un `status` por cada dron que esté online, para
 poder pintar el dashboard sin esperar al próximo tick.
 
+**El hub filtra por rol lo que manda**, con los mismos permisos que la API REST y
+leyendo el rol de la base, no del token: el operador de campo solo recibe las
+novedades del inventario de drones (`drone_updated`, `drone_online`,
+`drone_offline`, `drone_renamed`) y nunca video, alertas, telemetría ni eventos;
+los eventos de las categorías `usuarios` y `sistema` solo llegan al admin, que es
+el único que puede leer el registro general. Antes de cada envío se comprueba que
+el JWT no haya vencido y que la cuenta siga activa; si no, el socket se cierra.
+
 ## 4. App de control (celular) ↔ Software de detección (laptop)
 
-Conexión: `ws://<laptop>:8765/phone`. Este contrato es el que debe implementar
-el software real de detección de imágenes; `detection-mock/` es un placeholder
-que lo respeta.
+El control con el celular montado se comunica con la laptop que corre la
+detección **por cable USB**. Hay dos modos, elegibles desde la app:
+
+### Modo `CABLE` (por defecto)
+
+Túnel de ADB sobre el propio cable USB. En la laptop se corre **una sola vez**:
+
+```bash
+adb reverse tcp:8765 tcp:8765
+```
+
+Con eso, el puerto 8765 del celular queda redirigido al 8765 de la laptop, y la
+app se conecta a `ws://127.0.0.1:8765/phone`. Requiere depuración USB activada
+en el teléfono. Es el modo recomendado porque **no depende de la red**: no hay
+que averiguar IPs, no importa si el predio no tiene wifi y no hay tráfico de
+video saliendo al aire.
+
+Si el enlace no levanta, la app no muestra un error mudo: dice que revise el
+cable, la depuración USB y el `adb reverse`.
+
+### Modo `RED` (respaldo)
+
+URL manual contra la IP de la laptop (`ws://<ip-de-la-laptop>:8765`). Sirve
+cuando no hay depuración USB disponible, y también cubre el caso del **anclaje
+USB**, donde la laptop suele quedar en `192.168.42.x`.
+
+### Contrato de mensajes
+
+Este es el contrato que debe implementar el software real de detección;
+`detection-mock/` es un placeholder que lo respeta.
 
 | Dirección | Mensaje | Campos |
 |---|---|---|
@@ -137,47 +267,122 @@ que lo respeta.
 | laptop → celular | `detection` | `detected (bool), classes (["PERSON"\|"VEHICLE"]), confidence, ts` |
 
 La app solo actúa ante `detected: true` y solo mientras está en estado
-`PATROLLING` (evita re-alertar mientras orbita o vuelve a base).
+`PATROLLING` (evita re-alertar mientras orbita o vuelve a base). Cuando actúa,
+manda `alert_request` al Comando Central con la captura y las coordenadas, y eso
+queda en el registro (ver "Trazabilidad de las detecciones").
 
 ## 5. REST del Comando Central
 
+Lo que cambió respecto de la versión anterior está marcado con **negrita**.
+
+### Sesión
+
 | Método | Ruta | Auth | Descripción |
 |---|---|---|---|
-| POST | `/api/auth/login` | — | `{username, password}` → `{token, user}` (JWT HS256, 12 h). Lo usan el operador y la app del dron |
+| POST | `/api/auth/login` | — | `{username, password}` → **`{token, expiresIn, user}`**. `expiresIn` en segundos: lo usa la app para la cuenta regresiva de la sesión efímera |
+| **POST** | **`/api/auth/logout`** | JWT | `{motivo?}`. No invalida nada del lado del servidor (el JWT vive en el cliente): existe para **dejar registrado** el cierre de la sesión efímera del operador de campo |
 | GET | `/api/me` | JWT | Ficha del usuario autenticado. Para un dron incluye `displayName` y `base` |
-| GET | `/api/routes` | JWT | Rutas de patrullaje disponibles (waypoints incluidos) |
-| PATCH | `/api/routes/:routeId/waypoints/:index` | JWT operador | `{label}`; pone el apodo de un nodo (vacío lo borra). Emite `route_updated` |
-| GET | `/api/drones` | JWT operador | Todos los drones: `droneId, displayName, base, online, lastStatus` |
-| PATCH | `/api/drones/:droneId` | JWT operador | `{displayName}`; renombra y avisa al dron con `renamed` |
-| GET | `/api/alerts?status=` | JWT operador | Lista de alertas |
-| POST | `/api/alerts/:id/decision` | JWT operador | `{decision: VALIDATED\|DISMISSED}`; registra quién decidió y notifica al dron |
-| POST | `/api/drones/:droneId/resume` | JWT operador+ | `{fromIndex?}`: reanuda el patrullaje (desde ese nodo, o desde el último alcanzado). Libera el control manual si estaba tomado |
-| POST | `/api/drones/:droneId/route/start` | JWT operador+ | `{routeId, fromIndex?}`: comienza esa ruta |
-| POST | `/api/drones/:droneId/route/stop` | JWT operador+ | Interrumpe el patrullaje (el dron queda estacionario) |
-| POST | `/api/drones/:droneId/goto` | JWT con `canControl` | `{routeId, index}`: fuerza el vuelo hacia ese nodo |
-| POST | `/api/drones/:droneId/control` | JWT con `canControl` | Toma el control manual (409 si otro lo tiene) |
-| DELETE | `/api/drones/:droneId/control` | titular o supervisor+ | `{resume: 'last'\|'none'\|número}`: libera el control (default `last`) |
-| POST | `/api/drones/:droneId/manual_move` | titular del control | `{bearing, distanceM}` |
-| GET | `/api/users` | JWT supervisor+ | Supervisor: operadores; admin: todos los usuarios humanos |
-| POST | `/api/users` | JWT admin | `{username, password, role (operator\|supervisor), canControl}` |
-| PATCH | `/api/users/:username` | supervisor+ (solo `canControl` de operadores) / admin (todo) | `{canControl?, active?, password?}`. Registra antes y después |
-| DELETE | `/api/users/:username` | JWT admin | Elimina el usuario |
-| GET | `/api/logs?category=&limit=` | JWT admin | Log general del sistema (todas las categorías) |
-| GET | `/api/events?limit=&droneId=` | JWT operador | Log de eventos (más reciente primero) |
 | GET | `/api/health` | — | Ping |
+
+### Drones como activos
+
+| Método | Ruta | Auth | Descripción |
+|---|---|---|---|
+| GET | `/api/drones` | operador de campo, operador+ | `?includeDeleted=1` (el flag **solo lo respeta supervisor+**; para el resto se ignora) |
+| **POST** | **`/api/drones`** | campo, supervisor+ | `{displayName, model?, base?}` → 201 con la ficha, **incluido el `hash` para el QR** |
+| **POST** | **`/api/drones/pair`** | campo, supervisor+ | `{hash, lat?, lon?, accuracyM?, deviceModel?}` → `{token, drone}`. 404 si el QR no corresponde a ningún dron, 403 si está eliminado o desactivado |
+| **PATCH** | **`/api/drones/:hash`** | operador+ si solo cambia `displayName`; supervisor+ para el resto | `{displayName?, model?, active?, base?}`. Desactivar corta la conexión del dron |
+| **DELETE** | **`/api/drones/:hash`** | supervisor+ | **Borrado lógico**. Corta la conexión del dron |
+| **POST** | **`/api/drones/:hash/restore`** | supervisor+ | Restaura un dron eliminado |
+
+### Operación
+
+| Método | Ruta | Auth | Descripción |
+|---|---|---|---|
+| GET | `/api/routes` | JWT | Rutas de patrullaje disponibles (waypoints incluidos) |
+| PATCH | `/api/routes/:routeId/waypoints/:index` | operador+ | `{label}`; apodo de un nodo (vacío lo borra). Emite `route_updated` |
+| POST | `/api/drones/:droneId/route/start` | operador+ | `{routeId, fromIndex?}` |
+| POST | `/api/drones/:droneId/route/stop` | operador+ | Interrumpe el patrullaje (el dron queda estacionario) |
+| POST | `/api/drones/:droneId/resume` | operador+ | `{fromIndex?}`: reanuda desde ese nodo o desde el último alcanzado. Libera el control manual |
+| POST | `/api/drones/:droneId/goto` | con `canControl` | `{routeId, index}`: fuerza el vuelo hacia ese nodo |
+| POST | `/api/drones/:droneId/control` | con `canControl` | Toma el control manual (409 si otro lo tiene) |
+| DELETE | `/api/drones/:droneId/control` | titular o supervisor+ | `{resume: 'last'\|'none'\|número}` |
+| POST | `/api/drones/:droneId/manual_move` | titular del control | `{bearing, distanceM}` |
+
+### Alertas
+
+| Método | Ruta | Auth | Descripción |
+|---|---|---|---|
+| GET | `/api/alerts?status=` | operador+ | Lista de alertas |
+| **GET** | **`/api/alerts/:id`** | operador+ | Alerta completa **con la captura del video**; la usa el pop-up del registro |
+| POST | `/api/alerts/:id/decision` | operador+ | `{decision: VALIDATED\|DISMISSED}`; registra quién decidió y notifica al dron |
+
+### Usuarios
+
+| Método | Ruta | Auth | Descripción |
+|---|---|---|---|
+| GET | `/api/users` | supervisor+ | **`?includeDeleted=1`**. Supervisor ve operadores; admin ve todos |
+| POST | `/api/users` | admin | `{username, password, role, canControl}`. **`role` acepta ahora `field_operator`**, al que se le fuerza `canControl:false` |
+| PATCH | `/api/users/:username` | supervisor+ (solo `canControl` de operadores) / admin (todo) | `{canControl?, active?, password?}`. Registra antes y después |
+| **DELETE** | **`/api/users/:username`** | admin | **Borrado lógico**. Cierra sus sockets y libera los drones que controlara |
+| **POST** | **`/api/users/:username/restore`** | admin | Restaura un usuario eliminado |
+
+### Registro
+
+| Método | Ruta | Auth | Descripción |
+|---|---|---|---|
+| **GET** | **`/api/logs`** | admin | `?category=&page=&pageSize=&droneId=&q=` → **`{items, total, page, pageSize}`**. `pageSize` ∈ {25, 50, 75, 100}; fuera de ese conjunto cae a 25. El filtro y el conteo se resuelven **en SQL**, no en el navegador |
+| GET | `/api/events` | operador+ | `?limit=&droneId=`: log de drones (más reciente primero) |
 
 ## 6. Ficha de dron (`drone`)
 
-Forma que devuelven `GET /api/drones` y los mensajes `drone_online` / `drone_offline`:
+Forma que devuelven `GET /api/drones` y los mensajes `drone_online`,
+`drone_offline` y `drone_updated`. `hash` y `droneId` son el mismo valor con dos
+nombres: `hash` cuando se habla del activo y del QR, `droneId` cuando se habla
+del protocolo.
 
 ```json
 {
-  "droneId": "drone1",
+  "hash": "a3f9c1b27d5e4408f61a9c3e772b7e42",
+  "droneId": "a3f9c1b27d5e4408f61a9c3e772b7e42",
   "displayName": "Alfa",
+  "model": "DJI Mini 4 Pro",
+  "active": true,
+  "deletedAt": null,
   "base": { "name": "Base Norte", "lat": -34.8565, "lon": -56.2075 },
   "online": true,
+  "controlledBy": null,
   "lastStatus": { "state": "PATROLLING", "battery": 87, "lat": -34.855, "lon": -56.206,
                   "routeId": 1, "waypointIndex": 2, "waypointTotal": 4,
-                  "signal": "OK", "signalPct": 78, "mode": "TEST" }
+                  "signal": "OK", "signalPct": 78, "heading": 132, "mode": "TEST" }
 }
 ```
+
+## 7. Forma de `meta` por tipo de evento
+
+Piezas que se repiten: `Dron = {hash, displayName, model}` ·
+`EstadoDron = {displayName, model, activo, eliminado, base, baseLat, baseLon}`
+(plano a propósito, para que la comparación del pop-up sea campo a campo) ·
+`UserView = {username, role, active, canControl, deletedAt}`.
+
+| Categoría | Tipo | `meta` |
+|---|---|---|
+| drone | `DRONE_CREATED` | `{drone, despues: EstadoDron}` |
+| drone | `DRONE_UPDATED` / `DRONE_DELETED` / `DRONE_RESTORED` | `{drone, antes: EstadoDron, despues: EstadoDron}` |
+| drone | `DRONE_PAIRED` | `{por, ubicacion: {lat, lon, accuracyM} \| null, dispositivo, drone}` |
+| drone | `DRONE_CONNECTED` / `DRONE_DISCONNECTED` | `{drone}` |
+| drone | `DRONE_RENAMED` | `{antes: {displayName}, despues: {displayName}, drone}` |
+| drone | `WAYPOINT_RENAMED` | `{antes: {apodo}, despues: {apodo}, detalle: {ruta, rutaId, nodo}}` |
+| drone | `ROUTE_STARTED` | `{drone, detalle: {ruta, rutaId, desdeNodo}}` |
+| drone | `PATROL_STOPPED` | `{drone, detalle: {por}}` |
+| drone | `PATROL_RESUME_ORDERED` | `{drone, detalle: {por, desdeNodo}}` |
+| drone | `FORCED_GOTO` | `{drone, detalle: {ruta, rutaId, nodo}}` |
+| drone | `CONTROL_TAKEN` | `{drone, detalle: {por}}` |
+| drone | `CONTROL_RELEASED` | `{drone, detalle: {por, teniaElControl, forzado, motivo}}` |
+| drone | `ALERT_CREATED` | `{alerta: {id, tipo, lat, lon, ts}, drone}` |
+| drone | `ALERT_VALIDATED` / `ALERT_DISMISSED` | `{alerta: {id, tipo}, decision, por, antes: {estado}, despues: {estado, decidedBy, decidedAt}, drone}` |
+| drone | Eventos que reporta la app (`PATROL_STARTED`, `SIGNAL_LOST`, `RTH_LOW_BATTERY`, …) | `{drone}` |
+| usuarios | `USER_CREATED` | `{despues: UserView}` |
+| usuarios | `USER_UPDATED` / `USER_DELETED` / `USER_RESTORED` | `{antes: UserView, despues: UserView}` |
+| sistema | `FIELD_SESSION_CLOSED` | `{detalle: {por, motivo}}` |
+| sistema | `LOGIN` / `LOGIN_FAILED` / `LOGIN_REJECTED` | — |
