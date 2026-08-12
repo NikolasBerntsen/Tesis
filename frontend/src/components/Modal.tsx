@@ -5,6 +5,15 @@ const FOCUSABLES =
   'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /**
+ * Pila de diálogos abiertos. Hay pantallas que abren un diálogo arriba de otro
+ * (elegir las rutas de una base y, sin cerrar eso, dibujar una ruta nueva).
+ * Como cada diálogo escucha el teclado en `document`, sin esta pila un Escape
+ * los cerraría a todos de una y se perdería el trabajo del de abajo: sólo el
+ * último abierto responde a Escape y atrapa el tabulador.
+ */
+const pila: object[] = [];
+
+/**
  * Velo y caja de un diálogo modal. Vive acá y no copiado en cada pop-up porque
  * las tres reglas que lo hacen usable —Escape, el tabulador que no se escapa y
  * el clic en el velo— son fáciles de implementar a medias, y con una sola copia
@@ -45,10 +54,22 @@ export default function Modal({
     };
   }, []);
 
+  // Entrada y salida de la pila. La ref de la caja hace de identidad: es
+  // estable entre renders y única por diálogo.
+  useEffect(() => {
+    pila.push(caja);
+    return () => {
+      const i = pila.lastIndexOf(caja);
+      if (i >= 0) pila.splice(i, 1);
+    };
+  }, []);
+
   // Va en `document` y no en el JSX porque el diálogo tiene que responder a
   // Escape y atrapar el tabulador aun si el foco se escapó de la caja.
   useEffect(() => {
     function alTeclear(ev: KeyboardEvent) {
+      // Los de abajo se quedan quietos: el teclado es del diálogo de arriba.
+      if (pila[pila.length - 1] !== caja) return;
       if (ev.key === 'Escape') {
         cerrar.current();
         return;

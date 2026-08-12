@@ -5,6 +5,13 @@ on:
     branches: [main]
   pull_request:
 
+# Al empujar varias veces seguidas, la corrida anterior de esa misma rama deja de
+# tener sentido y se cancela. En main NO se cancela: de esa corrida depende el
+# despliegue, y cortarla a la mitad dejaría a la VM sin actualizar.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   backend:
     name: Backend (tests + cobertura)
@@ -66,9 +73,50 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+
+      # Cachea la distribución de Gradle y las dependencias entre corridas. Sin
+      # esto cada build bajaba Gradle entero (~130 MB) y todo el árbol de
+      # dependencias, que era la mayor parte del tiempo del job; y además ese
+      # bajado es el que falló con "Unexpected end of file from server" cuando
+      # services.gradle.org tuvo un hipo.
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          build-scan-publish: false
+          # En las ramas se lee el caché de main y no se escribe uno por rama:
+          # así no se llenan los 10 GB que GitHub da por repositorio.
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      # Robolectric baja sus imágenes de Android la primera vez que corre un
+      # test, y no van por el caché de Gradle sino por el de Maven.
+      - name: Caché de las imágenes de Robolectric
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-${{ runner.os }}-${{ hashFiles('android-app/app/build.gradle.kts') }}
+          restore-keys: robolectric-${{ runner.os }}-
+
       - uses: android-actions/setup-android@v3
+
+      # El wrapper baja Gradle de services.gradle.org y NO reintenta: si ese
+      # servidor corta la conexión, el job muere en menos de un segundo sin que
+      # haya nada roto en el código. Pasó dos veces en trece minutos.
+      #
+      # Va en un paso aparte, y no envolviendo el build, para que se reintente
+      # SOLO la descarga: si falla la compilación o un test, tiene que fallar a
+      # la primera y no tardar el triple en decirlo.
+      - name: Asegurar la distribución de Gradle
+        run: |
+          for intento in 1 2 3 4 5; do
+            if ./gradlew --version; then exit 0; fi
+            espera=$((intento * 10))
+            echo "::warning::No se pudo obtener Gradle (intento $intento de 5). Reintento en ${espera}s."
+            sleep "$espera"
+          done
+          echo "::error::services.gradle.org no respondió después de 5 intentos. No es un problema del código."
+          exit 1
+
       - name: Build + tests unitarios (flavor mock)
-        run: ./gradlew assembleMockDebug testMockDebugUnitTest --no-daemon
+        run: ./gradlew assembleMockDebug testMockDebugUnitTest --build-cache --no-daemon
       - name: Reporte de tests
         if: always()
         uses: actions/upload-artifact@v4

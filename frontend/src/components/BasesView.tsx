@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import L from 'leaflet';
-import { LEJOS_M, api, distanciaM, traerBases, traerRutas } from '../api';
+import { LEJOS_M, api, distanciaM, rutasDeBase, traerBases, traerRutas } from '../api';
 import type { BaseAsset, Me, PatrolRoute } from '../types';
+import EditorDeRuta from './EditorDeRuta';
 import Modal from './Modal';
 
 type Formulario = { name: string; lat: string; lon: string };
@@ -75,12 +76,15 @@ export default function BasesView({ me }: { me: Me }) {
   const [editando, setEditando] = useState<BaseAsset | null>(null);
   const [abierto, setAbierto] = useState(false);
   const [ubicando, setUbicando] = useState(false);
-  // Paso 2 del alta: qué rutas puede patrullar un dron que sale de esta base.
-  const [paso, setPaso] = useState<1 | 2>(1);
+  // Qué rutas puede patrullar un dron que sale de esta base. Se abre solo
+  // después de dar de alta una base y a pedido desde la fila de cualquier otra:
+  // las rutas de una base cambian mucho después del alta.
+  const [asignando, setAsignando] = useState<BaseAsset | null>(null);
+  const [reciencreada, setReciencreada] = useState(false);
   const [rutas, setRutas] = useState<PatrolRoute[]>([]);
   const [elegidas, setElegidas] = useState<number[]>([]);
   const [busqueda, setBusqueda] = useState('');
-  const [guardada, setGuardada] = useState<BaseAsset | null>(null);
+  const [editorAbierto, setEditorAbierto] = useState(false);
   const [aConfirmar, setAConfirmar] = useState<{ ruta: PatrolRoute; metros: number } | null>(null);
 
   const esSupervisor = me.role === 'supervisor' || me.role === 'admin';
@@ -120,11 +124,29 @@ export default function BasesView({ me }: { me: Me }) {
   function abrirAlta() {
     setEditando(null);
     setForm(VACIO);
-    setPaso(1);
     setElegidas([]);
     setBusqueda('');
-    setGuardada(null);
+    setAsignando(null);
     setAbierto(true);
+  }
+
+  /**
+   * Abre la asignación de rutas de una base que ya existe, con las que hoy
+   * tiene ya marcadas: acá se agrega y se saca, no se empieza de cero.
+   */
+  async function abrirRutas(b: BaseAsset) {
+    setError('');
+    setBusqueda('');
+    setReciencreada(false);
+    setElegidas([]);
+    setAsignando(b);
+    try {
+      const [todas, asignadas] = await Promise.all([traerRutas(), rutasDeBase(b.id)]);
+      setRutas(todas);
+      setElegidas(asignadas.map((r) => r.id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   }
 
   /**
@@ -133,7 +155,7 @@ export default function BasesView({ me }: { me: Me }) {
    * decide si la ruta tiene sentido para esta base.
    */
   const rutasOrdenadas = useMemo(() => {
-    const origen = guardada ?? (lat != null && lon != null ? { lat, lon } : null);
+    const origen = asignando ?? (lat != null && lon != null ? { lat, lon } : null);
     const q = busqueda.trim().toLowerCase();
     return rutas
       .filter((r) => !q || r.name.toLowerCase().includes(q))
@@ -143,7 +165,7 @@ export default function BasesView({ me }: { me: Me }) {
         return { ruta: r, metros };
       })
       .sort((a, b) => (a.metros ?? Infinity) - (b.metros ?? Infinity));
-  }, [rutas, busqueda, guardada, lat, lon]);
+  }, [rutas, busqueda, asignando, lat, lon]);
 
   function alternarRuta(ruta: PatrolRoute, metros: number | null) {
     if (elegidas.includes(ruta.id)) {
@@ -202,9 +224,11 @@ export default function BasesView({ me }: { me: Me }) {
     setError('');
     try {
       const creada = await api<BaseAsset>('/bases', { method: 'POST', body: cuerpo });
-      setGuardada(creada);
+      setAbierto(false);
+      setElegidas([]);
+      setReciencreada(true);
+      setAsignando(creada);
       setRutas(await traerRutas().catch(() => []));
-      setPaso(2);
       await cargar();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -250,7 +274,7 @@ export default function BasesView({ me }: { me: Me }) {
                   <th>Nombre</th>
                   <th>Coordenadas</th>
                   <th>Estado</th>
-                  {esSupervisor && <th />}
+                  {puedeCrear && <th />}
                 </tr>
               </thead>
               <tbody>
@@ -267,26 +291,37 @@ export default function BasesView({ me }: { me: Me }) {
                         <span className={b.active ? 'estado ok' : 'estado muted'}>{b.active ? 'Activa' : 'Inactiva'}</span>
                       )}
                     </td>
-                    {esSupervisor && (
+                    {puedeCrear && (
                       <td className="barra-acciones">
                         {b.deletedAt ? (
-                          <button className="chico" onClick={() => accion(() => api(`/bases/${b.id}/restore`, { method: 'POST' }))}>
-                            Restaurar
-                          </button>
+                          esSupervisor && (
+                            <button className="chico" onClick={() => accion(() => api(`/bases/${b.id}/restore`, { method: 'POST' }))}>
+                              Restaurar
+                            </button>
+                          )
                         ) : (
                           <>
-                            <button className="chico" onClick={() => abrirEdicion(b)}>
-                              Editar
+                            <button className="chico" onClick={() => void abrirRutas(b)}>
+                              Rutas
                             </button>
-                            <button
-                              className="chico"
-                              onClick={() => accion(() => api(`/bases/${b.id}`, { method: 'PATCH', body: JSON.stringify({ active: !b.active }) }))}
-                            >
-                              {b.active ? 'Desactivar' : 'Activar'}
-                            </button>
-                            <button className="chico dismiss" onClick={() => accion(() => api(`/bases/${b.id}`, { method: 'DELETE' }))}>
-                              Eliminar
-                            </button>
+                            {esSupervisor && (
+                              <>
+                                <button className="chico" onClick={() => abrirEdicion(b)}>
+                                  Editar
+                                </button>
+                                <button
+                                  className="chico"
+                                  onClick={() =>
+                                    accion(() => api(`/bases/${b.id}`, { method: 'PATCH', body: JSON.stringify({ active: !b.active }) }))
+                                  }
+                                >
+                                  {b.active ? 'Desactivar' : 'Activar'}
+                                </button>
+                                <button className="chico dismiss" onClick={() => accion(() => api(`/bases/${b.id}`, { method: 'DELETE' }))}>
+                                  Eliminar
+                                </button>
+                              </>
+                            )}
                           </>
                         )}
                       </td>
@@ -309,64 +344,6 @@ export default function BasesView({ me }: { me: Me }) {
               ×
             </button>
           </header>
-          {paso === 2 ? (
-            <>
-              <div className="modal-cuerpo form-base">
-                <p className="muted">
-                  <strong>{guardada?.name}</strong> quedó dada de alta. Elegí qué rutas puede patrullar un dron
-                  que sale de esta base; las más cercanas aparecen primero.
-                </p>
-                <input
-                  className="buscador"
-                  type="search"
-                  value={busqueda}
-                  onChange={(e) => setBusqueda(e.target.value)}
-                  placeholder="Buscar una ruta…"
-                  aria-label="Buscar rutas"
-                />
-                {rutasOrdenadas.length === 0 && <p className="vacio">No hay rutas para asignar.</p>}
-                <ul className="lista-bases" role="listbox" aria-label="Rutas disponibles">
-                  {rutasOrdenadas.map(({ ruta, metros }) => (
-                    <li key={ruta.id}>
-                      <button
-                        type="button"
-                        role="option"
-                        aria-selected={elegidas.includes(ruta.id)}
-                        className={elegidas.includes(ruta.id) ? 'active' : ''}
-                        onClick={() => alternarRuta(ruta, metros)}
-                      >
-                        <span className="inscripcion">{ruta.name}</span>
-                        <span className="muted mono">
-                          {ruta.waypoints.length} nodos
-                          {metros != null && ` · ${metros < 1000 ? `${Math.round(metros)} m` : `${(metros / 1000).toFixed(1)} km`}`}
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              <div className="modal-pie">
-                <button type="button" className="ghost" onClick={() => setAbierto(false)}>
-                  Después
-                </button>
-                <button
-                  type="button"
-                  className="primario"
-                  onClick={() =>
-                    accion(async () => {
-                      await api(`/bases/${guardada!.id}/routes`, {
-                        method: 'PUT',
-                        body: JSON.stringify({ routeIds: elegidas }),
-                      });
-                      setAbierto(false);
-                    })
-                  }
-                >
-                  Asignar {elegidas.length > 0 ? `${elegidas.length} ruta(s)` : 'sin rutas'}
-                </button>
-              </div>
-            </>
-          ) : (
           <form className="form-base modal-cuerpo" onSubmit={guardar}>
             <label>
               Nombre
@@ -403,9 +380,108 @@ export default function BasesView({ me }: { me: Me }) {
               </button>
             </div>
           </form>
-          )}
         </Modal>
       )}
+
+      {asignando && (
+        <Modal etiquetadoPor="titulo-rutas-base" onCerrar={() => setAsignando(null)}>
+          <header className="modal-cabecera">
+            <h2 className="modal-titulo" id="titulo-rutas-base">
+              Rutas de {asignando.name}
+            </h2>
+            <button type="button" className="modal-cerrar" aria-label="Cerrar" onClick={() => setAsignando(null)}>
+              ×
+            </button>
+          </header>
+          <div className="modal-cuerpo form-base">
+            {error && <p className="aviso malo">{error}</p>}
+            <p className="muted">
+              {reciencreada ? (
+                <>
+                  <strong>{asignando.name}</strong> quedó dada de alta. Elegí qué rutas puede patrullar un dron
+                  que sale de esta base; las más cercanas aparecen primero.
+                </>
+              ) : (
+                <>
+                  Elegí qué rutas puede patrullar un dron que sale de <strong>{asignando.name}</strong>; las más
+                  cercanas aparecen primero. Lo que quede sin marcar se le saca a la base.
+                </>
+              )}
+            </p>
+            <div className="barra-acciones">
+              <input
+                className="buscador"
+                type="search"
+                value={busqueda}
+                onChange={(e) => setBusqueda(e.target.value)}
+                placeholder="Buscar una ruta…"
+                aria-label="Buscar rutas"
+              />
+              {puedeCrear && (
+                <button type="button" className="chico" onClick={() => setEditorAbierto(true)}>
+                  Nueva ruta
+                </button>
+              )}
+            </div>
+            {rutasOrdenadas.length === 0 && <p className="vacio">No hay rutas para asignar.</p>}
+            <ul className="lista-bases" role="listbox" aria-label="Rutas disponibles">
+              {rutasOrdenadas.map(({ ruta, metros }) => (
+                <li key={ruta.id}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={elegidas.includes(ruta.id)}
+                    className={elegidas.includes(ruta.id) ? 'active' : ''}
+                    onClick={() => alternarRuta(ruta, metros)}
+                  >
+                    <span className="inscripcion">{ruta.name}</span>
+                    <span className="muted mono">
+                      {ruta.waypoints.length} nodos
+                      {metros != null && ` · ${metros < 1000 ? `${Math.round(metros)} m` : `${(metros / 1000).toFixed(1)} km`}`}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div className="modal-pie">
+            <button type="button" className="ghost" onClick={() => setAsignando(null)}>
+              {reciencreada ? 'Después' : 'Cancelar'}
+            </button>
+            <button
+              type="button"
+              className="primario"
+              onClick={() =>
+                accion(async () => {
+                  await api(`/bases/${asignando.id}/routes`, {
+                    method: 'PUT',
+                    body: JSON.stringify({ routeIds: elegidas }),
+                  });
+                  setAsignando(null);
+                })
+              }
+            >
+              Asignar {elegidas.length > 0 ? `${elegidas.length} ruta(s)` : 'sin rutas'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {editorAbierto && (
+        <EditorDeRuta
+          ruta={null}
+          onCerrar={() => setEditorAbierto(false)}
+          onGuardar={async (datos) => {
+            // Una ruta dibujada desde la base se asigna sola: es para esta base
+            // que se la está haciendo.
+            const creada = await api<PatrolRoute>('/routes', { method: 'POST', body: JSON.stringify(datos) });
+            setRutas((rs) => [...rs, creada]);
+            setElegidas((ids) => [...ids, creada.id]);
+            setEditorAbierto(false);
+          }}
+        />
+      )}
+
       {aConfirmar && (
         <Modal etiquetadoPor="titulo-lejos" onCerrar={() => setAConfirmar(null)}>
           <header className="modal-cabecera">
