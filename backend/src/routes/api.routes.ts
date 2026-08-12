@@ -2,10 +2,10 @@ import bcrypt from 'bcryptjs';
 import { Router } from 'express';
 import { ROLE_RANK, requireAuth, requireRoles, signDroneToken, type AuthedRequest } from '../auth';
 import {
-  contarDronesEnBase, createBase, createDrone, createLog, createUser, generarContrasenia, getBase, listBases, restoreBase, softDeleteBase, updateBase, decideAlert, getAlert, getDrone, getDroneIdentity, getRoute, getRoutes,
+  asignarRutas, basesDeRuta, contarDronesEnBase, createBase, createDrone, createLog, createRoute, createUser, distanciaM, generarContrasenia, getBase, restoreRoute, rutasDeBase, softDeleteRoute, updateRoute, listBases, restoreBase, softDeleteBase, updateBase, decideAlert, getAlert, getDrone, getDroneIdentity, getRoute, getRoutes,
   getUser, listAlerts, listEvents, listLogs, listUsers, restoreDrone, restoreUser, setWaypointLabel,
   softDeleteDrone, softDeleteUser, updateDrone, updateUser,
-  type BasePatch, type BaseView, type DroneAssetView, type DronePatch, type LogCategory, type Role,
+  type BasePatch, type BaseView, type DroneAssetView, type DronePatch, type PatrolRoute, type RoutePatch, type Waypoint, type LogCategory, type Role,
 } from '../store';
 import {
   broadcastDroneUpdated, broadcastOperators, droneCard, getController, kickDrone, kickUser, listDroneCards,
@@ -93,8 +93,155 @@ apiRouter.get('/me', requireAuth(), (req: AuthedRequest, res) => {
   res.json({ username: sub, role, canControl });
 });
 
-apiRouter.get('/routes', requireAuth(), (_req, res) => {
-  res.json(getRoutes());
+apiRouter.get('/routes', requireAuth(), (req: AuthedRequest, res) => {
+  const includeDeleted = flag(req.query.includeDeleted) && esSupervisorOMas(req.user!.role);
+  const rutas = getRoutes({ includeDeleted });
+  // La app del dron pide sólo las de SU base: es lo que el operador puede
+  // patrullar desde ahí, y mandarle el catálogo entero lo obliga a elegir mal.
+  if (req.user!.role === 'drone') {
+    const baseId = getDrone(req.user!.sub)?.baseId;
+    return res.json(baseId ? rutasDeBase(baseId) : []);
+  }
+  const deBase = req.query.baseId !== undefined ? Number(req.query.baseId) : null;
+  res.json(deBase && Number.isInteger(deBase) ? rutasDeBase(deBase) : rutas);
+});
+
+/** Nodos de una ruta, ya validados. Una ruta sin al menos dos no es una ruta. */
+function leerNodos(raw: unknown): { ok: true; waypoints: Waypoint[] } | { ok: false; error: string } {
+  if (!Array.isArray(raw)) return { ok: false, error: 'waypoints debe ser una lista de nodos' };
+  if (raw.length < 2) return { ok: false, error: 'Una ruta necesita al menos dos nodos' };
+  if (raw.length > 60) return { ok: false, error: 'Una ruta no puede superar los 60 nodos' };
+  const waypoints: Waypoint[] = [];
+  for (const w of raw) {
+    const o = (w ?? {}) as Record<string, unknown>;
+    const lat = typeof o.lat === 'number' ? o.lat : NaN;
+    const lon = typeof o.lon === 'number' ? o.lon : NaN;
+    const alt = typeof o.alt === 'number' ? o.alt : 40;
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return { ok: false, error: 'Cada nodo necesita lat y lon numéricos' };
+    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return { ok: false, error: 'Nodo con coordenadas fuera de rango' };
+    if (alt < 0 || alt > 500) return { ok: false, error: 'La altura de un nodo va entre 0 y 500 metros' };
+    const label = String(o.label ?? '').trim();
+    if (label.length > 40) return { ok: false, error: 'El apodo de un nodo no puede superar 40 caracteres' };
+    waypoints.push(label ? { lat, lon, alt, label } : { lat, lon, alt });
+  }
+  return { ok: true, waypoints };
+}
+
+function estadoRuta(r: PatrolRoute) {
+  return { nombre: r.name, descripcion: r.description, nodos: r.waypoints.length, eliminada: !!r.deletedAt };
+}
+
+apiRouter.post('/routes', requireRoles('field_operator', 'supervisor', 'admin'), (req: AuthedRequest, res) => {
+  const name = String(req.body?.name ?? '').trim();
+  if (!name) return res.status(400).json({ error: 'El nombre de la ruta es requerido' });
+  if (name.length > 60) return res.status(400).json({ error: 'El nombre no puede superar 60 caracteres' });
+  const description = String(req.body?.description ?? '').trim();
+  if (description.length > 200) return res.status(400).json({ error: 'La descripción no puede superar 200 caracteres' });
+  const lectura = leerNodos(req.body?.waypoints);
+  if (!lectura.ok) return res.status(400).json({ error: lectura.error });
+
+  const ruta = createRoute({ name, description, waypoints: lectura.waypoints }, req.user!.sub);
+  const ev = createLog('drone', 'ROUTE_CREATED', req.user!.sub, `${req.user!.sub} creó la ruta "${name}" con ${ruta.waypoints.length} nodos`, {
+    meta: { despues: estadoRuta(ruta) },
+  });
+  broadcastOperators({ type: 'event', event: ev });
+  broadcastOperators({ type: 'route_updated', route: ruta });
+  res.status(201).json(ruta);
+});
+
+apiRouter.patch('/routes/:id', requireAuth('supervisor'), (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  const actual = getRoute(id);
+  if (!actual) return res.status(404).json({ error: 'Ruta inexistente' });
+  if (actual.deletedAt) return res.status(409).json({ error: 'La ruta está eliminada: restaurala antes de modificarla' });
+
+  const patch: RoutePatch = {};
+  if (req.body?.name !== undefined) {
+    const name = String(req.body.name).trim();
+    if (!name) return res.status(400).json({ error: 'El nombre de la ruta es requerido' });
+    if (name.length > 60) return res.status(400).json({ error: 'El nombre no puede superar 60 caracteres' });
+    patch.name = name;
+  }
+  if (req.body?.description !== undefined) patch.description = String(req.body.description).trim().slice(0, 200);
+  if (req.body?.waypoints !== undefined) {
+    const lectura = leerNodos(req.body.waypoints);
+    if (!lectura.ok) return res.status(400).json({ error: lectura.error });
+    patch.waypoints = lectura.waypoints;
+  }
+  if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'Nada para modificar' });
+
+  const result = updateRoute(id, patch)!;
+  const ev = createLog('drone', 'ROUTE_UPDATED', req.user!.sub, `${req.user!.sub} modificó la ruta "${result.after.name}"`, {
+    meta: { antes: estadoRuta(result.before), despues: estadoRuta(result.after) },
+  });
+  broadcastOperators({ type: 'event', event: ev });
+  broadcastOperators({ type: 'route_updated', route: result.after });
+  res.json(result.after);
+});
+
+apiRouter.delete('/routes/:id', requireAuth('supervisor'), (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  const actual = getRoute(id);
+  if (!actual) return res.status(404).json({ error: 'Ruta inexistente' });
+  if (actual.deletedAt) return res.status(409).json({ error: 'La ruta ya estaba eliminada' });
+
+  const ruta = softDeleteRoute(id, req.user!.sub)!;
+  const ev = createLog('drone', 'ROUTE_DELETED', req.user!.sub, `${req.user!.sub} eliminó la ruta "${ruta.name}"`, {
+    meta: { antes: estadoRuta(actual), despues: estadoRuta(ruta) },
+  });
+  broadcastOperators({ type: 'event', event: ev });
+  broadcastOperators({ type: 'route_updated', route: ruta });
+  res.json(ruta);
+});
+
+apiRouter.post('/routes/:id/restore', requireAuth('supervisor'), (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  const actual = getRoute(id);
+  if (!actual) return res.status(404).json({ error: 'Ruta inexistente' });
+  if (!actual.deletedAt) return res.status(409).json({ error: 'La ruta no estaba eliminada' });
+
+  const ruta = restoreRoute(id)!;
+  const ev = createLog('drone', 'ROUTE_RESTORED', req.user!.sub, `${req.user!.sub} restauró la ruta "${ruta.name}"`, {
+    meta: { antes: estadoRuta(actual), despues: estadoRuta(ruta) },
+  });
+  broadcastOperators({ type: 'event', event: ev });
+  broadcastOperators({ type: 'route_updated', route: ruta });
+  res.json(ruta);
+});
+
+// ---- Rutas asignadas a una base ----
+
+apiRouter.get('/bases/:id/routes', requireRoles('field_operator', 'operator', 'supervisor', 'admin'), (req, res) => {
+  const id = Number(req.params.id);
+  if (!getBase(id)) return res.status(404).json({ error: 'Base inexistente' });
+  res.json(rutasDeBase(id));
+});
+
+apiRouter.put('/bases/:id/routes', requireRoles('field_operator', 'supervisor', 'admin'), (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  const base = getBase(id);
+  if (!base) return res.status(404).json({ error: 'Base inexistente' });
+  if (base.deletedAt) return res.status(409).json({ error: 'La base está eliminada' });
+
+  const crudos = req.body?.routeIds;
+  if (!Array.isArray(crudos)) return res.status(400).json({ error: 'routeIds debe ser una lista' });
+  const ids: number[] = [];
+  for (const c of crudos) {
+    const n = Number(c);
+    if (!Number.isInteger(n)) return res.status(400).json({ error: 'routeIds debe traer identificadores enteros' });
+    const ruta = getRoute(n);
+    if (!ruta || ruta.deletedAt) return res.status(400).json({ error: `La ruta ${n} no existe o fue eliminada` });
+    ids.push(n);
+  }
+
+  const antes = rutasDeBase(id).map((r) => r.name);
+  asignarRutas(id, ids);
+  const despues = rutasDeBase(id).map((r) => r.name);
+  const ev = createLog('drone', 'BASE_ROUTES_SET', req.user!.sub, `${req.user!.sub} asignó ${ids.length} ruta(s) a la base "${base.name}"`, {
+    meta: { antes: { rutas: antes.join(', ') || '(ninguna)' }, despues: { rutas: despues.join(', ') || '(ninguna)' } },
+  });
+  broadcastOperators({ type: 'event', event: ev });
+  res.json(rutasDeBase(id));
 });
 
 // Apodo de un nodo de patrullaje, para identificar zonas puntuales en el mapa.
