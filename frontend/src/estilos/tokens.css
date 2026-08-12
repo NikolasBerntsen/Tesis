@@ -34,6 +34,14 @@
     linear-gradient(135deg, #F0E3B8 0%, #D9BE6B 28%, #B8912F 55%, #8A6A1C 100%);
   --oro-velo: rgba(184, 145, 47, .10); /* fondo de lo seleccionado */
 
+  /* --- Cara de la piedra ------------------------------------------------ */
+  /* Todas las superficies levantadas (tarjetas, tejas, placa de ingreso,
+     modales) comparten esta cara: si cada una arma su propio degradé, el
+     mármol cambia de veta de una pieza a la otra y se nota. */
+  --piedra-cara:
+    var(--grano-textura),
+    linear-gradient(158deg, #FFFFFF 0%, var(--marmol-0) 50%, var(--marmol-1) 100%);
+
   /* --- Estados (apagados, nunca saturados) ------------------------------ */
   --ok: #4F7A46;
   --alerta: #B07A1E;
@@ -61,6 +69,7 @@
   /* --- Geometría -------------------------------------------------------- */
   --radio: 10px;
   --radio-chico: 6px;
+  --radio-sello: 3px; /* pastillas rectangulares chicas: categoría, esquina */
   --radio-grande: 16px;
   --filo: 2px; /* grosor del filo dorado */
 

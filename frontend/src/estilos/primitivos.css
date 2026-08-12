@@ -10,9 +10,7 @@
   border-radius: var(--radio);
   color: var(--tinta);
   background-color: var(--marmol-0);
-  background-image:
-    var(--grano-textura),
-    linear-gradient(158deg, #FFFFFF 0%, var(--marmol-0) 48%, var(--marmol-1) 100%);
+  background-image: var(--piedra-cara);
   box-shadow: var(--sombra-relieve);
 }
 
@@ -123,7 +121,7 @@ button[type='submit']:hover:not(:disabled),
 .login-card button:hover:not(:disabled) {
   background-image:
     linear-gradient(180deg, rgba(255, 255, 255, .55), rgba(255, 255, 255, .22)),
-    linear-gradient(135deg, #F0E3B8 0%, #D9BE6B 28%, #B8912F 55%, #8A6A1C 100%);
+    var(--oro-lamina);
   border-color: var(--oro-oscuro);
 }
 button.primario:disabled,
@@ -155,13 +153,16 @@ button.chico {
   font-size: var(--txt-sm);
 }
 
-/* Botones de decisión de alerta: el color entra por el borde, no por el fondo */
-button.validate {
+/* Botones de decisión de alerta: el color entra por el borde, no por el fondo.
+   .resume (reanudar patrullaje) es el mismo gesto afirmativo: comparte receta. */
+button.validate,
+button.resume {
   border-color: var(--ok);
   color: var(--ok);
   background-image: linear-gradient(180deg, #FDFEFC 0%, var(--ok-velo) 100%);
 }
-button.validate:hover:not(:disabled) { background-color: var(--ok-velo); border-color: var(--ok); }
+button.validate:hover:not(:disabled),
+button.resume:hover:not(:disabled) { background-color: var(--ok-velo); border-color: var(--ok); }
 
 button.dismiss {
   border-color: var(--peligro);
@@ -239,7 +240,16 @@ input:focus,
 select:focus,
 textarea:focus {
   border-color: var(--oro);
-  box-shadow: var(--sombra-hundida), 0 0 0 3px rgba(184, 145, 47, .18);
+  box-shadow: var(--sombra-hundida), 0 0 0 3px rgba(184, 145, 47, .22);
+}
+/* El campo ya se marca solo con el borde de oro y su halo: el anillo global de
+   :focus-visible encima le armaba un triple marco concéntrico. Las casillas y
+   los radios sí lo necesitan (no tienen borde propio que virar), así que
+   quedan afuera. */
+input:not([type='checkbox']):not([type='radio']):focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: none;
 }
 input:disabled,
 select:disabled,
@@ -345,7 +355,7 @@ legend {
   min-width: 20px;
   text-align: center;
   background: var(--peligro);
-  color: #FFF;
+  color: var(--marmol-0);
   border-radius: 999px;
   font-size: var(--txt-xs);
   font-weight: 700;
@@ -359,7 +369,7 @@ legend {
   font-size: var(--txt-xxs);
   font-weight: 700;
   padding: 2px 7px;
-  border-radius: 3px;
+  border-radius: var(--radio-sello);
   text-transform: uppercase;
   letter-spacing: var(--versalita);
   border: 1px solid transparent;
@@ -380,7 +390,7 @@ legend {
   height: 7px;
   border-radius: 50%;
   background: currentColor;
-  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 16%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 13%, transparent);
 }
 
 /* Aviso en línea (errores de formulario, notas) */

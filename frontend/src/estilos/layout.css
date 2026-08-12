@@ -58,7 +58,8 @@
   letter-spacing: var(--versalita);
   font-weight: 600;
 }
-.conn { font-size: var(--txt-xs); letter-spacing: .04em; }
+/* Sin letter-spacing propio: comparte el de las versalitas de al lado */
+.conn { font-size: var(--txt-xs); }
 .conn.ok { color: var(--ok); }
 .conn.bad { color: var(--peligro); }
 
@@ -165,9 +166,7 @@
   border: 1px solid var(--veta);
   border-radius: var(--radio-grande);
   background-color: var(--marmol-0);
-  background-image:
-    var(--grano-textura),
-    linear-gradient(158deg, #FFFFFF 0%, var(--marmol-0) 52%, var(--marmol-1) 100%);
+  background-image: var(--piedra-cara);
   box-shadow: var(--sombra-flotante);
 }
 /* Filo dorado superior: la piedra abierta en el canto de la placa */
@@ -181,6 +180,7 @@
   border-radius: 0 0 3px 3px;
   background: var(--oro-lamina);
 }
+.login-card .regla-ornamental { margin-block: var(--e-2); }
 .login-card h1 {
   margin: 0;
   font-family: var(--fuente-serif);

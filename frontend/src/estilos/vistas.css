@@ -28,12 +28,30 @@
   font-weight: 400;
   font-variant-numeric: tabular-nums lining-nums;
 }
+/* Medidor: un hairline con relleno de lámina. No es una barra de progreso de
+   dashboard, es la línea donde la piedra se abre a lo largo del nivel. */
+.medidor {
+  width: 100%;
+  height: 2px;
+  margin-top: var(--e-1);
+  border-radius: 999px;
+  background: var(--marmol-3);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .7);
+  overflow: hidden;
+}
+.medidor-relleno {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--oro-lamina);
+  transition: width var(--transicion);
+}
+
+/* El color y el fondo los pone button.resume en primitivos.css: acá va sólo
+   lo que es de esta vista (ocupa el ancho de la tarjeta). */
 .resume {
   margin-top: var(--e-4);
   width: 100%;
-  border-color: var(--ok);
-  color: var(--ok);
-  background-image: linear-gradient(180deg, #FDFEFC 0%, var(--ok-velo) 100%);
 }
 
 /* --- Video ---------------------------------------------------------------- */
@@ -143,13 +161,15 @@
   align-items: baseline;
   transition: background-color var(--transicion);
 }
+/* La fila de rótulos vive fuera del contenedor que scrollea (es hija directa
+   de la tarjeta): se la marca con la veta fuerte, igual que el thead de .tabla */
+.log-card > .log-row { border-bottom-color: var(--veta-fuerte); }
 .log-row:last-child { border-bottom: none; }
 .log-row:hover { background: rgba(255, 255, 255, .7); }
 .log-row-general { grid-template-columns: 84px 88px 180px 1fr; }
 .event-type {
   font-weight: 600;
   color: var(--tinta-media);
-  letter-spacing: .01em;
 }
 .event-type.bad { color: var(--peligro); }
 .event-type.warn { color: var(--alerta-texto); }
@@ -197,9 +217,7 @@ details.meta pre {
   border-radius: var(--radio);
   cursor: pointer;
   background-color: var(--marmol-0);
-  background-image:
-    var(--grano-textura),
-    linear-gradient(158deg, #FFFFFF 0%, var(--marmol-0) 50%, var(--marmol-1) 100%);
+  background-image: var(--piedra-cara);
   box-shadow: var(--sombra-relieve);
   transition: box-shadow var(--transicion), border-color var(--transicion);
 }
@@ -221,18 +239,17 @@ details.meta pre {
   font-size: var(--txt-sm);
 }
 .tile-row.muted { color: var(--tinta-media); }
-.tile-alerts {
-  position: absolute;
-  top: 20px;
-  right: 20px;
-  z-index: 2;
-  background: var(--peligro);
-  color: #FFF;
-  border-radius: 999px;
-  font-size: var(--txt-xs);
-  font-weight: 700;
-  padding: 2px 9px;
-  box-shadow: 0 2px 6px rgba(43, 38, 32, .3);
+/* Primera fila: el nombre manda y no se parte. Si compite de igual a igual con
+   el estado, un rótulo largo ("Volviendo a base…") lo corta al medio y el
+   lápiz queda colgando en el hueco. */
+.tile-info > .tile-row:first-child {
+  flex-wrap: wrap;
+  align-items: baseline;
+}
+.tile-info > .tile-row:first-child > .editable-name { flex: none; }
+.tile-info > .tile-row:first-child > .estado {
+  margin-left: auto;
+  text-align: right;
 }
 .tile-video { position: relative; }
 .tile-overlay {
@@ -249,7 +266,7 @@ details.meta pre {
   font-family: var(--fuente-serif);
   font-weight: 400;
   font-size: var(--txt-lg);
-  letter-spacing: .12em;
+  letter-spacing: var(--versalita);
   text-transform: uppercase;
 }
 .tile-esquina {
@@ -261,7 +278,7 @@ details.meta pre {
   letter-spacing: var(--versalita);
   text-transform: uppercase;
   padding: 2px 8px;
-  border-radius: 3px;
+  border-radius: var(--radio-sello);
   background: rgba(251, 250, 247, .88);
   border: 1px solid var(--veta);
 }
@@ -269,6 +286,20 @@ details.meta pre {
 .esquina-gris { color: var(--tinta-media); }
 
 /* --- Mapa ------------------------------------------------------------------ */
+/* Leyenda: los cuatro símbolos en versalitas, cada uno del color de su marca */
+.mapa-leyenda {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--e-2) var(--e-5);
+  margin-top: var(--e-3);
+}
+.mapa-leyenda span {
+  font-size: var(--txt-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  font-weight: 600;
+}
+
 .map {
   height: 420px;
   border-radius: var(--radio-chico);
@@ -278,48 +309,48 @@ details.meta pre {
 }
 .leaflet-container { font: inherit; }
 .mapa-head {
+  position: relative;
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: var(--e-3);
   flex-wrap: wrap;
+  padding-bottom: var(--e-2);
   margin-bottom: var(--e-4);
+  /* El hairline pasa a la fila entera —título y botón— para que esta tarjeta
+     lea igual que las que sólo tienen h2. */
+  border-bottom: 1px solid var(--veta);
+}
+.mapa-head::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: 38px;
+  height: 1px;
+  background: linear-gradient(90deg, var(--oro-oscuro) 0%, var(--oro-claro) 100%);
 }
 .mapa-head h2 { margin: 0; border: 0; padding: 0; }
+.mapa-head h2::after { display: none; }
 
-/* Marcador del dron: globo con las iniciales */
-.drone-pin {
-  width: 28px;
-  height: 28px;
-  background: var(--peligro);
-  border: 2px solid var(--marmol-0);
-  border-radius: 50% 50% 50% 0;
-  transform: rotate(-45deg);
-  display: grid;
-  place-items: center;
-  box-shadow: 0 2px 6px rgba(43, 38, 32, .38);
+/* Los marcadores son SVG inline (ver DronesMap.tsx). Leaflet le pone a todo
+   div-icon un recuadro blanco con borde gris: hay que sacárselo o el medallón
+   dorado aparece dentro de una cajita de fábrica. */
+.drone-pin-icon,
+.base-icon {
+  background: none;
+  border: 0;
 }
-.drone-pin span {
-  transform: rotate(45deg);
-  color: #FFF;
-  font-size: var(--txt-xs);
-  font-weight: 700;
-}
-/* Marcador de la base: cuadrado */
-.base-square {
-  width: 14px;
-  height: 14px;
-  background: var(--info);
-  border: 2px solid var(--marmol-0);
-  box-shadow: 0 1px 4px rgba(43, 38, 32, .35);
-}
+/* La etiqueta de distancia la viste DronesMap con los tokens, igual que el
+   resto de las etiquetas; acá va sólo lo que el JS no puede: sacarle la
+   flechita, y un mármol de respaldo por si el vestido no llega. */
 .distance-tooltip {
-  background: var(--peligro);
-  border: none;
-  color: #FFF;
+  background: var(--marmol-0);
+  border: 1px solid var(--veta);
+  color: var(--tinta);
   font-size: var(--txt-xs);
-  font-weight: 700;
-  padding: 1px 7px;
+  font-weight: 600;
+  padding: 3px 9px;
 }
 .distance-tooltip::before { display: none; }
 
@@ -379,6 +410,18 @@ details.meta pre {
   flex-direction: column;
   gap: var(--e-3);
 }
+/* Plato hundido: el pad es la pieza más táctil de la consola y tiene que
+   leerse como un instrumento embutido en la piedra. Ancho al contenido, si no
+   queda una losa vacía ocupando toda la tarjeta. */
+.pad-plato {
+  width: max-content;
+  margin: 0 auto;
+  padding: var(--e-4) var(--e-5);
+  background: var(--marmol-2);
+  border: 1px solid var(--veta);
+  border-radius: var(--radio-chico);
+  box-shadow: var(--sombra-hundida);
+}
 .pad {
   display: flex;
   flex-direction: column;
@@ -401,8 +444,20 @@ details.meta pre {
   align-items: center;
   gap: var(--e-2);
 }
+/* Editar un nombre no lo convierte en un campo de formulario: se mantiene la
+   serif y aparece el renglón, dorado mientras se escribe. min-width:0 deja que
+   el campo achique dentro de la teja; si no, empuja el estado a otra línea. */
 .editable-name input {
   width: 150px;
-  padding: 4px 8px;
+  min-width: 0;
+  padding: 2px 1px;
   font-size: var(--txt-base);
+  font-family: var(--fuente-serif);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: inset 0 -1px 0 var(--veta-fuerte);
+}
+.editable-name input:focus {
+  box-shadow: inset 0 -2px 0 var(--oro);
 }

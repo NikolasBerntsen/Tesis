@@ -126,7 +126,7 @@ describe('Console', () => {
     await screen.findByText('Sin señal de video');
     await userEvent.click(screen.getByText('Sin señal de video'));
 
-    const volver = await screen.findByRole('button', { name: /Volver al dashboard/ });
+    const volver = await screen.findByRole('button', { name: /Volver a Drones/ });
     expect(volver).toBeInTheDocument();
 
     // Renombrar desde el detalle dispara el PATCH del dron.

@@ -239,6 +239,10 @@ function vestir(el: HTMLElement | null | undefined, estilos: Record<string, stri
   for (const [prop, valor] of Object.entries(estilos)) el.style.setProperty(prop, valor);
 }
 
+const SVG_CRUZ = `<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor"
+    stroke-width="1.5" stroke-linecap="round" style="display:block" aria-hidden="true">
+    <path d="M4.2 4.2 11.8 11.8M11.8 4.2 4.2 11.8"/></svg>`;
+
 function vestirGlobo(popup: L.Popup) {
   const el = popup.getElement();
   if (!el) return;
@@ -257,7 +261,13 @@ function vestirGlobo(popup: L.Popup) {
     background: 'var(--marmol-0)',
     'box-shadow': 'none',
   });
-  vestir(el.querySelector<HTMLElement>('.leaflet-popup-close-button'), { color: 'var(--tinta-suave)' });
+  const cerrar = el.querySelector<HTMLElement>('.leaflet-popup-close-button');
+  vestir(cerrar, { color: 'var(--tinta-suave)', display: 'grid', 'place-items': 'center' });
+  // Leaflet cierra con un "×" de texto y un rótulo en inglés: los dos se cambian
+  if (cerrar && !cerrar.querySelector('svg')) {
+    cerrar.setAttribute('aria-label', 'Cerrar');
+    cerrar.innerHTML = SVG_CRUZ;
+  }
 }
 
 function vestirEtiqueta(tooltip: L.Tooltip) {

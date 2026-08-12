@@ -43,7 +43,7 @@ describe('DroneDetail', () => {
     expect(screen.getByText('En vuelo')).toBeInTheDocument();
     expect(screen.getByTestId('mapa-mock')).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: /Volver al dashboard/ }));
+    await userEvent.click(screen.getByRole('button', { name: /Volver a Drones/ }));
     expect(props.onBack).toHaveBeenCalled();
   });
 
@@ -113,6 +113,10 @@ describe('DroneDetail', () => {
       me: makeMe({ username: 'admin1', canControl: true }),
       drone: makeDrone({ controlledBy: 'admin1' }),
     });
+    // Las flechas son SVG sin texto: el nombre accesible lo pone el aria-label
+    for (const rumbo of ['norte', 'sur', 'este', 'oeste']) {
+      expect(screen.getByRole('button', { name: `Mover al ${rumbo}` })).toBeInTheDocument();
+    }
     await userEvent.click(screen.getByTitle('Norte'));
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith('/drones/d1/manual_move', {
@@ -168,6 +172,15 @@ describe('DroneDetail', () => {
     });
     renderDetail({ drone: makeDrone({ controlledBy: null }) });
     await userEvent.click(screen.getByRole('button', { name: 'Tomar control manual' }));
-    expect(await screen.findByText('Backend caído')).toBeInTheDocument();
+    const aviso = await screen.findByText('Backend caído');
+    expect(aviso).toBeInTheDocument();
+    expect(aviso).toHaveAttribute('role', 'alert');
+  });
+
+  it('rotula los cuatro símbolos del mapa en la leyenda', async () => {
+    renderDetail();
+    for (const simbolo of ['Dron', 'Base', 'Nodo pendiente', 'Nodo recorrido']) {
+      expect(await screen.findByText(simbolo)).toBeInTheDocument();
+    }
   });
 });

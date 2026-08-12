@@ -147,7 +147,7 @@ export default function DroneDetail({
           <svg width="15" height="15" viewBox="0 0 16 16" {...TRAZO} style={{ verticalAlign: '-2px' }}>
             <path d="M13 8H3.4M7.4 3.4 3 8l4.4 4.6" />
           </svg>{' '}
-          Volver al dashboard
+          Volver a Drones
         </button>
         <h2>
           <EditableName name={drone.displayName} onRename={onRename} />
