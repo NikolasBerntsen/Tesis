@@ -74,10 +74,15 @@ jobs:
             --exclude '*.db' \
             ./ "$VM_USER@$VM_HOST:$DEST/"
 
+      # DEV_WIPE_DB llega como variable del repositorio (Settings → Variables).
+      # Si no está definida, manda la del .env de la VM. En cualquiera de los
+      # dos lados, `true` significa que ESTE despliegue borra la base.
       - name: Construir y levantar los contenedores
+        env:
+          DEV_WIPE_DB: ${{ vars.DEV_WIPE_DB }}
         run: |
           ssh -i ~/.ssh/id_deploy "$VM_USER@$VM_HOST" bash -s <<EOF
           set -e
           cd "$DEST"
-          bash deploy/deploy.sh update
+          DEV_WIPE_DB='${DEV_WIPE_DB}' bash deploy/deploy.sh update
           EOF

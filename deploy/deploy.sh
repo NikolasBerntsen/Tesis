@@ -42,12 +42,44 @@ preparar_env() {
   else
     secreto="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d " \n")"
   fi
+  # La bandera se deja explícita y apagada: que exista en el archivo hace que
+  # se vea, y que se vea es lo que evita que alguien la active sin querer.
+  grep -q '^DEV_WIPE_DB=' .env || echo 'DEV_WIPE_DB=false' >> .env
   if grep -q '^JWT_SECRET=' .env; then
     sed -i "s|^JWT_SECRET=.*|JWT_SECRET=$secreto|" .env
   else
     echo "JWT_SECRET=$secreto" >> .env
   fi
   chmod 600 .env
+}
+
+# ---- DEV_WIPE_DB ----
+#
+# Bandera de desarrollo: con `true`, CADA despliegue borra la base antes de
+# levantar. Se lee del entorno (lo puede mandar el workflow) y, si no viene, del
+# .env de la VM. Cualquier otro valor —incluido no estar definida— deja los
+# datos intactos, que es el comportamiento por defecto.
+#
+# Está pensada para la etapa de desarrollo, mientras el esquema todavía se
+# mueve. Antes de que haya datos reales hay que ponerla en false: acá no hay
+# confirmación ni vuelta atrás, y el borrado corre solo con cada merge.
+valor_wipe() {
+  if [ -n "${DEV_WIPE_DB:-}" ]; then
+    echo "$DEV_WIPE_DB"
+  elif [ -f .env ]; then
+    grep -E '^DEV_WIPE_DB=' .env | tail -n1 | cut -d= -f2- | tr -d '"'"'"' '
+  fi
+}
+
+origen_wipe() {
+  if [ -n "${DEV_WIPE_DB:-}" ]; then echo "variable de entorno del despliegue"; else echo "archivo .env de la VM"; fi
+}
+
+wipe_pedido() {
+  case "$(valor_wipe | tr '[:upper:]' '[:lower:]')" in
+    true|1|si|sí|yes) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 preparar_red() {
@@ -96,6 +128,12 @@ case "${1:-up}" in
     ;;
   update)
     verificar_docker; preparar_env; preparar_red
+    if wipe_pedido; then
+      echo "⚠  DEV_WIPE_DB está en true: se BORRA la base antes de levantar."
+      echo "   Origen del valor: $(origen_wipe)"
+      compose down -v --remove-orphans
+      echo "   Volúmenes eliminados. El contenedor va a sembrar la base de cero al arrancar."
+    fi
     compose up -d --build
     esperar_salud
     # Las imágenes huérfanas se acumulan con cada build y llenan el disco de la
