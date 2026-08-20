@@ -1,7 +1,6 @@
 name: Deploy a Oracle Cloud
 
-# Mismo mecanismo que el otro proyecto que vive en esta VM: el runner copia el
-# código por rsync y la VM construye y levanta los contenedores. No hay registry
+# Copia el código por rsync y la VM construye y levanta los contenedores. No hay registry
 # de imágenes ni agente en el servidor.
 #
 # Se dispara cuando el CI de main termina bien: un commit que rompe los tests
