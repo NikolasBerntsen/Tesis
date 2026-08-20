@@ -19,7 +19,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # La VM es la misma que la del otro proyecto (comparten Caddy y red).
   VM_HOST: 144.22.138.149
   VM_USER: ubuntu
   DEST: /home/ubuntu/tesis
