@@ -5,7 +5,6 @@ API, el WebSocket y el build del frontend) en la **misma VM de Oracle que el otr
 proyecto**, detrás del **Caddy que ya está corriendo ahí**.
 
 - URL del sistema: **https://tesis.144-22-138-149.sslip.io**
-- URL del otro proyecto: https://panel.144-22-138-149.sslip.io *(no cambia)*
 
 ## Cómo funciona el despliegue continuo
 
