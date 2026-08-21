@@ -19,7 +19,7 @@ const ADMIN = makeMe({ username: 'admin1', role: 'admin' });
 const OPERADOR = makeMe({ username: 'oper1', role: 'operator' });
 
 function ruta(over: Partial<ReturnType<typeof makeRoute>> = {}) {
-  return { ...makeRoute({ id: 1, name: 'Perímetro Norte' }), createdBy: 'admin1', deletedAt: null, ...over };
+  return { ...makeRoute({ id: 1, name: 'Perímetro Norte' }), createdBy: 'admin1', deleted: false, deletedAt: null, ...over };
 }
 
 describe('RutasView', () => {

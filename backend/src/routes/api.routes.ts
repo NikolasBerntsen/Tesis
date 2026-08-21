@@ -839,7 +839,7 @@ apiRouter.post('/users/:username/regenerate-password', requireAuth('admin'), (re
   const { username } = req.params;
   const target = getUser(username);
   if (!target) return res.status(404).json({ error: 'Usuario inexistente' });
-  if (target.deleted_at) return res.status(409).json({ error: 'El usuario está eliminado: restauralo antes' });
+  if (target.deleted) return res.status(409).json({ error: 'El usuario está eliminado: restauralo antes' });
 
   const password = generarContrasenia();
   const result = updateUser(username, { passwordHash: bcrypt.hashSync(password, 10) })!;
@@ -859,7 +859,7 @@ apiRouter.patch('/users/:username', requireAuth('supervisor'), (req: AuthedReque
   const { username } = req.params;
   const target = getUser(username);
   if (!target) return res.status(404).json({ error: 'Usuario inexistente' });
-  if (target.deleted_at) return res.status(409).json({ error: 'El usuario está eliminado: restauralo antes de modificarlo' });
+  if (target.deleted) return res.status(409).json({ error: 'El usuario está eliminado: restauralo antes de modificarlo' });
   if (username === req.user!.sub) return res.status(400).json({ error: 'No podés modificarte a vos mismo' });
 
   const esAdmin = req.user!.role === 'admin';

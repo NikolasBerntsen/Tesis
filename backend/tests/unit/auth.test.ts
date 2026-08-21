@@ -123,7 +123,7 @@ describe('auth — login', () => {
   // poder decirle que la cuenta ya no está, no que se equivocó de contraseña.
   it('cuenta eliminada rechaza con motivo propio y el registro dice que fue eliminada', () => {
     crearUsuario('exempleado', 'clave123', 'operator');
-    db.prepare("UPDATE users SET deleted_at = '2024-01-01T00:00:00.000Z' WHERE username = 'exempleado'").run();
+    db.prepare("UPDATE users SET deleted = 1, deleted_at = '2024-01-01T00:00:00.000Z' WHERE username = 'exempleado'").run();
     expect(login('exempleado', 'clave123')).toEqual({ ok: false, motivo: 'eliminada' });
     const rechazo = logsDeSistema().find((l) => l.type === 'LOGIN_REJECTED');
     expect(rechazo?.message).toMatch(/eliminada/i);
@@ -188,7 +188,7 @@ describe('auth — requireAuth (middleware)', () => {
 
   it('403 si la cuenta fue eliminada, aunque el token siga siendo válido', () => {
     crearUsuario('exop', 'x', 'operator');
-    db.prepare("UPDATE users SET deleted_at = '2024-01-01T00:00:00.000Z' WHERE username = 'exop'").run();
+    db.prepare("UPDATE users SET deleted = 1, deleted_at = '2024-01-01T00:00:00.000Z' WHERE username = 'exop'").run();
     const res = fakeRes();
     requireAuth()(reqCon(tokenDe('exop', 'operator')), res as any, () => {});
     expect(res.statusCode).toBe(403);

@@ -129,8 +129,8 @@ describe('DronesView', () => {
   it('da de alta un dron con inventario y base elegida del desplegable', async () => {
     traerMock.mockResolvedValue([]);
     basesMock.mockResolvedValue([
-      { id: 7, name: 'Base Norte', lat: -34.85, lon: -56.2, active: true, createdAt: '', createdBy: null, deletedAt: null },
-      { id: 8, name: 'Base Sur', lat: -34.9, lon: -56.1, active: true, createdAt: '', createdBy: null, deletedAt: null },
+      { id: 7, name: 'Base Norte', lat: -34.85, lon: -56.2, active: true, createdAt: '', createdBy: null, deleted: false, deletedAt: null },
+      { id: 8, name: 'Base Sur', lat: -34.9, lon: -56.1, active: true, createdAt: '', createdBy: null, deleted: false, deletedAt: null },
     ]);
     apiMock.mockResolvedValue(makeDrone({ hash: 'nuevo', displayName: 'Delta' }));
     render(<DronesView me={makeMe({ username: 'admin1', role: 'admin' })} />);
@@ -268,7 +268,7 @@ describe('DronesView', () => {
   });
 
   it('elimina un dron sólo si se confirma', async () => {
-    apiMock.mockResolvedValue(alfa({ deletedAt: '2024-01-02T00:00:00.000Z' }));
+    apiMock.mockResolvedValue(alfa({ deleted: true, deletedAt: '2024-01-02T00:00:00.000Z' }));
     montar('supervisor');
     await screen.findByText('Alfa', { selector: 'div' });
 
@@ -292,8 +292,19 @@ describe('DronesView', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('El dron está eliminado');
   });
 
+  // La marca es la que manda: la fecha quedó como dato de auditoría y sola no
+  // alcanza para dar por eliminada una fila.
+  it('un dron con fecha de baja pero sin la marca se muestra como vivo', async () => {
+    traerMock.mockResolvedValue([alfa({ deleted: false, deletedAt: '2024-01-02T00:00:00.000Z' })]);
+    montar('supervisor');
+    await screen.findByText('Alfa', { selector: 'div' });
+
+    expect(fila('Alfa')).not.toHaveClass('fila-eliminada');
+    expect(within(fila('Alfa')).queryByText('Eliminado')).not.toBeInTheDocument();
+  });
+
   it('el toggle de eliminados pide la lista completa y deja restaurar', async () => {
-    const borrado = bravo({ deletedAt: '2024-01-02T00:00:00.000Z', active: false });
+    const borrado = bravo({ deleted: true, deletedAt: '2024-01-02T00:00:00.000Z', active: false });
     traerMock.mockImplementation(({ incluirEliminados } = {}) =>
       Promise.resolve(incluirEliminados ? [alfa(), borrado] : [alfa()]),
     );

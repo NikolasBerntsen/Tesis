@@ -17,14 +17,15 @@ db.exec(`
     -- 'field_operator' | 'operator' | 'supervisor' | 'admin' (validado en código)
     role          TEXT NOT NULL,
     display_name  TEXT,
-    base_name     TEXT,
-    base_lat      REAL,
-    base_lon      REAL,
     full_name     TEXT NOT NULL DEFAULT '',
     active        INTEGER NOT NULL DEFAULT 1,
     can_control   INTEGER NOT NULL DEFAULT 1,
     -- Borrado lógico: la fila queda y por lo tanto el username SIGUE OCUPADO
     -- (el UNIQUE se mantiene a propósito: el historial referencia ese nombre).
+    -- deleted es la marca que consulta el código; deleted_at y deleted_by son
+    -- el dato de auditoría. Preguntar por la marca y no por la fecha evita que
+    -- una fila con la fecha en blanco por un error de escritura pase por viva.
+    deleted       INTEGER NOT NULL DEFAULT 0,
     deleted_at    TEXT,
     deleted_by    TEXT
   );
@@ -42,11 +43,9 @@ db.exec(`
     inventory_code TEXT NOT NULL DEFAULT '',
     active       INTEGER NOT NULL DEFAULT 1,
     base_id      INTEGER REFERENCES bases(id),
-    base_name    TEXT,
-    base_lat     REAL,
-    base_lon     REAL,
     created_at   TEXT NOT NULL,
     created_by   TEXT,
+    deleted      INTEGER NOT NULL DEFAULT 0,
     deleted_at   TEXT,
     deleted_by   TEXT
   );
@@ -55,7 +54,12 @@ db.exec(`
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     name        TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
-    waypoints   TEXT NOT NULL -- JSON: [{lat, lon, alt, label?}]
+    waypoints   TEXT NOT NULL, -- JSON: [{lat, lon, alt, label?}]
+    created_at  TEXT,
+    created_by  TEXT,
+    deleted     INTEGER NOT NULL DEFAULT 0,
+    deleted_at  TEXT,
+    deleted_by  TEXT
   );
 
   CREATE TABLE IF NOT EXISTS alerts (
@@ -96,10 +100,10 @@ db.exec(`
     active     INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
     created_by TEXT,
+    deleted    INTEGER NOT NULL DEFAULT 0,
     deleted_at TEXT,
     deleted_by TEXT
   );
-  CREATE INDEX IF NOT EXISTS idx_bases_activas ON bases(deleted_at, active);
 
   -- Una base puede tener varias rutas y una ruta puede servir a varias bases:
   -- el operador elige, entre las de SU base, cuál patrullar.
@@ -117,9 +121,6 @@ db.exec(`
 const userCols = (db.prepare('PRAGMA table_info(users)').all() as { name: string }[]).map((c) => c.name);
 for (const [col, def] of [
   ['display_name', 'TEXT'],
-  ['base_name', 'TEXT'],
-  ['base_lat', 'REAL'],
-  ['base_lon', 'REAL'],
   ['active', 'INTEGER NOT NULL DEFAULT 1'],
   ['can_control', 'INTEGER NOT NULL DEFAULT 1'],
 ]) {
@@ -141,6 +142,13 @@ const usersSql = (db.prepare("SELECT sql FROM sqlite_master WHERE type='table' A
   | { sql: string }
   | undefined)?.sql;
 if (usersSql && usersSql.includes("CHECK (role IN ('operator', 'drone'))")) {
+  // La base embebida puede estar o no según hasta dónde haya llegado una
+  // migración anterior. Si está, se arrastra: recién se borra al final, cuando
+  // las cuentas de dron ya se promovieron a activos con su base_id.
+  const conBaseEmbebida = (db.prepare('PRAGMA table_info(users)').all() as { name: string }[])
+    .some((c) => c.name === 'base_lat');
+  const defsBase = conBaseEmbebida ? 'base_name TEXT, base_lat REAL, base_lon REAL,' : '';
+  const colsBase = conBaseEmbebida ? 'base_name, base_lat, base_lon,' : '';
   db.exec(`
     BEGIN;
     ALTER TABLE users RENAME TO users_old;
@@ -150,14 +158,12 @@ if (usersSql && usersSql.includes("CHECK (role IN ('operator', 'drone'))")) {
       password_hash TEXT NOT NULL,
       role          TEXT NOT NULL,
       display_name  TEXT,
-      base_name     TEXT,
-      base_lat      REAL,
-      base_lon      REAL,
+      ${defsBase}
       active        INTEGER NOT NULL DEFAULT 1,
       can_control   INTEGER NOT NULL DEFAULT 1
     );
-    INSERT INTO users (id, username, password_hash, role, display_name, base_name, base_lat, base_lon, active, can_control)
-      SELECT id, username, password_hash, role, display_name, base_name, base_lat, base_lon,
+    INSERT INTO users (id, username, password_hash, role, display_name, ${colsBase} active, can_control)
+      SELECT id, username, password_hash, role, display_name, ${colsBase}
              COALESCE(active, 1), COALESCE(can_control, 1)
         FROM users_old;
     DROP TABLE users_old;
@@ -172,6 +178,9 @@ const userColsPostRebuild = (db.prepare('PRAGMA table_info(users)').all() as { n
 for (const col of ['deleted_at', 'deleted_by']) {
   if (!userColsPostRebuild.includes(col)) db.exec(`ALTER TABLE users ADD COLUMN ${col} TEXT`);
 }
+if (!userColsPostRebuild.includes('deleted')) {
+  db.exec('ALTER TABLE users ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0');
+}
 
 // Índices del registro: van acá y no en el CREATE de arriba porque `category`
 // puede haberse agregado recién en la migración de columnas.
@@ -184,10 +193,17 @@ db.exec(`
 // pasa a ser una fila de `drones` con un hash nuevo, y el historial que la
 // referenciaba por username se reapunta a ese hash para no perder nada. Todo en
 // una transacción; si `drones` ya tiene filas, la base ya está migrada.
+const usuariosConBaseEmbebida = (db.prepare('PRAGMA table_info(users)').all() as { name: string }[])
+  .some((c) => c.name === 'base_lat');
+// El esquema más viejo de todos no tenía la base embebida en la cuenta: en ese
+// caso el activo nace sin base y se le asigna después desde la consola.
+const columnasDeBase = usuariosConBaseEmbebida
+  ? 'base_name, base_lat, base_lon'
+  : 'NULL AS base_name, NULL AS base_lat, NULL AS base_lon';
 const dronesVacia = (db.prepare('SELECT COUNT(*) AS n FROM drones').get() as { n: number }).n === 0;
 if (dronesVacia) {
   const cuentas = db
-    .prepare("SELECT username, display_name, base_name, base_lat, base_lon, active FROM users WHERE role = 'drone'")
+    .prepare(`SELECT username, display_name, ${columnasDeBase}, active FROM users WHERE role = 'drone'`)
     .all() as {
     username: string;
     display_name: string | null;
@@ -200,8 +216,14 @@ if (dronesVacia) {
   if (cuentas.length > 0) {
     const migrar = db.transaction(() => {
       const insertar = db.prepare(
-        `INSERT INTO drones (hash, display_name, model, active, base_name, base_lat, base_lon, created_at, created_by)
-         VALUES (?, ?, '', ?, ?, ?, ?, ?, 'migracion')`,
+        `INSERT INTO drones (hash, display_name, model, active, base_id, created_at, created_by)
+         VALUES (?, ?, '', ?, ?, ?, 'migracion')`,
+      );
+      // La base de la cuenta vieja se busca (o se crea) en `bases`: el activo
+      // nace apuntando por FK, no con la coordenada copiada encima.
+      const buscarBase = db.prepare('SELECT id FROM bases WHERE lat = ? AND lon = ?');
+      const crearBase = db.prepare(
+        "INSERT INTO bases (name, lat, lon, created_at, created_by) VALUES (?, ?, ?, ?, 'migracion')",
       );
       const reapuntarEventos = db.prepare('UPDATE events SET drone_id = ? WHERE drone_id = ?');
       const reapuntarAlertas = db.prepare('UPDATE alerts SET drone_id = ? WHERE drone_id = ?');
@@ -213,7 +235,14 @@ if (dronesVacia) {
 
       for (const c of cuentas) {
         const hash = randomBytes(16).toString('hex');
-        insertar.run(hash, c.display_name ?? c.username, c.active ? 1 : 0, c.base_name, c.base_lat, c.base_lon, creadoEn);
+        let baseId: number | null = null;
+        if (c.base_lat != null && c.base_lon != null) {
+          const ya = buscarBase.get(c.base_lat, c.base_lon) as { id: number } | undefined;
+          baseId = ya
+            ? ya.id
+            : Number(crearBase.run(c.base_name ?? 'Base', c.base_lat, c.base_lon, creadoEn).lastInsertRowid);
+        }
+        insertar.run(hash, c.display_name ?? c.username, c.active ? 1 : 0, baseId, creadoEn);
         reapuntarEventos.run(hash, c.username);
         reapuntarAlertas.run(hash, c.username);
         reapuntarOrigen.run(hash, c.username);
@@ -240,8 +269,10 @@ if (!userCols2.includes('full_name')) db.exec("ALTER TABLE users ADD COLUMN full
 // Las bases que vivían embebidas en cada dron se promueven a filas de `bases`.
 // Se agrupan por nombre y coordenada: tres drones que compartían "Base Norte"
 // terminan apuntando a una sola base, que es lo que el operador espera ver.
+const dronesConBaseEmbebida = (db.prepare('PRAGMA table_info(drones)').all() as { name: string }[])
+  .some((c) => c.name === 'base_lat');
 const basesVacia = (db.prepare('SELECT COUNT(*) AS n FROM bases').get() as { n: number }).n === 0;
-if (basesVacia) {
+if (basesVacia && dronesConBaseEmbebida) {
   const embebidas = db
     .prepare(
       `SELECT DISTINCT base_name AS name, base_lat AS lat, base_lon AS lon
@@ -278,4 +309,36 @@ for (const [col, def] of [
   ['deleted_by', 'TEXT'],
 ]) {
   if (!rutaCols.includes(col)) db.exec(`ALTER TABLE patrol_routes ADD COLUMN ${col} ${def}`);
+}
+
+// --- La baja lógica pasa a ser una marca propia ---
+
+// Antes había que deducirla de `deleted_at IS NOT NULL`. Ahora cada tabla con
+// baja lógica lleva su booleano y es lo único que consulta el código: la fecha
+// queda como dato de auditoría y deja de ser el interruptor.
+for (const tabla of ['users', 'drones', 'bases', 'patrol_routes']) {
+  const cols = (db.prepare(`PRAGMA table_info(${tabla})`).all() as { name: string }[]).map((c) => c.name);
+  if (!cols.includes('deleted')) {
+    db.exec(`ALTER TABLE ${tabla} ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0`);
+  }
+  // Las filas que ya estaban dadas de baja tienen fecha y todavía no marca.
+  db.exec(`UPDATE ${tabla} SET deleted = 1 WHERE deleted = 0 AND deleted_at IS NOT NULL`);
+}
+
+// El índice de bases activas filtraba por la fecha; ahora por la marca.
+db.exec('DROP INDEX IF EXISTS idx_bases_activas');
+db.exec('CREATE INDEX IF NOT EXISTS idx_bases_activas ON bases(deleted, active)');
+
+// --- Se van las columnas de base embebida ---
+
+// `drones.base_name`, `base_lat` y `base_lon` sobrevivían de cuando la base
+// vivía copiada dentro de cada dron. Hoy la base es una entidad y el vínculo es
+// `drones.base_id`; las de `users` nunca tuvieron uso después de que los drones
+// dejaran de ser cuentas. Se borran recién acá, cuando las migraciones de
+// arriba ya promovieron lo que había.
+for (const tabla of ['drones', 'users']) {
+  const cols = (db.prepare(`PRAGMA table_info(${tabla})`).all() as { name: string }[]).map((c) => c.name);
+  for (const col of ['base_name', 'base_lat', 'base_lon']) {
+    if (cols.includes(col)) db.exec(`ALTER TABLE ${tabla} DROP COLUMN ${col}`);
+  }
 }

@@ -10,11 +10,10 @@ export interface UserRow {
   role: Role;
   full_name: string;
   display_name: string | null;
-  base_name: string | null;
-  base_lat: number | null;
-  base_lon: number | null;
   active: number;
   can_control: number;
+  /** Marca de baja lógica. Es lo que se consulta; la fecha es sólo auditoría. */
+  deleted: number;
   deleted_at: string | null;
   deleted_by: string | null;
 }
@@ -27,6 +26,7 @@ export interface UserView {
   role: Role;
   active: boolean;
   canControl: boolean;
+  deleted: boolean;
   deletedAt: string | null;
 }
 
@@ -37,6 +37,7 @@ export function toUserView(u: UserRow): UserView {
     role: u.role,
     active: !!u.active,
     canControl: !!u.can_control,
+    deleted: !!u.deleted,
     deletedAt: u.deleted_at,
   };
 }
@@ -68,11 +69,10 @@ export interface DroneAsset {
   b_name?: string | null;
   b_lat?: number | null;
   b_lon?: number | null;
-  base_name: string | null;
-  base_lat: number | null;
-  base_lon: number | null;
   created_at: string;
   created_by: string | null;
+  /** Marca de baja lógica. Es lo que se consulta; la fecha es sólo auditoría. */
+  deleted: number;
   deleted_at: string | null;
   deleted_by: string | null;
 }
@@ -88,6 +88,7 @@ export interface DroneAssetView {
   base: DroneBase | null;
   createdAt: string;
   createdBy: string | null;
+  deleted: boolean;
   deletedAt: string | null;
   deletedBy: string | null;
 }
@@ -106,6 +107,7 @@ export interface PatrolRoute {
   description: string;
   waypoints: Waypoint[];
   createdBy: string | null;
+  deleted: boolean;
   deletedAt: string | null;
 }
 
@@ -115,6 +117,7 @@ interface FilaRuta {
   description: string;
   waypoints: string;
   created_by?: string | null;
+  deleted?: number;
   deleted_at?: string | null;
 }
 
@@ -125,6 +128,7 @@ function aRuta(r: FilaRuta): PatrolRoute {
     description: r.description,
     waypoints: JSON.parse(r.waypoints),
     createdBy: r.created_by ?? null,
+    deleted: !!r.deleted,
     deletedAt: r.deleted_at ?? null,
   };
 }
@@ -166,7 +170,7 @@ export function getUser(username: string): UserRow | undefined {
 /** Solo el usuario que puede operar: ni desactivado ni borrado. */
 export function getActiveUser(username: string): UserRow | undefined {
   return db
-    .prepare('SELECT * FROM users WHERE username = ? AND active = 1 AND deleted_at IS NULL')
+    .prepare('SELECT * FROM users WHERE username = ? AND active = 1 AND deleted = 0')
     .get(username) as UserRow | undefined;
 }
 
@@ -185,7 +189,7 @@ const ETIQUETA_ROL: Record<string, string> = {
 
 export function listUsers(roles: Role[], opts: { includeDeleted?: boolean; q?: string } = {}): UserView[] {
   const marks = roles.map(() => '?').join(',');
-  const filtroBorrados = opts.includeDeleted ? '' : ' AND deleted_at IS NULL';
+  const filtroBorrados = opts.includeDeleted ? '' : ' AND deleted = 0';
   const rows = db
     .prepare(`SELECT * FROM users WHERE role IN (${marks})${filtroBorrados} ORDER BY role, username`)
     .all(...roles) as UserRow[];
@@ -274,9 +278,9 @@ export function updateUser(username: string, patch: UserPatch): { before: UserVi
  */
 export function softDeleteUser(username: string, deletedBy: string): { before: UserView; after: UserView } | undefined {
   const row = getUser(username);
-  if (!row || row.deleted_at) return undefined;
+  if (!row || row.deleted) return undefined;
   const before = toUserView(row);
-  db.prepare('UPDATE users SET deleted_at = ?, deleted_by = ? WHERE username = ?').run(
+  db.prepare('UPDATE users SET deleted = 1, deleted_at = ?, deleted_by = ? WHERE username = ?').run(
     new Date().toISOString(),
     deletedBy,
     username,
@@ -287,9 +291,9 @@ export function softDeleteUser(username: string, deletedBy: string): { before: U
 /** Deshace el borrado lógico. Devuelve undefined si el usuario no estaba borrado. */
 export function restoreUser(username: string): { before: UserView; after: UserView } | undefined {
   const row = getUser(username);
-  if (!row || !row.deleted_at) return undefined;
+  if (!row || !row.deleted) return undefined;
   const before = toUserView(row);
-  db.prepare('UPDATE users SET deleted_at = NULL, deleted_by = NULL WHERE username = ?').run(username);
+  db.prepare('UPDATE users SET deleted = 0, deleted_at = NULL, deleted_by = NULL WHERE username = ?').run(username);
   return { before, after: toUserView(getUser(username)!) };
 }
 
@@ -297,18 +301,20 @@ export function restoreUser(username: string): { before: UserView; after: UserVi
 
 export interface BaseRow {
   id: number; name: string; lat: number; lon: number; active: number;
-  created_at: string; created_by: string | null; deleted_at: string | null; deleted_by: string | null;
+  created_at: string; created_by: string | null;
+  /** Marca de baja lógica. Es lo que se consulta; la fecha es sólo auditoría. */
+  deleted: number; deleted_at: string | null; deleted_by: string | null;
 }
 
 export interface BaseView {
   id: number; name: string; lat: number; lon: number; active: boolean;
-  createdAt: string; createdBy: string | null; deletedAt: string | null;
+  createdAt: string; createdBy: string | null; deleted: boolean; deletedAt: string | null;
 }
 
 export function toBaseView(b: BaseRow): BaseView {
   return {
     id: b.id, name: b.name, lat: b.lat, lon: b.lon, active: !!b.active,
-    createdAt: b.created_at, createdBy: b.created_by, deletedAt: b.deleted_at,
+    createdAt: b.created_at, createdBy: b.created_by, deleted: !!b.deleted, deletedAt: b.deleted_at,
   };
 }
 
@@ -329,7 +335,7 @@ export function getBase(id: number): BaseView | undefined {
 
 export function listBases(opts: { includeDeleted?: boolean; soloActivas?: boolean } = {}): BaseView[] {
   const donde: string[] = [];
-  if (!opts.includeDeleted) donde.push('deleted_at IS NULL');
+  if (!opts.includeDeleted) donde.push('deleted = 0');
   if (opts.soloActivas) donde.push('active = 1');
   const filtro = donde.length ? `WHERE ${donde.join(' AND ')}` : '';
   const rows = db.prepare(`SELECT * FROM bases ${filtro} ORDER BY name COLLATE NOCASE, id`).all() as BaseRow[];
@@ -340,7 +346,7 @@ export interface BasePatch { name?: string; lat?: number; lon?: number; active?:
 
 export function updateBase(id: number, patch: BasePatch): { before: BaseView; after: BaseView } | undefined {
   const before = getBase(id);
-  if (!before || before.deletedAt) return undefined;
+  if (!before || before.deleted) return undefined;
   db.prepare(
     `UPDATE bases SET name = COALESCE(?, name), lat = COALESCE(?, lat), lon = COALESCE(?, lon),
                       active = COALESCE(?, active) WHERE id = ?`,
@@ -351,35 +357,32 @@ export function updateBase(id: number, patch: BasePatch): { before: BaseView; af
 
 export function softDeleteBase(id: number, deletedBy: string): BaseView | undefined {
   const actual = getBase(id);
-  if (!actual || actual.deletedAt) return undefined;
-  db.prepare('UPDATE bases SET deleted_at = ?, deleted_by = ? WHERE id = ?').run(new Date().toISOString(), deletedBy, id);
+  if (!actual || actual.deleted) return undefined;
+  db.prepare('UPDATE bases SET deleted = 1, deleted_at = ?, deleted_by = ? WHERE id = ?').run(new Date().toISOString(), deletedBy, id);
   return getBase(id)!;
 }
 
 export function restoreBase(id: number): BaseView | undefined {
   const actual = getBase(id);
-  if (!actual || !actual.deletedAt) return undefined;
-  db.prepare('UPDATE bases SET deleted_at = NULL, deleted_by = NULL WHERE id = ?').run(id);
+  if (!actual || !actual.deleted) return undefined;
+  db.prepare('UPDATE bases SET deleted = 0, deleted_at = NULL, deleted_by = NULL WHERE id = ?').run(id);
   return getBase(id)!;
 }
 
 /** Drones que apuntan a una base. Se consulta antes de darla de baja. */
 export function contarDronesEnBase(id: number): number {
-  return (db.prepare('SELECT COUNT(*) AS n FROM drones WHERE base_id = ? AND deleted_at IS NULL').get(id) as { n: number }).n;
+  return (db.prepare('SELECT COUNT(*) AS n FROM drones WHERE base_id = ? AND deleted = 0').get(id) as { n: number }).n;
 }
 
 // ---- Drones como activos ----
 
 /**
- * La base sale de la tabla `bases` por base_id. Se conserva la lectura de las
- * columnas embebidas viejas como red: un dron migrado a mano podría tener la
- * coordenada y todavía no el vínculo.
+ * La base sale de la tabla `bases` por base_id, y de ningún otro lado: las
+ * columnas embebidas que copiaban el nombre y la coordenada dentro del dron se
+ * borraron del esquema, así que un dron sin vínculo no tiene base y punto.
  */
 function toDroneBase(d: DroneAsset): DroneBase | null {
-  if (d.b_lat != null && d.b_lon != null) return { name: d.b_name ?? 'Base', lat: d.b_lat, lon: d.b_lon };
-  return d.base_lat != null && d.base_lon != null
-    ? { name: d.base_name ?? 'Base', lat: d.base_lat, lon: d.base_lon }
-    : null;
+  return d.b_lat != null && d.b_lon != null ? { name: d.b_name ?? 'Base', lat: d.b_lat, lon: d.b_lon } : null;
 }
 
 /** Los drones se leen siempre unidos a su base. */
@@ -397,6 +400,7 @@ export function toDroneAssetView(d: DroneAsset): DroneAssetView {
     base: toDroneBase(d),
     createdAt: d.created_at,
     createdBy: d.created_by,
+    deleted: !!d.deleted,
     deletedAt: d.deleted_at,
     deletedBy: d.deleted_by,
   };
@@ -434,7 +438,7 @@ export function getDrone(hash: string): DroneAssetView | undefined {
 }
 
 export function listDrones(opts: { includeDeleted?: boolean } = {}): DroneAssetView[] {
-  const filtroBorrados = opts.includeDeleted ? '' : 'WHERE d.deleted_at IS NULL';
+  const filtroBorrados = opts.includeDeleted ? '' : 'WHERE d.deleted = 0';
   const rows = db
     .prepare(`${SELECT_DRON} ${filtroBorrados} ORDER BY d.display_name COLLATE NOCASE, d.id`)
     .all() as DroneAsset[];
@@ -453,7 +457,7 @@ export interface DronePatch {
 /** Aplica el cambio sobre un dron vivo y devuelve el antes y el después, para el log. */
 export function updateDrone(hash: string, patch: DronePatch): { before: DroneAssetView; after: DroneAssetView } | undefined {
   const before = getDrone(hash);
-  if (!before || before.deletedAt) return undefined;
+  if (!before || before.deleted) return undefined;
 
   db.prepare(
     `UPDATE drones SET
@@ -481,7 +485,7 @@ export function updateDrone(hash: string, patch: DronePatch): { before: DroneAss
 /** Borrado lógico: el historial sigue apuntando al hash. Undefined si ya estaba borrado. */
 export function softDeleteDrone(hash: string, deletedBy: string): DroneAssetView | undefined {
   const info = db
-    .prepare('UPDATE drones SET deleted_at = ?, deleted_by = ? WHERE hash = ? AND deleted_at IS NULL')
+    .prepare('UPDATE drones SET deleted = 1, deleted_at = ?, deleted_by = ? WHERE hash = ? AND deleted = 0')
     .run(new Date().toISOString(), deletedBy, hash);
   if (info.changes === 0) return undefined;
   return getDrone(hash);
@@ -490,7 +494,7 @@ export function softDeleteDrone(hash: string, deletedBy: string): DroneAssetView
 /** Deshace el borrado lógico. Undefined si el dron no existe o no estaba borrado. */
 export function restoreDrone(hash: string): DroneAssetView | undefined {
   const info = db
-    .prepare('UPDATE drones SET deleted_at = NULL, deleted_by = NULL WHERE hash = ? AND deleted_at IS NOT NULL')
+    .prepare('UPDATE drones SET deleted = 0, deleted_at = NULL, deleted_by = NULL WHERE hash = ? AND deleted = 1')
     .run(hash);
   if (info.changes === 0) return undefined;
   return getDrone(hash);
@@ -501,7 +505,7 @@ export function restoreDrone(hash: string): DroneAssetView | undefined {
  * inactivos sí, porque la consola tiene que poder mostrarlos y reactivarlos.
  */
 export function getDroneIdentity(droneId: string): DroneIdentity | undefined {
-  const row = db.prepare(`${SELECT_DRON} WHERE d.hash = ? AND d.deleted_at IS NULL`).get(droneId) as
+  const row = db.prepare(`${SELECT_DRON} WHERE d.hash = ? AND d.deleted = 0`).get(droneId) as
     | DroneAsset
     | undefined;
   return row ? toDroneIdentity(row) : undefined;
@@ -510,7 +514,7 @@ export function getDroneIdentity(droneId: string): DroneIdentity | undefined {
 /** Renombra un dron. Devuelve la identidad ya actualizada, o undefined si no existe. */
 export function renameDrone(droneId: string, displayName: string): DroneIdentity | undefined {
   const info = db
-    .prepare('UPDATE drones SET display_name = ? WHERE hash = ? AND deleted_at IS NULL')
+    .prepare('UPDATE drones SET display_name = ? WHERE hash = ? AND deleted = 0')
     .run(displayName, droneId);
   if (info.changes === 0) return undefined;
   return getDroneIdentity(droneId);
@@ -559,15 +563,15 @@ export function updateRoute(id: number, patch: RoutePatch): { before: PatrolRout
 
 export function softDeleteRoute(id: number, deletedBy: string): PatrolRoute | undefined {
   const actual = getRoute(id);
-  if (!actual || actual.deletedAt) return undefined;
-  db.prepare('UPDATE patrol_routes SET deleted_at = ?, deleted_by = ? WHERE id = ?').run(new Date().toISOString(), deletedBy, id);
+  if (!actual || actual.deleted) return undefined;
+  db.prepare('UPDATE patrol_routes SET deleted = 1, deleted_at = ?, deleted_by = ? WHERE id = ?').run(new Date().toISOString(), deletedBy, id);
   return getRoute(id)!;
 }
 
 export function restoreRoute(id: number): PatrolRoute | undefined {
   const actual = getRoute(id);
-  if (!actual || !actual.deletedAt) return undefined;
-  db.prepare('UPDATE patrol_routes SET deleted_at = NULL, deleted_by = NULL WHERE id = ?').run(id);
+  if (!actual || !actual.deleted) return undefined;
+  db.prepare('UPDATE patrol_routes SET deleted = 0, deleted_at = NULL, deleted_by = NULL WHERE id = ?').run(id);
   return getRoute(id)!;
 }
 
@@ -586,7 +590,7 @@ export function rutasDeBase(baseId: number): PatrolRoute[] {
     .prepare(
       `SELECT r.* FROM patrol_routes r
          JOIN base_routes br ON br.route_id = r.id
-        WHERE br.base_id = ? AND r.deleted_at IS NULL
+        WHERE br.base_id = ? AND r.deleted = 0
         ORDER BY r.name COLLATE NOCASE`,
     )
     .all(baseId) as FilaRuta[];
@@ -599,7 +603,7 @@ export function basesDeRuta(routeId: number): number[] {
 }
 
 export function getRoutes(opts: { includeDeleted?: boolean } = {}): PatrolRoute[] {
-  const filtro = opts.includeDeleted ? '' : 'WHERE deleted_at IS NULL';
+  const filtro = opts.includeDeleted ? '' : 'WHERE deleted = 0';
   const rows = db.prepare(`SELECT * FROM patrol_routes ${filtro} ORDER BY id`).all() as FilaRuta[];
   return rows.map(aRuta);
 }

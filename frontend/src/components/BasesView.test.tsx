@@ -23,10 +23,10 @@ const ADMIN = makeMe({ username: 'admin1', role: 'admin' });
 const CAMPO = makeMe({ username: 'campo1', role: 'field_operator' });
 const OPERADOR = makeMe({ username: 'oper1', role: 'operator' });
 
-function base(over: Partial<{ id: number; name: string; lat: number; lon: number; active: boolean; deletedAt: string | null }> = {}) {
+function base(over: Partial<{ id: number; name: string; lat: number; lon: number; active: boolean; deleted: boolean; deletedAt: string | null }> = {}) {
   return {
     id: 1, name: 'Base Norte', lat: -34.8565, lon: -56.2075,
-    active: true, createdAt: '2026-01-01T00:00:00.000Z', createdBy: 'admin1', deletedAt: null,
+    active: true, createdAt: '2026-01-01T00:00:00.000Z', createdBy: 'admin1', deleted: false, deletedAt: null,
     ...over,
   };
 }
@@ -95,7 +95,7 @@ describe('BasesView', () => {
     await screen.findByText('Base Norte');
     expect(basesMock).toHaveBeenCalledWith({ incluirEliminadas: false });
 
-    basesMock.mockResolvedValue([base({ deletedAt: '2026-01-02T00:00:00.000Z' })]);
+    basesMock.mockResolvedValue([base({ deleted: true, deletedAt: '2026-01-02T00:00:00.000Z' })]);
     await userEvent.click(screen.getByRole('button', { name: /ver eliminadas/i }));
 
     expect(basesMock).toHaveBeenLastCalledWith({ incluirEliminadas: true });
@@ -274,7 +274,7 @@ describe('BasesView — caminos que faltaban cubrir', () => {
   });
 
   it('restaurar una base eliminada pega al endpoint de restauración', async () => {
-    basesMock.mockResolvedValue([base({ deletedAt: '2026-01-02T00:00:00.000Z' })]);
+    basesMock.mockResolvedValue([base({ deleted: true, deletedAt: '2026-01-02T00:00:00.000Z' })]);
     apiMock.mockResolvedValue(base());
     render(<BasesView me={ADMIN} />);
     await userEvent.click(await screen.findByRole('button', { name: /ver eliminadas/i }));
@@ -290,14 +290,14 @@ describe('BasesView — asignar rutas apenas se da de alta la base', () => {
     limpiarEstadoMapa();
   });
 
-  const nueva = { id: 5, name: 'Base Río', lat: -34.9, lon: -56.15, active: true, createdAt: '', createdBy: 'campo1', deletedAt: null };
+  const nueva = { id: 5, name: 'Base Río', lat: -34.9, lon: -56.15, active: true, createdAt: '', createdBy: 'campo1', deleted: false, deletedAt: null };
 
   function rutaCerca() {
-    return { id: 1, name: 'Perímetro cercano', description: '', waypoints: [{ lat: -34.9005, lon: -56.1505, alt: 40 }, { lat: -34.901, lon: -56.151, alt: 40 }], createdBy: null, deletedAt: null };
+    return { id: 1, name: 'Perímetro cercano', description: '', waypoints: [{ lat: -34.9005, lon: -56.1505, alt: 40 }, { lat: -34.901, lon: -56.151, alt: 40 }], createdBy: null, deleted: false, deletedAt: null };
   }
   function rutaLejos() {
     // ~5 km al norte: bien pasado el umbral del kilómetro
-    return { id: 2, name: 'Perímetro lejano', description: '', waypoints: [{ lat: -34.855, lon: -56.15, alt: 40 }, { lat: -34.856, lon: -56.151, alt: 40 }], createdBy: null, deletedAt: null };
+    return { id: 2, name: 'Perímetro lejano', description: '', waypoints: [{ lat: -34.855, lon: -56.15, alt: 40 }, { lat: -34.856, lon: -56.151, alt: 40 }], createdBy: null, deleted: false, deletedAt: null };
   }
 
   async function llegarALasRutas() {
@@ -397,7 +397,7 @@ describe('BasesView — rutas de una base que ya existe', () => {
     return {
       id, name, description: '',
       waypoints: [{ lat, lon, alt: 40 }, { lat: lat - 0.001, lon: lon - 0.001, alt: 40 }],
-      createdBy: null, deletedAt: null,
+      createdBy: null, deleted: false, deletedAt: null,
     };
   }
 
@@ -537,7 +537,7 @@ describe('BasesView — mapas con doble fondo y la base como referencia', () => 
 
   it('al dibujar una ruta desde una base, la base queda marcada en el mapa', async () => {
     basesMock.mockResolvedValue([
-      { id: 1, name: 'Base Obelisco', lat: -34.6037, lon: -58.3816, active: true, createdAt: '', createdBy: 'admin1', deletedAt: null },
+      { id: 1, name: 'Base Obelisco', lat: -34.6037, lon: -58.3816, active: true, createdAt: '', createdBy: 'admin1', deleted: false, deletedAt: null },
     ]);
     rutasMock.mockResolvedValue([]);
     rutasDeBaseMock.mockResolvedValue([]);

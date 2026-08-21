@@ -89,8 +89,15 @@ describe('integración — migración desde el esquema original', () => {
 
   it('agrega las columnas nuevas a users, incluidas las del borrado lógico', () => {
     const cols = columnas(db, 'users');
-    for (const col of ['display_name', 'base_name', 'base_lat', 'base_lon', 'active', 'can_control', 'deleted_at', 'deleted_by']) {
+    for (const col of ['display_name', 'active', 'can_control', 'deleted', 'deleted_at', 'deleted_by']) {
       expect(cols).toContain(col);
+    }
+  });
+
+  it('no deja en users las columnas de base embebida', () => {
+    const cols = columnas(db, 'users');
+    for (const col of ['base_name', 'base_lat', 'base_lon']) {
+      expect(cols).not.toContain(col);
     }
   });
 
@@ -209,6 +216,14 @@ describe('integración — migración desde el esquema intermedio (drones como c
          VALUES ('drone2', 'h', 'drone', 'Bravo', 0)`,
       )
       .run();
+    // Comparte la base con drone1: las dos cuentas tienen que terminar
+    // apuntando a UNA sola fila de bases, no a dos iguales.
+    old
+      .prepare(
+        `INSERT INTO users (username, password_hash, role, display_name, base_name, base_lat, base_lon, active)
+         VALUES ('drone3', 'h', 'drone', 'Charlie', 'Base Norte', -34.8565, -56.2075, 1)`,
+      )
+      .run();
     old.prepare("INSERT INTO users (username, password_hash, role) VALUES ('operador', 'h', 'operator')").run();
     old
       .prepare(
@@ -239,19 +254,34 @@ describe('integración — migración desde el esquema intermedio (drones como c
 
   it('cada cuenta de dron pasa a `drones` conservando nombre, base y estado', () => {
     const drones = db.prepare('SELECT * FROM drones ORDER BY display_name').all();
-    expect(drones).toHaveLength(2);
+    expect(drones).toHaveLength(3);
 
     const alfa = drones[0];
     expect(alfa.display_name).toBe('Alfa');
-    expect(alfa.base_name).toBe('Base Norte');
-    expect(alfa.base_lat).toBeCloseTo(-34.8565);
-    expect(alfa.base_lon).toBeCloseTo(-56.2075);
     expect(alfa.active).toBe(1);
+    expect(alfa.deleted).toBe(0);
     expect(alfa.deleted_at).toBeNull();
+
+    // La base de la cuenta vieja no se copia dentro del dron: se promueve a
+    // `bases` y el activo queda apuntando por FK.
+    const base = db.prepare('SELECT * FROM bases WHERE id = ?').get(alfa.base_id) as
+      | { name: string; lat: number; lon: number }
+      | undefined;
+    expect(base?.name).toBe('Base Norte');
+    expect(base?.lat).toBeCloseTo(-34.8565);
+    expect(base?.lon).toBeCloseTo(-56.2075);
 
     const bravo = drones[1];
     expect(bravo.display_name).toBe('Bravo');
     expect(bravo.active).toBe(0);
+    // sin base en la cuenta vieja, el activo nace sin vínculo
+    expect(bravo.base_id).toBeNull();
+
+    // Charlie compartía la base con Alfa: una sola fila en `bases` para los dos.
+    const charlie = drones[2];
+    expect(charlie.display_name).toBe('Charlie');
+    expect(charlie.base_id).toBe(alfa.base_id);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM bases WHERE name = 'Base Norte'").get()).toEqual({ n: 1 });
 
     // hashes distintos, del formato que espera el QR
     expect(String(alfa.hash)).toMatch(/^[0-9a-f]{32}$/);
@@ -374,5 +404,132 @@ describe('integración — migración de las bases embebidas en los drones', () 
     expect((otra.prepare('SELECT COUNT(*) AS n FROM bases').get() as { n: number }).n).toBe(2);
     otra.close();
     db = await abrirConMigraciones(tmpFile);
+  });
+});
+
+describe('integración — la baja lógica pasa a ser una marca propia', () => {
+  let tmpFile = '';
+  let db: DbLike;
+
+  beforeAll(async () => {
+    tmpFile = archivoTemporal('migracion-deleted');
+
+    // Esquema con borrado lógico por fecha: la marca todavía no existe y la
+    // base embebida sigue copiada dentro de cada dron.
+    const old = new Database(tmpFile);
+    old.exec(`
+      CREATE TABLE users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL,
+        role TEXT NOT NULL, display_name TEXT, base_name TEXT, base_lat REAL, base_lon REAL,
+        full_name TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1, can_control INTEGER NOT NULL DEFAULT 1,
+        deleted_at TEXT, deleted_by TEXT
+      );
+      CREATE TABLE drones (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL,
+        model TEXT NOT NULL DEFAULT '', inventory_code TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1,
+        base_id INTEGER, base_name TEXT, base_lat REAL, base_lon REAL,
+        created_at TEXT NOT NULL, created_by TEXT, deleted_at TEXT, deleted_by TEXT
+      );
+      CREATE TABLE bases (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, created_by TEXT, deleted_at TEXT, deleted_by TEXT
+      );
+      CREATE TABLE patrol_routes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+        waypoints TEXT NOT NULL, created_at TEXT, created_by TEXT, deleted_at TEXT, deleted_by TEXT
+      );
+      CREATE TABLE events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, type TEXT NOT NULL, source TEXT NOT NULL,
+        message TEXT NOT NULL, drone_id TEXT, alert_id INTEGER, category TEXT NOT NULL DEFAULT 'drone', meta TEXT
+      );
+      CREATE INDEX idx_bases_activas ON bases(deleted_at, active);
+    `);
+    old.prepare("INSERT INTO users (username, password_hash, role) VALUES ('viva', 'h', 'operator')").run();
+    old
+      .prepare(
+        "INSERT INTO users (username, password_hash, role, deleted_at, deleted_by) VALUES ('exop', 'h', 'operator', '2024-01-01T00:00:00.000Z', 'admin1')",
+      )
+      .run();
+    old
+      .prepare(
+        "INSERT INTO drones (hash, display_name, created_at, base_name, base_lat, base_lon) VALUES ('aaaa', 'Alfa', '2024-01-01', 'Base Norte', -34.85, -56.2)",
+      )
+      .run();
+    old
+      .prepare(
+        "INSERT INTO drones (hash, display_name, created_at, deleted_at) VALUES ('bbbb', 'Bravo', '2024-01-01', '2024-02-01T00:00:00.000Z')",
+      )
+      .run();
+    old.prepare("INSERT INTO bases (name, lat, lon, created_at) VALUES ('Base Sur', -34.9, -56.1, '2024-01-01')").run();
+    old
+      .prepare("INSERT INTO bases (name, lat, lon, created_at, deleted_at) VALUES ('Ex base', -34.7, -56.3, '2024-01-01', '2024-03-01')")
+      .run();
+    old.prepare("INSERT INTO patrol_routes (name, waypoints) VALUES ('Viva', '[]')").run();
+    old.prepare("INSERT INTO patrol_routes (name, waypoints, deleted_at) VALUES ('Ex ruta', '[]', '2024-03-01')").run();
+    old.close();
+
+    db = await abrirConMigraciones(tmpFile);
+  });
+
+  afterAll(() => {
+    try {
+      db.close();
+    } catch {
+      /* ignorar */
+    }
+    borrarBase(tmpFile);
+  });
+
+  it('agrega la marca a las cuatro tablas con baja lógica', () => {
+    for (const tabla of ['users', 'drones', 'bases', 'patrol_routes']) {
+      expect(columnas(db, tabla)).toContain('deleted');
+    }
+  });
+
+  it('marca lo que ya estaba dado de baja y deja en pie lo demás', () => {
+    const marca = (tabla: string, campo: string, valor: string) =>
+      (db.prepare(`SELECT deleted FROM ${tabla} WHERE ${campo} = ?`).get(valor) as { deleted: number }).deleted;
+
+    expect(marca('users', 'username', 'exop')).toBe(1);
+    expect(marca('users', 'username', 'viva')).toBe(0);
+    expect(marca('drones', 'hash', 'bbbb')).toBe(1);
+    expect(marca('drones', 'hash', 'aaaa')).toBe(0);
+    expect(marca('bases', 'name', 'Ex base')).toBe(1);
+    expect(marca('bases', 'name', 'Base Sur')).toBe(0);
+    expect(marca('patrol_routes', 'name', 'Ex ruta')).toBe(1);
+    expect(marca('patrol_routes', 'name', 'Viva')).toBe(0);
+  });
+
+  it('conserva la fecha y el autor de la baja como dato de auditoría', () => {
+    const exop = db.prepare("SELECT deleted_at, deleted_by FROM users WHERE username = 'exop'").get() as {
+      deleted_at: string;
+      deleted_by: string;
+    };
+    expect(exop.deleted_at).toBe('2024-01-01T00:00:00.000Z');
+    expect(exop.deleted_by).toBe('admin1');
+  });
+
+  it('borra las columnas de base embebida de drones y de users', () => {
+    for (const tabla of ['drones', 'users']) {
+      for (const col of ['base_name', 'base_lat', 'base_lon']) {
+        expect(columnas(db, tabla)).not.toContain(col);
+      }
+    }
+  });
+
+  it('el índice de bases activas pasa a filtrar por la marca, no por la fecha', () => {
+    const sql = (db.prepare("SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_bases_activas'").get() as
+      | { sql: string }
+      | undefined)?.sql;
+    expect(sql).toContain('deleted');
+    expect(sql).not.toContain('deleted_at');
+  });
+
+  it('correr las migraciones de nuevo no cambia nada', async () => {
+    const antes = db.prepare('SELECT hash, deleted FROM drones ORDER BY hash').all();
+    db.close();
+    const otra = await abrirConMigraciones(tmpFile);
+    expect(otra.prepare('SELECT hash, deleted FROM drones ORDER BY hash').all()).toEqual(antes);
+    db = otra;
   });
 });

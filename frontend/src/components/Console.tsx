@@ -103,7 +103,7 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
         // El mismo mensaje trae altas, ediciones, bajas y restauraciones. Un
         // activo eliminado sale de la operación, pero igual viaja a la vista de
         // activos, que es la única que sabe si hay que seguir mostrándolo.
-        if (msg.drone.deletedAt) {
+        if (msg.drone.deleted) {
           setDrones((prev) => prev.filter((d) => d.droneId !== msg.drone.droneId));
           olvidarTelemetria(msg.drone.droneId);
         } else {

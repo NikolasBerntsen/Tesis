@@ -103,7 +103,7 @@ for (const h of humans) {
 
 /** Las bases son un activo propio: se dan de alta una vez y los drones apuntan. */
 function idDeBase(b: { name: string; lat: number; lon: number }): number {
-  const ya = db.prepare('SELECT id FROM bases WHERE name = ? AND deleted_at IS NULL').get(b.name) as { id: number } | undefined;
+  const ya = db.prepare('SELECT id FROM bases WHERE name = ? AND deleted = 0').get(b.name) as { id: number } | undefined;
   if (ya) return ya.id;
   const info = db
     .prepare("INSERT INTO bases (name, lat, lon, created_at, created_by) VALUES (?, ?, ?, ?, 'seed')")

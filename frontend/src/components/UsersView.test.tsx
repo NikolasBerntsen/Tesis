@@ -137,7 +137,7 @@ describe('UsersView', () => {
   describe('borrado lógico', () => {
     const conBorrado = [
       makeUser({ username: 'admin1', role: 'admin' }),
-      makeUser({ username: 'oper1', deletedAt: BORRADO }),
+      makeUser({ username: 'oper1', deleted: true, deletedAt: BORRADO }),
     ];
 
     it('el pop-up explica que la baja se puede deshacer y no se elimina si se cancela', async () => {
@@ -276,7 +276,7 @@ describe('UsersView', () => {
     });
 
     it('el supervisor ve los eliminados pero no puede restaurarlos', async () => {
-      servir([makeUser({ username: 'oper1' })], [makeUser({ username: 'oper1', deletedAt: BORRADO })]);
+      servir([makeUser({ username: 'oper1' })], [makeUser({ username: 'oper1', deleted: true, deletedAt: BORRADO })]);
       montar('supervisor', 'super1');
       await screen.findByText('oper1');
 
