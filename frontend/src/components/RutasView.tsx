@@ -144,7 +144,7 @@ export default function RutasView({ me }: { me: Me }) {
                   {rutas.map((r) => (
                     <tr
                       key={r.id}
-                      className={`${r.id === elegida?.id ? 'seleccionada ' : ''}${r.deletedAt ? 'fila-eliminada' : ''}`.trim() || undefined}
+                      className={`${r.id === elegida?.id ? 'seleccionada ' : ''}${r.deleted ? 'fila-eliminada' : ''}`.trim() || undefined}
                       onClick={() => setElegida(r)}
                     >
                       <td>
@@ -154,7 +154,7 @@ export default function RutasView({ me }: { me: Me }) {
                       <td className="mono">{r.waypoints.length}</td>
                       {esSupervisor && (
                         <td className="barra-acciones">
-                          {r.deletedAt ? (
+                          {r.deleted ? (
                             <button className="chico" onClick={() => accion(() => api(`/routes/${r.id}/restore`, { method: 'POST' }))}>
                               Restaurar
                             </button>

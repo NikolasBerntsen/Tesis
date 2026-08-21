@@ -169,7 +169,7 @@ export default function UsersView({ me }: { me: Me }) {
 
   // El backend sólo respeta `includeDeleted` para supervisor+; el filtro de acá
   // es el que garantiza que con el toggle apagado no se cuele ninguna baja.
-  const visibles = users.filter((u) => verEliminados || !u.deletedAt);
+  const visibles = users.filter((u) => verEliminados || !u.deleted);
 
   return (
     <main className="page-main">
@@ -219,7 +219,7 @@ export default function UsersView({ me }: { me: Me }) {
               <tbody>
                 {visibles.map((u) => {
                   const esYo = u.username === me.username;
-                  const eliminado = Boolean(u.deletedAt);
+                  const eliminado = u.deleted;
                   // El operador de campo despliega drones pero no los pilotea: el
                   // backend rechaza con un 400 cualquier intento de autorizarlo, así
                   // que en su fila el permiso ni siquiera corresponde.

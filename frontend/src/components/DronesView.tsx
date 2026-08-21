@@ -279,7 +279,7 @@ export default function DronesView({ me, novedad = null }: PropsDronesView) {
     setEdicion(formularioDe(dron));
   }
 
-  const visibles = drones.filter((d) => mostrarEliminados || !d.deletedAt);
+  const visibles = drones.filter((d) => mostrarEliminados || !d.deleted);
 
   return (
     <main className="page-main">
@@ -325,7 +325,7 @@ export default function DronesView({ me, novedad = null }: PropsDronesView) {
               </thead>
               <tbody>
                 {visibles.map((d) => {
-                  const eliminado = Boolean(d.deletedAt);
+                  const eliminado = d.deleted;
                   return (
                     <Fragment key={d.hash}>
                       <tr className={eliminado ? 'fila-eliminada' : undefined}>

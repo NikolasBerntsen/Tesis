@@ -76,7 +76,7 @@ export function login(username: string, password: string): LoginResult {
     createLog('sistema', 'LOGIN_FAILED', username, `Intento de inicio de sesión fallido para "${username}"`);
     return { ok: false, motivo: 'credenciales' };
   }
-  if (user.deleted_at) {
+  if (user.deleted) {
     createLog('sistema', 'LOGIN_REJECTED', username, `Inicio de sesión rechazado: la cuenta "${username}" fue eliminada`);
     return { ok: false, motivo: 'eliminada' };
   }
@@ -124,7 +124,7 @@ function resolverIdentidad(req: AuthedRequest): Resolucion {
 
   const user = getUser(payload.sub);
   if (!user) return { ok: false, status: 401, error: 'Usuario inexistente' };
-  if (user.deleted_at) return { ok: false, status: 403, error: 'Cuenta eliminada' };
+  if (user.deleted) return { ok: false, status: 403, error: 'Cuenta eliminada' };
   if (!user.active) return { ok: false, status: 403, error: 'Cuenta desactivada' };
   return { ok: true, user: { sub: user.username, role: user.role, canControl: !!user.can_control } };
 }

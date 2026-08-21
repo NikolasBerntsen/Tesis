@@ -280,13 +280,13 @@ export default function BasesView({ me }: { me: Me }) {
               </thead>
               <tbody>
                 {visibles.map((b) => (
-                  <tr key={b.id} className={b.deletedAt ? 'fila-eliminada' : undefined}>
+                  <tr key={b.id} className={b.deleted ? 'fila-eliminada' : undefined}>
                     <td className="inscripcion">{b.name}</td>
                     <td className="mono">
                       {b.lat.toFixed(5)}, {b.lon.toFixed(5)}
                     </td>
                     <td>
-                      {b.deletedAt ? (
+                      {b.deleted ? (
                         <span className="estado muted">Eliminada</span>
                       ) : (
                         <span className={b.active ? 'estado ok' : 'estado muted'}>{b.active ? 'Activa' : 'Inactiva'}</span>
@@ -294,7 +294,7 @@ export default function BasesView({ me }: { me: Me }) {
                     </td>
                     {puedeCrear && (
                       <td className="barra-acciones">
-                        {b.deletedAt ? (
+                        {b.deleted ? (
                           esSupervisor && (
                             <button className="chico" onClick={() => accion(() => api(`/bases/${b.id}/restore`, { method: 'POST' }))}>
                               Restaurar

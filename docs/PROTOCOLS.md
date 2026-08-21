@@ -107,16 +107,20 @@ cualquier otro activo del inventario:
 | `model` | Modelo del aparato, a título informativo |
 | `active` | Si está en `false`, **se rechaza la conexión del dron** (y se corta la que tuviera abierta) |
 | `base` | `{name, lat, lon}`: la base a la que vuelve. Se dibuja como cuadrado azul en los mapas |
-| `deletedAt` / `deletedBy` | Borrado lógico: la fila nunca se elimina |
+| `deleted` | Marca de baja lógica: es lo que decide si la fila está dada de baja |
+| `deletedAt` / `deletedBy` | Cuándo y quién dio la baja; dato de auditoría |
 
 En la interfaz el hash no se muestra entero nunca: se muestra el nombre y el
 hash abreviado (`a3f9c1…7e42`).
 
 ### Borrado lógico
 
-**Nada se borra físicamente**, ni usuarios ni drones: se marca `deleted_at` y
-`deleted_by`. Un usuario eliminado no puede iniciar sesión, sus sockets se
-cierran en el acto y **sigue ocupando su nombre de usuario** (el `UNIQUE` se
+**Nada se borra físicamente**, ni usuarios ni drones: se prende `deleted` y se
+anotan `deleted_at` y `deleted_by`. La consulta es siempre por la marca y nunca
+por la fecha: la fecha es el dato de auditoría, no el interruptor, así que una
+fila con fecha pero sin marca está viva. Un usuario eliminado no puede iniciar
+sesión, sus sockets se cierran en el acto y **sigue ocupando su nombre de
+usuario** (el `UNIQUE` se
 mantiene a propósito, para que el historial del registro nunca quede apuntando
 a un nombre que después reusó otra persona). De supervisor para arriba se puede
 listar lo eliminado y restaurarlo.
@@ -348,6 +352,7 @@ del protocolo.
   "displayName": "Alfa",
   "model": "DJI Mini 4 Pro",
   "active": true,
+  "deleted": false,
   "deletedAt": null,
   "base": { "name": "Base Norte", "lat": -34.8565, "lon": -56.2075 },
   "online": true,
@@ -363,7 +368,7 @@ del protocolo.
 Piezas que se repiten: `Dron = {hash, displayName, model}` ·
 `EstadoDron = {displayName, model, activo, eliminado, base, baseLat, baseLon}`
 (plano a propósito, para que la comparación del pop-up sea campo a campo) ·
-`UserView = {username, role, active, canControl, deletedAt}`.
+`UserView = {username, fullName, role, active, canControl, deleted, deletedAt}`.
 
 | Categoría | Tipo | `meta` |
 |---|---|---|

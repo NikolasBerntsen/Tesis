@@ -28,6 +28,7 @@ export function makeDrone(over: Partial<Drone> = {}): Drone {
     inventoryCode: 'INV-0001',
     baseId: 1,
     active: true,
+    deleted: false,
     deletedAt: null,
     base: { name: 'Base Norte', lat: -34.6, lon: -58.4 },
     online: true,
@@ -77,6 +78,9 @@ export function makeRoute(over: Partial<PatrolRoute> = {}): PatrolRoute {
       { lat: -34.6, lon: -58.4, alt: 30 },
       { lat: -34.61, lon: -58.41, alt: 30 },
     ],
+    createdBy: null,
+    deleted: false,
+    deletedAt: null,
     ...over,
   };
 }
@@ -87,6 +91,7 @@ export function makeUser(over: Partial<UserView> = {}): UserView {
     role: 'operator',
     active: true,
     canControl: true,
+    deleted: false,
     deletedAt: null,
     ...over,
   };

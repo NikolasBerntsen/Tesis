@@ -275,7 +275,7 @@ describe('Console', () => {
 
     fire({
       type: 'drone_updated',
-      drone: makeDrone({ droneId: 'd1', displayName: 'Alfa', online: false, deletedAt: '2024-02-01T10:00:00.000Z' }),
+      drone: makeDrone({ droneId: 'd1', displayName: 'Alfa', online: false, deleted: true, deletedAt: '2024-02-01T10:00:00.000Z' }),
     });
 
     await waitFor(() => expect(screen.queryByText('Alfa')).not.toBeInTheDocument());

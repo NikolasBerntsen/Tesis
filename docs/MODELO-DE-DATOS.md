@@ -32,12 +32,10 @@ erDiagram
         TEXT role "field_operator, operator, supervisor o admin"
         TEXT full_name
         TEXT display_name
-        TEXT base_name "columna heredada del esquema viejo"
-        REAL base_lat
-        REAL base_lon
         INTEGER active "0 desactiva la cuenta sin borrarla"
         INTEGER can_control "permiso de control manual"
-        TEXT deleted_at "borrado lógico"
+        INTEGER deleted "marca de baja lógica: es lo que consulta el código"
+        TEXT deleted_at "cuándo se dio de baja; dato de auditoría"
         TEXT deleted_by
     }
 
@@ -49,12 +47,10 @@ erDiagram
         TEXT inventory_code "no viaja dentro del QR"
         INTEGER active
         INTEGER base_id FK "base donde está dispuesto el dron"
-        TEXT base_name "columna embebida vieja, se conserva como red"
-        REAL base_lat
-        REAL base_lon
         TEXT created_at
         TEXT created_by
-        TEXT deleted_at "borrado lógico"
+        INTEGER deleted "marca de baja lógica: es lo que consulta el código"
+        TEXT deleted_at "cuándo se dio de baja; dato de auditoría"
         TEXT deleted_by
     }
 
@@ -66,7 +62,8 @@ erDiagram
         INTEGER active
         TEXT created_at
         TEXT created_by
-        TEXT deleted_at "borrado lógico"
+        INTEGER deleted "marca de baja lógica: es lo que consulta el código"
+        TEXT deleted_at "cuándo se dio de baja; dato de auditoría"
         TEXT deleted_by
     }
 
@@ -77,7 +74,8 @@ erDiagram
         TEXT waypoints "JSON con los nodos del recorrido"
         TEXT created_at
         TEXT created_by
-        TEXT deleted_at "borrado lógico"
+        INTEGER deleted "marca de baja lógica: es lo que consulta el código"
+        TEXT deleted_at "cuándo se dio de baja; dato de auditoría"
         TEXT deleted_by
     }
 
@@ -147,16 +145,22 @@ de baja y el registro tiene que seguir diciendo quién fue.
 - **El dron es un activo, no una cuenta.** Nació como una fila de `users` con
   rol `drone` y se promovió a tabla propia. La migración reapunta todo el
   historial del username viejo al hash nuevo, para no perder trazabilidad.
-- **La base es una entidad, no una columna.** Vivía embebida en cada dron
-  (`base_name`, `base_lat`, `base_lon`). Esas columnas siguen ahí como red para
-  un dron migrado a mano que todavía no tenga el vínculo, pero la lectura normal
-  sale de `bases` por `base_id`.
+- **La base es una entidad, no una columna.** Vivía embebida en cada dron, con
+  el nombre y la coordenada copiados fila por fila. La migración las promovió a
+  `bases`, agrupando por coordenada para que los drones que compartían base
+  terminen apuntando a una sola, y después borró las columnas: hoy el único
+  vínculo es `drones.base_id`.
 - **`base_routes` es una relación de muchos a muchos.** Una base puede tener
   varias rutas y una ruta puede servir a varias bases: el operador elige, entre
   las de su base, cuál patrullar.
-- **Todo el borrado es lógico.** Ninguna baja borra la fila: se marca con
-  `deleted_at` y `deleted_by`. Por eso el `UNIQUE` de `username` se mantiene
-  después de la baja.
+- **Todo el borrado es lógico, y la baja es una marca propia.** Ninguna baja
+  borra la fila: se prende `deleted` y se anotan `deleted_at` y `deleted_by`. La
+  consulta va siempre contra la marca y nunca contra la fecha —la fecha es el
+  dato de auditoría, no el interruptor—, así que una fila con la fecha en blanco
+  por un error de escritura no puede pasar por viva ni al revés. Por eso también
+  el `UNIQUE` de `username` se mantiene después de la baja.
+- **Renombrar una base se ve en el acto en todos sus drones**, justamente
+  porque el dato vive en un solo lugar y no hay copias que sincronizar.
 - **Los nodos de una ruta van embebidos.** Se leen y se escriben siempre
   completos, con la ruta, y nunca se consultan por separado. Una tabla aparte
   agregaría un join a cada lectura sin habilitar ninguna consulta que el sistema
@@ -364,21 +368,21 @@ flowchart LR
     campo(["Operador<br/>de campo"])
     operador(["Operador · Supervisor<br/>Administrador"])
 
-    subgraph predio["En el predio"]
+    subgraph predio["Base del dron"]
         direction TB
-        app["App de control<br/><i>Android · Kotlin</i><br/>teléfono acoplado al dron"]
-        dron["Dron<br/><i>DJI Mini 4 Pro</i>"]
-        vision["Módulo de detección<br/><i>modelo de visión</i>"]
+        app["App de control<br/>Android · Kotlin<br/>teléfono acoplado al dron"]
+        dron["Dron<br/>DJI Mini 4 Pro"]
+        vision["Módulo de detección<br/>modelo de visión"]
     end
 
     subgraph servidor["Servidor"]
         direction TB
-        proxy["Proxy inverso<br/><i>termina el TLS</i>"]
+        proxy["Proxy inverso<br/>termina el TLS"]
         subgraph back["Comando Central · backend"]
             direction TB
-            api["API REST<br/><i>Express</i>"]
-            hub["Central en tiempo real<br/><i>WebSocket</i>"]
-            auth["Autenticación<br/><i>JWT · bcrypt</i>"]
+            api["API REST<br/>Express"]
+            hub["Central en tiempo real<br/>WebSocket"]
+            auth["Autenticación<br/>JWT · bcrypt"]
             store["Acceso a datos"]
             datos[("SQLite")]
         end
@@ -386,8 +390,8 @@ flowchart LR
 
     subgraph consola["Puesto de mando"]
         direction TB
-        web["Consola web<br/><i>React · Leaflet</i>"]
-        teselas["Proveedor de teselas<br/><i>callejero y satelital</i>"]
+        web["Consola web<br/>React · Leaflet"]
+        teselas["Proveedor de teselas<br/>callejero y satelital"]
     end
 
     campo -->|emparejamiento por QR| app

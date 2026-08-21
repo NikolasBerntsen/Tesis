@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { db } from '../../src/db';
 import { limpiarBase } from '../helpers';
 import {
-  createBase, updateBase,
+  createBase, updateBase, listBases, softDeleteBase, restoreBase, contarDronesEnBase,
+  createRoute, softDeleteRoute, restoreRoute, rutasDeBase, asignarRutas,
   toUserView,
   toDroneAssetView,
   getUser,
@@ -38,17 +39,15 @@ import {
 // Inserta un usuario crudo en la base (sin pasar por la API).
 function insertUser(over: Partial<UserRow> & { username: string }) {
   db.prepare(
-    `INSERT INTO users (username, password_hash, role, display_name, base_name, base_lat, base_lon, active, can_control, deleted_at)
-     VALUES (@username, @password_hash, @role, @display_name, @base_name, @base_lat, @base_lon, @active, @can_control, @deleted_at)`,
+    `INSERT INTO users (username, password_hash, role, display_name, active, can_control, deleted, deleted_at)
+     VALUES (@username, @password_hash, @role, @display_name, @active, @can_control, @deleted, @deleted_at)`,
   ).run({
     password_hash: 'x',
     role: 'operator',
     display_name: null,
-    base_name: null,
-    base_lat: null,
-    base_lon: null,
     active: 1,
     can_control: 1,
+    deleted: 0,
     deleted_at: null,
     ...over,
   });
@@ -73,21 +72,22 @@ describe('store — usuarios', () => {
       role: 'supervisor',
       full_name: 'Ana Pérez',
       display_name: null,
-      base_name: null,
-      base_lat: null,
-      base_lon: null,
       active: 1,
       can_control: 0,
+      deleted: 0,
       deleted_at: null,
       deleted_by: null,
     });
-    expect(view).toEqual({ username: 'ana', fullName: 'Ana Pérez', role: 'supervisor', active: true, canControl: false, deletedAt: null });
+    expect(view).toEqual({
+      username: 'ana', fullName: 'Ana Pérez', role: 'supervisor',
+      active: true, canControl: false, deleted: false, deletedAt: null,
+    });
     expect(view).not.toHaveProperty('password_hash');
   });
 
   it('getUser devuelve la fila (incluso borrada) y getActiveUser no', () => {
     insertUser({ username: 'juan', role: 'admin' });
-    insertUser({ username: 'ida', deleted_at: '2020-01-01T00:00:00.000Z' });
+    insertUser({ username: 'ida', deleted: 1, deleted_at: '2020-01-01T00:00:00.000Z' });
     insertUser({ username: 'apagada', active: 0 });
 
     expect(getUser('juan')?.role).toBe('admin');
@@ -104,7 +104,7 @@ describe('store — usuarios', () => {
     insertUser({ username: 'sup1', role: 'supervisor' });
     insertUser({ username: 'adm1', role: 'admin' });
     insertUser({ username: 'campo1', role: 'field_operator' });
-    insertUser({ username: 'exop', role: 'operator', deleted_at: '2020-01-01T00:00:00.000Z' });
+    insertUser({ username: 'exop', role: 'operator', deleted: 1, deleted_at: '2020-01-01T00:00:00.000Z' });
 
     expect(listUsers(['operator']).map((u) => u.username)).toEqual(['op1']);
     expect(listUsers(['operator'], { includeDeleted: true }).map((u) => u.username)).toEqual(['exop', 'op1']);
@@ -115,7 +115,10 @@ describe('store — usuarios', () => {
 
   it('createUser inserta y devuelve la vista con canControl', () => {
     const conControl = createUser({ username: 'c1', fullName: 'Persona c1', passwordHash: 'h', role: 'operator', canControl: true });
-    expect(conControl).toEqual({ username: 'c1', fullName: 'Persona c1', role: 'operator', active: true, canControl: true, deletedAt: null });
+    expect(conControl).toEqual({
+      username: 'c1', fullName: 'Persona c1', role: 'operator',
+      active: true, canControl: true, deleted: false, deletedAt: null,
+    });
     const sinControl = createUser({ username: 'c2', fullName: 'Persona c2', passwordHash: 'h', role: 'field_operator', canControl: false });
     expect(sinControl.canControl).toBe(false);
     expect(getUser('c1')).toBeDefined();
@@ -201,18 +204,18 @@ describe('store — drones como activos', () => {
       inventory_code: '',
       active: 0,
       base_id: null,
-      base_name: 'Base Norte',
-      base_lat: -34.85,
-      base_lon: null,
+      b_lat: -34.85,
+      b_lon: null,
       created_at: '2020-01-01T00:00:00.000Z',
       created_by: null,
+      deleted: 0,
       deleted_at: null,
       deleted_by: null,
     };
     expect(toDroneAssetView(fila).base).toBeNull();
     expect(toDroneAssetView(fila).active).toBe(false);
-    // sin nombre de base, cae a "Base"
-    expect(toDroneAssetView({ ...fila, base_name: null, base_lon: -56.2 }).base).toEqual({ name: 'Base', lat: -34.85, lon: -56.2 });
+    // sin nombre de base unida, cae a "Base"
+    expect(toDroneAssetView({ ...fila, b_name: null, b_lon: -56.2 }).base).toEqual({ name: 'Base', lat: -34.85, lon: -56.2 });
   });
 
   it('getDrone devuelve el dron AUNQUE esté borrado; listDrones lo esconde', () => {
@@ -480,5 +483,133 @@ describe('store — alertas', () => {
     expect(decideAlert(a.id, 'VALIDATED', 'otro')).toBeUndefined();
     // alerta inexistente
     expect(decideAlert(9999, 'VALIDATED', 'op')).toBeUndefined();
+  });
+});
+
+describe('store — la baja lógica se lee de la marca, no de la fecha', () => {
+  it('dar de baja un usuario prende la marca y deja la fecha y el autor', () => {
+    createUser({ username: 'ana', fullName: 'Ana Pérez', passwordHash: 'h', role: 'operator', canControl: true });
+    const r = softDeleteUser('ana', 'admin1');
+
+    expect(r?.before.deleted).toBe(false);
+    expect(r?.after.deleted).toBe(true);
+    const fila = db.prepare("SELECT deleted, deleted_at, deleted_by FROM users WHERE username = 'ana'").get() as
+      { deleted: number; deleted_at: string; deleted_by: string };
+    expect(fila.deleted).toBe(1);
+    expect(fila.deleted_at).toBeTruthy();
+    expect(fila.deleted_by).toBe('admin1');
+  });
+
+  it('restaurar apaga la marca y limpia la auditoría', () => {
+    createUser({ username: 'ana', fullName: 'Ana Pérez', passwordHash: 'h', role: 'operator', canControl: true });
+    softDeleteUser('ana', 'admin1');
+    expect(restoreUser('ana')?.after.deleted).toBe(false);
+
+    const fila = db.prepare("SELECT deleted, deleted_at, deleted_by FROM users WHERE username = 'ana'").get() as
+      { deleted: number; deleted_at: string | null; deleted_by: string | null };
+    expect(fila.deleted).toBe(0);
+    expect(fila.deleted_at).toBeNull();
+    expect(fila.deleted_by).toBeNull();
+  });
+
+  // El punto del cambio: la fecha dejó de ser el interruptor. Una fila con
+  // fecha pero sin marca está VIVA, y una con marca pero sin fecha está de baja.
+  it('una fila con fecha pero sin marca sigue viva', () => {
+    createUser({ username: 'ana', fullName: 'Ana Pérez', passwordHash: 'h', role: 'operator', canControl: true });
+    db.prepare("UPDATE users SET deleted_at = '2020-01-01T00:00:00.000Z' WHERE username = 'ana'").run();
+
+    expect(getActiveUser('ana')).toBeDefined();
+    expect(listUsers(['operator']).map((u) => u.username)).toContain('ana');
+    expect(toUserView(getUser('ana')!).deleted).toBe(false);
+  });
+
+  it('una fila con marca pero sin fecha está de baja igual', () => {
+    createUser({ username: 'ana', fullName: 'Ana Pérez', passwordHash: 'h', role: 'operator', canControl: true });
+    db.prepare("UPDATE users SET deleted = 1 WHERE username = 'ana'").run();
+
+    expect(getActiveUser('ana')).toBeUndefined();
+    expect(listUsers(['operator']).map((u) => u.username)).not.toContain('ana');
+    expect(softDeleteUser('ana', 'admin1')).toBeUndefined();
+  });
+
+  it('el dron de baja se esconde del listado y no se puede renombrar', () => {
+    const dron = createDrone({ displayName: 'Alfa' }, 'admin1');
+    softDeleteDrone(dron.hash, 'admin1');
+
+    expect(getDrone(dron.hash)?.deleted).toBe(true);
+    expect(listDrones().map((d) => d.hash)).not.toContain(dron.hash);
+    expect(listDrones({ includeDeleted: true }).map((d) => d.hash)).toContain(dron.hash);
+    expect(getDroneIdentity(dron.hash)).toBeUndefined();
+    expect(renameDrone(dron.hash, 'Otro')).toBeUndefined();
+    expect(updateDrone(dron.hash, { model: 'X' })).toBeUndefined();
+
+    expect(restoreDrone(dron.hash)?.deleted).toBe(false);
+    expect(listDrones().map((d) => d.hash)).toContain(dron.hash);
+  });
+
+  it('la base de baja sale del listado y deja de contar sus drones', () => {
+    const base = createBase({ name: 'Base Norte', lat: -34.6, lon: -58.4 }, 'admin1');
+    const dron = createDrone({ displayName: 'Alfa', baseId: base.id }, 'admin1');
+    expect(contarDronesEnBase(base.id)).toBe(1);
+
+    softDeleteDrone(dron.hash, 'admin1');
+    expect(contarDronesEnBase(base.id)).toBe(0);
+
+    expect(softDeleteBase(base.id, 'admin1')?.deleted).toBe(true);
+    expect(listBases().map((b) => b.id)).not.toContain(base.id);
+    expect(listBases({ includeDeleted: true }).map((b) => b.id)).toContain(base.id);
+    expect(updateBase(base.id, { name: 'Otra' })).toBeUndefined();
+
+    expect(restoreBase(base.id)?.deleted).toBe(false);
+    expect(listBases().map((b) => b.id)).toContain(base.id);
+  });
+
+  it('la ruta de baja deja de ofrecerse en su base', () => {
+    const base = createBase({ name: 'Base Norte', lat: -34.6, lon: -58.4 }, 'admin1');
+    const ruta = createRoute(
+      { name: 'Perímetro', waypoints: [{ lat: -34.6, lon: -58.4, alt: 40 }, { lat: -34.61, lon: -58.41, alt: 40 }] },
+      'admin1',
+    );
+    asignarRutas(base.id, [ruta.id]);
+    expect(rutasDeBase(base.id).map((r) => r.id)).toEqual([ruta.id]);
+
+    expect(softDeleteRoute(ruta.id, 'admin1')?.deleted).toBe(true);
+    expect(rutasDeBase(base.id)).toEqual([]);
+    expect(getRoutes().map((r) => r.id)).not.toContain(ruta.id);
+    expect(getRoutes({ includeDeleted: true }).map((r) => r.id)).toContain(ruta.id);
+
+    expect(restoreRoute(ruta.id)?.deleted).toBe(false);
+    expect(rutasDeBase(base.id).map((r) => r.id)).toEqual([ruta.id]);
+  });
+});
+
+describe('store — la base del dron sale del vínculo por FK', () => {
+  it('un dron sin base asignada no tiene base', () => {
+    const dron = createDrone({ displayName: 'Alfa' }, 'admin1');
+    expect(dron.baseId).toBeNull();
+    expect(dron.base).toBeNull();
+  });
+
+  it('asignar la base la trae completa desde la tabla bases', () => {
+    const base = createBase({ name: 'Base Obelisco', lat: -34.6037, lon: -58.3816 }, 'admin1');
+    const dron = createDrone({ displayName: 'Alfa', baseId: base.id }, 'admin1');
+
+    expect(dron.base).toEqual({ name: 'Base Obelisco', lat: -34.6037, lon: -58.3816 });
+    expect(getDroneIdentity(dron.hash)?.base).toEqual({ name: 'Base Obelisco', lat: -34.6037, lon: -58.3816 });
+  });
+
+  it('renombrar la base se ve en el dron sin tocar el dron', () => {
+    const base = createBase({ name: 'Base Norte', lat: -34.6, lon: -58.4 }, 'admin1');
+    const dron = createDrone({ displayName: 'Alfa', baseId: base.id }, 'admin1');
+    updateBase(base.id, { name: 'Base Centro' });
+
+    expect(getDrone(dron.hash)?.base?.name).toBe('Base Centro');
+  });
+
+  it('desasignar la base deja al dron sin base', () => {
+    const base = createBase({ name: 'Base Norte', lat: -34.6, lon: -58.4 }, 'admin1');
+    const dron = createDrone({ displayName: 'Alfa', baseId: base.id }, 'admin1');
+
+    expect(updateDrone(dron.hash, { baseId: null })?.after.base).toBeNull();
   });
 });

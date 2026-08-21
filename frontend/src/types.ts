@@ -14,6 +14,9 @@ export interface BaseAsset {
   active: boolean;
   createdAt: string;
   createdBy: string | null;
+  /** Marca de baja lógica: es lo que decide si la fila está dada de baja. */
+  deleted: boolean;
+  /** Fecha ISO de esa baja; queda como dato de auditoría. */
   deletedAt: string | null;
 }
 
@@ -61,7 +64,9 @@ export interface UserView {
   role: RolConsola;
   active: boolean;
   canControl: boolean;
-  /** Fecha ISO del borrado lógico; `null` mientras la cuenta esté vigente. */
+  /** Marca de baja lógica: es lo que decide si la fila está dada de baja. */
+  deleted: boolean;
+  /** Fecha ISO de esa baja; queda como dato de auditoría. */
   deletedAt: string | null;
 }
 
@@ -80,7 +85,9 @@ export interface Drone {
   /** Un dron no operativo no puede conectarse: el backend le corta el WebSocket. */
   active: boolean;
   baseId: number | null;
-  /** Fecha ISO del borrado lógico; `null` mientras el activo esté vigente. */
+  /** Marca de baja lógica: es lo que decide si la fila está dada de baja. */
+  deleted: boolean;
+  /** Fecha ISO de esa baja; queda como dato de auditoría. */
   deletedAt: string | null;
   base: Base | null;
   online: boolean;
@@ -112,6 +119,9 @@ export interface PatrolRoute {
   description: string;
   waypoints: Waypoint[];
   createdBy: string | null;
+  /** Marca de baja lógica: es lo que decide si la fila está dada de baja. */
+  deleted: boolean;
+  /** Fecha ISO de esa baja; queda como dato de auditoría. */
   deletedAt: string | null;
 }
 
