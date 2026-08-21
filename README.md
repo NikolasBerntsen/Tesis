@@ -40,6 +40,7 @@ valida o descarta la alerta.
 | `detection-mock/` | Visor que recibe el video del celular y simula detecciones con botones | Node, ws |
 | `android-app/` | App de control que corre en el celular del RC-N2 | Kotlin, coroutines, OkHttp |
 | `docs/PROTOCOLS.md` | Contratos de mensajes entre los cuatro procesos | — |
+| `docs/MODELO-DE-DATOS.md` | Diagramas del modelo de datos, de clases y de componentes | — |
 
 ## Cómo levantar todo
 
