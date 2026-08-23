@@ -7,6 +7,7 @@ import com.tesis.dronepatrol.model.SesionOperador
 import java.time.Duration
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -19,7 +20,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 /**
- * Menú de campo: la cuenta regresiva de la sesión efímera y las tres acciones.
+ * Menú de campo: la cuenta regresiva de la sesión efímera y las cuatro acciones.
  * Nada de esto pide GPS ni cámara —eso recién pasa al escanear—, así que la
  * pantalla se puede armar entera en Robolectric.
  */
@@ -65,13 +66,17 @@ class FieldMenuActivityTest {
     }
 
     @Test
-    fun tieneAManoLasTresAccionesDelCampo() {
+    fun tieneAManoLasCuatroAccionesDelCampo() {
         abrirSesion()
         val actividad = Robolectric.buildActivity(FieldMenuActivity::class.java).setup().get()
 
         assertEquals(
             actividad.getString(R.string.menu_campo_escanear),
             actividad.findViewById<Button>(R.id.btnEscanear).text.toString(),
+        )
+        assertEquals(
+            actividad.getString(R.string.menu_campo_identificador),
+            actividad.findViewById<Button>(R.id.btnIdentificador).text.toString(),
         )
         assertEquals(
             actividad.getString(R.string.menu_campo_configuracion),
@@ -81,6 +86,22 @@ class FieldMenuActivityTest {
             actividad.getString(R.string.menu_campo_cerrar_sesion),
             actividad.findViewById<Button>(R.id.btnCerrarSesion).text.toString(),
         )
+    }
+
+    /**
+     * Escribir el identificador y configurar el enlace son botones vecinos que
+     * hacen cosas distintas: con la misma etiqueta el operador no puede saber
+     * cuál está tocando.
+     */
+    @Test
+    fun escribirElIdentificadorYConfigurarElEnlaceNoSeLlamanIgual() {
+        abrirSesion()
+        val actividad = Robolectric.buildActivity(FieldMenuActivity::class.java).setup().get()
+
+        val identificador = actividad.findViewById<Button>(R.id.btnIdentificador).text.toString()
+        val configuracion = actividad.findViewById<Button>(R.id.btnConfiguracion).text.toString()
+
+        assertNotEquals(identificador, configuracion)
     }
 
     /** El JWT del operador no puede quedar vivo en el proceso después del cierre. */

@@ -38,6 +38,7 @@
     <string name="menu_campo_restante_ayuda">La sesión del operador de campo es efímera a propósito: cuando llega a cero hay que volver a entrar.</string>
     <string name="menu_campo_escanear">Escanear QR del dron</string>
     <string name="menu_campo_escanear_ayuda">Apuntá al sticker pegado en el dron: con ese código se lo empareja y queda listo para desplegar.</string>
+    <string name="menu_campo_identificador">Escribir el identificador</string>
     <string name="menu_campo_configuracion">Configuración del enlace</string>
     <string name="menu_campo_cerrar_sesion">Cerrar sesión</string>
 
@@ -135,7 +136,6 @@
     <string name="menu_vista_operativa">Vista operativa</string>
     <string name="menu_ver_logs">Ver registro</string>
     <string name="menu_cerrar_sesion">Cerrar sesión</string>
-    <string name="main_btn_identificador">Escribir el identificador</string>
     <string name="continuar">Continuar</string>
     <string name="main_menu_titulo">Menú</string>
 </resources>
