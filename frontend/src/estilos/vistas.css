@@ -444,6 +444,109 @@ details.meta pre {
   place-items: center;
 }
 
+/* --- Mando virtual: las dos palancas de vuelo continuo ---------------------
+   Habla el mismo idioma que el pad de arriba —platos hundidos en la piedra,
+   perilla con cara de botón— porque son dos maneras de comandar el mismo dron
+   y tienen que leerse como piezas del mismo instrumento. El anillo dorado del
+   foco lo pone el :focus-visible general: el bloque entero es enfocable. */
+.mando {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-3);
+}
+.mando-palancas {
+  display: flex;
+  justify-content: center;
+  /* En una columna angosta las dos palancas se apilan en vez de achicarse
+     hasta dejar de ser agarrables. */
+  flex-wrap: wrap;
+  gap: var(--e-4);
+}
+.palanca {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--e-2);
+}
+.palanca-plato {
+  position: relative;
+  width: 132px;
+  height: 132px;
+  border-radius: 50%;
+  background: var(--marmol-2);
+  border: 1px solid var(--veta);
+  box-shadow: var(--sombra-hundida);
+  /* El dedo arrastra la palanca, no la página: sin esto el navegador se queda
+     con el gesto y desplaza la consola entera mientras se intenta volar. */
+  touch-action: none;
+  /* Y el mouse tampoco tiene que terminar seleccionando el texto de al lado. */
+  user-select: none;
+  cursor: grab;
+}
+.palanca-plato:active { cursor: grabbing; }
+/* El reposo marcado: sin el círculo del centro no se ve dónde vuelve la
+   palanca ni cuánto recorrido queda. */
+.palanca-cruz {
+  position: absolute;
+  inset: 16%;
+  border-radius: 50%;
+  border: 1px dashed var(--veta-fuerte);
+  opacity: .55;
+}
+.palanca-perilla {
+  position: absolute;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  /* El componente posiciona el centro de la perilla con left/top en %; este
+     corrimiento la centra sobre ese punto. */
+  transform: translate(-50%, -50%);
+  background: var(--cara-boton);
+  border: 1px solid var(--veta-fuerte);
+  box-shadow: var(--sombra-boton), inset 0 1px 0 var(--filo-luz);
+  /* Los eventos los escucha el plato: si los tomara la perilla, el arrastre se
+     cortaría apenas el puntero se le adelanta. */
+  pointer-events: none;
+}
+/* Con el mando enfocado, el oro de las perillas avisa que el teclado comanda. */
+.mando:focus-visible .palanca-perilla { border-color: var(--oro); }
+.mando-teclas {
+  font-size: var(--txt-xs);
+  letter-spacing: .04em;
+}
+.mando-lecturas {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: var(--e-2) var(--e-3);
+  margin: 0;
+  padding: var(--e-3);
+  background: var(--marmol-2);
+  border: 1px solid var(--veta);
+  border-radius: var(--radio-chico);
+  box-shadow: var(--sombra-hundida);
+}
+.mando-lecturas > div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-1);
+}
+.mando-lecturas dd {
+  margin: 0;
+  font-family: var(--fuente-serif);
+  font-size: var(--txt-sm);
+  font-variant-numeric: tabular-nums lining-nums;
+}
+.mando-ayuda {
+  margin: 0;
+  font-size: var(--txt-xs);
+}
+/* En un teléfono la tarjeta es angosta: las palancas achican, pero no tanto
+   como para que el pulgar tape el plato entero. */
+@media (max-width: 480px) {
+  .palanca-plato { width: 116px; height: 116px; }
+  .palanca-perilla { width: 42px; height: 42px; }
+}
+
 /* --- Nombre editable -------------------------------------------------------- */
 .editable-name {
   display: inline-flex;

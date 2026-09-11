@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Console from './Console';
@@ -16,13 +16,21 @@ vi.mock('./DronesMap', () => ({
   ),
 }));
 
-// Captura el handler de mensajes que Console le pasa a useWebSocket, para poder
-// empujar mensajes desde los tests. Devuelve siempre "conectado".
+// Captura el handler de mensajes que Console le pasa a useWebSocket y anota todo
+// lo que la consola manda por el canal, para poder empujar mensajes desde los
+// tests y leer los que salen. Devuelve siempre "conectado".
 let wsHandler: (msg: unknown) => void = () => {};
+let enviados: unknown[] = [];
 vi.mock('../useWebSocket', () => ({
   useWebSocket: (cb: (msg: unknown) => void) => {
     wsHandler = cb;
-    return true;
+    return {
+      conectado: true,
+      enviar: (mensaje: unknown) => {
+        enviados.push(mensaje);
+        return true;
+      },
+    };
   },
 }));
 
@@ -61,6 +69,7 @@ beforeEach(() => {
   localStorage.setItem('cc_token', 'tok');
   localStorage.setItem('cc_user', 'oper1');
   pedidos = [];
+  enviados = [];
   rechazados = new Set();
   meFix = makeMe({ username: 'oper1', role: 'operator' });
   dronesFix = [makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true })];
@@ -353,6 +362,25 @@ describe('Console', () => {
     await waitFor(() => expect(enConsola).toHaveBeenCalled());
     expect(within(header).getByText('Alfa')).toBeInTheDocument();
     enConsola.mockRestore();
+  });
+
+  it('el mando virtual manda los ejes por el WebSocket con el droneId del dron abierto', async () => {
+    // El mando sólo aparece con el control manual tomado por uno mismo.
+    dronesFix = [makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true, controlledBy: 'oper1' })];
+    render(<Console onLogout={() => {}} />);
+    await screen.findByText('Sin señal de video');
+    await userEvent.click(screen.getByText('Sin señal de video'));
+    const mando = await screen.findByRole('group', { name: 'Mando virtual de vuelo continuo' });
+
+    // Los ejes van por el socket y NO por REST: a 10 Hz, un POST por mensaje
+    // sería absurdo. Por eso se miran los enviados y no los pedidos.
+    fireEvent.keyDown(mando, { key: 'ArrowUp' });
+    expect(enviados[0]).toEqual({ type: 'manual_stick', droneId: 'd1', pitch: 1, roll: 0, yaw: 0, throttle: 0 });
+    expect(rutas().some((r) => r.includes('manual_stick'))).toBe(false);
+
+    // Al soltar, el último mensaje va en cero: el dron queda estacionario.
+    fireEvent.keyUp(mando, { key: 'ArrowUp' });
+    expect(enviados.at(-1)).toEqual({ type: 'manual_stick', droneId: 'd1', pitch: 0, roll: 0, yaw: 0, throttle: 0 });
   });
 
   it('cierra sesión con el botón Salir', async () => {

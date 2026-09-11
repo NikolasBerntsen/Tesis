@@ -4,6 +4,8 @@ import android.util.Base64
 import com.tesis.dronepatrol.comms.CommandCenterClient
 import com.tesis.dronepatrol.comms.DetectionClient
 import com.tesis.dronepatrol.drone.DroneController
+import com.tesis.dronepatrol.drone.LimitadorDeRitmo
+import com.tesis.dronepatrol.drone.MandoVirtual
 import com.tesis.dronepatrol.model.FlightEvent
 import com.tesis.dronepatrol.model.PatrolRoute
 import com.tesis.dronepatrol.model.PatrolState
@@ -40,6 +42,13 @@ class PatrolManager(
         const val LOW_BATTERY_PCT = 25.0
         const val ORBIT_RADIUS_M = 30.0
         const val METERS_PER_DEG_LAT = 111_320.0
+        // Al software de detección se le manda un cuadro cada tanto; al Comando
+        // Central le va todo lo que emite el controlador (ver onVideo()).
+        const val INTERVALO_DETECCION_MS = 500L
+        // Estando en MANUAL, sin órdenes de mando por más de este tiempo la app
+        // manda ceros por su cuenta (ver mandoWatchdog()).
+        const val MANDO_TIMEOUT_MS = 1_500L
+        const val REVISION_MANDO_MS = 250L
 
         // PAUSED/MANUAL/FORCED también son vuelo: batería baja y pérdida de
         // señal disparan el RTH igual que patrullando
@@ -85,6 +94,18 @@ class PatrolManager(
     private var lastTelemetryAt = 0L
     private var lastFrame: ByteArray? = null
 
+    /**
+     * Momento del último `manual_stick`; 0 = ninguno desde que se tomó el
+     * control. Lo escribe el hilo del WebSocket y lo lee el watchdog del mando,
+     * que corre en otra corrutina: de ahí el volátil.
+     */
+    @Volatile
+    private var ultimoMandoMs = 0L
+
+    /** Si el último mando recibido ya dejaba al dron quieto, no hay nada que cortar. */
+    @Volatile
+    private var ultimoMandoEstacionario = true
+
     private var started = false
 
     fun start() {
@@ -92,14 +113,7 @@ class PatrolManager(
         started = true
         scope.launch { controller.telemetry.collect { onTelemetry(it) } }
         scope.launch { controller.flightEvents.collect { onFlightEvent(it) } }
-        scope.launch {
-            controller.videoFrames.collect { frame ->
-                lastFrame = frame
-                val b64 = Base64.encodeToString(frame, Base64.NO_WRAP)
-                detection.sendFrame(b64)
-                commandCenter.sendVideoFrame(b64)
-            }
-        }
+        scope.launch { onVideo() }
         detection.onDetection = { classes -> scope.launch { onDetection(classes) } }
         commandCenter.onAlertDecision = { decision, decidedBy ->
             scope.launch { onAlertDecision(decision, decidedBy) }
@@ -118,9 +132,33 @@ class PatrolManager(
         commandCenter.onManualMove = { bearing, distanceM, by ->
             scope.launch { onManualMove(bearing, distanceM, by) }
         }
+        // A diferencia del resto de las órdenes, esta no se lanza en una
+        // corrutina: llegan diez por segundo y no hace nada que pueda bloquear,
+        // así que abrir una corrutina por mensaje sería puro costo.
+        commandCenter.onManualStick = { pitch, roll, yaw, throttle, _ ->
+            onManualStick(pitch, roll, yaw, throttle)
+        }
         commandCenter.onControlReleased = { by -> scope.launch { onControlReleased(by) } }
         scope.launch { signalWatchdog() }
+        scope.launch { mandoWatchdog() }
         scope.launch { statusTicker() }
+    }
+
+    /**
+     * Reparto del video. El Comando Central recibe TODOS los cuadros que emite
+     * el controlador (5 por segundo con el dron real): es el video que mira el
+     * operador y con el que decide. Al software de detección se le manda menos,
+     * uno cada [INTERVALO_DETECCION_MS]: el enlace con la laptop es el más flojo
+     * de los tres y detectar una persona o un vehículo no necesita más.
+     */
+    private suspend fun onVideo() {
+        val aLaDeteccion = LimitadorDeRitmo(INTERVALO_DETECCION_MS)
+        controller.videoFrames.collect { frame ->
+            lastFrame = frame
+            val b64 = Base64.encodeToString(frame, Base64.NO_WRAP)
+            commandCenter.sendVideoFrame(b64)
+            if (aLaDeteccion.aceptar(System.currentTimeMillis())) detection.sendFrame(b64)
+        }
     }
 
     fun startPatrol(route: PatrolRoute) {
@@ -179,6 +217,10 @@ class PatrolManager(
     private fun onControlTaken(by: String) {
         if (_state.value == PatrolState.PATROLLING) resumeWaypoint = lastReachedWaypoint
         controller.hold()
+        // Arranca sin mando previo: el watchdog no tiene que arrastrar lo que
+        // haya quedado de la vez anterior que alguien tomó el control.
+        ultimoMandoMs = 0L
+        ultimoMandoEstacionario = true
         _state.value = PatrolState.MANUAL
         // Solo log local: el Comando Central ya registra su propio CONTROL_TAKEN
         log("$by tomó el control manual del dron")
@@ -194,9 +236,55 @@ class PatrolManager(
         log("Movimiento manual de $by: ${distanceM.toInt()} m con rumbo ${bearing.toInt()}°")
     }
 
+    /**
+     * Mando virtual del operador. Solo se aplica en [PatrolState.MANUAL]: en
+     * cualquier otro estado el dron está patrullando, orbitando o volviendo a
+     * base y nadie tiene el control tomado, así que el mando se descarta.
+     *
+     * No se registra nada: a diez mensajes por segundo, el log local sería
+     * ilegible. Lo que sí queda registrado es tomar y soltar el control.
+     */
+    private fun onManualStick(pitch: Double, roll: Double, yaw: Double, throttle: Double) {
+        if (_state.value != PatrolState.MANUAL) return
+        ultimoMandoMs = System.currentTimeMillis()
+        // Se mira el mando ya traducido: una palanca apenas movida cae en la
+        // zona muerta y es vuelo estacionario, no una velocidad que cortar.
+        ultimoMandoEstacionario = MandoVirtual.velocidades(pitch, roll, yaw, throttle).estacionario
+        controller.manualStick(pitch, roll, yaw, throttle)
+    }
+
+    /**
+     * Watchdog del mando manual. El dron sostiene la última velocidad que le
+     * mandaron hasta que le llegue otra: si el celular se queda sin internet en
+     * medio de un movimiento, el dron seguiría andando con nadie al mando. Por
+     * eso, estando en MANUAL, cuando el mando se calla más de
+     * [MANDO_TIMEOUT_MS] la app manda los ejes en cero por su cuenta.
+     *
+     * Queda solo en el registro local y no se reporta como evento: el enlace con
+     * el Comando Central es justamente el que se sospecha caído.
+     */
+    private suspend fun mandoWatchdog() {
+        while (true) {
+            delay(REVISION_MANDO_MS)
+            if (_state.value != PatrolState.MANUAL) continue
+            // Sin mando previo no hay velocidad que cortar, y si el último ya
+            // dejaba al dron quieto tampoco hay nada que corregir
+            if (ultimoMandoMs == 0L || ultimoMandoEstacionario) continue
+            if (System.currentTimeMillis() - ultimoMandoMs <= MANDO_TIMEOUT_MS) continue
+            ultimoMandoEstacionario = true
+            controller.manualStick(0.0, 0.0, 0.0, 0.0)
+            log(
+                "Hace más de ${MANDO_TIMEOUT_MS / 1_000.0} s que no llegan órdenes de mando: " +
+                    "el dron queda en vuelo estacionario",
+            )
+        }
+    }
+
     private fun onControlReleased(by: String) {
         if (_state.value != PatrolState.MANUAL) return
         controller.hold()
+        ultimoMandoMs = 0L
+        ultimoMandoEstacionario = true
         // Si a continuación llega un resume_patrol, ese handler lo pone a patrullar
         _state.value = PatrolState.PAUSED
         log("$by liberó el control manual del dron")
