@@ -259,45 +259,7 @@ class CommandCenterClient(private val scope: CoroutineScope) {
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
-                    val msg = runCatching { JSONObject(text) }.getOrNull() ?: return
-                    when (msg.optString("type")) {
-                        "alert_decision" -> onAlertDecision?.invoke(
-                            msg.optString("decision"),
-                            msg.optString("decidedBy"),
-                        )
-                        "resume_patrol" -> onResumePatrol?.invoke(
-                            if (msg.isNull("fromIndex")) null else msg.optInt("fromIndex"),
-                        )
-                        "start_route" -> onStartRoute?.invoke(
-                            msg.optInt("routeId"),
-                            msg.optInt("fromIndex"),
-                            msg.optString("orderedBy"),
-                        )
-                        "stop_patrol" -> onStopPatrol?.invoke(msg.optString("orderedBy"))
-                        "force_goto" -> onForceGoto?.invoke(
-                            msg.optInt("routeId"),
-                            msg.optInt("index"),
-                            msg.optString("orderedBy"),
-                        )
-                        "control_taken" -> onControlTaken?.invoke(msg.optString("by"))
-                        "manual_move" -> onManualMove?.invoke(
-                            msg.optDouble("bearing"),
-                            msg.optDouble("distanceM"),
-                            msg.optString("by"),
-                        )
-                        // Los ejes ausentes valen 0 y no NaN (que es lo que
-                        // devuelve optDouble sin defecto): un NaN metido en una
-                        // velocidad sería una orden sin sentido para el dron.
-                        "manual_stick" -> onManualStick?.invoke(
-                            msg.optDouble("pitch", 0.0),
-                            msg.optDouble("roll", 0.0),
-                            msg.optDouble("yaw", 0.0),
-                            msg.optDouble("throttle", 0.0),
-                            msg.optString("by"),
-                        )
-                        "control_released" -> onControlReleased?.invoke(msg.optString("by"))
-                        "renamed" -> onRenamed?.invoke(msg.optString("displayName"))
-                    }
+                    manejarMensaje(text)
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -311,6 +273,56 @@ class CommandCenterClient(private val scope: CoroutineScope) {
                 }
             },
         )
+    }
+
+    /**
+     * Traduce un mensaje del Comando Central a la orden que le corresponde.
+     *
+     * Vive afuera del WebSocketListener para poder probarlo sin levantar un
+     * socket: es el ÚNICO lugar donde el JSON del protocolo se convierte en los
+     * argumentos que recibe la app, y confundir dos nombres acá manda el dron
+     * para el lado equivocado sin que nada se queje.
+     */
+    internal fun manejarMensaje(text: String) {
+        val msg = runCatching { JSONObject(text) }.getOrNull() ?: return
+        when (msg.optString("type")) {
+            "alert_decision" -> onAlertDecision?.invoke(
+                msg.optString("decision"),
+                msg.optString("decidedBy"),
+            )
+            "resume_patrol" -> onResumePatrol?.invoke(
+                if (msg.isNull("fromIndex")) null else msg.optInt("fromIndex"),
+            )
+            "start_route" -> onStartRoute?.invoke(
+                msg.optInt("routeId"),
+                msg.optInt("fromIndex"),
+                msg.optString("orderedBy"),
+            )
+            "stop_patrol" -> onStopPatrol?.invoke(msg.optString("orderedBy"))
+            "force_goto" -> onForceGoto?.invoke(
+                msg.optInt("routeId"),
+                msg.optInt("index"),
+                msg.optString("orderedBy"),
+            )
+            "control_taken" -> onControlTaken?.invoke(msg.optString("by"))
+            "manual_move" -> onManualMove?.invoke(
+                msg.optDouble("bearing"),
+                msg.optDouble("distanceM"),
+                msg.optString("by"),
+            )
+            // Los ejes ausentes valen 0 y no NaN (que es lo que devuelve
+            // optDouble sin defecto): un NaN metido en una velocidad sería una
+            // orden sin sentido para el dron.
+            "manual_stick" -> onManualStick?.invoke(
+                msg.optDouble("pitch", 0.0),
+                msg.optDouble("roll", 0.0),
+                msg.optDouble("yaw", 0.0),
+                msg.optDouble("throttle", 0.0),
+                msg.optString("by"),
+            )
+            "control_released" -> onControlReleased?.invoke(msg.optString("by"))
+            "renamed" -> onRenamed?.invoke(msg.optString("displayName"))
+        }
     }
 
     private fun scheduleReconnect() {

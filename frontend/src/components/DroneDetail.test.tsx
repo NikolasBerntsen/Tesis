@@ -16,12 +16,15 @@ function renderDetail(props: Partial<Parameters<typeof DroneDetail>[0]> = {}) {
     drone: makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true }),
     status: makeStatus({ droneId: 'd1', state: 'PATROLLING', routeId: null }),
     frame: null as string | null,
+    conectado: true,
     liveEvents: [],
     routes: [makeRoute({ id: 1, name: 'Ruta Perimetral' })],
     onBack: vi.fn(),
     onRename: vi.fn(),
     onWaypointLabel: vi.fn(),
-    onMando: vi.fn(),
+    // Devuelve true: el mensaje salió por el socket. Que devuelva false es el
+    // caso del enlace cortado, y tiene su propio test.
+    onMando: vi.fn(() => true),
   };
   const merged = { ...base, ...props } as Parameters<typeof DroneDetail>[0];
   render(<DroneDetail {...merged} />);
@@ -210,6 +213,7 @@ describe('DroneDetail — mando virtual', () => {
     const props = renderDetail({
       me: makeMe({ username: 'admin1', canControl: true }),
       drone: makeDrone({ controlledBy: 'admin1' }),
+      status: makeStatus({ state: 'MANUAL' }),
     });
 
     // Las dos formas de comandar conviven: el pad de 25 m sigue estando.
@@ -227,6 +231,51 @@ describe('DroneDetail — mando virtual', () => {
 
     fireEvent.keyUp(bloque, { key: 'w' });
     expect(props.onMando).toHaveBeenLastCalledWith({ pitch: 0, roll: 0, yaw: 0, throttle: 0 });
+    // Con todo en orden no hay ningún motivo escrito en el mando.
+    expect(screen.queryByTestId('mando-impedimento')).not.toBeInTheDocument();
+  });
+
+  /**
+   * Tener el lock no alcanza para que el dron obedezca: el backend no lo suelta
+   * cuando la app se va sola a volver a base, y el socket de la consola se cae
+   * y reconecta cada 3 s. En todos esos casos el mando se muestra igual —que
+   * desaparezca parece que le sacaron el control— pero inerte y con el motivo,
+   * como los botones de arriba, que ya están `disabled` por lo mismo.
+   */
+  const IMPEDIMENTOS = [
+    {
+      caso: 'el dron se desconectó',
+      props: { drone: makeDrone({ controlledBy: 'admin1', online: false }), status: makeStatus({ state: 'MANUAL' }) },
+      motivo: 'El dron está desconectado: el mando no responde.',
+    },
+    {
+      caso: 'se cortó el canal con el Comando Central',
+      props: { drone: makeDrone({ controlledBy: 'admin1' }), status: makeStatus({ state: 'MANUAL' }), conectado: false },
+      motivo: 'Sin conexión con el Comando Central: el mando no responde.',
+    },
+    {
+      caso: 'el dron dejó el vuelo manual',
+      props: { drone: makeDrone({ controlledBy: 'admin1' }), status: makeStatus({ state: 'RETURNING_HOME_BATTERY' }) },
+      motivo: 'El dron no está en vuelo manual (Volviendo a base (batería baja)): el mando no responde.',
+    },
+    {
+      caso: 'todavía no llegó telemetría',
+      props: { drone: makeDrone({ controlledBy: 'admin1' }), status: null },
+      motivo: 'El dron no está en vuelo manual (sin telemetría): el mando no responde.',
+    },
+  ] as const;
+
+  it.each(IMPEDIMENTOS)('$caso: el mando queda inerte y dice por qué', async ({ props, motivo }) => {
+    const usados = renderDetail({ me: makeMe({ username: 'admin1', canControl: true }), ...props });
+    // Se espera el bloque en vez de buscarlo en seco: el detalle pide el
+    // historial y las rutas de la base al montar, y sin esperarlos las
+    // respuestas caen fuera del test.
+    const bloque = await screen.findByRole('group', { name: 'Mando virtual de vuelo continuo' });
+    expect(screen.getByTestId('mando-impedimento')).toHaveTextContent(motivo);
+    expect(bloque).toHaveAttribute('aria-disabled', 'true');
+
+    fireEvent.keyDown(bloque, { key: 'w' });
+    expect(usados.onMando).not.toHaveBeenCalled();
   });
 });
 

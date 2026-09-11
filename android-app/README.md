@@ -118,7 +118,18 @@ El controlador emite cuadros JPEG y `PatrolManager` los reparte:
 | Destino | Ritmo | Por qué |
 |---|---|---|
 | Comando Central | **5 por segundo** (`CuadroDeVideo.INTERVALO_CUADRO_MS`) | Es el video que mira el operador y con el que decide |
-| Software de detección | **2 por segundo** (`PatrolManager.INTERVALO_DETECCION_MS`) | El enlace con la laptop es el más flojo de los tres y detectar no necesita más |
+| Software de detección | **2,5 por segundo**: uno de cada `PatrolManager.UNO_DE_CADA_N_A_DETECCION` | El enlace con la laptop es el más flojo de los tres y detectar no necesita más |
+
+El ritmo de la detección se cuenta en **cuadros y no en milisegundos**. El flujo
+que llega al reparto ya viene raleado a 200 ms, así que un limitador de tiempo
+solo puede aceptar en múltiplos de esos 200 ms: pedirle 500 ms daba 600 (1,67
+por segundo) y cualquier temblor en la entrega lo corría a 700 (1,43). Contando
+sale un ritmo exacto y estable —la mitad de 5— y no hay un borde en el que un
+cuadro entero se pierda por un milisegundo. Los 2 por segundo del contrato no
+son alcanzables diezmando un flujo de 5: 5/2 no da un entero.
+
+El dron simulado emite al mismo ritmo que el real (5 por segundo): así el banco
+de pruebas mide los mismos números que el campo, que es para lo que está.
 
 Con el dron real el cuadro llega en NV21 a 1920x1080 o 1280x720 y se reescala a
 **640 px de ancho** conservando la relación de aspecto, con submuestreo de vecino
@@ -135,13 +146,30 @@ horizontal, 2 m/s vertical, 45 °/s de giro, zona muerta de 0,05) y el
 controlador las ejecuta: el simulado moviendo su posición, el DJI mandando
 `VirtualStickFlightControlParam` en coordenadas BODY a 10 Hz.
 
-> **Watchdog de mando.** Estando en `MANUAL`, si no llega ningún mando durante
+> **Watchdog de mando.** Con el control tomado, si no llega ningún mando durante
 > 1,5 s y el último no era todo ceros, la app manda ceros por su cuenta y lo
 > anota en el registro local. Es la red de seguridad ante un corte de internet
 > del celular: el dron sostiene la última velocidad comandada hasta que le
-> llegue otra, así que sin esto seguiría andando con nadie al mando.
+> llegue otra, así que sin esto seguiría andando con nadie al mando. Vigila
+> mientras el control esté **tomado** y no mientras el estado sea `MANUAL`:
+> atarlo al estado lo apagaba justo en la transición que lo necesita.
 
 El mando se aplica **solo** en estado `MANUAL`; en cualquier otro se descarta.
+
+> **Salir de `MANUAL` frena.** Toda transición de estado pasa por
+> `PatrolManager.pasarA()`, que al salir de `MANUAL` suelta el mando: le ordena
+> vuelo estacionario si nadie más le está hablando al dron (pérdida de señal,
+> control liberado) y en todos los casos limpia lo que el watchdog vigila, para
+> que no le corte a los 1,5 s la orden nueva (una ruta, un desvío, el regreso a
+> base). Por el mismo motivo, al recuperar la señal el estado siempre tiene
+> salida: vuelve a `MANUAL` si el operador nunca soltó el control, retoma la ruta
+> si hay una, y si no queda en `PAUSED` y en vuelo estacionario.
+
+**Desplazamiento puntual y palanca.** Manda el último comando *deliberado*. Un
+`manual_stick` con los cuatro ejes en cero es el mensaje de cierre de la palanca
+—lo manda la consola al soltarla—, así que **no** aborta un `manual_move` en
+curso; cualquier eje fuera de la zona muerta sí lo aborta, porque ahí el
+operador agarró la palanca a propósito.
 
 ## Flavor dji — estado y pasos pendientes
 
@@ -161,8 +189,10 @@ waypoints del SDK: son solo Enterprise). Antes de volar hace falta:
 > Este flavor **no fue probado con hardware** en esta entrega y CI no lo compila
 > (hace falta `-PenableDji`). Por eso todo lo que se puede probar sin dron —la
 > conversión de los cuadros, el limitador de ritmo y la escala del mando— vive en
-> el sourceSet `main` con sus pruebas, y el archivo del flavor quedó lo más flaco
-> posible: apenas el pegamento con el SDK.
+> el sourceSet `main` con sus pruebas —y, desde el contraste, también el rumbo
+> hacia un punto (`drone/Geo.kt`), que estaba duplicado a mano en los dos
+> controladores y en uno de ellos sin escalar la longitud por `cos(lat)`—, y el
+> archivo del flavor quedó lo más flaco posible: apenas el pegamento con el SDK.
 
 ## Tests
 
@@ -181,13 +211,17 @@ waypoints del SDK: son solo Enterprise). Antes de volar hace falta:
 | `SimulatedDroneControllerTest` | Navegación, rumbo, altura y drenaje de batería del dron simulado, y el mando virtual: sube con throttle, gira con yaw, avanza con pitch y se queda quieto con los cuatro ejes en cero |
 | `CuadroDeVideoTest` | Tamaño de destino y conversión NV21 → ARGB: submuestreo, `offset`, cuadro corto y recorte de los canales |
 | `CuadroDeVideoJpegTest` | La compresión a JPEG, que es la parte que necesita `android.graphics` |
-| `LimitadorDeRitmoTest` | El limitador que ralea los cuadros (5 fps al Comando Central, 2 fps a la detección) |
+| `LimitadorDeRitmoTest` | El limitador que ralea el flujo de 30 fps del SDK a los 5 que se publican |
 | `MandoVirtualTest` | Zona muerta, recorte, signos de cada eje y rotación por rumbo |
-| `PatrolManagerMandoTest` | El mando se ignora fuera de `MANUAL` y el watchdog manda ceros cuando el mando se calla |
+| `PatrolManagerMandoTest` | El mando se ignora fuera de `MANUAL`, llega entero (pitch, roll, yaw, throttle), el watchdog manda ceros cuando el mando se calla —y no salta de prepo—, y el mensaje de cierre de la palanca no aborta un `manual_move` en curso |
+| `PatrolManagerSalidasDeManualTest` | Toda salida de `MANUAL` deja al dron quieto y no le deja el mando colgado al watchdog (con un dron espía que anota cada orden) |
+| `PatrolManagerVideoTest` | El reparto del video: todos los cuadros al Comando Central, uno de cada dos a la detección |
+| `CommandCenterClientTest` | El mapeo de los mensajes del WebSocket a órdenes, eje por eje |
+| `GeoTest` | Rumbo y metros por grado de longitud, que comparten el simulador y el DJI |
 
 `DetectionClientTest`, `HashDeDronTest`, `CuadroDeVideoTest`,
-`LimitadorDeRitmoTest` y `MandoVirtualTest` corren en la JVM pelada, sin
-Robolectric.
+`LimitadorDeRitmoTest`, `MandoVirtualTest` y `GeoTest` corren en la JVM pelada,
+sin Robolectric.
 
 ## Estructura
 

@@ -2,6 +2,7 @@ package com.tesis.dronepatrol.drone
 
 import com.tesis.dronepatrol.model.FlightEvent
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -28,6 +29,9 @@ class SimulatedDroneControllerTest {
         const val BASE_LAT = -34.6037
         const val BASE_LON = -58.3816
         const val M_POR_GRADO_LAT = 111_320.0
+        // A la latitud del Obelisco un grado de longitud mide bastante menos que
+        // uno de latitud: sin esto, los metros hacia el este no serían metros.
+        val M_POR_GRADO_LON = M_POR_GRADO_LAT * cos(Math.toRadians(BASE_LAT))
     }
 
     private val dron = SimulatedDroneController()
@@ -125,6 +129,25 @@ class SimulatedDroneControllerTest {
         val metrosAlNorte = (t.lat - BASE_LAT) * M_POR_GRADO_LAT
         assertTrue("se movió $metrosAlNorte m al norte", metrosAlNorte > 3.0)
         assertEquals("no tendría que haberse ido de costado", BASE_LON, t.lon, 1e-9)
+    }
+
+    /**
+     * El desplazamiento lateral. No lo ejercitaba ningún test de la cadena real
+     * —los cuatro `manualStick` de este archivo mandaban roll = 0—, así que se
+     * podía borrar el eje entero del controlador y la suite seguía verde con el
+     * dron sin costado.
+     */
+    @Test
+    fun elRollLoMueveDeCostado() = runBlocking {
+        dron.connect()
+        // Con la nariz al norte (rumbo inicial 0), la derecha del dron es el este
+        dron.manualStick(pitch = 0.0, roll = 1.0, yaw = 0.0, throttle = 0.0)
+        delay(1_500)
+
+        val t = withTimeout(5_000) { dron.telemetry.first() }
+        val metrosAlEste = (t.lon - BASE_LON) * M_POR_GRADO_LON
+        assertTrue("se corrió $metrosAlEste m al este", metrosAlEste > 3.0)
+        assertEquals("no tendría que haber avanzado", BASE_LAT, t.lat, 1e-9)
     }
 
     @Test

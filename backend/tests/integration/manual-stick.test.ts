@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import {
   crearUsuario, seed, startServer, login, api, connectWs, wait, tokenDeDron, tokenHumano,
@@ -28,18 +28,22 @@ describe('integración — mando virtual por WebSocket', () => {
   let srv: TestServer;
   let op = '';
   let adm = '';
+  let sup = '';
   let oper2 = '';
   let alfa: WsClient; // el socket del dron: acá tiene que aterrizar el mando
   let operWs: WsClient; // consola de "operador" (con canControl)
   let oper2Ws: WsClient; // segunda consola con canControl, para disputar el lock
   let campoWs: WsClient; // consola de un operador de campo
   let sinWs: WsClient; // consola de un operador al que no se le permite volar
+  let supWs: WsClient; // consola de un supervisor: el contrato dice "operator o superior"
+  let admWs: WsClient; // consola de un admin: el otro extremo de esa jerarquía
 
   beforeAll(async () => {
     seed();
     srv = await startServer();
     op = (await login(srv.base, 'operador', CREDS.operador))!;
     adm = (await login(srv.base, 'admin', CREDS.admin))!;
+    sup = (await login(srv.base, 'supervisor', CREDS.supervisor))!;
 
     const dos = await crearUsuario(srv.base, adm, { username: 'oper2', canControl: true });
     const sin = await crearUsuario(srv.base, adm, { username: 'sincontrol', canControl: false });
@@ -52,15 +56,17 @@ describe('integración — mando virtual por WebSocket', () => {
     oper2Ws = await connectWs(srv.wsUrl, oper2);
     campoWs = await connectWs(srv.wsUrl, campo);
     sinWs = await connectWs(srv.wsUrl, sinTok);
+    supWs = await connectWs(srv.wsUrl, sup);
+    admWs = await connectWs(srv.wsUrl, adm);
   });
 
   afterAll(async () => {
-    for (const c of [alfa, operWs, oper2Ws, campoWs, sinWs]) await c.close();
+    for (const c of [alfa, operWs, oper2Ws, campoWs, sinWs, supWs, admWs]) await c.close();
     await srv.close();
   });
 
   beforeEach(() => {
-    for (const c of [alfa, operWs, oper2Ws, campoWs, sinWs]) c.got.length = 0;
+    for (const c of [alfa, operWs, oper2Ws, campoWs, sinWs, supWs, admWs]) c.got.length = 0;
   });
 
   // El lock es de un dron, no de un test: se suelta siempre, sin importar quién
@@ -280,6 +286,138 @@ describe('integración — mando virtual por WebSocket', () => {
     const m = await alfa.waitFor((x) => x.type === 'manual_stick');
     expect(m.pitch).toBe(0.5);
     expect(mandosRecibidos()).toHaveLength(1);
+  });
+
+  // El contrato pide rol `operator` O SUPERIOR, y ROLE_RANK es jerárquico: si el
+  // control comparara el rol exacto ('operator'), el supervisor y el admin se
+  // quedarían sin volar y los tests del operador de campo no lo notarían.
+  it('el supervisor y el admin también vuelan: el mínimo es operator, no el rol exacto', async () => {
+    for (const [quien, token, consola] of [
+      ['supervisor', sup, supWs],
+      ['admin', adm, admWs],
+    ] as [string, string, WsClient][]) {
+      alfa.got.length = 0;
+      const toma = await api(srv.base, `/api/drones/${DRON.alfa}/control`, token, { method: 'POST' });
+      expect(toma.status, quien).toBe(200);
+      consola.ws.send(stick({ pitch: 0.42 }));
+      const m = await alfa.waitFor((x) => x.type === 'manual_stick');
+      expect(m, quien).toMatchObject({ pitch: 0.42, by: quien });
+      await api(srv.base, `/api/drones/${DRON.alfa}/control`, adm, {
+        method: 'DELETE',
+        body: JSON.stringify({ resume: 'none' }),
+      });
+    }
+  });
+
+  it('un rol que no está en la jerarquía no vuela: el control falla CERRADO', async () => {
+    await api(srv.base, `/api/drones/${DRON.alfa}/control`, op, { method: 'POST' });
+    // La columna `role` no tiene CHECK ("validado en código") y las migraciones
+    // copian el valor viejo tal cual, así que una fila puede traer un rol que no
+    // está en ROLE_RANK. `undefined < ROLE_RANK.operator` es false en JS: sin el
+    // control explícito, ese rol desconocido PASA el filtro y vuela el dron.
+    db.prepare('UPDATE users SET role = ? WHERE username = ?').run('operador_viejo', 'operador');
+    try {
+      const m = await soloLlegaElValido(
+        () => operWs.ws.send(stick({ pitch: 1 })),
+        () => {
+          db.prepare('UPDATE users SET role = ? WHERE username = ?').run('operator', 'operador');
+          operWs.ws.send(stick({ pitch: 0.15 }));
+        },
+      );
+      expect(m.pitch).toBe(0.15);
+    } finally {
+      db.prepare('UPDATE users SET role = ? WHERE username = ?').run('operator', 'operador');
+    }
+  });
+
+  it('un frame con `null`, un arreglo o un número suelto no tumban el Comando Central', async () => {
+    await api(srv.base, `/api/drones/${DRON.alfa}/control`, op, { method: 'POST' });
+    // `JSON.parse('null')` devuelve null y leerle `.type` es un TypeError que
+    // nadie atrapa: se cae el proceso entero del hub y con él el socket de TODAS
+    // las consolas y el de TODOS los drones, en pleno vuelo, por cuatro bytes.
+    const anotados = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      for (const basura of ['null', '[1,2]', '5', '"manual_stick"']) operWs.ws.send(basura);
+      await wait(120);
+      expect(operWs.ws.readyState).toBe(WebSocket.OPEN);
+      // Y se descartan VALIDÁNDOLOS, no rebotando contra la red de contención:
+      // el hub no tuvo que atrapar ninguna excepción para seguir en pie.
+      expect(anotados).not.toHaveBeenCalled();
+    } finally {
+      anotados.mockRestore();
+    }
+
+    operWs.ws.send(stick({ roll: 0.55 }));
+    const m = await alfa.waitFor((x) => x.type === 'manual_stick');
+    expect(m.roll).toBe(0.55);
+    expect(mandosRecibidos()).toHaveLength(1);
+  });
+
+  it('un mensaje de consola más largo que el tope se descarta sin parsearlo', async () => {
+    await api(srv.base, `/api/drones/${DRON.alfa}/control`, op, { method: 'POST' });
+    // El descartado trae los cuatro ejes válidos, el droneId correcto y el lock
+    // puesto: lo ÚNICO que lo descalifica es el relleno. Sin el tope el hub lo
+    // parsea igual —los campos de más se ignoran— y el mando sale.
+    const m = await soloLlegaElValido(
+      () => operWs.ws.send(stick({ pitch: 1, relleno: 'x'.repeat(2000) })),
+      () => operWs.ws.send(stick({ pitch: 0.05 })),
+    );
+    expect(m.pitch).toBe(0.05);
+  });
+
+  it('un frame gigante cierra ese socket con 1009 y el hub le sigue sirviendo al resto', async () => {
+    await api(srv.base, `/api/drones/${DRON.alfa}/control`, op, { method: 'POST' });
+    const gordo = await connectWs(srv.wsUrl, op);
+    const cerrado = cierreDe(gordo);
+    // 2 MiB. Sin tope rige el default de `ws` (100 MiB): el hub, que es de un
+    // solo hilo, se come el frame entero ANTES de mirarle el permiso a nadie, y
+    // mientras tanto no sale un cuadro de video ni una orden hacia ningún dron.
+    gordo.ws.send('x'.repeat(2 * 1024 * 1024));
+    expect(await cerrado).toBe(1009);
+
+    // El resto del Comando Central ni se enteró: el dron sigue recibiendo mando
+    operWs.ws.send(stick({ yaw: 0.33 }));
+    const m = await alfa.waitFor((x) => x.type === 'manual_stick');
+    expect(m.yaw).toBe(0.33);
+  });
+
+  it('una inundación de mando se corta en el techo de ritmo, y el socket sigue sirviendo', async () => {
+    await api(srv.base, `/api/drones/${DRON.alfa}/control`, op, { method: 'POST' });
+    // Consola aparte para no gastarle el cupo a la que usa el resto del archivo:
+    // el lock es del USUARIO, así que este segundo socket de "operador" también
+    // lo tiene. Es el escenario de la consola comprometida o con el temporizador
+    // roto, que a la velocidad del socket le cuesta al hub un SELECT y un envío
+    // al celular por mensaje.
+    const rafaga = await connectWs(srv.wsUrl, op);
+    try {
+      for (let i = 0; i < 400; i += 1) rafaga.ws.send(stick({ pitch: 0.5 }));
+      await wait(300);
+      const pasaron = mandosRecibidos().length;
+      expect(pasaron).toBeGreaterThan(0); // el balde arranca lleno: los primeros vuelan
+      expect(pasaron).toBeLessThan(100); // pero los 400 no pasan ni cerca
+
+      // Y el socket no queda castigado: repuestas las fichas, vuelve a volar
+      alfa.got.length = 0;
+      await wait(300);
+      rafaga.ws.send(stick({ pitch: -0.75 }));
+      const m = await alfa.waitFor((x) => x.type === 'manual_stick');
+      expect(m.pitch).toBe(-0.75);
+    } finally {
+      await rafaga.close();
+    }
+  });
+
+  it('el ritmo del contrato pasa entero: 10 Hz sostenidos no se filtran', async () => {
+    await api(srv.base, `/api/drones/${DRON.alfa}/control`, op, { method: 'POST' });
+    // Tres segundos de vuelo a los 10 Hz del contrato: son más mensajes que el
+    // balde lleno, así que si la reposición no alcanzara el operador perdería
+    // palancazos en pleno vuelo, que es exactamente lo que no puede pasar.
+    for (let i = 0; i < 30; i += 1) {
+      operWs.ws.send(stick({ pitch: i / 100 }));
+      await wait(100);
+    }
+    await alfa.waitFor((x) => x.type === 'manual_stick' && x.pitch === 0.29);
+    expect(mandosRecibidos()).toHaveLength(30);
   });
 
   it('si el dron no está conectado el mando se pierde sin romper nada', async () => {

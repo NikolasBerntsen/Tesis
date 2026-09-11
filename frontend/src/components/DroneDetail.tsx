@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, rutasDeBase } from '../api';
+import { stateLabel } from '../format';
 import type { Drone, DroneStatus, EventRow, Me, PatrolRoute } from '../types';
 import DroneStatusCard from './DroneStatusCard';
 import DronesMap, { type MapItem, type WaypointsLayer } from './DronesMap';
@@ -38,6 +39,7 @@ export default function DroneDetail({
   drone,
   status,
   frame,
+  conectado,
   liveEvents,
   routes,
   onBack,
@@ -49,13 +51,19 @@ export default function DroneDetail({
   drone: Drone;
   status: DroneStatus | null;
   frame: string | null;
+  /** Si el canal con el Comando Central está vivo: sin él el mando no sale. */
+  conectado: boolean;
   liveEvents: EventRow[];
   routes: PatrolRoute[];
   onBack: () => void;
   onRename: (displayName: string) => void;
   onWaypointLabel: (routeId: number, index: number, label: string) => void;
-  /** Ejes del mando virtual, que salen por el WebSocket y no por REST. */
-  onMando: (ejes: Ejes) => void;
+  /**
+   * Ejes del mando virtual, que salen por el WebSocket y no por REST. Devuelve
+   * si el mensaje llegó a salir: con el socket cerrado no sale, y eso el
+   * operador lo tiene que ver.
+   */
+  onMando: (ejes: Ejes) => boolean;
 }) {
   const [history, setHistory] = useState<EventRow[]>([]);
   const [error, setError] = useState('');
@@ -114,6 +122,23 @@ export default function DroneDetail({
   const soyControlador = !!me && controlador === me.username;
   const puedeControlar = !!me && me.canControl;
   const esSupervisor = me?.role === 'supervisor' || me?.role === 'admin';
+
+  /**
+   * Por qué el mando de vuelo continuo no puede comandar, o `null` si puede.
+   * Tener el control tomado no alcanza: si el dron se cayó del aire, si el
+   * socket de la consola está reconectando o si el dron no está en `MANUAL`
+   * —la app descarta los ejes en cualquier otro estado—, lo que el operador
+   * empuja no llega o el dron lo tira. Y el backend NO suelta el lock por eso:
+   * la app se puede ir sola a volver a base por batería con el control tomado,
+   * así que el único que puede avisar es la consola.
+   */
+  const impedimentoDelMando = !drone.online
+    ? 'El dron está desconectado: el mando no responde.'
+    : !conectado
+      ? 'Sin conexión con el Comando Central: el mando no responde.'
+      : status?.state !== 'MANUAL'
+        ? `El dron no está en vuelo manual (${status ? stateLabel(status.state) : 'sin telemetría'}): el mando no responde.`
+        : null;
 
   async function llamar(path: string, options: RequestInit = {}) {
     setError('');
@@ -307,7 +332,7 @@ export default function DroneDetail({
                     no se lean como un solo bloque de botones. */}
                 <hr className="regla" />
                 <h3>Vuelo continuo</h3>
-                <MandoVirtual onMando={onMando} />
+                <MandoVirtual onMando={onMando} impedimento={impedimentoDelMando} />
 
                 <button className="resume" onClick={soltarControl}>
                   Devolver al patrullaje

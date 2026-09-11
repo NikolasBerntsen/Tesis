@@ -15,9 +15,10 @@ interface DroneController {
     val telemetry: SharedFlow<Telemetry>
 
     /**
-     * Cuadros JPEG del video del dron: 5 por segundo con el dron real
-     * ([CuadroDeVideo.INTERVALO_CUADRO_MS]) y 2 con el simulado. Todo lo que
-     * sale por acá va al Comando Central; al software de detección lo ralea
+     * Cuadros JPEG del video del dron: 5 por segundo
+     * ([CuadroDeVideo.INTERVALO_CUADRO_MS]), tanto con el dron real como con el
+     * simulado. Todo lo que sale por acá va al Comando Central; al software de
+     * detección le llega uno de cada dos —2,5 por segundo— y de eso se encarga
      * PatrolManager.
      */
     val videoFrames: SharedFlow<ByteArray>
