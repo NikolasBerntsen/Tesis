@@ -73,7 +73,7 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
     return () => clearInterval(id);
   }, [deCampo]);
 
-  const { conectado, enviar } = useWebSocket((msg) => {
+  const connected = useWebSocket((msg) => {
     switch (msg.type) {
       case 'status':
         statusBuffer.current[msg.droneId] = msg;
@@ -161,7 +161,7 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
       .catch(console.error);
     api<Alert[]>('/alerts').then(setAlerts).catch(console.error);
     api<PatrolRoute[]>('/routes').then(setRoutes).catch(console.error);
-  }, [conectado, me]);
+  }, [connected, me]);
 
   // Apodo de un nodo de patrullaje. El backend responde con la ruta completa y
   // además emite route_updated, así que las demás consolas también se enteran.
@@ -255,8 +255,8 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
           )}
           {/* El punto lo dibuja .estado con currentColor: en la interfaz no hay
               caracteres decorativos, y así el punto toma el verde o el rojo. */}
-          <span className={`conn estado versalita ${conectado ? 'ok' : 'bad'}`} aria-live="polite">
-            {conectado ? 'conectado' : 'sin conexión'}
+          <span className={`conn estado versalita ${connected ? 'ok' : 'bad'}`} aria-live="polite">
+            {connected ? 'conectado' : 'sin conexión'}
           </span>
           <BotonTema />
           <span className="username">{getUsername()}</span>
@@ -290,7 +290,6 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
           onBack={() => setSelectedId(null)}
           onRename={(name) => rename(selected.droneId, name)}
           onWaypointLabel={setWaypointLabel}
-          onMando={(ejes) => enviar({ type: 'manual_stick', droneId: selected.droneId, ...ejes })}
         />
       ) : (
         <Dashboard

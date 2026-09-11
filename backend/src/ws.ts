@@ -1,6 +1,6 @@
 import type { Server } from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
-import { ROLE_RANK, verifyToken } from './auth';
+import { verifyToken } from './auth';
 import {
   createAlert, createLog, getActiveUser, getDrone, getDroneIdentity, listDrones, renameDrone,
   type DroneAssetView, type DroneBase, type EventRow, type Role,
@@ -337,96 +337,6 @@ function handleDroneMessage(droneId: string, raw: string) {
   }
 }
 
-/** Mensaje que llega de una consola: viene de la red, así que todo campo es opcional. */
-interface MensajeOperador {
-  type?: string;
-  droneId?: string;
-  pitch?: unknown;
-  roll?: unknown;
-  yaw?: unknown;
-  throttle?: unknown;
-  [clave: string]: unknown;
-}
-
-/**
- * Un eje de palanca es un número entre -1 y 1. Devuelve null si el valor no es
- * un número finito, y lo RECORTA si se pasó de rango.
- *
- * Se usa `Number.isFinite` y no `Number(...)` justamente porque no convierte:
- * `Number(null)` es 0 y `Number('')` también, así que con la conversión un campo
- * ausente o basura se le colaría al dron como un cero que la consola nunca
- * escribió. Y recortar en vez de descartar porque la consola normaliza el
- * arrastre del puntero: un 1.0000001 o un 1.4 por redondeo es plausible y lo
- * que el operador quiso decir es "todo para ese lado", no "no me hagas caso".
- */
-function eje(valor: unknown): number | null {
-  if (!Number.isFinite(valor)) return null;
-  return Math.min(1, Math.max(-1, valor as number));
-}
-
-/**
- * Mando virtual: lo único que una consola manda HACIA el hub. Va por el socket
- * que ya tiene abierto y no por REST porque son ~10 mensajes por segundo
- * mientras el operador mantiene la palanca, y abrir un POST por cada uno sería
- * absurdo.
- *
- * Todo rechazo es SILENCIOSO: al que manda no se le contesta nada. La consola ya
- * sabe si tiene el mando o no porque el hub le avisa con `control_changed` cada
- * vez que el lock cambia de manos; contestar por mensaje descartado sería, a
- * 10 Hz, una avalancha de respuestas que nadie mira.
- */
-function handleOperatorMessage(ws: WebSocket, sesion: SesionConsola, raw: string) {
-  let msg: MensajeOperador;
-  try {
-    msg = JSON.parse(raw) as MensajeOperador;
-  } catch {
-    // Viene de la red: un frame que no es JSON no puede tumbar el hub
-    return;
-  }
-  // Por ahora el mando es lo único que la consola manda para arriba; cualquier
-  // otro tipo se ignora en vez de tratarse como error.
-  if (msg.type !== 'manual_stick') return;
-
-  // El JWT no se revoca del lado del servidor, así que un socket abierto puede
-  // sobrevivir al vencimiento de su sesión: una sesión vencida no vuela un dron.
-  // sesionVigente además cierra el socket con 4401.
-  if (!sesionVigente(ws, sesion)) return;
-
-  // Si falta el droneId, String(undefined) no va a coincidir con ningún lock y
-  // el mensaje muere acá mismo, que es lo que corresponde.
-  const droneId = String(msg.droneId);
-  // El lock es lo que hace exclusivo el mando, así que se comprueba primero:
-  // es la condición que puede cambiar sola mientras el operador vuela (un
-  // supervisor se lo quita, se le cae la última consola) y la que decide si
-  // este socket es o no el que manda ESTE dron.
-  if (controlledBy.get(droneId) !== sesion.username) return;
-
-  // La cuenta se revalida contra la BASE en cada mensaje, igual que hace
-  // requireAuth con cada request: al operador al que le acaban de quitar
-  // canControl, le bajaron el rol o le dieron de baja la cuenta no le sirve
-  // tener el socket abierto de antes. Es también la última línea de defensa si
-  // alguna vez un camino liberara el permiso sin liberar el lock.
-  const cuenta = getActiveUser(sesion.username);
-  if (!cuenta || !cuenta.can_control) return;
-  if (ROLE_RANK[cuenta.role] < ROLE_RANK.operator) return;
-
-  const ejes = {
-    pitch: eje(msg.pitch),
-    roll: eje(msg.roll),
-    yaw: eje(msg.yaw),
-    throttle: eje(msg.throttle),
-  };
-  // Un solo eje inválido invalida el mensaje entero: mandarle al dron tres ejes
-  // buenos y uno inventado es peor que no mandarle nada.
-  if (Object.values(ejes).some((v) => v === null)) return;
-
-  // A propósito SIN createLog: a 10 Hz un registro por mensaje inundaría el log
-  // y taparía todo lo demás. Lo que queda registrado es tomar y soltar el
-  // control (CONTROL_TAKEN / CONTROL_RELEASED), que es lo que la auditoría
-  // necesita saber: quién tuvo el mando de qué dron y desde cuándo.
-  sendToDrone(droneId, { type: 'manual_stick', ...ejes, by: sesion.username });
-}
-
 export function setupWebSocket(server: Server) {
   const wss = new WebSocketServer({ server, path: '/ws' });
 
@@ -500,9 +410,6 @@ export function setupWebSocket(server: Server) {
     operators.set(ws, sesion);
     // Estado inicial: el operador pinta el dashboard sin esperar al próximo tick
     for (const status of lastStatus.values()) if (puedeVer(sesion, status)) ws.send(JSON.stringify(status));
-    // El socket de la consola es de doble vía: además de recibir el flujo en
-    // vivo, es por donde entra el mando virtual (ver handleOperatorMessage).
-    ws.on('message', (data) => handleOperatorMessage(ws, sesion, data.toString()));
     ws.on('close', () => {
       operators.delete(ws);
       // Si era la última conexión de ese usuario, no puede seguir controlando

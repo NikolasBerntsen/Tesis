@@ -38,12 +38,6 @@ class CommandCenterClient(private val scope: CoroutineScope) {
     var onForceGoto: ((routeId: Int, index: Int, orderedBy: String) -> Unit)? = null
     var onControlTaken: ((by: String) -> Unit)? = null
     var onManualMove: ((bearing: Double, distanceM: Double, by: String) -> Unit)? = null
-
-    /**
-     * Mando virtual: los cuatro ejes en [-1, 1] tal como los manda la consola,
-     * a unos 10 por segundo mientras el operador tiene la palanca tomada.
-     */
-    var onManualStick: ((pitch: Double, roll: Double, yaw: Double, throttle: Double, by: String) -> Unit)? = null
     var onControlReleased: ((by: String) -> Unit)? = null
     /** El Comando Central renombró al dron. */
     var onRenamed: ((displayName: String) -> Unit)? = null
@@ -283,16 +277,6 @@ class CommandCenterClient(private val scope: CoroutineScope) {
                         "manual_move" -> onManualMove?.invoke(
                             msg.optDouble("bearing"),
                             msg.optDouble("distanceM"),
-                            msg.optString("by"),
-                        )
-                        // Los ejes ausentes valen 0 y no NaN (que es lo que
-                        // devuelve optDouble sin defecto): un NaN metido en una
-                        // velocidad sería una orden sin sentido para el dron.
-                        "manual_stick" -> onManualStick?.invoke(
-                            msg.optDouble("pitch", 0.0),
-                            msg.optDouble("roll", 0.0),
-                            msg.optDouble("yaw", 0.0),
-                            msg.optDouble("throttle", 0.0),
                             msg.optString("by"),
                         )
                         "control_released" -> onControlReleased?.invoke(msg.optString("by"))

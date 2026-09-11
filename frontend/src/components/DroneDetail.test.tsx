@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import DroneDetail from './DroneDetail';
@@ -21,7 +21,6 @@ function renderDetail(props: Partial<Parameters<typeof DroneDetail>[0]> = {}) {
     onBack: vi.fn(),
     onRename: vi.fn(),
     onWaypointLabel: vi.fn(),
-    onMando: vi.fn(),
   };
   const merged = { ...base, ...props } as Parameters<typeof DroneDetail>[0];
   render(<DroneDetail {...merged} />);
@@ -185,48 +184,6 @@ describe('DroneDetail', () => {
     for (const simbolo of ['Dron', 'Base', 'Nodo pendiente', 'Nodo recorrido']) {
       expect(within(leyenda).getByText(simbolo)).toBeInTheDocument();
     }
-  });
-});
-
-describe('DroneDetail — mando virtual', () => {
-  const mando = () => screen.queryByRole('group', { name: 'Mando virtual de vuelo continuo' });
-
-  it('el mando no se muestra si no tengo el control tomado', async () => {
-    renderDetail({ drone: makeDrone({ controlledBy: null }) });
-    expect(await screen.findByRole('button', { name: 'Tomar control manual' })).toBeInTheDocument();
-    expect(mando()).not.toBeInTheDocument();
-  });
-
-  it('el mando tampoco se muestra si el control lo tiene otro', async () => {
-    renderDetail({
-      me: makeMe({ username: 'super1', role: 'supervisor', canControl: true }),
-      drone: makeDrone({ controlledBy: 'oper9' }),
-    });
-    expect(await screen.findByText(/Controlado por/)).toBeInTheDocument();
-    expect(mando()).not.toBeInTheDocument();
-  });
-
-  it('con el control tomado convive con el pad y los ejes suben por la prop', async () => {
-    const props = renderDetail({
-      me: makeMe({ username: 'admin1', canControl: true }),
-      drone: makeDrone({ controlledBy: 'admin1' }),
-    });
-
-    // Las dos formas de comandar conviven: el pad de 25 m sigue estando.
-    expect(screen.getByRole('button', { name: 'Mover al norte' })).toBeInTheDocument();
-    const bloque = mando() as HTMLElement;
-    expect(bloque).toBeInTheDocument();
-
-    // Y se aclara que no hacen lo mismo: salto puntual contra vuelo continuo.
-    expect(screen.getByRole('heading', { name: 'Desplazamiento puntual' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Vuelo continuo' })).toBeInTheDocument();
-    expect(screen.getByText(/es un salto puntual/)).toBeInTheDocument();
-
-    fireEvent.keyDown(bloque, { key: 'w' });
-    expect(props.onMando).toHaveBeenCalledWith({ pitch: 0, roll: 0, yaw: 0, throttle: 1 });
-
-    fireEvent.keyUp(bloque, { key: 'w' });
-    expect(props.onMando).toHaveBeenLastCalledWith({ pitch: 0, roll: 0, yaw: 0, throttle: 0 });
   });
 });
 

@@ -6,7 +6,6 @@ import DronesMap, { type MapItem, type WaypointsLayer } from './DronesMap';
 import EditableName from './EditableName';
 import EventLog from './EventLog';
 import LiveVideo from './LiveVideo';
-import MandoVirtual, { type Ejes } from './MandoVirtual';
 
 // Estados en los que el patrullaje normal está interrumpido: habilitan
 // "Retomar ruta" y "Continuar desde acá" en los nodos.
@@ -43,7 +42,6 @@ export default function DroneDetail({
   onBack,
   onRename,
   onWaypointLabel,
-  onMando,
 }: {
   me: Me | null;
   drone: Drone;
@@ -54,8 +52,6 @@ export default function DroneDetail({
   onBack: () => void;
   onRename: (displayName: string) => void;
   onWaypointLabel: (routeId: number, index: number, label: string) => void;
-  /** Ejes del mando virtual, que salen por el WebSocket y no por REST. */
-  onMando: (ejes: Ejes) => void;
 }) {
   const [history, setHistory] = useState<EventRow[]>([]);
   const [error, setError] = useState('');
@@ -274,7 +270,6 @@ export default function DroneDetail({
             )}
             {soyControlador && (
               <div className="control-panel">
-                <h3>Desplazamiento puntual</h3>
                 {/* Plato hundido: el pad es la pieza más táctil de la consola
                     y tiene que leerse como un instrumento grabado en la piedra */}
                 <div className="pad-plato">
@@ -295,20 +290,7 @@ export default function DroneDetail({
                     </button>
                   </div>
                 </div>
-                <p className="muted">
-                  Cada toque desplaza el dron 25 m en esa dirección: es un salto puntual, el dron lo
-                  recorre y se queda ahí.
-                </p>
-
-                {/* Las dos formas de comandar conviven y no hacen lo mismo: el
-                    pad de arriba manda UN desplazamiento de 25 m; el mando de
-                    acá abajo es vuelo continuo, el dron se mueve mientras la
-                    palanca esté sostenida. Van separadas por la regla para que
-                    no se lean como un solo bloque de botones. */}
-                <hr className="regla" />
-                <h3>Vuelo continuo</h3>
-                <MandoVirtual onMando={onMando} />
-
+                <p className="muted">Cada toque desplaza el dron 25 m en esa dirección.</p>
                 <button className="resume" onClick={soltarControl}>
                   Devolver al patrullaje
                 </button>

@@ -1,10 +1,7 @@
 # Drone Patrol — App de control (Android)
 
-App que corre en el celular montado en el **DJI RC-N3** —el control sin pantalla
-que usa el teléfono del operador como pantalla— y ejecuta la lógica de
-patrullaje (`patrol/PatrolManager.kt`). El celular habla con el dron a través
-del control: por eso es el que publica el video y el que ejecuta las órdenes de
-mando que llegan del Comando Central.
+App que corre en el dispositivo Android conectado al **DJI RC-N2** y ejecuta la
+lógica de patrullaje (`patrol/PatrolManager.kt`).
 
 Tiene tres pantallas:
 
@@ -45,7 +42,7 @@ vence antes de terminar, se vuelve al login con el aviso correspondiente.
 > que carga `Helper.install()`. En un emulador x86_64 eso da `UnsatisfiedLinkError`
 > durante `attachBaseContext`, o sea antes de que exista la Activity. Hoy queda
 > atrapado y solo se registra en el log, pero el SDK no va a funcionar ahí:
-> las pruebas del flavor `dji` van sobre el teléfono real conectado al RC-N3.
+> las pruebas del flavor `dji` van sobre el teléfono real conectado al RC-N2.
 
 La lógica (máquina de estados, watchdogs, comunicación) es la misma en ambos:
 solo cambia la implementación de `DroneController` que inyecta `ControllerFactory`.
@@ -111,58 +108,25 @@ cuando no hay depuración USB; con anclaje USB la laptop suele quedar en
 > no se puede declarar de antemano. `src/debug/res/xml/network_security_config.xml`
 > lo habilita para el banco de pruebas y las salidas de campo.
 
-## Video en vivo
-
-El controlador emite cuadros JPEG y `PatrolManager` los reparte:
-
-| Destino | Ritmo | Por qué |
-|---|---|---|
-| Comando Central | **5 por segundo** (`CuadroDeVideo.INTERVALO_CUADRO_MS`) | Es el video que mira el operador y con el que decide |
-| Software de detección | **2 por segundo** (`PatrolManager.INTERVALO_DETECCION_MS`) | El enlace con la laptop es el más flojo de los tres y detectar no necesita más |
-
-Con el dron real el cuadro llega en NV21 a 1920x1080 o 1280x720 y se reescala a
-**640 px de ancho** conservando la relación de aspecto, con submuestreo de vecino
-más cercano, antes de comprimirlo en JPEG con calidad 60. La conversión
-(`drone/CuadroDeVideo.kt`) vive en el sourceSet `main`, no en el del flavor:
-así se prueba sin dron, que es justo lo que el flavor `dji` no permite.
-
-## Mando virtual
-
-El operador toma el control desde la consola y mueve una palanca en pantalla;
-cada eje viaja en `[-1, 1]` dentro de un mensaje `manual_stick` del WebSocket, a
-unos 10 por segundo. `drone/MandoVirtual.kt` los traduce a velocidades (5 m/s
-horizontal, 2 m/s vertical, 45 °/s de giro, zona muerta de 0,05) y el
-controlador las ejecuta: el simulado moviendo su posición, el DJI mandando
-`VirtualStickFlightControlParam` en coordenadas BODY a 10 Hz.
-
-> **Watchdog de mando.** Estando en `MANUAL`, si no llega ningún mando durante
-> 1,5 s y el último no era todo ceros, la app manda ceros por su cuenta y lo
-> anota en el registro local. Es la red de seguridad ante un corte de internet
-> del celular: el dron sostiene la última velocidad comandada hasta que le
-> llegue otra, así que sin esto seguiría andando con nadie al mando.
-
-El mando se aplica **solo** en estado `MANUAL`; en cualquier otro se descarta.
-
 ## Flavor dji — estado y pasos pendientes
 
-`app/src/dji/` registra el SDK, escucha posición, batería, rumbo de la brújula,
-calidad del enlace y conexión vía KeyManager, publica el video real de la cámara
-principal y comanda el vuelo —patrullaje, órbita, goto, estacionario y mando
-manual— por **Virtual Stick** (el Mini 4 Pro **no** soporta las misiones de
-waypoints del SDK: son solo Enterprise). Antes de volar hace falta:
+El esqueleto (`app/src/dji/`) registra el SDK, escucha posición y batería vía
+KeyManager y estructura la navegación. Antes de volar hace falta:
 
 1. Crear una app en https://developer.dji.com y poner la key en
    `gradle.properties` → `DJI_API_KEY=...`, y compilar con `-PenableDji`.
-2. Queda un `TODO(hardware)`: escuchar `KeyIsFlying`/`KeyAreMotorsOn` para emitir
-   `FlightEvent.ArrivedHome` cuando el dron aterriza al volver a la base.
+2. Completar los `TODO(hardware)` de `DjiDroneController.kt`:
+   - envío real de velocidades por **Virtual Stick** (el Mini 4 Pro **no**
+     soporta las misiones de waypoints del SDK — son solo Enterprise — por eso
+     el patrullaje se implementa con Virtual Stick),
+   - captura del stream de video (`ICameraStreamManager`) → JPEG,
+   - escucha de `KeyConnection` para que el watchdog de señal funcione con el
+     enlace RC real.
 3. Probar en campo con las validaciones de seguridad correspondientes (RTH
    configurado, altura, geocercas).
 
-> Este flavor **no fue probado con hardware** en esta entrega y CI no lo compila
-> (hace falta `-PenableDji`). Por eso todo lo que se puede probar sin dron —la
-> conversión de los cuadros, el limitador de ritmo y la escala del mando— vive en
-> el sourceSet `main` con sus pruebas, y el archivo del flavor quedó lo más flaco
-> posible: apenas el pegamento con el SDK.
+> Este flavor **no fue probado con hardware** en esta entrega; compila y marca
+> los puntos de integración, pero requiere la etapa de pruebas de campo.
 
 ## Tests
 
@@ -178,16 +142,9 @@ waypoints del SDK: son solo Enterprise). Antes de volar hace falta:
 | `PreferenciasEnlaceTest` | URL del Comando Central por defecto y modo CABLE de fábrica |
 | `HashDeDronTest` | Filtro del contenido del QR: 32 hexadecimales y nada más |
 | `DetectionClientTest` | Armado de la URL del enlace en CABLE y en RED |
-| `SimulatedDroneControllerTest` | Navegación, rumbo, altura y drenaje de batería del dron simulado, y el mando virtual: sube con throttle, gira con yaw, avanza con pitch y se queda quieto con los cuatro ejes en cero |
-| `CuadroDeVideoTest` | Tamaño de destino y conversión NV21 → ARGB: submuestreo, `offset`, cuadro corto y recorte de los canales |
-| `CuadroDeVideoJpegTest` | La compresión a JPEG, que es la parte que necesita `android.graphics` |
-| `LimitadorDeRitmoTest` | El limitador que ralea los cuadros (5 fps al Comando Central, 2 fps a la detección) |
-| `MandoVirtualTest` | Zona muerta, recorte, signos de cada eje y rotación por rumbo |
-| `PatrolManagerMandoTest` | El mando se ignora fuera de `MANUAL` y el watchdog manda ceros cuando el mando se calla |
+| `SimulatedDroneControllerTest` | Navegación, rumbo y drenaje de batería del dron simulado |
 
-`DetectionClientTest`, `HashDeDronTest`, `CuadroDeVideoTest`,
-`LimitadorDeRitmoTest` y `MandoVirtualTest` corren en la JVM pelada, sin
-Robolectric.
+Las dos últimas de la lista corren en la JVM pelada, sin Robolectric.
 
 ## Estructura
 
@@ -201,9 +158,6 @@ app/src/main/java/com/tesis/dronepatrol/
 ├── model/Models.kt          Waypoint, PatrolRoute, Telemetry, PatrolState
 ├── drone/DroneController.kt Interfaz que abstrae el dron
 ├── drone/SimulatedDroneController.kt
-├── drone/CuadroDeVideo.kt   NV21 → ARGB reescalado → JPEG (sin SDK: se prueba sin dron)
-├── drone/LimitadorDeRitmo.kt  Deja pasar un cuadro cada N ms
-├── drone/MandoVirtual.kt    Ejes del mando → velocidades (y rotación por rumbo)
 ├── patrol/PatrolManager.kt  ★ Máquina de estados del patrullaje
 └── comms/                   Clientes WS: Comando Central y software de detección
 app/src/mock/  → ControllerFactory (simulador)

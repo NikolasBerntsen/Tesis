@@ -46,17 +46,12 @@ class SimulatedDroneController : DroneController {
         const val FAILSAFE_TIMEOUT_MS = 6_000L
         const val ARRIVE_THRESHOLD_M = 6.0
         const val METERS_PER_DEG_LAT = 111_320.0
-        // Altura a la que patrulla (ver altM)
-        const val ALTURA_CRUCERO_M = 40.0
-        // Techo del mando manual: 120 m es el límite legal de vuelo (ANAC).
-        const val ALTURA_MAXIMA_M = 120.0
         // Alcance del enlace RC: a esta distancia de la base la señal ya está al mínimo
         const val SIGNAL_RANGE_M = 1_200.0
         const val SIGNAL_MIN_PCT = 10
     }
 
-    /** STICK es el mando virtual del operador; el resto los ordena la patrulla. */
-    private enum class Mode { IDLE, FLY_ROUTE, ORBIT, RTH, HOLD, GOTO, STICK }
+    private enum class Mode { IDLE, FLY_ROUTE, ORBIT, RTH, HOLD, GOTO }
 
     override val telemetry = MutableSharedFlow<Telemetry>(replay = 1, extraBufferCapacity = 8)
     override val videoFrames = MutableSharedFlow<ByteArray>(extraBufferCapacity = 4)
@@ -73,11 +68,6 @@ class SimulatedDroneController : DroneController {
     private var homeLon = HOME_LON
     private var lat = HOME_LAT
     private var lon = HOME_LON
-    // Altura sobre la base. El simulador no modela el despegue: arranca ya a la
-    // altura de crucero (que es lo que la telemetría informaba fijo) y toca el
-    // suelo recién al terminar un regreso a base. El mando manual es el único
-    // que la mueve a gusto; los modos autónomos vuelven a la de crucero.
-    private var altM = ALTURA_CRUCERO_M
     private var battery = 100.0
     private var route: PatrolRoute? = null
     private var targetWaypoint = 0
@@ -89,13 +79,6 @@ class SimulatedDroneController : DroneController {
     private var gotoLon = 0.0
     // Rumbo hacia el objetivo mientras se mueve; estacionario conserva el último
     private var heading = 0.0
-
-    // Últimos ejes del mando virtual, ya convertidos a velocidades. Los escribe
-    // el hilo del WebSocket y los lee el lazo de vuelo: se guarda el objeto
-    // entero (y no cuatro campos sueltos) para que el lazo nunca vea media
-    // orden aplicada.
-    @Volatile
-    private var ejesMando = MandoVirtual.NEUTRO
 
     /** Mientras es true no llega telemetría ni video a la app (enlace RC cortado). */
     @Volatile
@@ -130,10 +113,8 @@ class SimulatedDroneController : DroneController {
         if (loops != null) return
         lat = homeLat
         lon = homeLon
-        altM = ALTURA_CRUCERO_M
         battery = 100.0
         mode = Mode.IDLE
-        ejesMando = MandoVirtual.NEUTRO
         loops = scope.launch {
             launch { flightLoop() }
             launch { frameLoop() }
@@ -162,13 +143,6 @@ class SimulatedDroneController : DroneController {
         gotoLat = lat
         gotoLon = lon
         mode = Mode.GOTO
-    }
-
-    override fun manualStick(pitch: Double, roll: Double, yaw: Double, throttle: Double) {
-        ejesMando = MandoVirtual.velocidades(pitch, roll, yaw, throttle)
-        // Con los cuatro ejes en cero el modo igual pasa a STICK: el dron queda
-        // en vuelo estacionario obedeciendo al mando, no volviendo a lo anterior.
-        mode = Mode.STICK
     }
 
     override fun returnHome() {
@@ -222,32 +196,15 @@ class SimulatedDroneController : DroneController {
                 Mode.RTH -> {
                     if (moveToward(homeLat, homeLon, dt)) {
                         mode = Mode.IDLE
-                        altM = 0.0 // aterrizó en la base
                         emitEvent(FlightEvent.ArrivedHome)
                     }
-                    drainBattery()
-                }
-                Mode.STICK -> {
-                    val v = ejesMando
-                    // El yaw es velocidad de giro: mueve la nariz y con ella el
-                    // "adelante" del propio mando.
-                    heading = (heading + v.giroGradosS * dt + 360.0) % 360.0
-                    val sobreTerreno = MandoVirtual.aTerreno(v, heading)
-                    lat += (sobreTerreno.norteMs * dt) / METERS_PER_DEG_LAT
-                    lon += (sobreTerreno.esteMs * dt) / metersPerDegLon()
-                    altM = (altM + v.subidaMs * dt).coerceIn(0.0, ALTURA_MAXIMA_M)
                     drainBattery()
                 }
                 Mode.IDLE -> Unit
             }
 
-            // El mando manual es el único que elige la altura; en cuanto el dron
-            // vuelve a volar solo (ruta, órbita, goto, estacionario o RTH) sube o
-            // baja a la de crucero, así el operador no lo deja a ras del suelo.
-            if (mode != Mode.STICK && mode != Mode.IDLE) acercarAltura(ALTURA_CRUCERO_M, dt)
-
             if (!signalLost) {
-                telemetry.tryEmit(Telemetry(lat, lon, altM, battery, signalPct(), heading, System.currentTimeMillis()))
+                telemetry.tryEmit(Telemetry(lat, lon, 40.0, battery, signalPct(), heading, System.currentTimeMillis()))
             }
         }
     }
@@ -263,16 +220,6 @@ class SimulatedDroneController : DroneController {
         lat += (dy / dist) * step / METERS_PER_DEG_LAT
         lon += (dx / dist) * step / metersPerDegLon()
         return false
-    }
-
-    /** Sube o baja hacia [objetivoM] a la misma velocidad vertical que el mando. */
-    private fun acercarAltura(objetivoM: Double, dt: Double) {
-        val paso = MandoVirtual.MAX_VERTICAL_MS * dt
-        altM = when {
-            altM < objetivoM -> (altM + paso).coerceAtMost(objetivoM)
-            altM > objetivoM -> (altM - paso).coerceAtLeast(objetivoM)
-            else -> altM
-        }
     }
 
     /** Rumbo 0..360° desde la posición actual hacia el punto dado (norte = 0, este = 90). */

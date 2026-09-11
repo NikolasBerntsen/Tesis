@@ -1,12 +1,8 @@
 # Contratos de mensajes (MVP)
 
-Todos los enlaces usan WebSocket con mensajes JSON en texto. Los cuadros de video
-viajan como JPEG codificado en base64: **640 px de ancho** (la altura sale de
-conservar la relación de aspecto del stream del dron, que llega en 1920x1080 o
-1280x720) y calidad 60. El mismo flujo se filtra a dos ritmos distintos:
-**5 cuadros por segundo hacia el Comando Central** y **2 hacia el software de
-detección**. Detectar no necesita más, y el enlace con la laptop es el más flojo
-de los tres.
+Todos los enlaces usan WebSocket con mensajes JSON en texto. Los frames de video
+viajan como JPEG codificado en base64 (~640x360, calidad 60, ~2 fps) para
+mantener el MVP simple.
 
 El sistema soporta **varios drones simultáneos**. Un dron **no es una cuenta de
 usuario**: es un activo del inventario, identificado por un `hash` opaco de 32
@@ -52,11 +48,6 @@ mantiene el lock (`controlledBy`) y lo incluye en la ficha del dron y en cada
 `status`. Tomar un dron controlado por otro da `409`; un supervisor puede
 forzar la liberación. Si el usuario que controla cierra todas sus conexiones,
 el backend libera el lock y reanuda el patrullaje automáticamente.
-
-Tener el lock es lo que habilita a pilotear: las órdenes de vuelo a mano
-(`manual_move` por REST y el mando con palancas `manual_stick` por WebSocket,
-§3.b) se aceptan **solo del titular**, y el permiso se revalida contra la base en
-cada orden, no contra el token.
 
 ## Registro (logs)
 
@@ -174,7 +165,7 @@ Conexión: `ws://<backend>:4000/ws?token=<JWT>` (el rol `drone` sale del token).
 |---|---|---|
 | `status` | ver tabla de abajo | Se guarda como último estado del dron y se reenvía a los operadores |
 | `event` | `eventType, message` | Se persiste en `events` y se reenvía a los operadores |
-| `video_frame` | `jpegBase64, ts` | Se reenvía a los operadores etiquetado con `droneId`. **5 por segundo**: JPEG de 640 px de ancho, calidad 60 |
+| `video_frame` | `jpegBase64, ts` | Se reenvía a los operadores etiquetado con `droneId` |
 | `alert_request` | `alertType (PERSON\|VEHICLE), lat, lon, snapshotBase64` | Crea fila en `alerts` (PENDING) + evento `ALERT_CREATED`, y notifica a los operadores |
 | `set_name` | `displayName` | Renombra el dron y avisa a los operadores con `drone_renamed` |
 
@@ -209,31 +200,9 @@ Los mensajes se dirigen **solo al dron correspondiente**, salvo que se indique.
 | `stop_patrol` | `orderedBy` | Interrumpe el patrullaje: el dron queda en vuelo estacionario (`PAUSED`) |
 | `force_goto` | `routeId, index, orderedBy` | Vuela forzado hacia ese nodo y queda estacionario sobre él (`FORCED`) |
 | `control_taken` | `by` | Entra en control manual (`MANUAL`): vuelo estacionario a la espera de movimientos |
-| `manual_move` | `bearing, distanceM, by` | **Desplazamiento puntual** de esa distancia en ese rumbo (solo en `MANUAL`) |
-| `manual_stick` | `pitch, roll, yaw, throttle, by` | **Vuelo continuo con palancas** (solo en `MANUAL`): cada eje es un número en `[-1, 1]` y el dron lo sostiene hasta el mensaje siguiente. Ver §3.b |
+| `manual_move` | `bearing, distanceM, by` | Se desplaza esa distancia en ese rumbo (solo en `MANUAL`) |
 | `control_released` | `by` | Sale del control manual; si no llega un `resume_patrol` a continuación queda `PAUSED` |
 | `renamed` | `displayName` | El operador renombró al dron: la app actualiza el nombre que muestra |
-
-### `manual_move` y `manual_stick` no son lo mismo
-
-Los dos mueven el dron a mano y los dos solo valen en estado `MANUAL`, pero son
-dos formas distintas de pilotear:
-
-| | `manual_move` | `manual_stick` |
-|---|---|---|
-| Qué es | Un **salto puntual**: "corrémelo 25 metros al este" | **Vuelo continuo**: las palancas de un control físico |
-| Parámetros | Rumbo absoluto (0..360°) y distancia en metros | Cuatro ejes en `[-1, 1]`, relativos al cuerpo del dron |
-| Cómo llega | REST (`POST /api/drones/:droneId/manual_move`): es un click, uno por vez | WebSocket, ~10 mensajes por segundo mientras la palanca esté tomada |
-| Cuándo termina | Cuando el dron llegó; después queda estacionario | Cuando llega un mensaje con los cuatro ejes en `0`, o cuando salta el watchdog de la app |
-
-Los botones de flecha de la consola siguen mandando `manual_move` (25 m por
-click); las palancas mandan `manual_stick`.
-
-**Watchdog de mando (en la app)**: estando en `MANUAL`, si pasan 1500 ms sin que
-llegue ningún `manual_stick` y el último recibido no era todo ceros, la app pone
-los ejes en cero por su cuenta y lo anota en su log local. Es la red de seguridad
-ante un corte de internet del celular: sin eso, el dron seguiría volando con la
-última velocidad comandada.
 
 ## 3. Comando Central → Consola del operador (web)
 
@@ -242,7 +211,7 @@ Conexión: `ws://<backend>:4000/ws?token=<JWT>` (rol `operator`).
 | Mensaje | Contenido |
 |---|---|
 | `status` | Estado de un dron (los campos de arriba + `droneId`, `displayName`) |
-| `video_frame` | `droneId, jpegBase64, ts` (5 por segundo, JPEG de 640 px de ancho) |
+| `video_frame` | `droneId, jpegBase64, ts` |
 | `event` | Evento recién persistido (fila completa) |
 | `alert_created` | Alerta nueva (fila completa, incluye snapshot) |
 | `alert_updated` | Alerta con decisión tomada |
@@ -262,81 +231,6 @@ novedades del inventario de drones (`drone_updated`, `drone_online`,
 los eventos de las categorías `usuarios` y `sistema` solo llegan al admin, que es
 el único que puede leer el registro general. Antes de cada envío se comprueba que
 el JWT no haya vencido y que la cuenta siga activa; si no, el socket se cierra.
-
-## 3.b Consola del operador (web) → Comando Central
-
-El socket de la consola es de **doble vía**. Casi todo lo que la consola le pide
-al backend va por REST; lo único que sube por el WebSocket es el **mando
-virtual**, y sube por acá justamente porque no es una acción suelta sino un flujo:
-
-| Mensaje | Campos | Efecto en el backend |
-|---|---|---|
-| `manual_stick` | `droneId, pitch, roll, yaw, throttle` | Si se acepta, se reenvía al dron como `manual_stick` con `by: <username>`. No genera registro |
-
-```json
-{ "type": "manual_stick", "droneId": "a3f9c1…7e42", "pitch": 0.6, "roll": 0, "yaw": -0.3, "throttle": 0 }
-```
-
-### Los cuatro ejes
-
-Cada eje es un número en `[-1, 1]`, como la palanca de un control físico. Los
-ejes son **relativos al cuerpo del dron** (adelante = hacia donde mira la
-cámara), que es exactamente lo que el operador está viendo en el video: no hay
-que rotar nada por el rumbo.
-
-| Eje | `+1` | `-1` |
-|---|---|---|
-| `pitch` | Adelante (hacia la nariz) | Atrás |
-| `roll` | A la derecha | A la izquierda |
-| `yaw` | Gira en sentido horario | Gira en sentido antihorario |
-| `throttle` | Sube | Baja |
-
-Los cuatro son **obligatorios y tienen que ser números**: si alguno falta, viene
-en texto (`"0.5"`) o es `null`, se descarta el mensaje **entero**, porque
-mandarle al dron tres ejes buenos y uno inventado es peor que no mandarle nada.
-Un valor apenas fuera de rango (un `1.4` de la normalización del arrastre del
-puntero) **no se descarta: se recorta** a `1`; lo que el operador quiso decir es
-"todo para ese lado".
-
-### Ritmo y cierre
-
-La consola emite a **10 Hz** mientras el mando está tomado, y al soltar la
-palanca manda **un último mensaje con los cuatro ejes en `0`**: ese mensaje es el
-que deja al dron en vuelo estacionario. Por eso un mando todo en cero es un
-mensaje válido y no se filtra.
-
-### Por qué no es REST
-
-Es la única orden de vuelo que no tiene endpoint REST. A ~10 mensajes por
-segundo, abrir un POST por cada uno (con su handshake, su cabecera de
-autorización y su respuesta JSON) sería absurdo: el socket ya está abierto, ya
-está autenticado y ya entrega en orden. La tabla de endpoints REST de §5 no
-cambió por el mando virtual.
-
-### Cuándo se acepta
-
-El mensaje se reenvía al dron **solo si, en ese momento**, se cumple todo esto:
-
-1. La sesión del socket **no venció** (si venció, el socket se cierra con `4401`).
-2. El que manda **tiene el lock de control manual de ese dron** (`controlledBy`).
-   Es lo primero que se comprueba: el lock es lo que hace exclusivo el mando.
-3. La cuenta **sigue activa y no está eliminada**, y conserva `canControl`.
-4. Su rol es `operator` o superior.
-
-Los puntos 3 y 4 se releen **de la base en cada mensaje**, igual que hace la API
-REST con cada request: a un operador al que le acaban de quitar `canControl` o
-bajarle el rol no le sirve tener el socket abierto de antes.
-
-Si algo de eso no se cumple, el mensaje se descarta **en silencio**: no se le
-contesta nada a la consola. Contestar no serviría, porque la consola ya se entera
-del estado del lock por `control_changed`, y a 10 Hz una respuesta por cada
-mensaje descartado sería una avalancha que nadie mira. Un frame que no es JSON, o
-un `type` que el hub no conoce, también se ignoran sin cortar la conexión.
-
-**El mando no deja entradas en el registro.** A 10 Hz inundaría la tabla `events`
-y taparía todo lo demás. Lo que queda registrado es tomar y soltar el control
-(`CONTROL_TAKEN` / `CONTROL_RELEASED`), que es lo que la auditoría necesita:
-quién tuvo el mando de qué dron y desde cuándo.
 
 ## 4. App de control (celular) ↔ Software de detección (laptop)
 
@@ -373,13 +267,8 @@ Este es el contrato que debe implementar el software real de detección;
 
 | Dirección | Mensaje | Campos |
 |---|---|---|
-| celular → laptop | `video_frame` | `jpegBase64, ts` (**2 por segundo**, JPEG de 640 px de ancho) |
+| celular → laptop | `video_frame` | `jpegBase64, ts` |
 | laptop → celular | `detection` | `detected (bool), classes (["PERSON"\|"VEHICLE"]), confidence, ts` |
-
-Son los **mismos cuadros** que van al Comando Central, filtrados a menos ritmo: 5
-por segundo hacia la consola (donde hay una persona mirando y el salto se nota) y
-2 hacia la detección. El algoritmo no necesita más, y este es el enlace más flojo
-de los tres.
 
 La app solo actúa ante `detected: true` y solo mientras está en estado
 `PATROLLING` (evita re-alertar mientras orbita o vuelve a base). Cuando actúa,
@@ -422,11 +311,7 @@ Lo que cambió respecto de la versión anterior está marcado con **negrita**.
 | POST | `/api/drones/:droneId/goto` | con `canControl` | `{routeId, index}`: fuerza el vuelo hacia ese nodo |
 | POST | `/api/drones/:droneId/control` | con `canControl` | Toma el control manual (409 si otro lo tiene) |
 | DELETE | `/api/drones/:droneId/control` | titular o supervisor+ | `{resume: 'last'\|'none'\|número}` |
-| POST | `/api/drones/:droneId/manual_move` | titular del control | `{bearing, distanceM}`: desplazamiento puntual (la consola manda 25 m por click) |
-
-El **mando virtual con palancas no está en esta tabla y no va a estar**: viaja por
-el WebSocket de la consola (§3.b) porque son ~10 mensajes por segundo mientras el
-operador sostiene la palanca.
+| POST | `/api/drones/:droneId/manual_move` | titular del control | `{bearing, distanceM}` |
 
 ### Alertas
 
