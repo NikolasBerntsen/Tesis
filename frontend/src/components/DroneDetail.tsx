@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, rutasDeBase } from '../api';
+import { stateLabel } from '../format';
 import type { Drone, DroneStatus, EventRow, Me, PatrolRoute } from '../types';
 import DroneStatusCard from './DroneStatusCard';
 import DronesMap, { type MapItem, type WaypointsLayer } from './DronesMap';
@@ -38,6 +39,7 @@ export default function DroneDetail({
   drone,
   status,
   frame,
+  conectado,
   liveEvents,
   routes,
   onBack,
@@ -49,13 +51,19 @@ export default function DroneDetail({
   drone: Drone;
   status: DroneStatus | null;
   frame: string | null;
+  /** Si el canal con el Comando Central está vivo: sin él el mando no sale. */
+  conectado: boolean;
   liveEvents: EventRow[];
   routes: PatrolRoute[];
   onBack: () => void;
   onRename: (displayName: string) => void;
   onWaypointLabel: (routeId: number, index: number, label: string) => void;
-  /** Ejes del mando virtual, que salen por el WebSocket y no por REST. */
-  onMando: (ejes: Ejes) => void;
+  /**
+   * Ejes del mando virtual, que salen por el WebSocket y no por REST. Devuelve
+   * si el mensaje llegó a salir: con el socket cerrado no sale, y eso el
+   * operador lo tiene que ver.
+   */
+  onMando: (ejes: Ejes) => boolean;
 }) {
   const [history, setHistory] = useState<EventRow[]>([]);
   const [error, setError] = useState('');
@@ -114,6 +122,47 @@ export default function DroneDetail({
   const soyControlador = !!me && controlador === me.username;
   const puedeControlar = !!me && me.canControl;
   const esSupervisor = me?.role === 'supervisor' || me?.role === 'admin';
+
+  /**
+   * El estado que el dron reportó DESPUÉS de que se tomó el control, o `null`
+   * mientras no llegó ninguno. Esa distinción es la que hace falta para decidir
+   * si el mando puede comandar: el Comando Central le estampa a cada `status`
+   * que reenvía el dueño del lock de ese momento (`controlledBy` en ws.ts), así
+   * que un status que no trae al controlador es de ANTES del `control_changed` y
+   * no dice absolutamente nada sobre si la app ya entró en vuelo manual.
+   *
+   * Mirar `status.state` en seco dejaba el mando inerte en el camino más normal
+   * que hay: el lock se ve al instante (el backend lo broadcastea en el acto),
+   * pero el estado tarda hasta un segundo de la app (`statusTicker` manda cada
+   * 1 s y no empuja nada al cambiar de estado) más otro del volcado de la
+   * consola. En esa ventana el operador agarraba la palanca, no salía un solo
+   * `manual_stick` y encima la pantalla le decía que el dron no estaba en manual.
+   */
+  const estadoConfirmado = status && controlador && status.controlledBy === controlador ? status.state : null;
+
+  /**
+   * Por qué el mando de vuelo continuo no puede comandar, o `null` si puede.
+   * Tener el control tomado no alcanza: si el dron se cayó del aire, si el
+   * socket de la consola está reconectando o si el dron ya confirmó un estado
+   * que NO es `MANUAL` —la app descarta los ejes en cualquier otro estado—, lo
+   * que el operador empuja no llega o el dron lo tira. Y el backend NO suelta el
+   * lock por eso: la app se puede ir sola a volver a base por batería con el
+   * control tomado, así que el único que puede avisar es la consola.
+   *
+   * Lo que NO es impedimento es la espera de esa confirmación: ahí el mando
+   * emite (los ejes que lleguen antes de tiempo la app los descarta sola, que es
+   * mucho más barato que tragarse el gesto del operador) y se avisa aparte.
+   */
+  const impedimentoDelMando = !drone.online
+    ? 'El dron está desconectado: el mando no responde.'
+    : !conectado
+      ? 'Sin conexión con el Comando Central: el mando no responde.'
+      : estadoConfirmado !== null && estadoConfirmado !== 'MANUAL'
+        ? `El dron no está en vuelo manual (${stateLabel(estadoConfirmado)}): el mando no responde.`
+        : null;
+
+  /** Control tomado y el dron todavía sin decir en qué estado quedó. */
+  const esperandoConfirmacion = impedimentoDelMando === null && estadoConfirmado === null;
 
   async function llamar(path: string, options: RequestInit = {}) {
     setError('');
@@ -307,7 +356,17 @@ export default function DroneDetail({
                     no se lean como un solo bloque de botones. */}
                 <hr className="regla" />
                 <h3>Vuelo continuo</h3>
-                <MandoVirtual onMando={onMando} />
+                {/* Recién tomado el control esto se ve alrededor de un segundo,
+                    con el mando VIVO: explica por qué la tarjeta de estado de
+                    arriba todavía dice "Patrullando" mientras el operador ya
+                    está comandando. */}
+                {esperandoConfirmacion && (
+                  <p className="aviso" role="status" data-testid="mando-esperando">
+                    El dron todavía no confirmó el vuelo manual (su telemetría llega cada ~1 s): el
+                    mando ya emite, pero hasta la confirmación puede descartar los ejes.
+                  </p>
+                )}
+                <MandoVirtual onMando={onMando} impedimento={impedimentoDelMando} />
 
                 <button className="resume" onClick={soltarControl}>
                   Devolver al patrullaje

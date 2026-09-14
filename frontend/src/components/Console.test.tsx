@@ -365,20 +365,74 @@ describe('Console', () => {
   });
 
   it('el mando virtual manda los ejes por el WebSocket con el droneId del dron abierto', async () => {
-    // El mando sólo aparece con el control manual tomado por uno mismo.
-    dronesFix = [makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true, controlledBy: 'oper1' })];
+    // El mando comanda con el control manual tomado por uno mismo. El status
+    // viene como lo reenvía el Comando Central —con el dueño del lock estampado—
+    // y con el dron ya en MANUAL, que es el estado en el que la app aplica los
+    // ejes: la telemetría entra por `lastStatus` y se vuelca en el tick.
+    dronesFix = [
+      makeDrone({
+        droneId: 'd1',
+        displayName: 'Alfa',
+        online: true,
+        controlledBy: 'oper1',
+        lastStatus: makeStatus({ droneId: 'd1', state: 'MANUAL', controlledBy: 'oper1' }),
+      }),
+    ];
     render(<Console onLogout={() => {}} />);
     await screen.findByText('Sin señal de video');
     await userEvent.click(screen.getByText('Sin señal de video'));
     const mando = await screen.findByRole('group', { name: 'Mando virtual de vuelo continuo' });
+    expect(mando).toHaveAttribute('aria-disabled', 'false');
 
     // Los ejes van por el socket y NO por REST: a 10 Hz, un POST por mensaje
-    // sería absurdo. Por eso se miran los enviados y no los pedidos.
+    // sería absurdo. Se cuentan los pedidos HTTP antes y después de la ráfaga:
+    // si alguien mandara los ejes por REST —con cualquier path— este total se
+    // movería, que es lo que se quiere afirmar.
+    const pedidosAntes = pedidos.length;
     fireEvent.keyDown(mando, { key: 'ArrowUp' });
     expect(enviados[0]).toEqual({ type: 'manual_stick', droneId: 'd1', pitch: 1, roll: 0, yaw: 0, throttle: 0 });
-    expect(rutas().some((r) => r.includes('manual_stick'))).toBe(false);
 
     // Al soltar, el último mensaje va en cero: el dron queda estacionario.
+    fireEvent.keyUp(mando, { key: 'ArrowUp' });
+    expect(enviados.at(-1)).toEqual({ type: 'manual_stick', droneId: 'd1', pitch: 0, roll: 0, yaw: 0, throttle: 0 });
+    expect(enviados).toHaveLength(2);
+    expect(pedidos).toHaveLength(pedidosAntes);
+  });
+
+  it('apenas tomado el control el mando ya emite, sin esperar el status con el vuelo manual', async () => {
+    // El camino más normal que hay, de punta a punta: el dron viene patrullando,
+    // nadie tiene el control y el operador lo toma para volarlo a mano.
+    dronesFix = [
+      makeDrone({
+        droneId: 'd1',
+        displayName: 'Alfa',
+        online: true,
+        controlledBy: null,
+        // El último status del patrullaje: sin dueño del lock estampado, porque
+        // cuando el Comando Central lo reenvió todavía no había control tomado.
+        lastStatus: makeStatus({ droneId: 'd1', state: 'PATROLLING', controlledBy: null }),
+      }),
+    ];
+    render(<Console onLogout={() => {}} />);
+    await screen.findByText('Sin señal de video');
+    await userEvent.click(screen.getByText('Sin señal de video'));
+    await userEvent.click(await screen.findByRole('button', { name: 'Tomar control manual' }));
+    expect(rutas()).toContain('POST /drones/d1/control');
+
+    // El backend broadcastea el lock EN EL ACTO, así que el panel de vuelo
+    // continuo aparece al instante; el estado MANUAL, en cambio, tarda hasta un
+    // segundo de la app (su `statusTicker`) más otro del volcado de la consola.
+    // Se espera a que se vuelque el status del patrullaje para estar parados
+    // justo en esa ventana: control tomado y el dron todavía sin confirmar.
+    fire({ type: 'control_changed', droneId: 'd1', controlledBy: 'oper1' });
+    const mando = await screen.findByRole('group', { name: 'Mando virtual de vuelo continuo' });
+    await waitFor(() => expect(screen.getByText('Patrullando')).toBeInTheDocument(), { timeout: 3000 });
+    expect(screen.getByTestId('mando-esperando')).toBeInTheDocument();
+    expect(mando).toHaveAttribute('aria-disabled', 'false');
+
+    // Y la palanca comanda: el gesto del operador no se traga ni un segundo.
+    fireEvent.keyDown(mando, { key: 'ArrowUp' });
+    expect(enviados).toContainEqual({ type: 'manual_stick', droneId: 'd1', pitch: 1, roll: 0, yaw: 0, throttle: 0 });
     fireEvent.keyUp(mando, { key: 'ArrowUp' });
     expect(enviados.at(-1)).toEqual({ type: 'manual_stick', droneId: 'd1', pitch: 0, roll: 0, yaw: 0, throttle: 0 });
   });

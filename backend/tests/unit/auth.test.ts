@@ -245,6 +245,49 @@ describe('auth — requireAuth (middleware)', () => {
     expect(res403d.body.error).toMatch(/desactivado/i);
   });
 
+  it('403 si el rol de la fila no está en la jerarquía: el mínimo falla CERRADO', () => {
+    // El tipo `Role` de la fila es una promesa del esquema, no una garantía: la
+    // columna no tiene CHECK y las migraciones copian el valor viejo tal cual.
+    // `ROLE_RANK['operador_viejo'] < ROLE_RANK.operator` es `undefined < 2`, que
+    // en JS da false: sin el control explícito la request PASA el filtro de rol
+    // de TODA la API REST, incluidos los endpoints de vuelo.
+    crearUsuario('viejo', 'x', 'operador_viejo' as Role);
+    const res = fakeRes();
+    let llamado = false;
+    requireAuth('operator')(reqCon(tokenDe('viejo', 'operator')), res as any, () => (llamado = true));
+    expect(llamado).toBe(false);
+    expect(res.statusCode).toBe(403);
+    expect(res.body.error).toMatch(/permiso/i);
+  });
+
+  it('403 también si el rol se llama como un método de Object: el control cierra por TIPO', () => {
+    // ROLE_RANK es un objeto literal, así que hereda Object.prototype:
+    // `ROLE_RANK['toString']` no es undefined, es una FUNCIÓN. Comprobar solo
+    // `=== undefined` dejaba pasar esos nombres, porque `función < 2` también da
+    // false (la comparación termina en NaN). Son los únicos valores de la columna
+    // `role` que se colaban, y la columna no tiene CHECK que los impida.
+    for (const nombre of ['toString', 'constructor', 'valueOf', 'hasOwnProperty']) {
+      crearUsuario(`raro_${nombre}`, 'x', nombre as Role);
+      const res = fakeRes();
+      let llamado = false;
+      requireAuth('operator')(reqCon(tokenDe(`raro_${nombre}`, 'operator')), res as any, () => (llamado = true));
+      expect(llamado, `el rol "${nombre}" pasó el filtro`).toBe(false);
+      expect(res.statusCode).toBe(403);
+    }
+  });
+
+  it('sin rol mínimo un rol desconocido sigue pasando: solo se le exige estar activo', () => {
+    // No es un olvido: `requireAuth()` sin mínimo es "cualquiera autenticado"
+    // (por ejemplo GET /me), y ahí el rol no decide nada. Lo que se comprueba es
+    // que cerrar el rango no rompió ese caso.
+    crearUsuario('viejo2', 'x', 'operador_viejo' as Role);
+    const req = reqCon(tokenDe('viejo2', 'operator'));
+    let llamado = false;
+    requireAuth()(req, fakeRes() as any, () => (llamado = true));
+    expect(llamado).toBe(true);
+    expect(req.user?.role).toBe('operador_viejo');
+  });
+
   it('el dron nunca alcanza un rango mínimo de operador', () => {
     const dron = createDrone({ displayName: 'Alfa' }, 'campo');
     const res = fakeRes();

@@ -3,10 +3,41 @@
 Todos los enlaces usan WebSocket con mensajes JSON en texto. Los cuadros de video
 viajan como JPEG codificado en base64: **640 px de ancho** (la altura sale de
 conservar la relación de aspecto del stream del dron, que llega en 1920x1080 o
-1280x720) y calidad 60. El mismo flujo se filtra a dos ritmos distintos:
-**5 cuadros por segundo hacia el Comando Central** y **2 hacia el software de
-detección**. Detectar no necesita más, y el enlace con la laptop es el más flojo
-de los tres.
+1280x720) y calidad 60.
+
+El ritmo no es un número del protocolo: lo fija el **controlador de vuelo de la
+app**, y de ahí sale un solo flujo que se reparte a dos destinos con reglas
+distintas.
+
+- Al **Comando Central** le llegan **todos** los cuadros que el controlador
+  emite: es el video que mira el operador y con el que decide.
+- Al **software de detección** se le deja pasar uno cada
+  `PatrolManager.INTERVALO_DETECCION_MS` (500 ms), o sea **dos por segundo como
+  techo**: detectar no necesita más y el enlace con la laptop es el más flojo de
+  los tres.
+
+El techo de la detección se mide con **reloj y no contando cuadros**
+(`LimitadorDeRitmo`), y esa diferencia importa: contando, el ritmo de la
+detección quedaría atado al del controlador —sobre los cinco por segundo de hoy
+daría 2,5, un 25 % por encima de lo pactado y encima del enlace más flojo—, y si
+mañana el controlador emitiera diez, la detección se iría a cinco sin que nada la
+frene. Con reloj el techo vale sea cual sea el ritmo de entrada.
+
+Lo que se paga por medir con reloj: el flujo que llega al reparto ya viene
+raleado al intervalo del controlador, así que el limitador solo puede aceptar en
+múltiplos de ese intervalo. Con el dron real, que emite cada 200 ms
+(`CuadroDeVideo.INTERVALO_CUADRO_MS`), el primer cuadro que pasa los 500 ms es el
+de los 600, y la detección recibe uno cada 600 ms: **1,67 por segundo efectivos**
+contra un techo de 2. Queda por debajo del techo y no por encima, que es del lado
+que hay que errar. El dron **simulado** usa hoy el mismo intervalo
+(`SimulatedDroneController.FRAME_MS = CuadroDeVideo.INTERVALO_CUADRO_MS`), así
+que da los mismos números.
+
+O sea: a la consola le llegan **cinco cuadros por segundo** y a la detección
+**1,67**, con un techo garantizado de 2. Quien dimensione el enlace de la
+detección tiene que hacerlo para ese techo. Antes de citar un número, mirá las
+**dos** constantes —el intervalo del controlador y el del reparto—, no este
+documento.
 
 El sistema soporta **varios drones simultáneos**. Un dron **no es una cuenta de
 usuario**: es un activo del inventario, identificado por un `hash` opaco de 32
@@ -53,10 +84,23 @@ mantiene el lock (`controlledBy`) y lo incluye en la ficha del dron y en cada
 forzar la liberación. Si el usuario que controla cierra todas sus conexiones,
 el backend libera el lock y reanuda el patrullaje automáticamente.
 
-Tener el lock es lo que habilita a pilotear: las órdenes de vuelo a mano
+Tener el lock es lo que habilita a pilotear: las dos órdenes de vuelo a mano
 (`manual_move` por REST y el mando con palancas `manual_stick` por WebSocket,
-§3.b) se aceptan **solo del titular**, y el permiso se revalida contra la base en
-cada orden, no contra el token.
+§3.b) se aceptan **solo del titular**. Pero no se apoyan en lo mismo:
+
+- `POST /manual_move` compara el titular del lock y nada más. La cuenta y el rol
+  igual se releen de la base en cada request (es lo que hace `requireAuth` con
+  todas), pero **`canControl` no se vuelve a mirar**: para este endpoint, el lock
+  hace de permiso.
+- `manual_stick` viaja por un socket que se abrió una vez y puede quedar horas
+  abierto, así que además del lock **revalida la cuenta entera contra la base en
+  cada mensaje**: que siga activa, que no esté eliminada, que conserve
+  `canControl` y que su rol sea `operator` o superior (§3.b).
+
+Hoy la diferencia no se nota porque quitarle `canControl` a alguien le suelta
+todos los locks (`releaseAllControlledBy`), así que quedarse con el lock sin el
+permiso no es un estado alcanzable. La que no depende de eso para ser correcta
+es la del WebSocket.
 
 ## Registro (logs)
 
@@ -174,7 +218,7 @@ Conexión: `ws://<backend>:4000/ws?token=<JWT>` (el rol `drone` sale del token).
 |---|---|---|
 | `status` | ver tabla de abajo | Se guarda como último estado del dron y se reenvía a los operadores |
 | `event` | `eventType, message` | Se persiste en `events` y se reenvía a los operadores |
-| `video_frame` | `jpegBase64, ts` | Se reenvía a los operadores etiquetado con `droneId`. **5 por segundo**: JPEG de 640 px de ancho, calidad 60 |
+| `video_frame` | `jpegBase64, ts` | Se reenvía a los operadores etiquetado con `droneId`. JPEG de 640 px de ancho, calidad 60; el ritmo es el del controlador (**5 por segundo con el dron real**; el simulado emite al suyo) |
 | `alert_request` | `alertType (PERSON\|VEHICLE), lat, lon, snapshotBase64` | Crea fila en `alerts` (PENDING) + evento `ALERT_CREATED`, y notifica a los operadores |
 | `set_name` | `displayName` | Renombra el dron y avisa a los operadores con `drone_renamed` |
 
@@ -242,7 +286,7 @@ Conexión: `ws://<backend>:4000/ws?token=<JWT>` (rol `operator`).
 | Mensaje | Contenido |
 |---|---|
 | `status` | Estado de un dron (los campos de arriba + `droneId`, `displayName`) |
-| `video_frame` | `droneId, jpegBase64, ts` (5 por segundo, JPEG de 640 px de ancho) |
+| `video_frame` | `droneId, jpegBase64, ts` (JPEG de 640 px de ancho; todos los cuadros que emite el controlador: 5 por segundo con el dron real) |
 | `event` | Evento recién persistido (fila completa) |
 | `alert_created` | Alerta nueva (fila completa, incluye snapshot) |
 | `alert_updated` | Alerta con decisión tomada |
@@ -298,6 +342,27 @@ Un valor apenas fuera de rango (un `1.4` de la normalización del arrastre del
 puntero) **no se descarta: se recorta** a `1`; lo que el operador quiso decir es
 "todo para ese lado".
 
+### Zona muerta: |eje| < 0,05 es cero
+
+Un eje cuyo valor absoluto sea **menor** que `0,05` se toma como `0`. El borde
+exacto `0,05` **no** es zona muerta (la comparación es estricta): `0.05` mueve el
+dron, `0.049` no. Es lo que evita que el mando de la consola —un dedo sobre una
+pantalla— deje al dron con una deriva de la que nadie se hace cargo al soltar
+despacio la palanca.
+
+La zona muerta la aplican **los dos extremos y no el backend**:
+
+| Quién | Qué hace | Dónde |
+|---|---|---|
+| Consola web | La aplica **antes de emitir**: un eje bajo el umbral sale como `0` | `MandoVirtual.ZONA_MUERTA` en el frontend |
+| Comando Central | **No la aplica**: solo recorta a `[-1, 1]` y reenvía el valor tal cual llegó | `eje()` en `ws.ts` |
+| App de control | La aplica **al traducir a velocidades**, después de recortar | `MandoVirtual.ZONA_MUERTA` en el Android |
+
+Para cualquier otro cliente del Comando Central esto importa: mandar
+`pitch: 0.03` es un mensaje **válido** —el hub lo acepta y lo reenvía— pero el
+dron **no se va a mover**, porque la app se lo come por zona muerta. Si hace
+falta el movimiento más chico posible, el valor a mandar es `0,05`.
+
 ### Ritmo y cierre
 
 La consola emite a **10 Hz** mientras el mando está tomado, y al soltar la
@@ -321,17 +386,38 @@ El mensaje se reenvía al dron **solo si, en ese momento**, se cumple todo esto:
 2. El que manda **tiene el lock de control manual de ese dron** (`controlledBy`).
    Es lo primero que se comprueba: el lock es lo que hace exclusivo el mando.
 3. La cuenta **sigue activa y no está eliminada**, y conserva `canControl`.
-4. Su rol es `operator` o superior.
+4. Su rol es `operator` o superior. La jerarquía es la de siempre
+   (`field_operator` < `operator` < `supervisor` < `admin`), así que el
+   supervisor y el admin también vuelan; un rol que **no** esté en esa jerarquía
+   se rechaza en vez de dejarlo pasar.
 
 Los puntos 3 y 4 se releen **de la base en cada mensaje**, igual que hace la API
 REST con cada request: a un operador al que le acaban de quitar `canControl` o
 bajarle el rol no le sirve tener el socket abierto de antes.
 
+Además hay dos topes que no dependen del permiso de nadie, porque su razón de
+ser es que una sola consola no pueda dejar sin Comando Central a todo el resto
+(el hub es un solo proceso para todas las consolas y todos los drones):
+
+- **Tamaño.** Un frame de más de 1 MiB cierra esa conexión con el código `1009`.
+  El tope es grande porque por este mismo servidor entra el video del dron, que
+  pesa decenas de KB por cuadro. Encima de eso, un mensaje de consola de más de
+  1 KiB se descarta **sin decodificarlo ni parsearlo**: un `manual_stick` no
+  llega a 200 bytes, y decodificar y parsear es justamente el trabajo caro que
+  conviene no regalar. Ese 1 KiB se cuenta en **bytes del frame como llegó**, no
+  en letras: un mensaje lleno de acentos o de eñes pesa en UTF-8 más que su largo
+  en caracteres y el que se pasa de 1 KiB en bytes se descarta igual.
+- **Ritmo.** Cada socket tiene un cupo de mando que se repone solo. El contrato
+  manda 10 Hz y el cupo tolera el doble sostenido, más una ráfaga para absorber
+  los tirones del temporizador del navegador: corta la inundación, no al
+  operador que está volando.
+
 Si algo de eso no se cumple, el mensaje se descarta **en silencio**: no se le
 contesta nada a la consola. Contestar no serviría, porque la consola ya se entera
 del estado del lock por `control_changed`, y a 10 Hz una respuesta por cada
-mensaje descartado sería una avalancha que nadie mira. Un frame que no es JSON, o
-un `type` que el hub no conoce, también se ignoran sin cortar la conexión.
+mensaje descartado sería una avalancha que nadie mira. Un frame que no es JSON,
+uno que es JSON pero no un objeto (`null`, un arreglo, un número suelto) y un
+`type` que el hub no conoce también se ignoran sin cortar la conexión.
 
 **El mando no deja entradas en el registro.** A 10 Hz inundaría la tabla `events`
 y taparía todo lo demás. Lo que queda registrado es tomar y soltar el control
@@ -373,13 +459,20 @@ Este es el contrato que debe implementar el software real de detección;
 
 | Dirección | Mensaje | Campos |
 |---|---|---|
-| celular → laptop | `video_frame` | `jpegBase64, ts` (**2 por segundo**, JPEG de 640 px de ancho) |
+| celular → laptop | `video_frame` | `jpegBase64, ts` (JPEG de 640 px de ancho, **1,67 por segundo** con el dron real, con un techo de 2) |
 | laptop → celular | `detection` | `detected (bool), classes (["PERSON"\|"VEHICLE"]), confidence, ts` |
 
-Son los **mismos cuadros** que van al Comando Central, filtrados a menos ritmo: 5
-por segundo hacia la consola (donde hay una persona mirando y el salto se nota) y
-2 hacia la detección. El algoritmo no necesita más, y este es el enlace más flojo
-de los tres.
+Son los **mismos cuadros** que van al Comando Central, filtrados a menos ritmo:
+hacia la consola va todo lo que emite el controlador (donde hay una persona
+mirando y el salto se nota) y hacia la detección se deja pasar uno cada
+`PatrolManager.INTERVALO_DETECCION_MS` (500 ms). El algoritmo no necesita más, y
+este es el enlace más flojo de los tres.
+
+Ese techo de **dos por segundo** se mide con reloj, así que vale sea cual sea el
+ritmo del controlador: si mañana emitiera diez cuadros por segundo, acá seguirían
+llegando dos. Lo que llega hoy con el dron real es **1,67 por segundo**, porque
+el flujo ya viene raleado a 200 ms y el limitador solo puede aceptar en múltiplos
+de ese intervalo (ver §1).
 
 La app solo actúa ante `detected: true` y solo mientras está en estado
 `PATROLLING` (evita re-alertar mientras orbita o vuelve a base). Cuando actúa,

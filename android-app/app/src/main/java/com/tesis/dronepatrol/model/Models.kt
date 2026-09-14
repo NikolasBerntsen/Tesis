@@ -71,4 +71,12 @@ sealed class FlightEvent {
     object ArrivedHome : FlightEvent()
     /** Llegó al punto pedido con gotoPoint y quedó en vuelo estacionario. */
     object GotoArrived : FlightEvent()
+
+    /**
+     * El dron —o su SDK— rechazó una orden. Existe porque un rechazo mudo es lo
+     * peor que puede pasar en vuelo: el operador mueve la palanca, el dron no se
+     * mueve y no hay una sola pista de por qué. PatrolManager lo reporta al
+     * Comando Central para que quede en el registro de la salida.
+     */
+    data class Problema(val motivo: String) : FlightEvent()
 }
