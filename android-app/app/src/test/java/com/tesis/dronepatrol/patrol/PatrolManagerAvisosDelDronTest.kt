@@ -93,19 +93,36 @@ class PatrolManagerAvisosDelDronTest {
                 RECHAZO,
                 avisado + PatrolManager.REPETIR_PROBLEMA_MS - 1,
                 avisado,
+                1,
             ),
         )
         assertTrue(
             "cumplido el minuto vuelve a avisarse",
-            PatrolManager.hayQueAvisarElProblema(RECHAZO, RECHAZO, avisado + PatrolManager.REPETIR_PROBLEMA_MS, avisado),
+            PatrolManager.hayQueAvisarElProblema(
+                RECHAZO,
+                RECHAZO,
+                avisado + PatrolManager.REPETIR_PROBLEMA_MS,
+                avisado,
+                1,
+            ),
         )
         assertTrue(
-            "un motivo distinto avisa sin esperar el minuto",
-            PatrolManager.hayQueAvisarElProblema(OTRO_RECHAZO, RECHAZO, avisado + PatrolManager.SEPARACION_PROBLEMAS_MS, avisado),
+            "un motivo distinto avisa enseguida, sin esperar nada",
+            PatrolManager.hayQueAvisarElProblema(OTRO_RECHAZO, RECHAZO, avisado + 1, avisado, 1),
         )
         assertTrue(
             "y el primero de todos también",
-            PatrolManager.hayQueAvisarElProblema(RECHAZO, null, 0, 0),
+            PatrolManager.hayQueAvisarElProblema(RECHAZO, null, 0, 0, 0),
+        )
+        assertFalse(
+            "gastado el presupuesto de la ventana, un motivo nuevo espera",
+            PatrolManager.hayQueAvisarElProblema(
+                OTRO_RECHAZO,
+                RECHAZO,
+                avisado + 1,
+                avisado,
+                PatrolManager.MAX_PROBLEMAS_POR_VENTANA,
+            ),
         )
     }
 
@@ -122,20 +139,27 @@ class PatrolManagerAvisosDelDronTest {
         val arranque = 10_000L
         var ultimoMotivo: String? = null
         var ultimoAviso = 0L
+        var enLaVentana = 0
         var avisos = 0
         // Diez segundos de rechazos alternados a 10 Hz: cien intentos
         for (i in 0 until 100) {
             val ahora = arranque + i * 100L
             val motivo = if (i % 2 == 0) RECHAZO else OTRO_RECHAZO
-            if (PatrolManager.hayQueAvisarElProblema(motivo, ultimoMotivo, ahora, ultimoAviso)) {
+            if (PatrolManager.hayQueAvisarElProblema(motivo, ultimoMotivo, ahora, ultimoAviso, enLaVentana)) {
                 avisos++
+                val ventanaNueva = (ahora - ultimoAviso) !in 0 until PatrolManager.REPETIR_PROBLEMA_MS
+                enLaVentana = if (ventanaNueva) 1 else enLaVentana + 1
                 ultimoMotivo = motivo
                 ultimoAviso = ahora
             }
         }
-        // Con la separación mínima: uno al arrancar y uno cada dos segundos.
-        assertTrue("cien intentos alternados generaron $avisos avisos", avisos <= 6)
-        assertTrue("el problema no puede quedar mudo del todo", avisos >= 1)
+        // El presupuesto de la ventana es el techo, y el primero entra por el
+        // silencio previo: no más de uno y el presupuesto.
+        assertEquals(
+            "cien intentos alternados generaron $avisos avisos",
+            PatrolManager.MAX_PROBLEMAS_POR_VENTANA,
+            avisos,
+        )
     }
 
     /**
@@ -145,7 +169,7 @@ class PatrolManagerAvisosDelDronTest {
     @Test
     fun elRelojParaAtrasNoDejaLosAvisosMudos() {
         assertTrue(
-            PatrolManager.hayQueAvisarElProblema(RECHAZO, RECHAZO, ahoraMs = 5_000, ultimoAvisoMs = 1_000_000),
+            PatrolManager.hayQueAvisarElProblema(RECHAZO, RECHAZO, ahoraMs = 5_000, ultimoAvisoMs = 1_000_000, avisosEnLaVentana = 3),
         )
     }
 

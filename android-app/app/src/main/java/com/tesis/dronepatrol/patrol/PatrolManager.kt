@@ -63,11 +63,14 @@ class PatrolManager(
         const val REPETIR_PROBLEMA_MS = 60_000L
 
         /**
-         * Separación mínima entre dos avisos, aunque el motivo cambie
-         * (ver hayQueAvisarElProblema()). Es el techo que sostiene el filtro
-         * cuando los motivos alternan en vez de repetirse.
+         * Cuántos avisos, como mucho, pueden salir dentro de una misma ventana de
+         * [REPETIR_PROBLEMA_MS] (ver hayQueAvisarElProblema()). Es el techo que
+         * sostiene el filtro cuando los motivos ALTERNAN en vez de repetirse, que
+         * es por donde se colaba la inundación: deduplicar por igualdad de motivo
+         * no alcanza porque el motivo lleva adentro la descripción del error del
+         * SDK, y esa no es una sola.
          */
-        const val SEPARACION_PROBLEMAS_MS = 2_000L
+        const val MAX_PROBLEMAS_POR_VENTANA = 5
 
         // PAUSED/MANUAL/FORCED también son vuelo: batería baja y pérdida de
         // señal disparan el RTH igual que patrullando
@@ -126,22 +129,24 @@ class PatrolManager(
             ultimoMotivo: String?,
             ahoraMs: Long,
             ultimoAvisoMs: Long,
+            avisosEnLaVentana: Int,
         ): Boolean {
             // Un transcurrido negativo es el reloj del celular acomodándose hacia
             // atrás (NTP, cambio de hora): se avisa y se vuelve a anclar, igual
             // que en LimitadorDeRitmo, en vez de quedar mudo hasta que el reloj
-            // recupere la diferencia.
+            // recupere la diferencia. Y el primer aviso de todos entra por acá:
+            // sin avisos previos el transcurrido es el reloj entero.
             val transcurrido = ahoraMs - ultimoAvisoMs
             if (transcurrido !in 0 until REPETIR_PROBLEMA_MS) return true
-            // Dentro del minuto solo pasa un motivo NUEVO, y aun así no más de uno
-            // cada [SEPARACION_PROBLEMAS_MS]. Deduplicar solo por igualdad de
-            // motivo dejaba abierta la misma inundación que este filtro vino a
-            // cerrar: si la aeronave alterna entre dos rechazos —y el motivo lleva
-            // adentro la descripción del error del SDK, que no es una sola—,
-            // ninguno es igual al anterior y los dos atraviesan el filtro, diez
-            // veces por segundo. Un motivo distinto sigue avisándose enseguida,
-            // que es lo que importa cuando el problema cambió de verdad.
-            return motivo != ultimoMotivo && transcurrido >= SEPARACION_PROBLEMAS_MS
+            // El mismo motivo no vuelve hasta cumplido el minuto: el controlador
+            // reintenta en cada vuelta de su lazo de 10 Hz y el rechazo idéntico
+            // llega diez veces por segundo.
+            if (motivo == ultimoMotivo) return false
+            // Un problema NUEVO avisa enseguida —esperar sería tragarse justo la
+            // novedad que importa— pero contra un presupuesto por ventana: si la
+            // aeronave alterna entre dos rechazos, ninguno es igual al anterior y
+            // sin el presupuesto los dos atravesarían el filtro a 10 Hz.
+            return avisosEnLaVentana < MAX_PROBLEMAS_POR_VENTANA
         }
     }
 
@@ -236,6 +241,13 @@ class PatrolManager(
      */
     private var ultimoProblemaAvisado: String? = null
     private var ultimoProblemaAvisadoMs = 0L
+
+    /**
+     * Avisos que ya salieron dentro de la ventana en curso. Se pone en cero cuando
+     * arranca una ventana nueva, que es cada vez que se avisa después de un
+     * silencio de [REPETIR_PROBLEMA_MS] (ver [hayQueAvisarElProblema]).
+     */
+    private var problemasEnLaVentana = 0
 
     private var started = false
 
@@ -700,7 +712,11 @@ class PatrolManager(
             // cada consola (ver hayQueAvisarElProblema()).
             is FlightEvent.Problema -> {
                 val ahora = System.currentTimeMillis()
-                if (hayQueAvisarElProblema(e.motivo, ultimoProblemaAvisado, ahora, ultimoProblemaAvisadoMs)) {
+                if (hayQueAvisarElProblema(e.motivo, ultimoProblemaAvisado, ahora, ultimoProblemaAvisadoMs, problemasEnLaVentana)) {
+                    // Si el aviso sale después de un silencio de un minuto, empieza
+                    // una ventana nueva y el presupuesto vuelve a estar entero.
+                    val ventanaNueva = (ahora - ultimoProblemaAvisadoMs) !in 0 until REPETIR_PROBLEMA_MS
+                    problemasEnLaVentana = if (ventanaNueva) 1 else problemasEnLaVentana + 1
                     ultimoProblemaAvisado = e.motivo
                     ultimoProblemaAvisadoMs = ahora
                     report("DRONE_PROBLEM", "El dron rechazó una orden: ${e.motivo}")
