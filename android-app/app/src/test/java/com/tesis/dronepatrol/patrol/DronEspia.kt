@@ -47,7 +47,24 @@ internal class DronEspia : DroneController {
         telemetria.emit(Telemetry(lat, lon, 40.0, bateria, 90, 0.0, System.currentTimeMillis()))
     }
 
-    private fun anotar(orden: String) = synchronized(recibidas) { recibidas += orden }
+    /**
+     * Gancho que corre al recibir cada orden, ANTES de anotarla. Los tests de
+     * carrera lo usan para pararse en el medio de una orden y soltar al otro hilo
+     * justo ahí: la ventana entre "leo el estado" y "le hablo al dron" es de
+     * microsegundos, así que sin un punto de parada un test de esa carrera no
+     * podría fallar de forma repetible — y un test que no puede fallar no prueba
+     * nada.
+     *
+     * Se invoca FUERA del candado de [recibidas]: el gancho bloquea a propósito, y
+     * con el candado tomado dejaría colgado al hilo que viene a leer las órdenes.
+     */
+    @Volatile
+    var alRecibirLaOrden: ((String) -> Unit)? = null
+
+    private fun anotar(orden: String) {
+        alRecibirLaOrden?.invoke(orden)
+        synchronized(recibidas) { recibidas += orden }
+    }
 
     override fun connect() = anotar("connect")
     override fun startRoute(route: PatrolRoute, fromWaypoint: Int) = anotar("startRoute(${route.id}, $fromWaypoint)")

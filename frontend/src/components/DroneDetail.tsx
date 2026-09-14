@@ -124,21 +124,45 @@ export default function DroneDetail({
   const esSupervisor = me?.role === 'supervisor' || me?.role === 'admin';
 
   /**
+   * El estado que el dron reportó DESPUÉS de que se tomó el control, o `null`
+   * mientras no llegó ninguno. Esa distinción es la que hace falta para decidir
+   * si el mando puede comandar: el Comando Central le estampa a cada `status`
+   * que reenvía el dueño del lock de ese momento (`controlledBy` en ws.ts), así
+   * que un status que no trae al controlador es de ANTES del `control_changed` y
+   * no dice absolutamente nada sobre si la app ya entró en vuelo manual.
+   *
+   * Mirar `status.state` en seco dejaba el mando inerte en el camino más normal
+   * que hay: el lock se ve al instante (el backend lo broadcastea en el acto),
+   * pero el estado tarda hasta un segundo de la app (`statusTicker` manda cada
+   * 1 s y no empuja nada al cambiar de estado) más otro del volcado de la
+   * consola. En esa ventana el operador agarraba la palanca, no salía un solo
+   * `manual_stick` y encima la pantalla le decía que el dron no estaba en manual.
+   */
+  const estadoConfirmado = status && controlador && status.controlledBy === controlador ? status.state : null;
+
+  /**
    * Por qué el mando de vuelo continuo no puede comandar, o `null` si puede.
    * Tener el control tomado no alcanza: si el dron se cayó del aire, si el
-   * socket de la consola está reconectando o si el dron no está en `MANUAL`
-   * —la app descarta los ejes en cualquier otro estado—, lo que el operador
-   * empuja no llega o el dron lo tira. Y el backend NO suelta el lock por eso:
-   * la app se puede ir sola a volver a base por batería con el control tomado,
-   * así que el único que puede avisar es la consola.
+   * socket de la consola está reconectando o si el dron ya confirmó un estado
+   * que NO es `MANUAL` —la app descarta los ejes en cualquier otro estado—, lo
+   * que el operador empuja no llega o el dron lo tira. Y el backend NO suelta el
+   * lock por eso: la app se puede ir sola a volver a base por batería con el
+   * control tomado, así que el único que puede avisar es la consola.
+   *
+   * Lo que NO es impedimento es la espera de esa confirmación: ahí el mando
+   * emite (los ejes que lleguen antes de tiempo la app los descarta sola, que es
+   * mucho más barato que tragarse el gesto del operador) y se avisa aparte.
    */
   const impedimentoDelMando = !drone.online
     ? 'El dron está desconectado: el mando no responde.'
     : !conectado
       ? 'Sin conexión con el Comando Central: el mando no responde.'
-      : status?.state !== 'MANUAL'
-        ? `El dron no está en vuelo manual (${status ? stateLabel(status.state) : 'sin telemetría'}): el mando no responde.`
+      : estadoConfirmado !== null && estadoConfirmado !== 'MANUAL'
+        ? `El dron no está en vuelo manual (${stateLabel(estadoConfirmado)}): el mando no responde.`
         : null;
+
+  /** Control tomado y el dron todavía sin decir en qué estado quedó. */
+  const esperandoConfirmacion = impedimentoDelMando === null && estadoConfirmado === null;
 
   async function llamar(path: string, options: RequestInit = {}) {
     setError('');
@@ -332,6 +356,16 @@ export default function DroneDetail({
                     no se lean como un solo bloque de botones. */}
                 <hr className="regla" />
                 <h3>Vuelo continuo</h3>
+                {/* Recién tomado el control esto se ve alrededor de un segundo,
+                    con el mando VIVO: explica por qué la tarjeta de estado de
+                    arriba todavía dice "Patrullando" mientras el operador ya
+                    está comandando. */}
+                {esperandoConfirmacion && (
+                  <p className="aviso" role="status" data-testid="mando-esperando">
+                    El dron todavía no confirmó el vuelo manual (su telemetría llega cada ~1 s): el
+                    mando ya emite, pero hasta la confirmación puede descartar los ejes.
+                  </p>
+                )}
                 <MandoVirtual onMando={onMando} impedimento={impedimentoDelMando} />
 
                 <button className="resume" onClick={soltarControl}>

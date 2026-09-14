@@ -197,6 +197,14 @@ export default function MandoVirtual({
 
   const comandando = hayComando(ejes);
 
+  // Levantado el impedimento, el aviso de "no salió" dejó de describir algo: el
+  // watchdog de la app (1,5 s) ya frenó al dron mucho antes de que el socket
+  // volviera. Se limpia acá para no dejar colgado un cartel que era cierto
+  // cuando salió y dejó de serlo.
+  useEffect(() => {
+    if (!inerte) setUltimoSalio(true);
+  }, [inerte]);
+
   useEffect(() => {
     if (!comandando) return;
     const emitir = (ejesAEmitir: Ejes) => setUltimoSalio(onMandoRef.current(ejesAEmitir));
@@ -282,6 +290,7 @@ export default function MandoVirtual({
         window.removeEventListener('mousemove', alMoverse);
         window.removeEventListener('mouseup', alSoltarse);
         window.removeEventListener('blur', alSoltarse);
+        window.removeEventListener('pointercancel', alSoltarse);
         limpiarArrastre.current[palanca] = () => {};
       };
       // El seguimiento va en la ventana y no en el plato: mientras se comanda,
@@ -292,13 +301,44 @@ export default function MandoVirtual({
       // La ventana que pierde el foco con el botón apretado (Alt+Tab, otra
       // aplicación, un diálogo del sistema) no va a entregar nunca el `mouseup`.
       window.addEventListener('blur', alSoltarse);
+      // Y si el sistema le saca el puntero al navegador en pleno arrastre (un
+      // gesto del sistema operativo, el mouse que se desenchufa), lo que llega
+      // es `pointercancel` y NO un `mouseup`: sin esto la palanca se quedaría
+      // emitiendo el último eje a 10 Hz. Con la captura puesta más todavía,
+      // porque cancelar el puntero es justo lo que la suelta.
+      window.addEventListener('pointercancel', alSoltarse);
     };
   }
 
   /**
-   * Dedo que baja al plato. No se usan eventos de puntero a propósito —la
-   * consola también corre en navegadores donde no están— y el que la página no
-   * se desplace al arrastrar lo resuelve el `touch-action: none` del plato,
+   * El puntero que baja al plato. El arrastre lo sigue manejando el camino de
+   * mouse —los eventos de mouse están en todos los navegadores y son los que ya
+   * estaban probados—; acá se PIDE la captura del puntero, que es lo único que
+   * garantiza que el `pointerup` (y con él el `mouseup` de compatibilidad) le
+   * llegue a la página aunque el operador suelte el botón afuera de la ventana.
+   * Sin captura ese caso no lo cierra nadie: soltar sobre otra aplicación sin
+   * clickearla no le quita el foco a la ventana (no hay `blur`) y con el
+   * puntero quieto afuera tampoco hay `mousemove`, así que la palanca seguiría
+   * emitiendo el último eje a 10 Hz hasta que el puntero vuelva a entrar.
+   *
+   * El dedo no se captura a propósito: un toque ya le entrega todos sus eventos
+   * al elemento donde empezó, y el camino táctil de este componente no pasa por
+   * los eventos de puntero.
+   */
+  function alBajarPuntero(ev: React.PointerEvent<HTMLDivElement>) {
+    if (inerte || ev.pointerType === 'touch') return;
+    // El `?.` no es de adorno: jsdom no implementa la captura, y en un navegador
+    // sin Pointer Events este manejador no corre siquiera. En los dos casos queda
+    // el camino de mouse tal cual estaba.
+    ev.currentTarget.setPointerCapture?.(ev.pointerId);
+  }
+
+  /**
+   * Dedo que baja al plato. El camino táctil NO pasa por los eventos de puntero
+   * a propósito —la consola también corre en navegadores donde no están, y un
+   * toque ya le entrega todos sus eventos al elemento donde empezó; lo único que
+   * se les pide es la captura del mouse, en `alBajarPuntero`—, y el que la página
+   * no se desplace al arrastrar lo resuelve el `touch-action: none` del plato,
    * porque React escucha touchmove en pasivo.
    */
   function alEmpezarToque(palanca: Palanca) {
@@ -367,6 +407,7 @@ export default function MandoVirtual({
         <div
           className="palanca-plato"
           data-testid={`palanca-${palanca}`}
+          onPointerDown={alBajarPuntero}
           onMouseDown={alApretarMouse(palanca)}
           onTouchStart={alEmpezarToque(palanca)}
           onTouchMove={alMoverToque(palanca)}
@@ -401,20 +442,26 @@ export default function MandoVirtual({
       onBlur={alPerderFoco}
     >
       {/* El motivo va arriba de todo: es lo primero que hay que leer antes de
-          empujar una palanca que no va a mover nada. El aviso de "no salió" es
-          el otro lado de lo mismo, y sólo tiene sentido cuando el mando está
-          habilitado y aun así el mensaje no llegó a irse. */}
-      {inerte ? (
+          empujar una palanca que no va a mover nada. */}
+      {inerte && (
         <p className="aviso" role="status" data-testid="mando-impedimento">
           {impedimento}
         </p>
-      ) : (
-        !ultimoSalio && (
-          <p className="aviso malo" role="alert" data-testid="mando-no-salio">
-            El último comando no salió de la consola: se cortó el enlace con el Comando Central. El
-            dron sigue con la última velocidad que le llegó hasta que corte por su cuenta.
-          </p>
-        )
+      )}
+      {/* Los dos avisos NO son excluyentes, y justamente conviven en el caso que
+          importa. `onMando` devuelve false por un solo motivo, el socket cerrado,
+          que es el mismo que le pone al mando el impedimento de conexión (ver
+          `impedimentoDelMando` en DroneDetail); colgado del `else` de ese
+          impedimento, este aviso quedaba en una rama que la consola no alcanza a
+          mostrar: el false y el impedimento llegan juntos. Con el enlace cortado
+          en pleno vuelo manual, arriba se lee que el mando no responde y acá lo
+          que hay que hacer algo al respecto: el dron se sigue moviendo con la
+          última velocidad que alcanzó a recibir. */}
+      {!ultimoSalio && (
+        <p className="aviso malo" role="alert" data-testid="mando-no-salio">
+          El último comando no salió de la consola: se cortó el enlace con el Comando Central. Hasta
+          que la app corte sola (1,5 s), el dron sigue con la última velocidad que le llegó.
+        </p>
       )}
 
       <div className="mando-palancas">

@@ -4,6 +4,7 @@ import android.util.Base64
 import com.tesis.dronepatrol.comms.CommandCenterClient
 import com.tesis.dronepatrol.comms.DetectionClient
 import com.tesis.dronepatrol.drone.DroneController
+import com.tesis.dronepatrol.drone.LimitadorDeRitmo
 import com.tesis.dronepatrol.drone.MandoVirtual
 import com.tesis.dronepatrol.model.FlightEvent
 import com.tesis.dronepatrol.model.PatrolRoute
@@ -34,9 +35,10 @@ class PatrolManager(
     /** Modo elegido tras iniciar sesión: "TEST" o "DEPLOY" (viaja en cada status). */
     private val mode: String,
 ) {
-    // internal y no private: el banco de pruebas necesita el límite exacto del
-    // watchdog y el reparto de cuadros, que adentro de un lazo con reloj propio
-    // no hay forma de pararse a mirar.
+    // internal y no private: el banco de pruebas necesita los límites exactos
+    // —el del watchdog del mando, el del reparto de cuadros y el de la repetición
+    // de un aviso—, que adentro de un lazo con reloj propio no hay forma de
+    // pararse a mirar.
     internal companion object {
         // Sin telemetría durante este tiempo => consideramos perdido el enlace RC
         const val SIGNAL_TIMEOUT_MS = 4_000L
@@ -44,15 +46,21 @@ class PatrolManager(
         const val LOW_BATTERY_PCT = 25.0
         const val ORBIT_RADIUS_M = 30.0
         const val METERS_PER_DEG_LAT = 111_320.0
-        // Al software de detección se le manda uno de cada tantos cuadros; al
-        // Comando Central le va todo lo que emite el controlador (ver
-        // repartirVideo(), que explica por qué se cuentan cuadros y no
-        // milisegundos).
-        const val UNO_DE_CADA_N_A_DETECCION = 2
+        // Techo del flujo hacia el software de detección: uno cada tanto, o sea
+        // dos por segundo como máximo (contrato §1). Al Comando Central le va
+        // todo lo que emite el controlador (ver repartirVideo(), que explica por
+        // qué el techo se mide con reloj y no contando cuadros).
+        const val INTERVALO_DETECCION_MS = 500L
         // Estando en MANUAL, sin órdenes de mando por más de este tiempo la app
         // manda ceros por su cuenta (ver mandoWatchdog()).
         const val MANDO_TIMEOUT_MS = 1_500L
         const val REVISION_MANDO_MS = 250L
+
+        /**
+         * Cada cuánto, como mucho, se vuelve a avisar un problema del dron que
+         * sigue siendo el MISMO (ver hayQueAvisarElProblema()).
+         */
+        const val REPETIR_PROBLEMA_MS = 60_000L
 
         // PAUSED/MANUAL/FORCED también son vuelo: batería baja y pérdida de
         // señal disparan el RTH igual que patrullando
@@ -89,6 +97,36 @@ class PatrolManager(
             if (ultimoMandoMs == 0L || estacionario) return false
             return ahoraMs - ultimoMandoMs > MANDO_TIMEOUT_MS
         }
+
+        /**
+         * Decide si un problema del dron se reporta al Comando Central. El aviso
+         * es por TRANSICIÓN —cuando cambia el motivo— y no por intento: el
+         * controlador reintenta habilitar el mando virtual en cada vuelta de su
+         * lazo de comandos (10 Hz), así que el MISMO rechazo llega diez veces por
+         * segundo, y cada reporte es una fila en la tabla `events` del Comando
+         * Central más un broadcast a cada consola abierta. El propio contrato lo
+         * prohíbe: a 10 Hz inunda el registro y tapa todo lo demás, justo cuando
+         * hay un problema real que mirar.
+         *
+         * Un problema que sigue ahí igual no puede quedar mudo para siempre, así
+         * que el mismo motivo se repite a lo sumo cada [REPETIR_PROBLEMA_MS].
+         *
+         * Va aparte y sin reloj propio, como [hayQueCortarElMando], para poder
+         * probar el borde exacto sin dormir el test.
+         */
+        internal fun hayQueAvisarElProblema(
+            motivo: String,
+            ultimoMotivo: String?,
+            ahoraMs: Long,
+            ultimoAvisoMs: Long,
+        ): Boolean {
+            if (motivo != ultimoMotivo) return true
+            // Un transcurrido negativo es el reloj del celular acomodándose hacia
+            // atrás (NTP, cambio de hora): se avisa y se vuelve a anclar, igual
+            // que en LimitadorDeRitmo, en vez de quedar mudo hasta que el reloj
+            // recupere la diferencia.
+            return (ahoraMs - ultimoAvisoMs) !in 0 until REPETIR_PROBLEMA_MS
+        }
     }
 
     private val _state = MutableStateFlow(PatrolState.IDLE)
@@ -119,7 +157,9 @@ class PatrolManager(
     /**
      * Momento del último `manual_stick`; 0 = ninguno desde que se tomó el
      * control. Lo escribe el hilo del WebSocket y lo lee el watchdog del mando,
-     * que corre en otra corrutina: de ahí el volátil.
+     * que corre en otra corrutina: de ahí el volátil. Ojo: el volátil solo evita
+     * que el valor quede pegado en un núcleo; lo que hace segura la marca contra
+     * las transiciones es [cerrojoDelMando].
      */
     @Volatile
     private var ultimoMandoMs = 0L
@@ -147,6 +187,39 @@ class PatrolManager(
      */
     @Volatile
     private var saltoManualEnCurso = false
+
+    /**
+     * Serializa las tres cosas que deciden sobre el mando manual: [onManualStick],
+     * [pasarA] y el corte de [mandoWatchdog]. Hace falta porque `onManualStick`
+     * corre en el hilo lector de OkHttp —llegan diez por segundo y no se abre una
+     * corrutina por mensaje— mientras las transiciones corren en corrutinas, y
+     * los `@Volatile` sueltos no dan exclusión entre "leo el estado" y "escribo
+     * las marcas y le hablo al dron".
+     *
+     * Lo que arreglaba: con la batería al 25 % y el operador sosteniendo la
+     * palanca, un mando que ya había pasado la puerta del estado le llegaba al
+     * controlador DESPUÉS del regreso a base y se lo relevaba (en el DJI,
+     * `manualStick` cancela el lazo de navegación), con el dron yéndose a 5 m/s.
+     * Al revés, las marcas escritas después de que [pasarA] las limpió dejaban al
+     * watchdog cortándole el regreso un segundo y medio más tarde.
+     *
+     * De acá sale la invariante que hace segura la red de seguridad: las marcas
+     * del mando solo pueden quedar escritas con el estado en MANUAL (ver
+     * [mandoWatchdog]).
+     *
+     * Las órdenes al dron que NO son del mando se mandan con el cerrojo ya
+     * soltado: para esas alcanza con que el estado esté pisado, que es la puerta
+     * que mira [onManualStick].
+     */
+    private val cerrojoDelMando = Any()
+
+    /**
+     * Último motivo de problema reportado y cuándo (ver [hayQueAvisarElProblema]).
+     * Sin volátil ni cerrojo a propósito: los toca solo [onFlightEvent], que corre
+     * en la única corrutina que colecta `controller.flightEvents`.
+     */
+    private var ultimoProblemaAvisado: String? = null
+    private var ultimoProblemaAvisadoMs = 0L
 
     private var started = false
 
@@ -197,32 +270,38 @@ class PatrolManager(
      * Reparto del video. El Comando Central recibe TODOS los cuadros que emite
      * el controlador —5 por segundo, tanto con el dron real como con el
      * simulado ([com.tesis.dronepatrol.drone.CuadroDeVideo.INTERVALO_CUADRO_MS])—:
-     * es el video que mira el operador y con el que decide. Al software de
-     * detección se le manda uno de cada [UNO_DE_CADA_N_A_DETECCION], o sea
-     * **2,5 cuadros por segundo**: el enlace con la laptop es el más flojo de
-     * los tres y detectar una persona o un vehículo no necesita más.
+     * es el video que mira el operador y con el que decide. A la detección se le
+     * deja pasar uno cada [INTERVALO_DETECCION_MS] —**dos por segundo como
+     * techo**, lo que fija el contrato §1—: el enlace con la laptop es el más
+     * flojo de los tres y detectar una persona o un vehículo no necesita más.
      *
-     * Se cuentan CUADROS y no milisegundos a propósito. El flujo que llega acá
-     * ya viene raleado a 200 ms, así que un limitador de tiempo solo puede
-     * aceptar en múltiplos de esos 200 ms: pedirle 500 ms daba 600 (1,67 fps) y
-     * cualquier temblor en la entrega lo corría a 700 (1,43 fps). Contando sale
-     * un ritmo exacto, estable y explicable — 2,5 fps, la mitad de 5— y no hay
-     * un borde en el que un cuadro entero se pierda por un milisegundo.
+     * El techo se mide con RELOJ y no contando cuadros. Contando salía la mitad
+     * de lo que entra, así que el ritmo de la detección quedaba atado al del
+     * controlador: sobre los 5 por segundo de hoy daban 2,5 —un 25 % más de lo
+     * pactado, encima del enlace más flojo— y si mañana el controlador emitiera
+     * 10, la detección se iba a 5 sin que nada la frene. Con reloj el techo vale
+     * cualquiera sea el ritmo de entrada, que es lo que fija el contrato §1.
+     *
+     * Lo que se paga: como el flujo que llega acá ya viene raleado a 200 ms, el
+     * limitador solo puede aceptar en múltiplos de esos 200 ms, así que sobre 5
+     * por segundo acepta uno de cada tres (1,67 por segundo). Queda por debajo
+     * del techo y no por encima, que es del lado que hay que errar.
      *
      * Los dos destinos llegan por parámetro para poder probar el reparto sin
-     * sockets: quién recibe qué es justamente lo que hay que verificar.
+     * sockets: quién recibe qué es justamente lo que hay que verificar. El reloj
+     * también, para medir el techo sin dormir el test.
      */
     internal suspend fun repartirVideo(
         alComandoCentral: (String) -> Unit,
         aLaDeteccion: (String) -> Unit,
+        ahoraMs: () -> Long = System::currentTimeMillis,
     ) {
-        var cuadrosVistos = 0
+        val techoDeLaDeteccion = LimitadorDeRitmo(INTERVALO_DETECCION_MS)
         controller.videoFrames.collect { frame ->
             lastFrame = frame
             val b64 = Base64.encodeToString(frame, Base64.NO_WRAP)
             alComandoCentral(b64)
-            if (cuadrosVistos % UNO_DE_CADA_N_A_DETECCION == 0) aLaDeteccion(b64)
-            cuadrosVistos++
+            if (techoDeLaDeteccion.aceptar(ahoraMs())) aLaDeteccion(b64)
         }
     }
 
@@ -230,8 +309,11 @@ class PatrolManager(
         this.route = route
         lastReachedWaypoint = 0
         resumeWaypoint = 0
-        controller.startRoute(route, 0)
+        // Primero el estado y después la orden, como manda pasarA(): si no, un
+        // mando que viene en camino se cuela entre las dos, pasa la puerta de
+        // onManualStick() y le releva el lazo de la ruta recién ordenada.
         pasarA(PatrolState.PATROLLING)
+        controller.startRoute(route, 0)
         report("PATROL_STARTED", "Patrullaje iniciado en ruta \"${route.name}\"")
     }
 
@@ -253,8 +335,11 @@ class PatrolManager(
         route = r
         lastReachedWaypoint = desde
         resumeWaypoint = desde
-        controller.startRoute(r, desde)
+        // El estado antes que la orden (ver pasarA()): esta transición es
+        // alcanzable desde MANUAL —el operador puede pedir otra ruta sin soltar
+        // el control— y al revés un mando en camino le relevaba la ruta.
         pasarA(PatrolState.PATROLLING)
+        controller.startRoute(r, desde)
         report("PATROL_STARTED", "Patrullaje iniciado en ruta \"${r.name}\" desde el nodo ${desde + 1} (orden de $orderedBy)")
     }
 
@@ -276,13 +361,18 @@ class PatrolManager(
         // Ojo: no se pisa resumeWaypoint, así un resume posterior retoma el
         // patrullaje normal desde el último nodo recorrido
         forcedIndex = index
-        controller.gotoPoint(wp.lat, wp.lon)
+        // El estado antes que la orden (ver pasarA()): también se llega acá desde
+        // MANUAL, y un mando colado en el medio abandona el desvío recién pedido.
         pasarA(PatrolState.FORCED)
+        controller.gotoPoint(wp.lat, wp.lon)
         report("FORCED_GOTO", "Desvío forzado hacia el nodo ${index + 1} (orden de $orderedBy)")
     }
 
     private fun onControlTaken(by: String) {
         if (_state.value == PatrolState.PATROLLING) resumeWaypoint = lastReachedWaypoint
+        // Acá el orden es el inverso del resto de las transiciones a propósito: esta
+        // ABRE la puerta del mando en vez de cerrarla, así que el vuelo estacionario
+        // tiene que quedar ordenado ANTES, o el primer mando del operador se lo come.
         controller.hold()
         // Arranca sin mando previo: el watchdog no tiene que arrastrar lo que
         // haya quedado de la vez anterior que alguien tomó el control.
@@ -316,25 +406,33 @@ class PatrolManager(
      *
      * No se registra nada: a diez mensajes por segundo, el log local sería
      * ilegible. Lo que sí queda registrado es tomar y soltar el control.
+     *
+     * El cuerpo entero va adentro de [cerrojoDelMando]: leer el estado, marcar el
+     * mando y comandarle velocidad al dron tienen que ser UN solo paso contra las
+     * transiciones, que corren en corrutinas. Suelto, un mando que ya había
+     * pasado la puerta le llegaba al controlador después de un regreso a base y
+     * se lo relevaba.
      */
     private fun onManualStick(pitch: Double, roll: Double, yaw: Double, throttle: Double) {
-        if (_state.value != PatrolState.MANUAL) return
-        // Se mira el mando ya traducido: una palanca apenas movida cae en la
-        // zona muerta y es vuelo estacionario, no una velocidad que cortar.
-        val v = MandoVirtual.velocidades(pitch, roll, yaw, throttle)
-        ultimoMandoMs = System.currentTimeMillis()
-        ultimoMandoEstacionario = v.estacionario
-        // Regla: manda el último comando DELIBERADO. Un mensaje con los cuatro
-        // ejes en cero es el que la consola manda al SOLTAR la palanca —el
-        // cierre del gesto, no una orden de frenar—, así que no puede abortar un
-        // `manual_move` que está a mitad de camino: el pad y las palancas viven
-        // en el mismo panel de la consola y rozar una palanca dejaba el salto de
-        // 25 m tirado en cualquier lado, en silencio. Cualquier eje fuera de la
-        // zona muerta, en cambio, es el operador agarrando la palanca a
-        // propósito: ahí sí el salto se abandona y manda la palanca.
-        if (v.estacionario && saltoManualEnCurso) return
-        saltoManualEnCurso = false
-        controller.manualStick(pitch, roll, yaw, throttle)
+        synchronized(cerrojoDelMando) {
+            if (_state.value != PatrolState.MANUAL) return@synchronized
+            // Se mira el mando ya traducido: una palanca apenas movida cae en la
+            // zona muerta y es vuelo estacionario, no una velocidad que cortar.
+            val v = MandoVirtual.velocidades(pitch, roll, yaw, throttle)
+            ultimoMandoMs = System.currentTimeMillis()
+            ultimoMandoEstacionario = v.estacionario
+            // Regla: manda el último comando DELIBERADO. Un mensaje con los cuatro
+            // ejes en cero es el que la consola manda al SOLTAR la palanca —el
+            // cierre del gesto, no una orden de frenar—, así que no puede abortar un
+            // `manual_move` que está a mitad de camino: el pad y las palancas viven
+            // en el mismo panel de la consola y rozar una palanca dejaba el salto de
+            // 25 m tirado en cualquier lado, en silencio. Cualquier eje fuera de la
+            // zona muerta, en cambio, es el operador agarrando la palanca a
+            // propósito: ahí sí el salto se abandona y manda la palanca.
+            if (v.estacionario && saltoManualEnCurso) return@synchronized
+            saltoManualEnCurso = false
+            controller.manualStick(pitch, roll, yaw, throttle)
+        }
     }
 
     /**
@@ -352,15 +450,28 @@ class PatrolManager(
      *
      * [frenar] es para las transiciones que NO le dan otra orden al dron; con una
      * ruta, un desvío o un regreso a base en camino, un vuelo estacionario acá se
-     * la comería, así que por defecto no frena.
+     * la comería, así que por defecto no frena. Cuando se pide, frena SIEMPRE y
+     * no solo viniendo de MANUAL: el dron sostiene la última velocidad comandada
+     * sin importar quién se la dio, y en el DJI el lazo de la ruta o de la órbita
+     * sigue vivo mandándole velocidades a 10 Hz hasta que otra orden lo releve.
+     * Con el frenar colgado de la salida de MANUAL, perder la señal patrullando
+     * dejaba la ruta corriendo mientras el Comando Central mostraba "volviendo a
+     * base", y el dron retomaba la marcha en cuanto el enlace se reenganchaba.
+     *
+     * El estado y las marcas se pisan adentro de [cerrojoDelMando]; el freno se
+     * manda con el cerrojo ya soltado, porque para eso alcanza con que la puerta
+     * del estado esté cerrada.
      */
     private fun pasarA(nuevo: PatrolState, frenar: Boolean = false) {
-        val salimosDeManual = _state.value == PatrolState.MANUAL && nuevo != PatrolState.MANUAL
-        _state.value = nuevo
-        if (!salimosDeManual) return
-        ultimoMandoMs = 0L
-        ultimoMandoEstacionario = true
-        saltoManualEnCurso = false
+        synchronized(cerrojoDelMando) {
+            val salimosDeManual = _state.value == PatrolState.MANUAL && nuevo != PatrolState.MANUAL
+            _state.value = nuevo
+            if (salimosDeManual) {
+                ultimoMandoMs = 0L
+                ultimoMandoEstacionario = true
+                saltoManualEnCurso = false
+            }
+        }
         if (frenar) controller.hold()
     }
 
@@ -375,8 +486,19 @@ class PatrolManager(
      * Atarlo al estado apagaba la red de seguridad justo en el momento que la
      * necesita: al perderse la señal el estado pasa a RETURNING_HOME_SIGNAL y el
      * watchdog hacía `continue` para siempre, con el dron todavía comandado a la
-     * última velocidad. Las salidas de MANUAL ya frenan por su cuenta (ver
-     * [pasarA]); esto cubre el mando que alcanzó a cruzarse con la transición.
+     * última velocidad. Toda salida de MANUAL ya suelta el mando por su cuenta
+     * —frenando cuando nadie más le habla al dron, o entregándole la orden nueva
+     * cuando hay una (ver [pasarA])—; esto cubre el mando que alcanzó a cruzarse
+     * con la transición.
+     *
+     * Que el corte NO pueda caerle encima a un regreso a base —donde el dron
+     * tiene su propia orden y un `manualStick(0,0,0,0)` no la frena, se la releva—
+     * no lo decide este guard: lo decide [cerrojoDelMando]. Las marcas del mando
+     * se escriben con el estado en MANUAL y [pasarA] las limpia al salir, las dos
+     * cosas con el cerrojo tomado, así que fuera de MANUAL no hay marca viva y
+     * [hayQueCortarElMando] contesta que no. Por eso el corte va adentro del
+     * mismo cerrojo que la decisión: entre "hay que cortar" y cortar tampoco
+     * puede meterse una transición.
      *
      * Queda solo en el registro local y no se reporta como evento: el enlace con
      * el Comando Central es justamente el que se sospecha caído.
@@ -384,16 +506,20 @@ class PatrolManager(
     private suspend fun mandoWatchdog() {
         while (true) {
             delay(REVISION_MANDO_MS)
-            if (!controlTomado) continue
-            if (!hayQueCortarElMando(System.currentTimeMillis(), ultimoMandoMs, ultimoMandoEstacionario)) continue
-            ultimoMandoMs = 0L
-            ultimoMandoEstacionario = true
-            saltoManualEnCurso = false
-            controller.manualStick(0.0, 0.0, 0.0, 0.0)
-            log(
-                "Hace más de ${MANDO_TIMEOUT_MS / 1_000.0} s que no llegan órdenes de mando: " +
-                    "el dron queda en vuelo estacionario",
-            )
+            synchronized(cerrojoDelMando) {
+                if (!controlTomado) return@synchronized
+                if (!hayQueCortarElMando(System.currentTimeMillis(), ultimoMandoMs, ultimoMandoEstacionario)) {
+                    return@synchronized
+                }
+                ultimoMandoMs = 0L
+                ultimoMandoEstacionario = true
+                saltoManualEnCurso = false
+                controller.manualStick(0.0, 0.0, 0.0, 0.0)
+                log(
+                    "Hace más de ${MANDO_TIMEOUT_MS / 1_000.0} s que no llegan órdenes de mando: " +
+                        "el dron queda en vuelo estacionario",
+                )
+            }
         }
     }
 
@@ -523,8 +649,19 @@ class PatrolManager(
                 }
             }
             // Un rechazo del dron no puede quedar mudo: el operador mueve la
-            // palanca, el dron no se mueve y sin esto no hay ni una pista.
-            is FlightEvent.Problema -> report("DRONE_PROBLEM", "El dron rechazó una orden: ${e.motivo}")
+            // palanca, el dron no se mueve y sin esto no hay ni una pista. Pero
+            // se avisa por TRANSICIÓN y no por intento: el controlador reintenta
+            // en cada vuelta de su lazo de 10 Hz y el mismo rechazo llegaba diez
+            // veces por segundo, cada una una fila en `events` y un broadcast a
+            // cada consola (ver hayQueAvisarElProblema()).
+            is FlightEvent.Problema -> {
+                val ahora = System.currentTimeMillis()
+                if (hayQueAvisarElProblema(e.motivo, ultimoProblemaAvisado, ahora, ultimoProblemaAvisadoMs)) {
+                    ultimoProblemaAvisado = e.motivo
+                    ultimoProblemaAvisadoMs = ahora
+                    report("DRONE_PROBLEM", "El dron rechazó una orden: ${e.motivo}")
+                }
+            }
         }
     }
 
@@ -538,8 +675,12 @@ class PatrolManager(
         // Simplificación del MVP: se orbita la posición actual del dron (el
         // objetivo está dentro del campo visual). Georreferenciar la detección
         // queda para la etapa del software de visión.
-        controller.startOrbit(t.lat, t.lon, ORBIT_RADIUS_M)
+        // El estado antes que la orden, como en el resto de las transiciones (ver
+        // pasarA()). Acá no hay carrera —solo se orbita viniendo de PATROLLING, y
+        // en PATROLLING el mando ya está descartado—, pero la disciplina es una y
+        // la próxima transición que se agregue se copia de las que hay.
         pasarA(PatrolState.ORBITING)
+        controller.startOrbit(t.lat, t.lon, ORBIT_RADIUS_M)
         report("ORBIT_STARTED", "Detección de $alertType: el dron pasa a modo órbita")
 
         val snapshot = lastFrame?.let { Base64.encodeToString(it, Base64.NO_WRAP) }
@@ -564,8 +705,11 @@ class PatrolManager(
         val desde = (fromIndex ?: resumeWaypoint).coerceIn(0, r.waypoints.size - 1)
         resumeWaypoint = desde
         lastReachedWaypoint = desde
-        controller.startRoute(r, desde)
+        // El estado antes que la orden (ver pasarA()): ESTADOS_REANUDABLES
+        // incluye MANUAL y el operador puede apretar "Retomar ruta" sin soltar el
+        // control, así que acá también hay un mando a 10 Hz golpeando la puerta.
         pasarA(PatrolState.PATROLLING)
+        controller.startRoute(r, desde)
         report("PATROL_RESUMED", "Patrullaje reanudado desde el nodo ${desde + 1} ($reason)")
     }
 

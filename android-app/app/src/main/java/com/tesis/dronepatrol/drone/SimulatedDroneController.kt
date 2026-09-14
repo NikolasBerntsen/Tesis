@@ -40,7 +40,7 @@ class SimulatedDroneController : DroneController {
         const val TICK_MS = 500L
         // El video simulado sale al MISMO ritmo que el del dron real (5 cuadros
         // por segundo): así el reparto que hace PatrolManager —todo al Comando
-        // Central, uno de cada dos a la detección— da los mismos números en el
+        // Central, uno cada 500 ms a la detección— da los mismos números en el
         // banco de pruebas que en el campo, que es justamente para lo que está
         // el simulador. Antes iba a 2 fps y el banco medía otra cosa.
         const val FRAME_MS = CuadroDeVideo.INTERVALO_CUADRO_MS

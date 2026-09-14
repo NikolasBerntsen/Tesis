@@ -118,15 +118,24 @@ El controlador emite cuadros JPEG y `PatrolManager` los reparte:
 | Destino | Ritmo | Por qué |
 |---|---|---|
 | Comando Central | **5 por segundo** (`CuadroDeVideo.INTERVALO_CUADRO_MS`) | Es el video que mira el operador y con el que decide |
-| Software de detección | **2,5 por segundo**: uno de cada `PatrolManager.UNO_DE_CADA_N_A_DETECCION` | El enlace con la laptop es el más flojo de los tres y detectar no necesita más |
+| Software de detección | **2 por segundo como techo**: uno cada `PatrolManager.INTERVALO_DETECCION_MS` | El enlace con la laptop es el más flojo de los tres y detectar no necesita más |
 
-El ritmo de la detección se cuenta en **cuadros y no en milisegundos**. El flujo
-que llega al reparto ya viene raleado a 200 ms, así que un limitador de tiempo
-solo puede aceptar en múltiplos de esos 200 ms: pedirle 500 ms daba 600 (1,67
-por segundo) y cualquier temblor en la entrega lo corría a 700 (1,43). Contando
-sale un ritmo exacto y estable —la mitad de 5— y no hay un borde en el que un
-cuadro entero se pierda por un milisegundo. Los 2 por segundo del contrato no
-son alcanzables diezmando un flujo de 5: 5/2 no da un entero.
+El techo de la detección se mide con **reloj y no contando cuadros**, y eso es a
+propósito. Contando salía la mitad de lo que entra, así que el ritmo de la
+detección quedaba atado al del controlador: sobre los 5 por segundo de hoy daba
+2,5 —un 25 % más de lo que fija el contrato, encima del enlace más flojo de los
+tres— y si mañana `CuadroDeVideo.INTERVALO_CUADRO_MS` bajara a 100 ms, la
+detección pasaba a 5 por segundo sin que nada la frenara. Con reloj el techo vale
+cualquiera sea el ritmo de entrada, que es lo que fija el **contrato §1** de la
+entrega: cinco por segundo a la consola y dos a la detección. `docs/PROTOCOLS.md`
+—que es del frente backend— tiene que citar este mismo techo; si alguna vez dicen
+números distintos, el que manda es el contrato.
+
+Lo que se paga: como el flujo que llega al reparto ya viene raleado a 200 ms, el
+limitador solo puede aceptar en múltiplos de esos 200 ms, así que sobre 5 por
+segundo acepta uno de cada tres: **1,67 por segundo efectivos**. Queda por debajo
+del techo de 2 y no por encima, que es del lado que hay que errar cuando lo que
+está en juego es el enlace más flojo.
 
 El dron simulado emite al mismo ritmo que el real (5 por segundo): así el banco
 de pruebas mide los mismos números que el campo, que es para lo que está.
@@ -152,16 +161,32 @@ controlador las ejecuta: el simulado moviendo su posición, el DJI mandando
 > del celular: el dron sostiene la última velocidad comandada hasta que le
 > llegue otra, así que sin esto seguiría andando con nadie al mando. Vigila
 > mientras el control esté **tomado** y no mientras el estado sea `MANUAL`:
-> atarlo al estado lo apagaba justo en la transición que lo necesita.
+> atarlo al estado lo apagaba justo en la transición que lo necesita. Que el
+> corte no pueda caerle encima a un regreso a base —donde el dron tiene su propia
+> orden y unos ejes en cero no la frenan, se la relevan— no lo decide ese guard
+> sino el cerrojo del mando: las marcas que el watchdog vigila solo se escriben
+> con el estado en `MANUAL`, y salir de `MANUAL` las limpia, las dos cosas con el
+> cerrojo tomado.
 
 El mando se aplica **solo** en estado `MANUAL`; en cualquier otro se descarta.
 
-> **Salir de `MANUAL` frena.** Toda transición de estado pasa por
-> `PatrolManager.pasarA()`, que al salir de `MANUAL` suelta el mando: le ordena
-> vuelo estacionario si nadie más le está hablando al dron (pérdida de señal,
-> control liberado) y en todos los casos limpia lo que el watchdog vigila, para
-> que no le corte a los 1,5 s la orden nueva (una ruta, un desvío, el regreso a
-> base). Por el mismo motivo, al recuperar la señal el estado siempre tiene
+> **Frenar y soltar el mando son dos cosas distintas.** Toda transición pasa por
+> `PatrolManager.pasarA()`. Al **salir de `MANUAL`** limpia lo que el watchdog
+> vigila, para que no le corte a los 1,5 s la orden nueva (una ruta, un desvío, el
+> regreso a base). Y **frena** —vuelo estacionario— cuando la transición no le da
+> otra orden al dron (pérdida de señal, control liberado), venga del estado que
+> venga: el dron sostiene la última velocidad comandada sin importar quién se la
+> dio, y el lazo de la ruta o de la órbita sigue vivo mandándole velocidades a
+> 10 Hz hasta que otra orden lo releve. Con el freno colgado de la salida de
+> `MANUAL`, perder la señal patrullando dejaba la ruta corriendo mientras la
+> consola mostraba "volviendo a base".
+>
+> El orden dentro de cada transición también es parte del arreglo: **primero se
+> pisa el estado y después se le habla al dron**. El estado es la puerta que mira
+> `onManualStick` desde el hilo del WebSocket, y con la orden primero un mando que
+> llega a 10 Hz se cuela entre las dos y le releva la ruta recién ordenada.
+>
+> Por el mismo motivo, al recuperar la señal el estado siempre tiene
 > salida: vuelve a `MANUAL` si el operador nunca soltó el control, retoma la ruta
 > si hay una, y si no queda en `PAUSED` y en vuelo estacionario.
 
@@ -188,8 +213,8 @@ waypoints del SDK: son solo Enterprise). Antes de volar hace falta:
 
 > Este flavor **no fue probado con hardware** en esta entrega y CI no lo compila
 > (hace falta `-PenableDji`). Por eso todo lo que se puede probar sin dron —la
-> conversión de los cuadros, el limitador de ritmo y la escala del mando— vive en
-> el sourceSet `main` con sus pruebas —y, desde el contraste, también el rumbo
+> conversión de los cuadros, el limitador de ritmo, la espera creciente entre
+> reintentos y la escala del mando— vive en el sourceSet `main` con sus pruebas —y, desde el contraste, también el rumbo
 > hacia un punto (`drone/Geo.kt`), que estaba duplicado a mano en los dos
 > controladores y en uno de ellos sin escalar la longitud por `cos(lat)`—, y el
 > archivo del flavor quedó lo más flaco posible: apenas el pegamento con el SDK.
@@ -211,17 +236,20 @@ waypoints del SDK: son solo Enterprise). Antes de volar hace falta:
 | `SimulatedDroneControllerTest` | Navegación, rumbo, altura y drenaje de batería del dron simulado, y el mando virtual: sube con throttle, gira con yaw, avanza con pitch y se queda quieto con los cuatro ejes en cero |
 | `CuadroDeVideoTest` | Tamaño de destino y conversión NV21 → ARGB: submuestreo, `offset`, cuadro corto y recorte de los canales |
 | `CuadroDeVideoJpegTest` | La compresión a JPEG, que es la parte que necesita `android.graphics` |
-| `LimitadorDeRitmoTest` | El limitador que ralea el flujo de 30 fps del SDK a los 5 que se publican |
+| `LimitadorDeRitmoTest` | El limitador que ralea el flujo de 30 fps del SDK a los 5 que se publican y pone el techo de la detección |
+| `EsperaCrecienteTest` | La espera que se duplica entre reintentos de la habilitación del mando virtual: sin ella el rechazo del dron se reintentaba —y se avisaba— diez veces por segundo |
 | `MandoVirtualTest` | Zona muerta, recorte, signos de cada eje y rotación por rumbo |
 | `PatrolManagerMandoTest` | El mando se ignora fuera de `MANUAL`, llega entero (pitch, roll, yaw, throttle), el watchdog manda ceros cuando el mando se calla —y no salta de prepo—, y el mensaje de cierre de la palanca no aborta un `manual_move` en curso |
-| `PatrolManagerSalidasDeManualTest` | Toda salida de `MANUAL` deja al dron quieto y no le deja el mando colgado al watchdog (con un dron espía que anota cada orden) |
-| `PatrolManagerVideoTest` | El reparto del video: todos los cuadros al Comando Central, uno de cada dos a la detección |
+| `PatrolManagerSalidasDeManualTest` | Toda salida de `MANUAL` deja al dron quieto y no le deja el mando colgado al watchdog, y las dos carreras contra el mando que llega a 10 Hz desde el hilo del WebSocket: ni se cuela después de un regreso a base ni entre la orden de ruta y el estado (con un dron espía que anota cada orden) |
+| `PatrolManagerPerdidaDeSenialTest` | Perder el enlace de radio frena al dron desde CADA estado de vuelo —patrullando, orbitando y en un desvío—, no solo con el control manual tomado |
+| `PatrolManagerAvisosDelDronTest` | Un rechazo del dron se avisa por transición y no por intento: treinta iguales son un aviso, uno distinto avisa, y el mismo motivo recién vuelve pasado el minuto |
+| `PatrolManagerVideoTest` | El reparto del video: todos los cuadros al Comando Central, uno cada 500 ms a la detección (con reloj de mentira), que el techo no se mueva si el controlador emite más rápido, y el cableado real de `start()` |
 | `CommandCenterClientTest` | El mapeo de los mensajes del WebSocket a órdenes, eje por eje |
 | `GeoTest` | Rumbo y metros por grado de longitud, que comparten el simulador y el DJI |
 
 `DetectionClientTest`, `HashDeDronTest`, `CuadroDeVideoTest`,
-`LimitadorDeRitmoTest`, `MandoVirtualTest` y `GeoTest` corren en la JVM pelada,
-sin Robolectric.
+`LimitadorDeRitmoTest`, `MandoVirtualTest`, `EsperaCrecienteTest` y `GeoTest`
+corren en la JVM pelada, sin Robolectric.
 
 ## Estructura
 

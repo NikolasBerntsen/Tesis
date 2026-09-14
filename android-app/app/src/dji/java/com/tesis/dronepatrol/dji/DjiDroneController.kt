@@ -3,6 +3,7 @@ package com.tesis.dronepatrol.dji
 import android.util.Log
 import com.tesis.dronepatrol.drone.CuadroDeVideo
 import com.tesis.dronepatrol.drone.DroneController
+import com.tesis.dronepatrol.drone.EsperaCreciente
 import com.tesis.dronepatrol.drone.Geo
 import com.tesis.dronepatrol.drone.LimitadorDeRitmo
 import com.tesis.dronepatrol.drone.MandoVirtual
@@ -29,6 +30,7 @@ import dji.v5.manager.aircraft.virtualstick.VirtualStickStateListener
 import dji.v5.manager.datacenter.MediaDataCenter
 import dji.v5.manager.interfaces.ICameraStreamManager
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -37,15 +39,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Integración real con el DJI Mini 4 Pro vía MSDK v5.
@@ -139,6 +138,22 @@ class DjiDroneController : DroneController {
      * aeronave revoca la autoridad de vuelo por su cuenta.
      */
     private val virtualStickListo = AtomicBoolean(false)
+
+    /**
+     * Último motivo avisado, para que el aviso sea por TRANSICIÓN y no por
+     * intento (ver [avisar]). Es atómico y no `@Volatile` porque la comparación y
+     * la escritura tienen que ser un solo paso: los avisos salen del hilo del SDK
+     * y de los lazos de comando a la vez, y dos hilos con el mismo motivo no
+     * pueden avisar los dos.
+     */
+    private val ultimoAviso = AtomicReference<String?>(null)
+
+    /**
+     * Espera del reintento de la habilitación del Virtual Stick. Sin esto, el
+     * rechazo se reintentaba en cada vuelta del lazo de comandos: 10 veces por
+     * segundo, para siempre (ver [asegurarVirtualStick]).
+     */
+    private val reintentoDelMandoVirtual = EsperaCreciente(REINTENTO_MANDO_INICIAL_MS, REINTENTO_MANDO_TOPE_MS)
 
     private val limitadorDeCuadros = LimitadorDeRitmo(CuadroDeVideo.INTERVALO_CUADRO_MS)
 
@@ -411,23 +426,43 @@ class DjiDroneController : DroneController {
     }
 
     /**
-     * El orden de acá abajo es la mitad del arreglo. Antes se cancelaba el lazo
-     * sin esperarlo y se deshabilitaba el Virtual Stick enseguida: una vuelta
-     * que ya había pasado el `delay` entraba a `enviarVelocidadCuerpo`, llamaba
-     * a [asegurarVirtualStick] y lo volvía a habilitar DESPUÉS del disable. El
+     * Cerrar la puerta ANTES de cortar es la mitad del arreglo. Antes se
+     * deshabilitaba el Virtual Stick sin más: una vuelta del lazo que ya había
+     * pasado el `delay` entraba a `enviarVelocidadCuerpo`, llamaba a
+     * [asegurarVirtualStick] y lo volvía a habilitar DESPUÉS del disable. El
      * Virtual Stick quedaba prendido con la app cerrada y el operador no
      * recuperaba el dron con las palancas del RC-N3.
+     *
+     * No se ESPERA a que el lazo muera, y eso es a propósito. Esto lo llaman
+     * `onDestroy()` y el botón de "Desconectar y volver al login", los dos en el
+     * hilo principal de Android: esperar el corte —aunque sea con tope— congelaba
+     * la pantalla hasta medio segundo cada vez que el lazo estaba en medio de una
+     * llamada al SDK, incluida cada recreación por rotación.
+     *
+     * Y la espera no es lo que hace falta para la corrección: lo que impide que
+     * una vuelta en camino vuelva a HABILITAR el Virtual Stick es `desconectado`,
+     * que ya quedó en true y lo miran tanto [asegurarVirtualStick] como el
+     * `onSuccess` de su callback.
+     *
+     * Lo que sí queda, y hay que decirlo: una vuelta que ya pasó el `delay` puede
+     * alcanzar a mandar UN parámetro más justo antes de que el dron procese el
+     * `disableVirtualStick`. Es una sola velocidad y el Virtual Stick no se
+     * sostiene sin comandos a 10 Hz, así que el dron vuelve al palito físico del
+     * RC-N3 igual. Se elige eso antes que apagar el Virtual Stick recién cuando el
+     * lazo termine (`invokeOnCompletion`): si una vuelta quedara colgada dentro de
+     * una llamada al SDK, el apagado no llegaría NUNCA y el operador se quedaría
+     * sin poder recuperar el dron con el control, que es la falla grave que este
+     * orden existe para evitar.
      */
     override fun disconnect() {
         // 1) Se cierra la puerta: ningún lazo puede volver a habilitarlo.
         desconectado = true
-        // 2) Se espera a que el lazo muera de verdad (con tope: esto lo llama la
-        //    pantalla al cerrarse y no puede quedarse colgado).
-        val lazo = synchronized(relevoDeLazo) {
+        // 2) Se corta el lazo de comandos, sin esperarlo (ver arriba).
+        synchronized(relevoDeLazo) {
             mandoActivo = false
-            navigationJob.also { navigationJob = null }
+            navigationJob?.cancel()
+            navigationJob = null
         }
-        runBlocking { withTimeoutOrNull(ESPERA_CORTE_MS) { lazo?.cancelAndJoin() } }
         // 3) Se corta todo lo demás que sigue emitiendo: sin esto las
         //    conversiones ya lanzadas seguían publicando cuadros de un dron del
         //    que la app ya se despidió.
@@ -468,10 +503,31 @@ class DjiDroneController : DroneController {
      * puede pasar en vuelo —el operador mueve la palanca, el dron no se mueve y
      * no hay una sola pista de por qué—, y este archivo no tiene registro local
      * propio.
+     *
+     * Avisa por TRANSICIÓN: solo cuando el motivo cambia. Los llamadores están
+     * adentro de lazos que corren a 10 Hz, así que el MISMO rechazo se repetía
+     * diez veces por segundo, y cada `Problema` termina en una fila de la tabla
+     * `events` del Comando Central más un broadcast a cada consola abierta: el
+     * contrato lo prohíbe justamente porque tapa el registro de la salida cuando
+     * hay algo real que mirar. El techo de PatrolManager es el que protege al hub
+     * de cualquier controlador; éste evita además llenar el logcat del celular y
+     * el buffer de [flightEvents].
      */
     private fun avisar(motivo: String) {
+        // Comparar y recordar en un solo paso: si dos hilos traen el mismo motivo,
+        // avisa uno.
+        if (ultimoAviso.getAndSet(motivo) == motivo) return
         Log.w(TAG, motivo)
         flightEvents.tryEmit(FlightEvent.Problema(motivo))
+    }
+
+    /**
+     * El problema se resolvió. Borra la memoria de [avisar] para que, si el mismo
+     * motivo vuelve a aparecer más tarde, sea noticia otra vez en vez de quedar
+     * tapado por el aviso viejo.
+     */
+    private fun seResolvioElProblema() {
+        ultimoAviso.set(null)
     }
 
     /**
@@ -483,16 +539,27 @@ class DjiDroneController : DroneController {
      * La habilitación es asíncrona: los primeros comandos pueden caer mientras
      * el dron todavía la está aceptando y se pierden, pero como se manda a 10 Hz
      * el siguiente llega enseguida.
+     *
+     * Si el dron la rechaza, el reintento NO sale en la vuelta siguiente: entra
+     * por [reintentoDelMandoVirtual], que espera cada vez más. Un rechazo suele
+     * ser una condición que dura —el dron en el suelo sin punto de home, el RC-N3
+     * sin ceder la autoridad, un regreso a base en curso— y preguntar diez veces
+     * por segundo no la cambia.
      */
     private fun asegurarVirtualStick() {
         // La app ya se despidió del dron: habilitarlo acá sería dejárselo
         // prendido al operador (ver disconnect()).
         if (desconectado) return
+        if (!reintentoDelMandoVirtual.sePuedeIntentar(System.currentTimeMillis())) return
         if (!virtualStickListo.compareAndSet(false, true)) return
         val vs = VirtualStickManager.getInstance()
         vs.enableVirtualStick(
             object : CommonCallbacks.CompletionCallback {
                 override fun onSuccess() {
+                    reintentoDelMandoVirtual.exito()
+                    // El dron aceptó: si más adelante vuelve a rechazar, es un
+                    // problema nuevo y tiene que volver a avisarse.
+                    seResolvioElProblema()
                     // El modo avanzado es el único que acepta velocidades y
                     // marco de coordenadas; sin esto sendVirtualStickAdvancedParam
                     // no tiene efecto.
@@ -503,12 +570,15 @@ class DjiDroneController : DroneController {
                 }
 
                 override fun onFailure(error: IDJIError) {
-                    // Quedó sin habilitar: se libera la marca para que el próximo
-                    // comando lo reintente, en vez de comandar al vacío para siempre.
+                    // Quedó sin habilitar: se libera la marca para que se pueda
+                    // reintentar, en vez de comandar al vacío para siempre. El
+                    // cuándo lo pone la espera creciente.
                     virtualStickListo.set(false)
+                    reintentoDelMandoVirtual.fracaso(System.currentTimeMillis())
                     // Y se avisa: sin esto el dron ignoraba la consola en
                     // silencio, porque sendVirtualStickAdvancedParam descarta el
-                    // parámetro cuando el modo avanzado no está prendido.
+                    // parámetro cuando el modo avanzado no está prendido. El aviso
+                    // es por transición (ver avisar()).
                     avisar("el dron no aceptó el mando virtual (${error.description()}): la consola no lo va a poder mover")
                 }
             },
@@ -586,11 +656,14 @@ class DjiDroneController : DroneController {
         const val INTERVALO_MANDO_MS = 100L
 
         /**
-         * Tope de lo que [disconnect] espera a que muera el lazo de comandos. El
-         * lazo duerme en un `delay` de 100 ms, así que en la práctica corta al
-         * toque; el tope está para que cerrar la app no se cuelgue nunca.
+         * Espera del primer reintento de la habilitación del Virtual Stick y tope
+         * al que llega duplicándose. Medio segundo es holgado para un rechazo de
+         * un instante —el lazo manda a 10 Hz, así que se pierden cinco comandos—
+         * y cinco segundos es un ritmo con el que el operador sigue viendo el
+         * rechazo en la consola sin inundarla.
          */
-        const val ESPERA_CORTE_MS = 500L
+        const val REINTENTO_MANDO_INICIAL_MS = 500L
+        const val REINTENTO_MANDO_TOPE_MS = 5_000L
 
         const val TAG = "DjiDroneController"
     }

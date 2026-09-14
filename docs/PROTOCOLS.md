@@ -11,18 +11,31 @@ distintas.
 
 - Al **Comando Central** le llegan **todos** los cuadros que el controlador
   emite: es el video que mira el operador y con el que decide.
-- Al **software de detección** se le deja pasar **uno cada 500 ms** (dos por
-  segundo como techo): detectar no necesita más y el enlace con la laptop es el
-  más flojo de los tres.
+- Al **software de detección** se le deja pasar **uno de cada dos**
+  (`PatrolManager.UNO_DE_CADA_N_A_DETECCION` = 2): detectar no necesita más y el
+  enlace con la laptop es el más flojo de los tres.
+
+El reparto hacia la detección **cuenta cuadros, no milisegundos**: en ese camino
+no hay ningún limitador de tiempo. El único `LimitadorDeRitmo` está antes, en el
+hilo del SDK (`DjiDroneController`), y es el que ralea el stream de la cámara al
+intervalo del controlador. Por eso el ritmo de la detección **no es un techo
+fijo**: es siempre la mitad del ritmo del controlador. Si mañana
+`CuadroDeVideo.INTERVALO_CUADRO_MS` bajara a 100 ms (10 por segundo), la
+detección pasaría a 5 por segundo y no hay nada que la frene.
 
 Con el dron real el controlador emite cinco cuadros por segundo
-(`CuadroDeVideo.INTERVALO_CUADRO_MS`), así que la consola ve cinco y la detección
-dos. El dron **simulado** emite al ritmo que fija su propio controlador
-(`SimulatedDroneController.FRAME_MS`) y la consola ve exactamente ese, sea cual
-sea: si el simulador emitiera más despacio que el dron real, con el simulador se
-verían menos cuadros en la consola y la detección tampoco vería más que él. Antes
-de citar un número, mirá la constante: el ritmo lo pone el controlador que esté
-corriendo, no este documento.
+(`CuadroDeVideo.INTERVALO_CUADRO_MS = 200`), así que la consola ve **cinco** y la
+detección **dos y medio**. Ese 2,5 no es un redondeo prolijo de los 2 por segundo
+que pedía el contrato del MVP: diezmando un flujo de 5 no hay forma de dar 2 (uno
+de cada 2 da 2,5 y uno de cada 3 daría 1,67), y se eligió 2,5 — el KDoc de
+`PatrolManager.repartirVideo` explica por qué se cuentan cuadros y no
+milisegundos. Quien dimensione el enlace de la detección tiene que hacerlo para
+**2,5 por segundo**, no para 2. El dron **simulado** usa hoy el mismo intervalo
+(`SimulatedDroneController.FRAME_MS = CuadroDeVideo.INTERVALO_CUADRO_MS`), así
+que da los mismos números; si algún día se le pusiera otro, la consola vería ese
+ritmo y la detección su mitad. Antes de citar un número, mirá las **dos**
+constantes: el ritmo lo ponen el controlador que esté corriendo y el divisor del
+reparto, no este documento.
 
 El sistema soporta **varios drones simultáneos**. Un dron **no es una cuenta de
 usuario**: es un activo del inventario, identificado por un `hash` opaco de 32
@@ -327,6 +340,27 @@ Un valor apenas fuera de rango (un `1.4` de la normalización del arrastre del
 puntero) **no se descarta: se recorta** a `1`; lo que el operador quiso decir es
 "todo para ese lado".
 
+### Zona muerta: |eje| < 0,05 es cero
+
+Un eje cuyo valor absoluto sea **menor** que `0,05` se toma como `0`. El borde
+exacto `0,05` **no** es zona muerta (la comparación es estricta): `0.05` mueve el
+dron, `0.049` no. Es lo que evita que el mando de la consola —un dedo sobre una
+pantalla— deje al dron con una deriva de la que nadie se hace cargo al soltar
+despacio la palanca.
+
+La zona muerta la aplican **los dos extremos y no el backend**:
+
+| Quién | Qué hace | Dónde |
+|---|---|---|
+| Consola web | La aplica **antes de emitir**: un eje bajo el umbral sale como `0` | `MandoVirtual.ZONA_MUERTA` en el frontend |
+| Comando Central | **No la aplica**: solo recorta a `[-1, 1]` y reenvía el valor tal cual llegó | `eje()` en `ws.ts` |
+| App de control | La aplica **al traducir a velocidades**, después de recortar | `MandoVirtual.ZONA_MUERTA` en el Android |
+
+Para cualquier otro cliente del Comando Central esto importa: mandar
+`pitch: 0.03` es un mensaje **válido** —el hub lo acepta y lo reenvía— pero el
+dron **no se va a mover**, porque la app se lo come por zona muerta. Si hace
+falta el movimiento más chico posible, el valor a mandar es `0,05`.
+
 ### Ritmo y cierre
 
 La consola emite a **10 Hz** mientras el mando está tomado, y al soltar la
@@ -366,8 +400,11 @@ ser es que una sola consola no pueda dejar sin Comando Central a todo el resto
 - **Tamaño.** Un frame de más de 1 MiB cierra esa conexión con el código `1009`.
   El tope es grande porque por este mismo servidor entra el video del dron, que
   pesa decenas de KB por cuadro. Encima de eso, un mensaje de consola de más de
-  1 KiB se descarta **sin siquiera parsearlo**: un `manual_stick` no llega a 200
-  bytes, y parsear es justamente el trabajo caro que conviene no regalar.
+  1 KiB se descarta **sin decodificarlo ni parsearlo**: un `manual_stick` no
+  llega a 200 bytes, y decodificar y parsear es justamente el trabajo caro que
+  conviene no regalar. Ese 1 KiB se cuenta en **bytes del frame como llegó**, no
+  en letras: un mensaje lleno de acentos o de eñes pesa en UTF-8 más que su largo
+  en caracteres y el que se pasa de 1 KiB en bytes se descarta igual.
 - **Ritmo.** Cada socket tiene un cupo de mando que se repone solo. El contrato
   manda 10 Hz y el cupo tolera el doble sostenido, más una ráfaga para absorber
   los tirones del temporizador del navegador: corta la inundación, no al
@@ -420,16 +457,20 @@ Este es el contrato que debe implementar el software real de detección;
 
 | Dirección | Mensaje | Campos |
 |---|---|---|
-| celular → laptop | `video_frame` | `jpegBase64, ts` (JPEG de 640 px de ancho, **a lo sumo 2 por segundo**) |
+| celular → laptop | `video_frame` | `jpegBase64, ts` (JPEG de 640 px de ancho, **2,5 por segundo** con el dron real: la mitad del ritmo del controlador) |
 | laptop → celular | `detection` | `detected (bool), classes (["PERSON"\|"VEHICLE"]), confidence, ts` |
 
 Son los **mismos cuadros** que van al Comando Central, filtrados a menos ritmo:
 hacia la consola va todo lo que emite el controlador (donde hay una persona
-mirando y el salto se nota) y hacia la detección se deja pasar uno cada 500 ms.
-El algoritmo no necesita más, y este es el enlace más flojo de los tres. Con el
-dron real eso da cinco por segundo a la consola y dos a la detección; con el
-simulado, la consola ve el ritmo del simulador y la detección sigue sin ver más
-de dos por segundo.
+mirando y el salto se nota) y hacia la detección se deja pasar **uno de cada dos**
+(`PatrolManager.UNO_DE_CADA_N_A_DETECCION`). El algoritmo no necesita más, y este
+es el enlace más flojo de los tres. Con el dron real eso da cinco por segundo a la
+consola y **dos y medio** a la detección.
+
+Ese 2,5 **no es un techo**: el reparto cuenta cuadros y no mira el reloj, así que
+la detección recibe siempre la mitad de lo que emite el controlador (ver §1). Lo
+que hay que dimensionar es "la mitad del ritmo del controlador", no un 2 fijo: si
+el controlador subiera a 10 por segundo, acá llegarían 5.
 
 La app solo actúa ante `detected: true` y solo mientras está en estado
 `PATROLLING` (evita re-alertar mientras orbita o vuelve a base). Cuando actúa,

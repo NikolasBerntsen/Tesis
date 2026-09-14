@@ -5,6 +5,9 @@ import com.tesis.dronepatrol.comms.DetectionClient
 import com.tesis.dronepatrol.model.PatrolRoute
 import com.tesis.dronepatrol.model.PatrolState
 import com.tesis.dronepatrol.model.Waypoint
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -138,6 +141,107 @@ class PatrolManagerSalidasDeManualTest {
 
         val despues = dron.ordenes.drop(hastaAca)
         assertTrue("el watchdog le pisó el regreso a base con esto: $despues", despues.none { it.startsWith("stick") })
+    }
+
+    /**
+     * La misma carrera que el caso de arriba pero con el mando llegando DESDE OTRO
+     * HILO mientras se dispara la transición, que es como pasa en el campo: los
+     * `manual_stick` los ejecuta el hilo lector de OkHttp —a propósito, sin abrir
+     * una corrutina por mensaje— y las transiciones corren en corrutinas.
+     *
+     * El test para el mando JUSTO adentro de la orden al dron y desde ahí baja la
+     * batería. Lo que se mide es que la transición NO pueda completarse mientras
+     * hay un mando a mitad de camino: sin exclusión mutua entre "leo el estado" y
+     * "le hablo al dron", el regreso a base sale primero y el mando le llega
+     * después y se lo releva (en el DJI, `manualStick` cancela el lazo de
+     * navegación), o sea el dron yéndose a 5 m/s con la batería al 20 %. Los dos
+     * casos de arriba invocan el mando una sola vez y estrictamente antes de la
+     * transición, así que no pueden ver esto.
+     */
+    @Test
+    fun unMandoAMitadDeCaminoNoDejaPasarElRegresoPorBateria() = runBlocking {
+        tomarElControl()
+        val mandoAdentroDelDron = CountDownLatch(1)
+        val dejarSalirAlMando = CountDownLatch(1)
+        dron.alRecibirLaOrden = { orden ->
+            if (orden.startsWith("stick(1.0")) {
+                mandoAdentroDelDron.countDown()
+                dejarSalirAlMando.await(10, TimeUnit.SECONDS)
+            }
+        }
+        val hiloDelWebSocket = thread(name = "mando-de-la-consola") {
+            comandoCentral.onManualStick?.invoke(1.0, 0.0, 0.0, 0.0, "operador1")
+        }
+        assertTrue("el mando nunca llegó al dron", mandoAdentroDelDron.await(10, TimeUnit.SECONDS))
+
+        // Con el mando parado a mitad de camino, la batería cae al 20 %
+        dron.emitirTelemetria(bateria = 20.0)
+        delay(500) // sin exclusión, para acá la transición ya pasó entera
+
+        assertEquals(
+            "la transición corrió con un mando a mitad de camino: el mando le llega " +
+                "al dron DESPUÉS del regreso a base y se lo releva",
+            PatrolState.MANUAL,
+            patrulla.state.value,
+        )
+        assertTrue("el regreso a base ya se le ordenó al dron: ${dron.ordenes}", "returnHome" !in dron.ordenes)
+
+        // Soltado el mando, el regreso a base tiene que salir igual
+        dejarSalirAlMando.countDown()
+        hiloDelWebSocket.join()
+        dron.alRecibirLaOrden = null
+        withTimeout(5_000) { patrulla.state.first { it == PatrolState.RETURNING_HOME_BATTERY } }
+        delay(PatrolManager.MANDO_TIMEOUT_MS + 1_000) // y el watchdog tampoco lo corta después
+
+        val ordenes = dron.ordenes
+        val regreso = ordenes.indexOf("returnHome")
+        assertTrue("nunca se ordenó el regreso a base: $ordenes", regreso >= 0)
+        assertTrue(
+            "un mando le llegó al dron después del regreso a base: $ordenes",
+            ordenes.indexOfLast { it.startsWith("stick") } < regreso,
+        )
+    }
+
+    /**
+     * Y la otra mitad de la misma carrera: la orden al dron tiene que salir
+     * DESPUÉS de pisar el estado, nunca antes. El operador puede apretar "Retomar
+     * ruta" sin soltar el control, así que mientras corre la reanudación hay un
+     * mando a 10 Hz golpeando la puerta: con la orden primero, un mando colado en
+     * el medio ve MANUAL, pasa el guard y le releva el lazo de la ruta recién
+     * ordenada. El estado reporta PATROLLING, la ruta está muerta y el dron se va
+     * con los últimos ejes del operador. El cerrojo no alcanza para esto: la orden
+     * y el estado son dos pasos distintos del mismo handler.
+     */
+    @Test
+    fun elMandoNoSeCuelaEntreLaOrdenDeRutaYElEstado() = runBlocking {
+        patrulla.availableRoutes = listOf(ruta)
+        tomarElControl()
+        val ordenDeRutaEnCurso = CountDownLatch(1)
+        val dejarSalirLaRuta = CountDownLatch(1)
+        dron.alRecibirLaOrden = { orden ->
+            if (orden.startsWith("startRoute")) {
+                ordenDeRutaEnCurso.countDown()
+                dejarSalirLaRuta.await(10, TimeUnit.SECONDS)
+            }
+        }
+
+        comandoCentral.onStartRoute?.invoke(ruta.id, 0, "operador1")
+        assertTrue("nunca se ordenó la ruta", ordenDeRutaEnCurso.await(10, TimeUnit.SECONDS))
+        // La orden de ruta está a mitad de camino y el operador —que nunca soltó el
+        // control— sigue moviendo la palanca desde el hilo del WebSocket
+        thread(name = "mando-de-la-consola") {
+            comandoCentral.onManualStick?.invoke(1.0, 0.0, 0.0, 0.0, "operador1")
+        }.join()
+
+        assertTrue(
+            "un mando se coló entre la orden de ruta y el estado y le relevó la ruta: ${dron.ordenes}",
+            dron.ordenes.none { it.startsWith("stick(1.0") },
+        )
+
+        dejarSalirLaRuta.countDown()
+        dron.alRecibirLaOrden = null
+        withTimeout(5_000) { patrulla.state.first { it == PatrolState.PATROLLING } }
+        assertEquals(PatrolState.PATROLLING, patrulla.state.value)
     }
 
     /** Deja el patrullaje en MANUAL con una posición conocida, como en el campo. */

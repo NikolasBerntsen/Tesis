@@ -365,6 +365,68 @@ describe('integración — mando virtual por WebSocket', () => {
     expect(m.pitch).toBe(0.05);
   });
 
+  it('el tope se mide en BYTES del frame crudo, no en letras del string decodificado', async () => {
+    await api(srv.base, `/api/drones/${DRON.alfa}/control`, op, { method: 'POST' });
+    // 600 eñes: en UTF-16 (lo que cuenta `String.length`) son 600 unidades y el
+    // mensaje entero queda por debajo de las 1024, así que midiendo el string ya
+    // decodificado ESTE mensaje pasa. En UTF-8 —los bytes que de verdad viajaron
+    // por el cable y los que el hub tuvo que decodificar— cada eñe son 2, así
+    // que el frame pesa más de 1 KiB y tiene que morir antes de decodificarse.
+    const conEnies = stick({ pitch: 1, relleno: 'ñ'.repeat(600) });
+    expect(conEnies.length).toBeLessThan(1024);
+    expect(Buffer.byteLength(conEnies, 'utf8')).toBeGreaterThan(1024);
+
+    const m = await soloLlegaElValido(
+      () => operWs.ws.send(conEnies),
+      () => operWs.ws.send(stick({ pitch: 0.2 })),
+    );
+    expect(m.pitch).toBe(0.2);
+  });
+
+  it('un mando con acentos que entra en el tope sigue pasando', async () => {
+    await api(srv.base, `/api/drones/${DRON.alfa}/control`, op, { method: 'POST' });
+    // La otra mitad del tope en bytes: medir en bytes no puede volverse una
+    // excusa para comerse un mando legítimo. Este pesa más en bytes que en
+    // letras y sigue estando holgado abajo del KiB.
+    const chico = stick({ pitch: -0.4, relleno: 'ñ'.repeat(100) });
+    expect(Buffer.byteLength(chico, 'utf8')).toBeLessThan(1024);
+    operWs.ws.send(chico);
+    const m = await alfa.waitFor((x) => x.type === 'manual_stick');
+    expect(m.pitch).toBe(-0.4);
+    expect(mandosRecibidos()).toHaveLength(1);
+  });
+
+  it('el frame que se pasa del tope no se decodifica a string siquiera', async () => {
+    await api(srv.base, `/api/drones/${DRON.alfa}/control`, op, { method: 'POST' });
+    // El tope existe para que el trabajo caro no dependa de lo que mande el otro
+    // lado, y decodificar UTF-8 un frame de casi un mega YA es ese trabajo: con
+    // el tope medido sobre el string, el hub —que es de un solo hilo— lo hacía
+    // igual y recién después lo tiraba. Se espía `Buffer.prototype.toString`
+    // porque es el paso que no tiene que ocurrir; el tamaño del buffer que lo
+    // recibe es lo que lo delata.
+    const grandes: number[] = [];
+    const original = Buffer.prototype.toString;
+    const espia = vi
+      .spyOn(Buffer.prototype, 'toString')
+      .mockImplementation(function (this: Buffer, ...args: unknown[]) {
+        if (this.byteLength > 1024) grandes.push(this.byteLength);
+        return (original as (...a: unknown[]) => string).apply(this, args);
+      } as typeof Buffer.prototype.toString);
+    try {
+      operWs.ws.send('x'.repeat(900 * 1024));
+      await wait(150);
+    } finally {
+      espia.mockRestore();
+    }
+    expect(grandes).toEqual([]);
+    expect(mandosRecibidos()).toHaveLength(0);
+
+    // Y el socket queda sano: el mando siguiente vuela.
+    operWs.ws.send(stick({ throttle: 0.9 }));
+    const m = await alfa.waitFor((x) => x.type === 'manual_stick');
+    expect(m.throttle).toBe(0.9);
+  });
+
   it('un frame gigante cierra ese socket con 1009 y el hub le sigue sirviendo al resto', async () => {
     await api(srv.base, `/api/drones/${DRON.alfa}/control`, op, { method: 'POST' });
     const gordo = await connectWs(srv.wsUrl, op);

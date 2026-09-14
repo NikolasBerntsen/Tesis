@@ -27,8 +27,14 @@ import org.json.JSONObject
  * Cliente REST + WebSocket contra el Comando Central. Lleva un solo JWT por vez:
  * primero el del operador de campo (efímero, para emparejar) y después el del
  * dron, que es con el que se abre el WebSocket. Reconecta solo si se cae el socket.
+ *
+ * `open` por una sola razón: sin socket abierto, todo lo que esta clase manda cae
+ * al vacío y no hay forma de ver qué se le pidió. El banco de pruebas necesita
+ * distinguir lo que va al Comando Central de lo que va a la detección —dar vuelta
+ * los dos destinos del video es un defecto que CI no veía— y para eso hereda y
+ * pisa el envío.
  */
-class CommandCenterClient(private val scope: CoroutineScope) {
+open class CommandCenterClient(private val scope: CoroutineScope) {
 
     var onAlertDecision: ((decision: String, decidedBy: String) -> Unit)? = null
     /** Reanudar el patrullaje; [fromIndex] nulo = desde el último nodo alcanzado. */
@@ -371,7 +377,8 @@ class CommandCenterClient(private val scope: CoroutineScope) {
     fun sendEvent(eventType: String, message: String) =
         send(JSONObject().put("type", "event").put("eventType", eventType).put("message", message))
 
-    fun sendVideoFrame(jpegBase64: String) =
+    /** `open` para poder verificar el cableado del reparto de video (ver la clase). */
+    open fun sendVideoFrame(jpegBase64: String) =
         send(JSONObject().put("type", "video_frame").put("jpegBase64", jpegBase64).put("ts", System.currentTimeMillis()))
 
     fun sendAlertRequest(alertType: String, lat: Double, lon: Double, snapshotBase64: String?) =

@@ -1,5 +1,5 @@
 import type { Server } from 'node:http';
-import { WebSocketServer, WebSocket } from 'ws';
+import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import { ROLE_RANK, verifyToken } from './auth';
 import {
   createAlert, createLog, getActiveUser, getDrone, getDroneIdentity, listDrones, renameDrone,
@@ -41,11 +41,12 @@ interface SesionConsola {
 const TOPE_FRAME_BYTES = 1024 * 1024;
 
 /**
- * Tope del mensaje de una CONSOLA, medido antes de parsearlo. Acá sí puede ser
- * chico: lo único que una consola manda para arriba es `manual_stick`, que con
- * el droneId y los cuatro ejes no llega a 200 bytes. Se mide antes del
- * `JSON.parse` porque parsear es justamente el trabajo caro que un socket
- * abusivo quiere regalarle al hub.
+ * Tope del mensaje de una CONSOLA, en bytes y medido sobre el frame CRUDO: antes
+ * de decodificarlo a string y antes de parsearlo. Acá sí puede ser chico: lo
+ * único que una consola manda para arriba es `manual_stick`, que con el droneId
+ * y los cuatro ejes no llega a 200 bytes. Se mide primero porque decodificar y
+ * parsear es justamente el trabajo caro que un socket abusivo quiere regalarle
+ * al hub (ver `handleOperatorMessage`).
  */
 const TOPE_MENSAJE_CONSOLA = 1024;
 
@@ -295,6 +296,25 @@ interface MensajeDron {
 }
 
 /**
+ * Bytes que ocupa un frame tal como lo entregó `ws`, SIN decodificarlo. Es lo que
+ * hay que mirar para descartar por tamaño: `Buffer.byteLength` sobre el string ya
+ * decodificado llegaría tarde, y el `.length` de ese string cuenta unidades
+ * UTF-16, que no son los bytes que viajaron por el cable (una eñe es una unidad
+ * y dos bytes).
+ *
+ * `ws` hoy entrega un Buffer, pero el tipo `RawData` admite además un ArrayBuffer
+ * y una lista de fragmentos: los tres se cubren en vez de confiar en la forma de
+ * hoy, porque leerle `.byteLength` a un arreglo daría `undefined` y
+ * `undefined > TOPE` es false en JS, o sea que el tope fallaría ABIERTO. Se
+ * exporta solo para poder probar las tres formas, que desde un socket de verdad
+ * no se pueden provocar.
+ */
+export function bytesDelFrame(datos: RawData): number {
+  if (Array.isArray(datos)) return datos.reduce((total, parte) => total + parte.byteLength, 0);
+  return datos.byteLength;
+}
+
+/**
  * Parsea un frame de la red y devuelve null si no es un OBJETO JSON.
  *
  * El control de que sea un objeto no es cosmético: `JSON.parse('null')` devuelve
@@ -462,12 +482,15 @@ function hayCupoDeMando(sesion: SesionConsola, ahora: number): boolean {
  * vez que el lock cambia de manos; contestar por mensaje descartado sería, a
  * 10 Hz, una avalancha de respuestas que nadie mira.
  */
-function handleOperatorMessage(ws: WebSocket, sesion: SesionConsola, raw: string) {
+function handleOperatorMessage(ws: WebSocket, sesion: SesionConsola, datos: RawData) {
   // Lo que pesa más que TOPE_MENSAJE_CONSOLA no es un mando: se descarta sin
-  // parsearlo. Es lo primero de todo justamente para que el trabajo caro
-  // (parsear) no dependa de nada que mande el que está del otro lado.
-  if (raw.length > TOPE_MENSAJE_CONSOLA) return;
-  const msg = parsearMensaje(raw) as MensajeOperador | null;
+  // decodificarlo ni parsearlo. Es lo primero de todo justamente para que el
+  // trabajo caro no dependa de nada que mande el que está del otro lado, y por
+  // eso se miden los BYTES que llegaron y no el largo del string: pasar a texto
+  // el megabyte que deja entrar TOPE_FRAME_BYTES ya es parte del trabajo que un
+  // socket abusivo quiere regalarle al hub, que es de un solo hilo.
+  if (bytesDelFrame(datos) > TOPE_MENSAJE_CONSOLA) return;
+  const msg = parsearMensaje(datos.toString()) as MensajeOperador | null;
   if (!msg) return;
   // Por ahora el mando es lo único que la consola manda para arriba; cualquier
   // otro tipo se ignora en vez de tratarse como error.
@@ -630,8 +653,8 @@ export function setupWebSocket(server: Server) {
     for (const status of lastStatus.values()) if (puedeVer(sesion, status)) ws.send(JSON.stringify(status));
     // El socket de la consola es de doble vía: además de recibir el flujo en
     // vivo, es por donde entra el mando virtual (ver handleOperatorMessage).
-    ws.on('message', (data) =>
-      sinTumbarElHub(`la consola de ${sesion.username}`, () => handleOperatorMessage(ws, sesion, data.toString())),
+    ws.on('message', (datos) =>
+      sinTumbarElHub(`la consola de ${sesion.username}`, () => handleOperatorMessage(ws, sesion, datos)),
     );
     ws.on('close', () => {
       operators.delete(ws);

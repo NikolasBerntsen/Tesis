@@ -27,8 +27,13 @@ function renderDetail(props: Partial<Parameters<typeof DroneDetail>[0]> = {}) {
     onMando: vi.fn(() => true),
   };
   const merged = { ...base, ...props } as Parameters<typeof DroneDetail>[0];
-  render(<DroneDetail {...merged} />);
-  return merged;
+  const { rerender } = render(<DroneDetail {...merged} />);
+  // Volver a renderizar con algo cambiado es la única forma de probar lo que le
+  // pasa al mando EN el momento en que se cae el enlace o llega el primer status:
+  // con un render nuevo el estado del mando arrancaría de cero.
+  const volverARenderizar = (cambios: Partial<Parameters<typeof DroneDetail>[0]>) =>
+    rerender(<DroneDetail {...merged} {...cambios} />);
+  return { ...merged, volverARenderizar };
 }
 
 beforeEach(() => {
@@ -213,7 +218,9 @@ describe('DroneDetail — mando virtual', () => {
     const props = renderDetail({
       me: makeMe({ username: 'admin1', canControl: true }),
       drone: makeDrone({ controlledBy: 'admin1' }),
-      status: makeStatus({ state: 'MANUAL' }),
+      // El status viene como lo reenvía el Comando Central: con el dueño del lock
+      // estampado, o sea que es POSTERIOR a que se tomara el control.
+      status: makeStatus({ state: 'MANUAL', controlledBy: 'admin1' }),
     });
 
     // Las dos formas de comandar conviven: el pad de 25 m sigue estando.
@@ -225,6 +232,8 @@ describe('DroneDetail — mando virtual', () => {
     expect(screen.getByRole('heading', { name: 'Desplazamiento puntual' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Vuelo continuo' })).toBeInTheDocument();
     expect(screen.getByText(/es un salto puntual/)).toBeInTheDocument();
+    // El dron ya confirmó el vuelo manual: no hay nada que esperar ni que avisar.
+    expect(screen.queryByTestId('mando-esperando')).not.toBeInTheDocument();
 
     fireEvent.keyDown(bloque, { key: 'w' });
     expect(props.onMando).toHaveBeenCalledWith({ pitch: 0, roll: 0, yaw: 0, throttle: 1 });
@@ -245,23 +254,30 @@ describe('DroneDetail — mando virtual', () => {
   const IMPEDIMENTOS = [
     {
       caso: 'el dron se desconectó',
-      props: { drone: makeDrone({ controlledBy: 'admin1', online: false }), status: makeStatus({ state: 'MANUAL' }) },
+      props: {
+        drone: makeDrone({ controlledBy: 'admin1', online: false }),
+        status: makeStatus({ state: 'MANUAL', controlledBy: 'admin1' }),
+      },
       motivo: 'El dron está desconectado: el mando no responde.',
     },
     {
       caso: 'se cortó el canal con el Comando Central',
-      props: { drone: makeDrone({ controlledBy: 'admin1' }), status: makeStatus({ state: 'MANUAL' }), conectado: false },
+      props: {
+        drone: makeDrone({ controlledBy: 'admin1' }),
+        status: makeStatus({ state: 'MANUAL', controlledBy: 'admin1' }),
+        conectado: false,
+      },
       motivo: 'Sin conexión con el Comando Central: el mando no responde.',
     },
     {
-      caso: 'el dron dejó el vuelo manual',
-      props: { drone: makeDrone({ controlledBy: 'admin1' }), status: makeStatus({ state: 'RETURNING_HOME_BATTERY' }) },
+      // El status trae estampado al dueño del lock, así que es del dron YA con el
+      // control tomado: cuando dice que no está en manual, no está en manual.
+      caso: 'el dron confirmó que dejó el vuelo manual',
+      props: {
+        drone: makeDrone({ controlledBy: 'admin1' }),
+        status: makeStatus({ state: 'RETURNING_HOME_BATTERY', controlledBy: 'admin1' }),
+      },
       motivo: 'El dron no está en vuelo manual (Volviendo a base (batería baja)): el mando no responde.',
-    },
-    {
-      caso: 'todavía no llegó telemetría',
-      props: { drone: makeDrone({ controlledBy: 'admin1' }), status: null },
-      motivo: 'El dron no está en vuelo manual (sin telemetría): el mando no responde.',
     },
   ] as const;
 
@@ -273,9 +289,90 @@ describe('DroneDetail — mando virtual', () => {
     const bloque = await screen.findByRole('group', { name: 'Mando virtual de vuelo continuo' });
     expect(screen.getByTestId('mando-impedimento')).toHaveTextContent(motivo);
     expect(bloque).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.queryByTestId('mando-esperando')).not.toBeInTheDocument();
 
     fireEvent.keyDown(bloque, { key: 'w' });
     expect(usados.onMando).not.toHaveBeenCalled();
+  });
+
+  /**
+   * El intervalo entre tomar el control y la confirmación del dron. El lock se
+   * ve al instante —el backend broadcastea `control_changed` en el acto— pero el
+   * estado `MANUAL` tarda hasta un segundo de la app (`statusTicker`, que manda
+   * cada 1 s y no empuja nada al cambiar de estado) más otro del volcado de la
+   * consola. Bloquear el mando ahí rompía el camino más normal que hay: tomar el
+   * control y mover la palanca.
+   */
+  const ESPERANDO = [
+    {
+      caso: 'el status que hay es de antes de tomar el control',
+      // Lo que el operador tiene en pantalla es el último status del patrullaje:
+      // sin el dueño del lock estampado, porque cuando se reenvió no había lock.
+      status: makeStatus({ state: 'PATROLLING', controlledBy: null }),
+    },
+    {
+      // La app aplica el mando en cuanto entra en MANUAL, tenga o no telemetría
+      // del DJI para reportar (`statusTicker` no manda status hasta que la hay),
+      // así que "sin telemetría" no es motivo para tragarse el gesto.
+      caso: 'todavía no llegó ningún status',
+      status: null,
+    },
+  ] as const;
+
+  it.each(ESPERANDO)('$caso: el mando emite igual y avisa que falta la confirmación', async ({ status }) => {
+    const usados = renderDetail({
+      me: makeMe({ username: 'admin1', canControl: true }),
+      drone: makeDrone({ controlledBy: 'admin1', online: true }),
+      status,
+    });
+    const bloque = await screen.findByRole('group', { name: 'Mando virtual de vuelo continuo' });
+    expect(bloque).toHaveAttribute('aria-disabled', 'false');
+    expect(screen.queryByTestId('mando-impedimento')).not.toBeInTheDocument();
+    expect(screen.getByTestId('mando-esperando')).toHaveTextContent(/todavía no confirmó el vuelo manual/);
+
+    // Y lo que importa: el gesto no se traga, el eje sale.
+    fireEvent.keyDown(bloque, { key: 'w' });
+    expect(usados.onMando).toHaveBeenCalledWith({ pitch: 0, roll: 0, yaw: 0, throttle: 1 });
+    fireEvent.keyUp(bloque, { key: 'w' });
+  });
+
+  it('llegado el status con el vuelo manual, el aviso de espera se va solo', async () => {
+    const usados = renderDetail({
+      me: makeMe({ username: 'admin1', canControl: true }),
+      drone: makeDrone({ controlledBy: 'admin1', online: true }),
+      status: makeStatus({ state: 'PATROLLING', controlledBy: null }),
+    });
+    expect(await screen.findByTestId('mando-esperando')).toBeInTheDocument();
+
+    // Un segundo después llega el status de la app con el control ya aplicado.
+    usados.volverARenderizar({ status: makeStatus({ state: 'MANUAL', controlledBy: 'admin1' }) });
+    expect(screen.queryByTestId('mando-esperando')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('mando-impedimento')).not.toBeInTheDocument();
+  });
+
+  it('si el enlace se corta en pleno vuelo manual, el mando dice el motivo Y que el comando no salió', async () => {
+    const onMando = vi.fn(() => true);
+    const usados = renderDetail({
+      me: makeMe({ username: 'admin1', canControl: true }),
+      drone: makeDrone({ controlledBy: 'admin1', online: true }),
+      status: makeStatus({ state: 'MANUAL', controlledBy: 'admin1' }),
+      onMando,
+    });
+    const bloque = await screen.findByRole('group', { name: 'Mando virtual de vuelo continuo' });
+    fireEvent.keyDown(bloque, { key: 'ArrowUp' });
+    expect(onMando).toHaveBeenCalledWith({ pitch: 1, roll: 0, yaw: 0, throttle: 0 });
+
+    // Se cae el socket de la consola: `conectado` pasa a false y el `enviar` del
+    // canal empieza a devolver false, las dos cosas por el mismo motivo. Esta es
+    // la única combinación con la que se ve el aviso de "no salió", y la consola
+    // sí la produce: el padre pone el impedimento y el hijo se queda sin salida.
+    onMando.mockReturnValue(false);
+    usados.volverARenderizar({ conectado: false, onMando });
+
+    expect(screen.getByTestId('mando-impedimento')).toHaveTextContent(
+      'Sin conexión con el Comando Central: el mando no responde.',
+    );
+    expect(screen.getByTestId('mando-no-salio')).toHaveTextContent(/El último comando no salió/);
   });
 });
 

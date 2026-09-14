@@ -3,13 +3,18 @@ package com.tesis.dronepatrol.drone
 /**
  * Deja pasar un elemento cada [intervaloMs] y descarta el resto.
  *
- * Se usa sobre el flujo de cuadros que entrega el decodificador del MSDK, que
- * llega a unos 30 por segundo: de ahí salen los 5 que se publican
- * ([CuadroDeVideo.INTERVALO_CUADRO_MS]). El reparto entre el Comando Central y
- * la detección NO usa esto y cuenta cuadros: sobre un flujo que ya viene
- * raleado, un limitador de tiempo solo puede aceptar en múltiplos del intervalo
- * de origen y el ritmo que sale no es el que se pidió (ver
- * PatrolManager.repartirVideo).
+ * Se usa en los dos techos del video, que son de cosas distintas:
+ *
+ *  - sobre el flujo que entrega el decodificador del MSDK, que llega a unos 30
+ *    por segundo, para publicar los 5 del contrato
+ *    ([CuadroDeVideo.INTERVALO_CUADRO_MS]); y
+ *  - sobre el reparto hacia el software de detección, que no puede ver más de
+ *    dos por segundo (PatrolManager.repartirVideo).
+ *
+ * En el segundo caso la entrada ya viene raleada a 200 ms, así que el limitador
+ * solo puede aceptar en múltiplos de esos 200 ms y el ritmo que sale queda por
+ * DEBAJO del pedido (uno cada 600 ms en vez de cada 500). Es a propósito: lo que
+ * se promete afuera es un techo, y errarle por abajo es del lado correcto.
  *
  * No tiene reloj propio a propósito: el momento lo pasa quien llama. Así se
  * prueba sin dormir el test y el mismo limitador sirve para el hilo del SDK y
