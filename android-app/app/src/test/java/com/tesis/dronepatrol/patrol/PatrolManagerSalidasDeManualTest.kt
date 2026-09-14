@@ -244,6 +244,56 @@ class PatrolManagerSalidasDeManualTest {
         assertEquals(PatrolState.PATROLLING, patrulla.state.value)
     }
 
+    /**
+     * La tercera carrera del mismo panel: el pad de 25 m y las palancas conviven
+     * en la consola y llegan por hilos distintos —el pad por el hilo principal y
+     * el mando por el lector del WebSocket—, así que el salto tiene que marcarse
+     * y ordenarse como UN solo paso.
+     *
+     * Suelto se perdía una actualización: un mando que caía entre la orden y la
+     * marca relevaba el salto y la línea siguiente volvía a marcarlo como vivo.
+     * Con esa marca espuria, el mensaje de cierre de la palanca —los cuatro ejes
+     * en cero, el que manda la consola al soltar— se descartaba por "no abandonar
+     * un salto en curso" y nunca llegaba al dron: el Virtual Stick le seguía
+     * repitiendo los últimos 5 m/s a 10 Hz, sin nadie al mando, y el watchdog no
+     * lo cortaba porque la marca decía "estacionario".
+     */
+    @Test
+    fun unMandoAMitadDelSaltoDe25mNoDejaLaMarcaViva() = runBlocking {
+        tomarElControl()
+        val saltoEnCurso = CountDownLatch(1)
+        val dejarSalirElSalto = CountDownLatch(1)
+        dron.alRecibirLaOrden = { orden ->
+            if (orden == "gotoPoint") {
+                saltoEnCurso.countDown()
+                dejarSalirElSalto.await(10, TimeUnit.SECONDS)
+            }
+        }
+
+        val hiloDelPad = thread(name = "pad-de-la-consola") {
+            comandoCentral.onManualMove?.invoke(0.0, 25.0, "operador1")
+        }
+        assertTrue("nunca se ordenó el salto de 25 m", saltoEnCurso.await(10, TimeUnit.SECONDS))
+        // El operador no soltó la palanca mientras tocaba el pad: el mando sigue
+        // llegando por el otro hilo, justo con el salto a mitad de camino.
+        val hiloDelMando = thread(name = "mando-de-la-consola") {
+            comandoCentral.onManualStick?.invoke(1.0, 0.0, 0.0, 0.0, "operador1")
+        }
+        delay(200) // que el hilo del mando llegue hasta el cerrojo
+        dejarSalirElSalto.countDown()
+        hiloDelPad.join()
+        hiloDelMando.join()
+        dron.alRecibirLaOrden = null
+
+        // Y ahora sí suelta la palanca: la consola manda UN mensaje de cierre en
+        // cero, y ese tiene que llegarle al dron.
+        comandoCentral.onManualStick?.invoke(0.0, 0.0, 0.0, 0.0, "operador1")
+        assertTrue(
+            "el mensaje de cierre de la palanca se perdió por una marca de salto espuria: ${dron.ordenes}",
+            dron.ordenes.contains("stick(0.0, 0.0, 0.0, 0.0)"),
+        )
+    }
+
     /** Deja el patrullaje en MANUAL con una posición conocida, como en el campo. */
     private suspend fun tomarElControl() {
         dron.emitirTelemetria()

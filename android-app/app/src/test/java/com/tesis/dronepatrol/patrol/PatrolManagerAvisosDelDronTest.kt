@@ -100,13 +100,42 @@ class PatrolManagerAvisosDelDronTest {
             PatrolManager.hayQueAvisarElProblema(RECHAZO, RECHAZO, avisado + PatrolManager.REPETIR_PROBLEMA_MS, avisado),
         )
         assertTrue(
-            "un motivo distinto avisa siempre, sin esperar nada",
-            PatrolManager.hayQueAvisarElProblema(OTRO_RECHAZO, RECHAZO, avisado + 1, avisado),
+            "un motivo distinto avisa sin esperar el minuto",
+            PatrolManager.hayQueAvisarElProblema(OTRO_RECHAZO, RECHAZO, avisado + PatrolManager.SEPARACION_PROBLEMAS_MS, avisado),
         )
         assertTrue(
             "y el primero de todos también",
             PatrolManager.hayQueAvisarElProblema(RECHAZO, null, 0, 0),
         )
+    }
+
+    /**
+     * Deduplicar solo por igualdad de motivo deja abierta la misma inundación que
+     * el filtro vino a cerrar. El motivo lleva adentro la descripción del error
+     * que devuelve el SDK, y esa no es una sola: si la aeronave alterna entre dos
+     * rechazos, ninguno es igual al anterior y los dos pasan, diez veces por
+     * segundo, que es una fila por mensaje en la tabla `events` del Comando
+     * Central más un broadcast a cada consola abierta.
+     */
+    @Test
+    fun dosMotivosAlternadosNoAtraviesanElFiltro() {
+        val arranque = 10_000L
+        var ultimoMotivo: String? = null
+        var ultimoAviso = 0L
+        var avisos = 0
+        // Diez segundos de rechazos alternados a 10 Hz: cien intentos
+        for (i in 0 until 100) {
+            val ahora = arranque + i * 100L
+            val motivo = if (i % 2 == 0) RECHAZO else OTRO_RECHAZO
+            if (PatrolManager.hayQueAvisarElProblema(motivo, ultimoMotivo, ahora, ultimoAviso)) {
+                avisos++
+                ultimoMotivo = motivo
+                ultimoAviso = ahora
+            }
+        }
+        // Con la separación mínima: uno al arrancar y uno cada dos segundos.
+        assertTrue("cien intentos alternados generaron $avisos avisos", avisos <= 6)
+        assertTrue("el problema no puede quedar mudo del todo", avisos >= 1)
     }
 
     /**

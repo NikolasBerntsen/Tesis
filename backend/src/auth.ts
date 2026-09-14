@@ -141,8 +141,14 @@ export function requireAuth(minRole?: Role) {
     // control falla CERRADO a propósito, igual que el mando por WebSocket
     // (ws.ts), porque lo desconocido no vuela un dron. `requireRoles` ya falla
     // cerrado solo, porque compara contra una lista explícita.
-    const rango: number | undefined = ROLE_RANK[r.user.role];
-    if (minRole && (rango === undefined || rango < ROLE_RANK[minRole])) {
+    // Se exige que sea un NÚMERO y no solo que no sea undefined: ROLE_RANK es un
+    // objeto literal, así que hereda Object.prototype y un rol llamado
+    // `toString`, `constructor` o `valueOf` devuelve una FUNCIÓN. Con esa función,
+    // `=== undefined` da false y `función < 2` también (la comparación termina en
+    // NaN): el rol desconocido pasaba igual, que es justo lo que este control
+    // vino a cerrar.
+    const rango: unknown = ROLE_RANK[r.user.role];
+    if (minRole && (typeof rango !== 'number' || rango < ROLE_RANK[minRole])) {
       return res.status(403).json({ error: 'Rol sin permiso para esta operación' });
     }
     req.user = r.user;

@@ -315,6 +315,21 @@ export function bytesDelFrame(datos: RawData): number {
 }
 
 /**
+ * El texto del frame, decodificado de la MISMA forma en que [bytesDelFrame] lo
+ * midió. Va en par con esa función a propósito: medir las tres formas de
+ * `RawData` y después decodificar con un `.toString()` pelado dejaba el trabajo a
+ * medias, porque ese `.toString()` solo hace lo correcto con un Buffer. Sobre un
+ * ArrayBuffer devuelve la cadena `[object ArrayBuffer]`, y sobre una lista de
+ * fragmentos los une con COMAS: `{"a":1` + `,"b":2}` sale `{"a":1,,"b":2}`, que
+ * no parsea. En los dos casos el mando se perdía en silencio.
+ */
+export function textoDelFrame(datos: RawData): string {
+  if (Array.isArray(datos)) return Buffer.concat(datos).toString('utf8');
+  if (datos instanceof ArrayBuffer) return Buffer.from(datos).toString('utf8');
+  return datos.toString('utf8');
+}
+
+/**
  * Parsea un frame de la red y devuelve null si no es un OBJETO JSON.
  *
  * El control de que sea un objeto no es cosmético: `JSON.parse('null')` devuelve
@@ -490,7 +505,7 @@ function handleOperatorMessage(ws: WebSocket, sesion: SesionConsola, datos: RawD
   // el megabyte que deja entrar TOPE_FRAME_BYTES ya es parte del trabajo que un
   // socket abusivo quiere regalarle al hub, que es de un solo hilo.
   if (bytesDelFrame(datos) > TOPE_MENSAJE_CONSOLA) return;
-  const msg = parsearMensaje(datos.toString()) as MensajeOperador | null;
+  const msg = parsearMensaje(textoDelFrame(datos)) as MensajeOperador | null;
   if (!msg) return;
   // Por ahora el mando es lo único que la consola manda para arriba; cualquier
   // otro tipo se ignora en vez de tratarse como error.
@@ -529,8 +544,11 @@ function handleOperatorMessage(ws: WebSocket, sesion: SesionConsola, datos: RawD
   // `undefined < 2` da false en JS y el mando SALDRÍA igual: el control falla
   // cerrado a propósito, que en un sistema de fuerzas de seguridad lo
   // desconocido no vuela.
-  const rango: number | undefined = ROLE_RANK[cuenta.role];
-  if (rango === undefined || rango < ROLE_RANK.operator) return;
+  // Se exige NÚMERO, no "distinto de undefined": ROLE_RANK hereda
+  // Object.prototype, así que un rol llamado `toString` o `constructor` devuelve
+  // una función, y con ella `=== undefined` es false y `función < 2` también.
+  const rango: unknown = ROLE_RANK[cuenta.role];
+  if (typeof rango !== 'number' || rango < ROLE_RANK.operator) return;
 
   const ejes = {
     pitch: eje(msg.pitch),

@@ -442,7 +442,10 @@ class DjiDroneController : DroneController {
      * Y la espera no es lo que hace falta para la corrección: lo que impide que
      * una vuelta en camino vuelva a HABILITAR el Virtual Stick es `desconectado`,
      * que ya quedó en true y lo miran tanto [asegurarVirtualStick] como el
-     * `onSuccess` de su callback.
+     * `onSuccess` de su callback. Ese `onSuccess` tardío apaga por
+     * [mandarApagado] y no por [apagarVirtualStick], porque el paso 4 de acá
+     * abajo ya consumió la marca: ruteado por la marca, el apagado tardío no
+     * salía nunca.
      *
      * Lo que sí queda, y hay que decirlo: una vuelta que ya pasó el `delay` puede
      * alcanzar a mandar UN parámetro más justo antes de que el dron procese el
@@ -565,8 +568,15 @@ class DjiDroneController : DroneController {
                     // no tiene efecto.
                     vs.setVirtualStickAdvancedModeEnabled(true)
                     // Si la app se cerró mientras el dron todavía lo aceptaba,
-                    // esta habilitación llegó tarde y hay que deshacerla.
-                    if (desconectado) apagarVirtualStick()
+                    // esta habilitación llegó tarde y hay que deshacerla. Va
+                    // derecho al apagado y no por apagarVirtualStick(): para
+                    // cuando llega este onSuccess, disconnect() ya consumió la
+                    // marca, así que el compareAndSet fallaría y el Virtual Stick
+                    // quedaría prendido con la app cerrada (ver mandarApagado()).
+                    if (desconectado) {
+                        virtualStickListo.set(false)
+                        mandarApagado()
+                    }
                 }
 
                 override fun onFailure(error: IDJIError) {
@@ -585,9 +595,29 @@ class DjiDroneController : DroneController {
         )
     }
 
-    /** Le devuelve el mando al palito físico del RC-N3. */
+    /**
+     * Le devuelve el mando al palito físico del RC-N3, una sola vez: el
+     * compareAndSet evita mandar un `disableVirtualStick` por cada lazo que
+     * termina.
+     */
     private fun apagarVirtualStick() {
         if (!virtualStickListo.compareAndSet(true, false)) return
+        mandarApagado()
+    }
+
+    /**
+     * El apagado propiamente dicho, SIN pasar por la marca. Existe aparte porque
+     * hay un camino donde la marca ya se consumió y el dron igual quedó con el
+     * Virtual Stick habilitado: [disconnect] apaga (compareAndSet true→false y
+     * manda el disable) mientras una habilitación está en vuelo, y cuando la
+     * aeronave contesta ese `onSuccess` tardío el Virtual Stick está prendido
+     * pero la marca ya dice false. Ruteado por [apagarVirtualStick], el
+     * compareAndSet fallaba y no se mandaba ningún disable: el Virtual Stick
+     * quedaba habilitado con la app cerrada y el operador no recuperaba el dron
+     * con las palancas del control, que es justo la falla grave que todo este
+     * orden existe para evitar.
+     */
+    private fun mandarApagado() {
         VirtualStickManager.getInstance().disableVirtualStick(
             object : CommonCallbacks.CompletionCallback {
                 override fun onSuccess() = Unit

@@ -62,6 +62,13 @@ class PatrolManager(
          */
         const val REPETIR_PROBLEMA_MS = 60_000L
 
+        /**
+         * Separación mínima entre dos avisos, aunque el motivo cambie
+         * (ver hayQueAvisarElProblema()). Es el techo que sostiene el filtro
+         * cuando los motivos alternan en vez de repetirse.
+         */
+        const val SEPARACION_PROBLEMAS_MS = 2_000L
+
         // PAUSED/MANUAL/FORCED también son vuelo: batería baja y pérdida de
         // señal disparan el RTH igual que patrullando
         val ESTADOS_EN_VUELO = setOf(
@@ -120,12 +127,21 @@ class PatrolManager(
             ahoraMs: Long,
             ultimoAvisoMs: Long,
         ): Boolean {
-            if (motivo != ultimoMotivo) return true
             // Un transcurrido negativo es el reloj del celular acomodándose hacia
             // atrás (NTP, cambio de hora): se avisa y se vuelve a anclar, igual
             // que en LimitadorDeRitmo, en vez de quedar mudo hasta que el reloj
             // recupere la diferencia.
-            return (ahoraMs - ultimoAvisoMs) !in 0 until REPETIR_PROBLEMA_MS
+            val transcurrido = ahoraMs - ultimoAvisoMs
+            if (transcurrido !in 0 until REPETIR_PROBLEMA_MS) return true
+            // Dentro del minuto solo pasa un motivo NUEVO, y aun así no más de uno
+            // cada [SEPARACION_PROBLEMAS_MS]. Deduplicar solo por igualdad de
+            // motivo dejaba abierta la misma inundación que este filtro vino a
+            // cerrar: si la aeronave alterna entre dos rechazos —y el motivo lleva
+            // adentro la descripción del error del SDK, que no es una sola—,
+            // ninguno es igual al anterior y los dos atraviesan el filtro, diez
+            // veces por segundo. Un motivo distinto sigue avisándose enseguida,
+            // que es lo que importa cuando el problema cambió de verdad.
+            return motivo != ultimoMotivo && transcurrido >= SEPARACION_PROBLEMAS_MS
         }
     }
 
@@ -385,17 +401,33 @@ class PatrolManager(
         log("$by tomó el control manual del dron")
     }
 
+    /**
+     * Salto puntual de 25 m del pad de la consola. Va adentro de
+     * [cerrojoDelMando] y con la marca ANTES de la orden, igual que el resto de
+     * los caminos que le hablan al dron: el pad y las palancas viven en el mismo
+     * panel de la consola y llegan por hilos distintos —este handler corre en el
+     * hilo principal y [onManualStick] en el lector de OkHttp—, así que suelto se
+     * perdía una actualización. Un mando que caía entre la orden y la marca
+     * dejaba `saltoManualEnCurso` en false, relevaba el salto, y la línea
+     * siguiente lo volvía a poner en true con el salto ya relevado. Con esa marca
+     * espuria, el mensaje de cierre de la palanca —los cuatro ejes en cero— se
+     * descartaba y nunca llegaba al controlador: el dron se quedaba repitiendo la
+     * última velocidad a 10 Hz, sin nadie al mando y con el watchdog desarmado,
+     * porque la marca decía "estacionario".
+     */
     private fun onManualMove(bearing: Double, distanceM: Double, by: String) {
-        if (_state.value != PatrolState.MANUAL) return
         val t = lastTelemetry ?: return
         val rad = Math.toRadians(bearing)
         val dLat = distanceM * cos(rad) / METERS_PER_DEG_LAT
         val dLon = distanceM * sin(rad) / (METERS_PER_DEG_LAT * cos(Math.toRadians(t.lat)))
-        controller.gotoPoint(t.lat + dLat, t.lon + dLon)
-        // Queda marcado hasta que llegue (FlightEvent.GotoArrived): mientras
-        // tanto, el mensaje de cierre de la palanca no lo puede abandonar a
-        // mitad de camino (ver onManualStick()).
-        saltoManualEnCurso = true
+        synchronized(cerrojoDelMando) {
+            if (_state.value != PatrolState.MANUAL) return
+            // Queda marcado hasta que llegue (FlightEvent.GotoArrived): mientras
+            // tanto, el mensaje de cierre de la palanca no lo puede abandonar a
+            // mitad de camino (ver onManualStick()).
+            saltoManualEnCurso = true
+            controller.gotoPoint(t.lat + dLat, t.lon + dLon)
+        }
         log("Movimiento manual de $by: ${distanceM.toInt()} m con rumbo ${bearing.toInt()}°")
     }
 
@@ -500,6 +532,15 @@ class PatrolManager(
      * mismo cerrojo que la decisión: entre "hay que cortar" y cortar tampoco
      * puede meterse una transición.
      *
+     * Eso cubre las transiciones de estado, pero hay una orden que le da al dron
+     * una navegación propia SIN salir de MANUAL: el salto de 25 m del pad. Si el
+     * operador lo dispara y suelta la palanca, el mando se calla y el watchdog
+     * cortaría —con los ejes en cero— un salto que está a mitad de camino, que es
+     * exactamente lo que el criterio del "último comando deliberado" no quiere.
+     * Por eso el corte respeta [saltoManualEnCurso]: mientras el salto vive, el
+     * dron ya tiene orden y no está corriendo sin nadie al mando. La marca la
+     * levanta la llegada (FlightEvent.GotoArrived) o el primer mando deliberado.
+     *
      * Queda solo en el registro local y no se reporta como evento: el enlace con
      * el Comando Central es justamente el que se sospecha caído.
      */
@@ -508,6 +549,9 @@ class PatrolManager(
             delay(REVISION_MANDO_MS)
             synchronized(cerrojoDelMando) {
                 if (!controlTomado) return@synchronized
+                // El salto de 25 m es navegación propia del dron: no hay nadie
+                // corriendo sin mando y cortarlo lo abandonaría a mitad de camino.
+                if (saltoManualEnCurso) return@synchronized
                 if (!hayQueCortarElMando(System.currentTimeMillis(), ultimoMandoMs, ultimoMandoEstacionario)) {
                     return@synchronized
                 }

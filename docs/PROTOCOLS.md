@@ -11,31 +11,33 @@ distintas.
 
 - Al **Comando Central** le llegan **todos** los cuadros que el controlador
   emite: es el video que mira el operador y con el que decide.
-- Al **software de detección** se le deja pasar **uno de cada dos**
-  (`PatrolManager.UNO_DE_CADA_N_A_DETECCION` = 2): detectar no necesita más y el
-  enlace con la laptop es el más flojo de los tres.
+- Al **software de detección** se le deja pasar uno cada
+  `PatrolManager.INTERVALO_DETECCION_MS` (500 ms), o sea **dos por segundo como
+  techo**: detectar no necesita más y el enlace con la laptop es el más flojo de
+  los tres.
 
-El reparto hacia la detección **cuenta cuadros, no milisegundos**: en ese camino
-no hay ningún limitador de tiempo. El único `LimitadorDeRitmo` está antes, en el
-hilo del SDK (`DjiDroneController`), y es el que ralea el stream de la cámara al
-intervalo del controlador. Por eso el ritmo de la detección **no es un techo
-fijo**: es siempre la mitad del ritmo del controlador. Si mañana
-`CuadroDeVideo.INTERVALO_CUADRO_MS` bajara a 100 ms (10 por segundo), la
-detección pasaría a 5 por segundo y no hay nada que la frene.
+El techo de la detección se mide con **reloj y no contando cuadros**
+(`LimitadorDeRitmo`), y esa diferencia importa: contando, el ritmo de la
+detección quedaría atado al del controlador —sobre los cinco por segundo de hoy
+daría 2,5, un 25 % por encima de lo pactado y encima del enlace más flojo—, y si
+mañana el controlador emitiera diez, la detección se iría a cinco sin que nada la
+frene. Con reloj el techo vale sea cual sea el ritmo de entrada.
 
-Con el dron real el controlador emite cinco cuadros por segundo
-(`CuadroDeVideo.INTERVALO_CUADRO_MS = 200`), así que la consola ve **cinco** y la
-detección **dos y medio**. Ese 2,5 no es un redondeo prolijo de los 2 por segundo
-que pedía el contrato del MVP: diezmando un flujo de 5 no hay forma de dar 2 (uno
-de cada 2 da 2,5 y uno de cada 3 daría 1,67), y se eligió 2,5 — el KDoc de
-`PatrolManager.repartirVideo` explica por qué se cuentan cuadros y no
-milisegundos. Quien dimensione el enlace de la detección tiene que hacerlo para
-**2,5 por segundo**, no para 2. El dron **simulado** usa hoy el mismo intervalo
+Lo que se paga por medir con reloj: el flujo que llega al reparto ya viene
+raleado al intervalo del controlador, así que el limitador solo puede aceptar en
+múltiplos de ese intervalo. Con el dron real, que emite cada 200 ms
+(`CuadroDeVideo.INTERVALO_CUADRO_MS`), el primer cuadro que pasa los 500 ms es el
+de los 600, y la detección recibe uno cada 600 ms: **1,67 por segundo efectivos**
+contra un techo de 2. Queda por debajo del techo y no por encima, que es del lado
+que hay que errar. El dron **simulado** usa hoy el mismo intervalo
 (`SimulatedDroneController.FRAME_MS = CuadroDeVideo.INTERVALO_CUADRO_MS`), así
-que da los mismos números; si algún día se le pusiera otro, la consola vería ese
-ritmo y la detección su mitad. Antes de citar un número, mirá las **dos**
-constantes: el ritmo lo ponen el controlador que esté corriendo y el divisor del
-reparto, no este documento.
+que da los mismos números.
+
+O sea: a la consola le llegan **cinco cuadros por segundo** y a la detección
+**1,67**, con un techo garantizado de 2. Quien dimensione el enlace de la
+detección tiene que hacerlo para ese techo. Antes de citar un número, mirá las
+**dos** constantes —el intervalo del controlador y el del reparto—, no este
+documento.
 
 El sistema soporta **varios drones simultáneos**. Un dron **no es una cuenta de
 usuario**: es un activo del inventario, identificado por un `hash` opaco de 32
@@ -457,20 +459,20 @@ Este es el contrato que debe implementar el software real de detección;
 
 | Dirección | Mensaje | Campos |
 |---|---|---|
-| celular → laptop | `video_frame` | `jpegBase64, ts` (JPEG de 640 px de ancho, **2,5 por segundo** con el dron real: la mitad del ritmo del controlador) |
+| celular → laptop | `video_frame` | `jpegBase64, ts` (JPEG de 640 px de ancho, **1,67 por segundo** con el dron real, con un techo de 2) |
 | laptop → celular | `detection` | `detected (bool), classes (["PERSON"\|"VEHICLE"]), confidence, ts` |
 
 Son los **mismos cuadros** que van al Comando Central, filtrados a menos ritmo:
 hacia la consola va todo lo que emite el controlador (donde hay una persona
-mirando y el salto se nota) y hacia la detección se deja pasar **uno de cada dos**
-(`PatrolManager.UNO_DE_CADA_N_A_DETECCION`). El algoritmo no necesita más, y este
-es el enlace más flojo de los tres. Con el dron real eso da cinco por segundo a la
-consola y **dos y medio** a la detección.
+mirando y el salto se nota) y hacia la detección se deja pasar uno cada
+`PatrolManager.INTERVALO_DETECCION_MS` (500 ms). El algoritmo no necesita más, y
+este es el enlace más flojo de los tres.
 
-Ese 2,5 **no es un techo**: el reparto cuenta cuadros y no mira el reloj, así que
-la detección recibe siempre la mitad de lo que emite el controlador (ver §1). Lo
-que hay que dimensionar es "la mitad del ritmo del controlador", no un 2 fijo: si
-el controlador subiera a 10 por segundo, acá llegarían 5.
+Ese techo de **dos por segundo** se mide con reloj, así que vale sea cual sea el
+ritmo del controlador: si mañana emitiera diez cuadros por segundo, acá seguirían
+llegando dos. Lo que llega hoy con el dron real es **1,67 por segundo**, porque
+el flujo ya viene raleado a 200 ms y el limitador solo puede aceptar en múltiplos
+de ese intervalo (ver §1).
 
 La app solo actúa ante `detected: true` y solo mientras está en estado
 `PATROLLING` (evita re-alertar mientras orbita o vuelve a base). Cuando actúa,

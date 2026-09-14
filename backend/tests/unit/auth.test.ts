@@ -260,6 +260,22 @@ describe('auth — requireAuth (middleware)', () => {
     expect(res.body.error).toMatch(/permiso/i);
   });
 
+  it('403 también si el rol se llama como un método de Object: el control cierra por TIPO', () => {
+    // ROLE_RANK es un objeto literal, así que hereda Object.prototype:
+    // `ROLE_RANK['toString']` no es undefined, es una FUNCIÓN. Comprobar solo
+    // `=== undefined` dejaba pasar esos nombres, porque `función < 2` también da
+    // false (la comparación termina en NaN). Son los únicos valores de la columna
+    // `role` que se colaban, y la columna no tiene CHECK que los impida.
+    for (const nombre of ['toString', 'constructor', 'valueOf', 'hasOwnProperty']) {
+      crearUsuario(`raro_${nombre}`, 'x', nombre as Role);
+      const res = fakeRes();
+      let llamado = false;
+      requireAuth('operator')(reqCon(tokenDe(`raro_${nombre}`, 'operator')), res as any, () => (llamado = true));
+      expect(llamado, `el rol "${nombre}" pasó el filtro`).toBe(false);
+      expect(res.statusCode).toBe(403);
+    }
+  });
+
   it('sin rol mínimo un rol desconocido sigue pasando: solo se le exige estar activo', () => {
     // No es un olvido: `requireAuth()` sin mínimo es "cualquiera autenticado"
     // (por ejemplo GET /me), y ahí el rol no decide nada. Lo que se comprueba es
