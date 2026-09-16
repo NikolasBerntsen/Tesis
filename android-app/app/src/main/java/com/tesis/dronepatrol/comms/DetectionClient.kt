@@ -27,8 +27,12 @@ enum class ModoEnlace {
 /**
  * Enlace con el software de detección que corre en la laptop (ver
  * docs/PROTOCOLS.md). Le envía los frames de video y recibe las detecciones.
+ *
+ * `open` por lo mismo que [com.tesis.dronepatrol.comms.CommandCenterClient]: sin
+ * socket no se puede ver qué cuadro se le mandó a cada destino, y el banco de
+ * pruebas tiene que poder distinguirlos.
  */
-class DetectionClient(private val scope: CoroutineScope) {
+open class DetectionClient(private val scope: CoroutineScope) {
 
     var onDetection: ((classes: List<String>) -> Unit)? = null
     val connected = MutableStateFlow(false)
@@ -161,7 +165,8 @@ class DetectionClient(private val scope: CoroutineScope) {
         }
     }
 
-    fun sendFrame(jpegBase64: String) {
+    /** `open` para poder verificar el cableado del reparto de video (ver la clase). */
+    open fun sendFrame(jpegBase64: String) {
         ws?.send(
             JSONObject()
                 .put("type", "video_frame")

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { crearUsuario, seed, startServer, login, api, connectWs, tokenDeDron, CREDS, DRON, type TestServer, type WsClient } from '../helpers';
+import { db } from '../../src/db';
 
 // Control manual exclusivo: toma, movimiento, liberación (titular y forzada por
 // supervisor), y cómo la suspensión/desactivación cortan el control en el acto.
@@ -258,6 +259,45 @@ describe('integración — control manual exclusivo', () => {
     expect(ficha.online).toBe(false);
 
     await api(srv.base, `/api/drones/${DRON.bravo}`, sup, { method: 'PATCH', body: JSON.stringify({ active: true }) });
+  });
+
+  it('un rol que no está en la jerarquía no toma el control ni mueve el dron: el REST falla CERRADO', async () => {
+    // La columna `role` no tiene CHECK ("validado en código") y las migraciones
+    // copian el valor viejo tal cual, así que una fila puede traer un rol que no
+    // está en ROLE_RANK. `undefined < ROLE_RANK.operator` es false en JS: sin el
+    // control explícito en requireAuth, esa cuenta PASA el filtro de rol de toda
+    // la API REST. Y el camino REST es el que menos revalida: manual_move solo
+    // compara el lock, así que con el lock ya tomado movería el dron 25 m por
+    // click. El mando por WebSocket ya falla cerrado; esta es la otra mitad.
+    const vieja = await crearUsuario(srv.base, adm, { username: 'rolviejo', canControl: true });
+    const tok = (await login(srv.base, 'rolviejo', vieja.password))!;
+
+    // Con el rol bueno toma el lock, para que lo único que cambie después sea el rol.
+    expect((await api(srv.base, `/api/drones/${DRON.alfa}/control`, tok, { method: 'POST' })).status).toBe(200);
+    expect(await titular()).toBe('rolviejo');
+    alfa.got.length = 0;
+
+    db.prepare('UPDATE users SET role = ? WHERE username = ?').run('operador_viejo', 'rolviejo');
+    try {
+      const mover = await api(srv.base, `/api/drones/${DRON.alfa}/manual_move`, tok, {
+        method: 'POST',
+        body: JSON.stringify({ bearing: 90, distanceM: 25 }),
+      });
+      expect(mover.status).toBe(403);
+      expect(mover.body.error).toMatch(/permiso/i);
+      // Y al dron no le llegó nada: el 403 no es cosmético.
+      await new Promise((r) => setTimeout(r, 120));
+      expect(alfa.got.filter((m: any) => m.type === 'manual_move')).toHaveLength(0);
+
+      // Tampoco puede tomar el lock de otro dron con ese rol.
+      expect((await api(srv.base, `/api/drones/${DRON.charlie}/control`, tok, { method: 'POST' })).status).toBe(403);
+      // Ni leer el tablero, que también pide operator o más.
+      expect((await api(srv.base, '/api/events', tok)).status).toBe(403);
+    } finally {
+      // El rol se devuelve a mano: la fila sobrevive al test y los que siguen no
+      // tienen por qué heredar una cuenta con el rol roto.
+      db.prepare('UPDATE users SET role = ? WHERE username = ?').run('operator', 'rolviejo');
+    }
   });
 
   it('cerrar la última conexión WS del titular libera su control', async () => {

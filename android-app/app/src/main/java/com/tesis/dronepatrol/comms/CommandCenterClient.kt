@@ -27,8 +27,14 @@ import org.json.JSONObject
  * Cliente REST + WebSocket contra el Comando Central. Lleva un solo JWT por vez:
  * primero el del operador de campo (efímero, para emparejar) y después el del
  * dron, que es con el que se abre el WebSocket. Reconecta solo si se cae el socket.
+ *
+ * `open` por una sola razón: sin socket abierto, todo lo que esta clase manda cae
+ * al vacío y no hay forma de ver qué se le pidió. El banco de pruebas necesita
+ * distinguir lo que va al Comando Central de lo que va a la detección —dar vuelta
+ * los dos destinos del video es un defecto que CI no veía— y para eso hereda y
+ * pisa el envío.
  */
-class CommandCenterClient(private val scope: CoroutineScope) {
+open class CommandCenterClient(private val scope: CoroutineScope) {
 
     var onAlertDecision: ((decision: String, decidedBy: String) -> Unit)? = null
     /** Reanudar el patrullaje; [fromIndex] nulo = desde el último nodo alcanzado. */
@@ -259,45 +265,7 @@ class CommandCenterClient(private val scope: CoroutineScope) {
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
-                    val msg = runCatching { JSONObject(text) }.getOrNull() ?: return
-                    when (msg.optString("type")) {
-                        "alert_decision" -> onAlertDecision?.invoke(
-                            msg.optString("decision"),
-                            msg.optString("decidedBy"),
-                        )
-                        "resume_patrol" -> onResumePatrol?.invoke(
-                            if (msg.isNull("fromIndex")) null else msg.optInt("fromIndex"),
-                        )
-                        "start_route" -> onStartRoute?.invoke(
-                            msg.optInt("routeId"),
-                            msg.optInt("fromIndex"),
-                            msg.optString("orderedBy"),
-                        )
-                        "stop_patrol" -> onStopPatrol?.invoke(msg.optString("orderedBy"))
-                        "force_goto" -> onForceGoto?.invoke(
-                            msg.optInt("routeId"),
-                            msg.optInt("index"),
-                            msg.optString("orderedBy"),
-                        )
-                        "control_taken" -> onControlTaken?.invoke(msg.optString("by"))
-                        "manual_move" -> onManualMove?.invoke(
-                            msg.optDouble("bearing"),
-                            msg.optDouble("distanceM"),
-                            msg.optString("by"),
-                        )
-                        // Los ejes ausentes valen 0 y no NaN (que es lo que
-                        // devuelve optDouble sin defecto): un NaN metido en una
-                        // velocidad sería una orden sin sentido para el dron.
-                        "manual_stick" -> onManualStick?.invoke(
-                            msg.optDouble("pitch", 0.0),
-                            msg.optDouble("roll", 0.0),
-                            msg.optDouble("yaw", 0.0),
-                            msg.optDouble("throttle", 0.0),
-                            msg.optString("by"),
-                        )
-                        "control_released" -> onControlReleased?.invoke(msg.optString("by"))
-                        "renamed" -> onRenamed?.invoke(msg.optString("displayName"))
-                    }
+                    manejarMensaje(text)
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -311,6 +279,56 @@ class CommandCenterClient(private val scope: CoroutineScope) {
                 }
             },
         )
+    }
+
+    /**
+     * Traduce un mensaje del Comando Central a la orden que le corresponde.
+     *
+     * Vive afuera del WebSocketListener para poder probarlo sin levantar un
+     * socket: es el ÚNICO lugar donde el JSON del protocolo se convierte en los
+     * argumentos que recibe la app, y confundir dos nombres acá manda el dron
+     * para el lado equivocado sin que nada se queje.
+     */
+    internal fun manejarMensaje(text: String) {
+        val msg = runCatching { JSONObject(text) }.getOrNull() ?: return
+        when (msg.optString("type")) {
+            "alert_decision" -> onAlertDecision?.invoke(
+                msg.optString("decision"),
+                msg.optString("decidedBy"),
+            )
+            "resume_patrol" -> onResumePatrol?.invoke(
+                if (msg.isNull("fromIndex")) null else msg.optInt("fromIndex"),
+            )
+            "start_route" -> onStartRoute?.invoke(
+                msg.optInt("routeId"),
+                msg.optInt("fromIndex"),
+                msg.optString("orderedBy"),
+            )
+            "stop_patrol" -> onStopPatrol?.invoke(msg.optString("orderedBy"))
+            "force_goto" -> onForceGoto?.invoke(
+                msg.optInt("routeId"),
+                msg.optInt("index"),
+                msg.optString("orderedBy"),
+            )
+            "control_taken" -> onControlTaken?.invoke(msg.optString("by"))
+            "manual_move" -> onManualMove?.invoke(
+                msg.optDouble("bearing"),
+                msg.optDouble("distanceM"),
+                msg.optString("by"),
+            )
+            // Los ejes ausentes valen 0 y no NaN (que es lo que devuelve
+            // optDouble sin defecto): un NaN metido en una velocidad sería una
+            // orden sin sentido para el dron.
+            "manual_stick" -> onManualStick?.invoke(
+                msg.optDouble("pitch", 0.0),
+                msg.optDouble("roll", 0.0),
+                msg.optDouble("yaw", 0.0),
+                msg.optDouble("throttle", 0.0),
+                msg.optString("by"),
+            )
+            "control_released" -> onControlReleased?.invoke(msg.optString("by"))
+            "renamed" -> onRenamed?.invoke(msg.optString("displayName"))
+        }
     }
 
     private fun scheduleReconnect() {
@@ -359,7 +377,8 @@ class CommandCenterClient(private val scope: CoroutineScope) {
     fun sendEvent(eventType: String, message: String) =
         send(JSONObject().put("type", "event").put("eventType", eventType).put("message", message))
 
-    fun sendVideoFrame(jpegBase64: String) =
+    /** `open` para poder verificar el cableado del reparto de video (ver la clase). */
+    open fun sendVideoFrame(jpegBase64: String) =
         send(JSONObject().put("type", "video_frame").put("jpegBase64", jpegBase64).put("ts", System.currentTimeMillis()))
 
     fun sendAlertRequest(alertType: String, lat: Double, lon: Double, snapshotBase64: String?) =

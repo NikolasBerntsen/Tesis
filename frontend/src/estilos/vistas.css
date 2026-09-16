@@ -508,6 +508,14 @@ details.meta pre {
      cortaría apenas el puntero se le adelanta. */
   pointer-events: none;
 }
+/* Mando inerte: el dron se desconectó, se cortó el enlace con el Comando
+   Central o el dron no está en vuelo manual. Se muestra igual —esconderlo de
+   golpe parece que le sacaron el control al operador— pero apagado, con el
+   motivo escrito arriba y sin cursor de agarre, porque no hay nada que agarrar. */
+.mando-impedido .palanca-plato { cursor: not-allowed; }
+.mando-impedido .mando-palancas,
+.mando-impedido .mando-lecturas { opacity: .5; }
+
 /* Con el mando enfocado, el oro de las perillas avisa que el teclado comanda. */
 .mando:focus-visible .palanca-perilla { border-color: var(--oro); }
 .mando-teclas {

@@ -11,7 +11,6 @@ import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.sin
@@ -39,7 +38,12 @@ class SimulatedDroneController : DroneController {
         const val HOME_LON = -58.3816
         const val SPEED_MS = 12.0
         const val TICK_MS = 500L
-        const val FRAME_MS = 500L // ~2 fps
+        // El video simulado sale al MISMO ritmo que el del dron real (5 cuadros
+        // por segundo): así el reparto que hace PatrolManager —todo al Comando
+        // Central, uno cada 500 ms a la detección— da los mismos números en el
+        // banco de pruebas que en el campo, que es justamente para lo que está
+        // el simulador. Antes iba a 2 fps y el banco medía otra cosa.
+        const val FRAME_MS = CuadroDeVideo.INTERVALO_CUADRO_MS
         const val BATTERY_DRAIN_PER_TICK = 0.02 // % por tick volando
         // Igual que el dron real: si pierde el enlace RC por más de este tiempo,
         // el propio dron inicia RTH (failsafe), sin intervención de la app.
@@ -276,13 +280,10 @@ class SimulatedDroneController : DroneController {
     }
 
     /** Rumbo 0..360° desde la posición actual hacia el punto dado (norte = 0, este = 90). */
-    private fun bearingTo(tLat: Double, tLon: Double): Double {
-        val dy = (tLat - lat) * METERS_PER_DEG_LAT
-        val dx = (tLon - lon) * metersPerDegLon()
-        return (Math.toDegrees(atan2(dx, dy)) + 360.0) % 360.0
-    }
+    private fun bearingTo(tLat: Double, tLon: Double): Double =
+        (Geo.rumboHacia(lat, lon, tLat, tLon) + 360.0) % 360.0
 
-    private fun metersPerDegLon() = METERS_PER_DEG_LAT * cos(Math.toRadians(lat))
+    private fun metersPerDegLon() = Geo.metrosPorGradoLon(lat)
 
     /** La señal se degrada de forma lineal con la distancia a la base. */
     private fun signalPct(): Int {

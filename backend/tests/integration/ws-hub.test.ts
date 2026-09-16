@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import {
   crearUsuario,
@@ -128,6 +128,39 @@ describe('integración — hub WebSocket multi-dron', () => {
     // el hub sigue vivo: un status posterior se sigue reenviando
     d1.ws.send(mkStatus({ battery: 42 }));
     await opWs.waitFor((m) => m.type === 'status' && m.battery === 42);
+  });
+
+  it('un `null` y un alert_request con basura no tumban el hub', async () => {
+    const opWs = await conn(op);
+    const d1 = await conn(alfaTok);
+    await wait(50);
+    const anotados = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      // `JSON.parse('null')` devuelve null y `msg.type` sobre null es un
+      // TypeError que nadie atrapa: se cae el proceso entero y con él el Comando
+      // Central de todas las consolas y de todos los drones que estén volando.
+      d1.ws.send('null');
+      await wait(120);
+      // Se descarta validándolo, sin que el hub tenga que atrapar nada
+      expect(anotados).not.toHaveBeenCalled();
+
+      // Y esto es lo que la validación no puede prever: una coordenada que no es
+      // un número revienta adentro de SQLite al guardar la alerta. Ahí sí entra
+      // la red de contención: el mensaje se descarta, queda anotado y el hub
+      // sigue en pie en vez de llevarse puesto a todo el mundo.
+      d1.ws.send(JSON.stringify({ type: 'alert_request', lat: {}, lon: {} }));
+      await wait(150);
+      expect(anotados).toHaveBeenCalled();
+    } finally {
+      anotados.mockRestore();
+    }
+    expect(d1.ws.readyState).toBe(WebSocket.OPEN);
+
+    // el hub sigue vivo: un status posterior se sigue reenviando
+    d1.ws.send(mkStatus({ battery: 37 }));
+    await opWs.waitFor((m) => m.type === 'status' && m.battery === 37);
+    // y la alerta rota no llegó a existir
+    expect(opWs.got.some((m) => m.type === 'alert_created')).toBe(false);
   });
 
   it('una alerta se crea y la decisión llega SOLO al dron que la originó', async () => {

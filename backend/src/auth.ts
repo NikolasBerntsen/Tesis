@@ -134,7 +134,21 @@ export function requireAuth(minRole?: Role) {
   return (req: AuthedRequest, res: Response, next: NextFunction) => {
     const r = resolverIdentidad(req);
     if (!r.ok) return res.status(r.status).json({ error: r.error });
-    if (minRole && ROLE_RANK[r.user.role] < ROLE_RANK[minRole]) {
+    // El tipo `Role` de la fila es una promesa del esquema, no una garantía: la
+    // columna `role` no tiene CHECK (db.ts: "validado en código") y las
+    // migraciones copian el valor viejo tal cual. Con un rol que no está en
+    // ROLE_RANK, `undefined < 2` da false en JS y la request PASARÍA: el
+    // control falla CERRADO a propósito, igual que el mando por WebSocket
+    // (ws.ts), porque lo desconocido no vuela un dron. `requireRoles` ya falla
+    // cerrado solo, porque compara contra una lista explícita.
+    // Se exige que sea un NÚMERO y no solo que no sea undefined: ROLE_RANK es un
+    // objeto literal, así que hereda Object.prototype y un rol llamado
+    // `toString`, `constructor` o `valueOf` devuelve una FUNCIÓN. Con esa función,
+    // `=== undefined` da false y `función < 2` también (la comparación termina en
+    // NaN): el rol desconocido pasaba igual, que es justo lo que este control
+    // vino a cerrar.
+    const rango: unknown = ROLE_RANK[r.user.role];
+    if (minRole && (typeof rango !== 'number' || rango < ROLE_RANK[minRole])) {
       return res.status(403).json({ error: 'Rol sin permiso para esta operación' });
     }
     req.user = r.user;

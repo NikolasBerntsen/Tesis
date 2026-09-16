@@ -1,7 +1,10 @@
 package com.tesis.dronepatrol.dji
 
+import android.util.Log
 import com.tesis.dronepatrol.drone.CuadroDeVideo
 import com.tesis.dronepatrol.drone.DroneController
+import com.tesis.dronepatrol.drone.EsperaCreciente
+import com.tesis.dronepatrol.drone.Geo
 import com.tesis.dronepatrol.drone.LimitadorDeRitmo
 import com.tesis.dronepatrol.drone.MandoVirtual
 import com.tesis.dronepatrol.model.FlightEvent
@@ -12,6 +15,7 @@ import dji.sdk.keyvalue.key.BatteryKey
 import dji.sdk.keyvalue.key.FlightControllerKey
 import dji.sdk.keyvalue.key.KeyTools
 import dji.sdk.keyvalue.value.common.ComponentIndexType
+import dji.sdk.keyvalue.value.flightcontroller.FlightControlAuthorityChangeReason
 import dji.sdk.keyvalue.value.flightcontroller.FlightCoordinateSystem
 import dji.sdk.keyvalue.value.flightcontroller.RollPitchControlMode
 import dji.sdk.keyvalue.value.flightcontroller.VerticalControlMode
@@ -21,9 +25,12 @@ import dji.v5.common.callback.CommonCallbacks
 import dji.v5.common.error.IDJIError
 import dji.v5.manager.KeyManager
 import dji.v5.manager.aircraft.virtualstick.VirtualStickManager
+import dji.v5.manager.aircraft.virtualstick.VirtualStickState
+import dji.v5.manager.aircraft.virtualstick.VirtualStickStateListener
 import dji.v5.manager.datacenter.MediaDataCenter
 import dji.v5.manager.interfaces.ICameraStreamManager
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -32,6 +39,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
@@ -58,15 +68,44 @@ class DjiDroneController : DroneController {
     override val flightEvents = MutableSharedFlow<FlightEvent>(extraBufferCapacity = 8)
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /**
+     * Serializa el relevo del lazo de comandos. Cortar el anterior y publicar el
+     * nuevo tiene que ser UN solo paso indivisible: los pedidos llegan por hilos
+     * distintos —`manualStick` corre en el hilo lector de OkHttp y el resto en
+     * corrutinas de Dispatchers.Default— y entrelazados dejaban un lazo vivo al
+     * que ya nadie referenciaba, mandándole velocidades contradictorias al dron
+     * a 10 Hz sin forma de matarlo. El monitor es reentrante, así que
+     * [manualStick] puede llamar a [relevarLazo] sin soltarlo.
+     */
+    private val relevoDeLazo = Any()
+
+    /** Lazo de comandos en curso. Se lee y se escribe SIEMPRE con [relevoDeLazo] tomado. */
     private var navigationJob: Job? = null
 
-    private var lastLat = Double.NaN
-    private var lastLon = Double.NaN
-    private var lastAlt = 0.0
-    private var lastBattery = 0.0
+    /** true mientras el lazo de [navigationJob] sea el del mando manual. Mismo lock. */
+    private var mandoActivo = false
+
+    /** Corrutina que convierte los cuadros del SDK, una por vez (ver [convertirCuadros]). */
+    private var conversionJob: Job? = null
 
     // Lo que sigue lo escriben los listeners del SDK, cada uno en su hilo, y lo
-    // lee el que arma la telemetría: volátil para que no quede pegado.
+    // leen los lazos de navegación y el que arma la telemetría, que corren en
+    // otros: volátil para que no quede pegado. Sin esto un lazo podía quedarse
+    // con lastLat en NaN y hacer `continue` para siempre —el dron reportando
+    // posición y la ruta sin comandar una sola velocidad— sin que nada lo avise.
+    @Volatile
+    private var lastLat = Double.NaN
+
+    @Volatile
+    private var lastLon = Double.NaN
+
+    @Volatile
+    private var lastAlt = 0.0
+
+    @Volatile
+    private var lastBattery = 0.0
+
     @Volatile
     private var lastHeading = 0.0
 
@@ -84,14 +123,57 @@ class DjiDroneController : DroneController {
     @Volatile
     private var ejesMando = MandoVirtual.NEUTRO
 
-    /** true mientras el lazo de [navigationJob] sea el del mando manual. */
+    /**
+     * Se prende en [disconnect] y no se apaga hasta el próximo [connect]. Es lo
+     * que impide que una vuelta del lazo que venía en camino vuelva a habilitar
+     * el Virtual Stick DESPUÉS de que se lo deshabilitó al cerrar la app: si eso
+     * pasa, el operador no recupera el dron con las palancas del RC-N3.
+     */
     @Volatile
-    private var mandoActivo = false
+    private var desconectado = false
 
-    /** El Virtual Stick se habilita una sola vez; esto es lo que lo recuerda. */
+    /**
+     * Lo que el SDK dice del Virtual Stick. Lo pisan tanto [asegurarVirtualStick]
+     * como el oyente de estado del propio SDK, que es el que avisa cuando la
+     * aeronave revoca la autoridad de vuelo por su cuenta.
+     */
     private val virtualStickListo = AtomicBoolean(false)
 
+    /**
+     * Último motivo avisado, para que el aviso sea por TRANSICIÓN y no por
+     * intento (ver [avisar]). Es atómico y no `@Volatile` porque la comparación y
+     * la escritura tienen que ser un solo paso: los avisos salen del hilo del SDK
+     * y de los lazos de comando a la vez, y dos hilos con el mismo motivo no
+     * pueden avisar los dos.
+     */
+    private val ultimoAviso = AtomicReference<String?>(null)
+
+    /**
+     * Espera del reintento de la habilitación del Virtual Stick. Sin esto, el
+     * rechazo se reintentaba en cada vuelta del lazo de comandos: 10 veces por
+     * segundo, para siempre (ver [asegurarVirtualStick]).
+     */
+    private val reintentoDelMandoVirtual = EsperaCreciente(REINTENTO_MANDO_INICIAL_MS, REINTENTO_MANDO_TOPE_MS)
+
     private val limitadorDeCuadros = LimitadorDeRitmo(CuadroDeVideo.INTERVALO_CUADRO_MS)
+
+    /** Un cuadro crudo del MSDK, ya copiado del buffer que el SDK reusa. */
+    private class CuadroCrudo(val datos: ByteArray, val ancho: Int, val alto: Int)
+
+    /**
+     * Cola de UN solo lugar entre el hilo del decodificador y el que convierte.
+     * Antes cada cuadro se convertía en su propia corrutina sobre un pool
+     * multihilo y nada garantizaba el orden: si la conversión de uno tardaba más
+     * que los 200 ms que lo separan del siguiente, se emitía el viejo último y
+     * la consola pintaba un cuadro atrasado encima del nuevo (y la captura que
+     * se adjunta a una alerta podía no ser la que disparó la detección).
+     *
+     * Con un solo consumidor el orden se preserva, y con DROP_OLDEST el que se
+     * pierde cuando el celular se atrasa es el viejo —que es lo que corresponde
+     * en video en vivo— en vez de apilarse corrutinas.
+     */
+    private val cuadrosPorConvertir =
+        Channel<CuadroCrudo>(capacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
     /**
      * Cuadros de la cámara principal. Ojo con este callback: lo llama el
@@ -116,13 +198,60 @@ class DjiDroneController : DroneController {
             val hasta = minOf(offset + length, frameData.size)
             if (offset < 0 || hasta <= offset) return
             val copia = frameData.copyOfRange(offset, hasta)
-            scope.launch(Dispatchers.Default) {
-                CuadroDeVideo.nv21AJpeg(copia, 0, width, height)?.let { videoFrames.tryEmit(it) }
+            cuadrosPorConvertir.trySend(CuadroCrudo(copia, width, height))
+        }
+    }
+
+    /**
+     * Convierte los cuadros de a uno y en orden (ver [cuadrosPorConvertir]).
+     *
+     * El cuerpo va entero adentro de un runCatching: una excepción sin atrapar
+     * en un `launch` no se descarta sola —el SupervisorJob salva al scope, pero
+     * el hilo la propaga igual— y se llevaría puesta la app en pleno vuelo. El
+     * caso concreto es un OutOfMemoryError reservando el bitmap de 640x360 con
+     * el celular ocupado; perder un cuadro de treinta no se nota, perder la app
+     * sí.
+     */
+    private suspend fun convertirCuadros() {
+        for (cuadro in cuadrosPorConvertir) {
+            runCatching { CuadroDeVideo.nv21AJpeg(cuadro.datos, 0, cuadro.ancho, cuadro.alto) }
+                .onSuccess { jpeg -> jpeg?.let { videoFrames.tryEmit(it) } }
+                .onFailure { falla -> Log.w(TAG, "Se descartó un cuadro de video", falla) }
+        }
+    }
+
+    /**
+     * Estado real del Virtual Stick según el SDK. [virtualStickListo] por sí
+     * solo recuerda lo que la app PIDIÓ: si la aeronave revoca la autoridad de
+     * vuelo por su cuenta —el RC-N3 cambió de modo, arrancó un regreso a base,
+     * se cayó el enlace— la marca quedaba en true y nadie volvía a habilitarlo
+     * nunca, con el dron ignorando la consola en silencio.
+     */
+    private val oyenteDeVirtualStick = object : VirtualStickStateListener {
+        override fun onVirtualStickStateUpdate(estado: VirtualStickState) {
+            virtualStickListo.set(estado.isVirtualStickEnable)
+            // El modo avanzado es el único que acepta velocidades: si el dron lo
+            // apagó, sendVirtualStickAdvancedParam se come el parámetro y vuelve
+            // sin hacer nada, así que hay que reponerlo.
+            if (!desconectado && estado.isVirtualStickEnable && !estado.isVirtualStickAdvancedModeEnabled) {
+                VirtualStickManager.getInstance().setVirtualStickAdvancedModeEnabled(true)
+            }
+        }
+
+        override fun onChangeReasonUpdate(motivo: FlightControlAuthorityChangeReason) {
+            // MSDK_REQUEST somos nosotros pidiéndolo: eso no es noticia.
+            if (motivo != FlightControlAuthorityChangeReason.MSDK_REQUEST) {
+                avisar("la aeronave le sacó la autoridad de vuelo a la app ($motivo)")
             }
         }
     }
 
     override fun connect() {
+        desconectado = false
+        // Un solo consumidor de cuadros, y se relanza por si se reconecta
+        conversionJob?.cancel()
+        conversionJob = scope.launch { convertirCuadros() }
+        VirtualStickManager.getInstance().setVirtualStickStateListener(oyenteDeVirtualStick)
         val km = KeyManager.getInstance()
 
         // Posición del dron → telemetría
@@ -169,8 +298,7 @@ class DjiDroneController : DroneController {
     }
 
     override fun startRoute(route: PatrolRoute, fromWaypoint: Int) {
-        cortarNavegacion()
-        navigationJob = scope.launch {
+        relevarLazo(esMando = false) {
             asegurarVirtualStick()
             var target = fromWaypoint.coerceIn(0, route.waypoints.size - 1)
             while (true) {
@@ -196,8 +324,7 @@ class DjiDroneController : DroneController {
     }
 
     override fun hold() {
-        cortarNavegacion()
-        navigationJob = scope.launch {
+        relevarLazo(esMando = false) {
             asegurarVirtualStick()
             // Vuelo estacionario = velocidad cero SOSTENIDA. Si simplemente se
             // dejara de comandar, el dron saldría del Virtual Stick y volvería a
@@ -210,8 +337,7 @@ class DjiDroneController : DroneController {
     }
 
     override fun gotoPoint(lat: Double, lon: Double) {
-        cortarNavegacion()
-        navigationJob = scope.launch {
+        relevarLazo(esMando = false) {
             asegurarVirtualStick()
             while (true) {
                 delay(INTERVALO_MANDO_MS)
@@ -240,8 +366,7 @@ class DjiDroneController : DroneController {
     }
 
     override fun startOrbit(centerLat: Double, centerLon: Double, radiusM: Double) {
-        cortarNavegacion()
-        navigationJob = scope.launch {
+        relevarLazo(esMando = false) {
             asegurarVirtualStick()
             var angle = 0.0
             while (true) {
@@ -255,7 +380,11 @@ class DjiDroneController : DroneController {
                 val dx = (tLon - lastLon) * METERS_PER_DEG_LAT * cos(Math.toRadians(lastLat))
                 val dist = hypot(dx, dy).coerceAtLeast(0.1)
                 val speed = ORBIT_SPEED_MS.coerceAtMost(dist)
-                val yawToCenter = Math.toDegrees(atan2(centerLon - lastLon, centerLat - lastLat))
+                // Por Geo y no a mano: la cuenta anterior restaba grados de
+                // longitud contra grados de latitud sin escalar por cos(lat), y
+                // la nariz —con ella la cámara— no quedaba apuntando al objetivo
+                // que se está orbitando.
+                val yawToCenter = Geo.rumboHacia(lastLat, lastLon, centerLat, centerLon)
                 enviarVelocidadTerreno(speed * dy / dist, speed * dx / dist, yawToCenter)
             }
         }
@@ -264,22 +393,30 @@ class DjiDroneController : DroneController {
     override fun manualStick(pitch: Double, roll: Double, yaw: Double, throttle: Double) {
         // El lazo lee estos ejes en cada vuelta: un mensaje nuevo solo los pisa.
         ejesMando = MandoVirtual.velocidades(pitch, roll, yaw, throttle)
-        if (mandoActivo && navigationJob?.isActive == true) return
-        cortarNavegacion()
-        mandoActivo = true
-        navigationJob = scope.launch {
-            asegurarVirtualStick()
-            // El lazo sigue a 10 Hz aunque los ejes estén en cero, por lo mismo
-            // que hold(): el Virtual Stick se sostiene comandando.
-            while (true) {
-                enviarVelocidadCuerpo(ejesMando)
-                delay(INTERVALO_MANDO_MS)
+        synchronized(relevoDeLazo) {
+            // Mirar y relanzar van juntos, adentro del mismo lock: entre "el
+            // lazo del mando ya está corriendo" y relanzarlo no puede meterse
+            // otro hilo, que es como quedaban dos lazos vivos a la vez.
+            if (mandoActivo && navigationJob?.isActive == true) return
+            relevarLazo(esMando = true) {
+                asegurarVirtualStick()
+                // El lazo sigue a 10 Hz aunque los ejes estén en cero, por lo
+                // mismo que hold(): el Virtual Stick se sostiene comandando.
+                while (true) {
+                    enviarVelocidadCuerpo(ejesMando)
+                    delay(INTERVALO_MANDO_MS)
+                }
             }
         }
     }
 
     override fun returnHome() {
-        cortarNavegacion()
+        // Sin lazo nuevo: el regreso a base lo maneja el propio dron.
+        synchronized(relevoDeLazo) {
+            mandoActivo = false
+            navigationJob?.cancel()
+            navigationJob = null
+        }
         KeyManager.getInstance().performAction(
             KeyTools.createKey(FlightControllerKey.KeyStartGoHome),
             null,
@@ -288,22 +425,57 @@ class DjiDroneController : DroneController {
         // FlightEvent.ArrivedHome cuando el dron aterriza.
     }
 
+    /**
+     * Cerrar la puerta ANTES de cortar es la mitad del arreglo. Antes se
+     * deshabilitaba el Virtual Stick sin más: una vuelta del lazo que ya había
+     * pasado el `delay` entraba a `enviarVelocidadCuerpo`, llamaba a
+     * [asegurarVirtualStick] y lo volvía a habilitar DESPUÉS del disable. El
+     * Virtual Stick quedaba prendido con la app cerrada y el operador no
+     * recuperaba el dron con las palancas del RC-N3.
+     *
+     * No se ESPERA a que el lazo muera, y eso es a propósito. Esto lo llaman
+     * `onDestroy()` y el botón de "Desconectar y volver al login", los dos en el
+     * hilo principal de Android: esperar el corte —aunque sea con tope— congelaba
+     * la pantalla hasta medio segundo cada vez que el lazo estaba en medio de una
+     * llamada al SDK, incluida cada recreación por rotación.
+     *
+     * Y la espera no es lo que hace falta para la corrección: lo que impide que
+     * una vuelta en camino vuelva a HABILITAR el Virtual Stick es `desconectado`,
+     * que ya quedó en true y lo miran tanto [asegurarVirtualStick] como el
+     * `onSuccess` de su callback. Ese `onSuccess` tardío apaga por
+     * [mandarApagado] y no por [apagarVirtualStick], porque el paso 4 de acá
+     * abajo ya consumió la marca: ruteado por la marca, el apagado tardío no
+     * salía nunca.
+     *
+     * Lo que sí queda, y hay que decirlo: una vuelta que ya pasó el `delay` puede
+     * alcanzar a mandar UN parámetro más justo antes de que el dron procese el
+     * `disableVirtualStick`. Es una sola velocidad y el Virtual Stick no se
+     * sostiene sin comandos a 10 Hz, así que el dron vuelve al palito físico del
+     * RC-N3 igual. Se elige eso antes que apagar el Virtual Stick recién cuando el
+     * lazo termine (`invokeOnCompletion`): si una vuelta quedara colgada dentro de
+     * una llamada al SDK, el apagado no llegaría NUNCA y el operador se quedaría
+     * sin poder recuperar el dron con el control, que es la falla grave que este
+     * orden existe para evitar.
+     */
     override fun disconnect() {
-        cortarNavegacion()
-        MediaDataCenter.getInstance().getCameraStreamManager().removeFrameListener(oyenteDeCuadros)
-        KeyManager.getInstance().cancelListen(this)
-        // Se le devuelve el mando al palito físico del RC-N3: si el Virtual
-        // Stick quedara habilitado, el operador no recuperaría el control del
-        // dron al cerrar la app.
-        if (virtualStickListo.compareAndSet(true, false)) {
-            VirtualStickManager.getInstance().disableVirtualStick(
-                object : CommonCallbacks.CompletionCallback {
-                    override fun onSuccess() = Unit
-
-                    override fun onFailure(error: IDJIError) = Unit
-                },
-            )
+        // 1) Se cierra la puerta: ningún lazo puede volver a habilitarlo.
+        desconectado = true
+        // 2) Se corta el lazo de comandos, sin esperarlo (ver arriba).
+        synchronized(relevoDeLazo) {
+            mandoActivo = false
+            navigationJob?.cancel()
+            navigationJob = null
         }
+        // 3) Se corta todo lo demás que sigue emitiendo: sin esto las
+        //    conversiones ya lanzadas seguían publicando cuadros de un dron del
+        //    que la app ya se despidió.
+        scope.coroutineContext.cancelChildren()
+        conversionJob = null
+        MediaDataCenter.getInstance().getCameraStreamManager().removeFrameListener(oyenteDeCuadros)
+        VirtualStickManager.getInstance().removeVirtualStickStateListener(oyenteDeVirtualStick)
+        KeyManager.getInstance().cancelListen(this)
+        // 4) Y recién ahora se le devuelve el mando al palito físico del RC-N3.
+        apagarVirtualStick()
     }
 
     private fun emitTelemetry() {
@@ -315,14 +487,54 @@ class DjiDroneController : DroneController {
         )
     }
 
-    /** Corta el lazo de comandos en curso, sea de navegación o de mando manual. */
-    private fun cortarNavegacion() {
-        mandoActivo = false
-        navigationJob?.cancel()
+    /**
+     * Releva el lazo de comandos: mata el que estaba y publica el nuevo, todo
+     * bajo [relevoDeLazo]. Todos los modos pasan por acá —ruta, goto, órbita,
+     * estacionario y mando manual— porque el par cortar+asignar es justamente lo
+     * que no puede entrelazarse entre hilos.
+     */
+    private fun relevarLazo(esMando: Boolean, cuerpo: suspend CoroutineScope.() -> Unit) =
+        synchronized(relevoDeLazo) {
+            navigationJob?.cancel()
+            mandoActivo = esMando
+            navigationJob = scope.launch(block = cuerpo)
+        }
+
+    /**
+     * Deja constancia de un problema del dron. Va al log del dispositivo y, sobre
+     * todo, al Comando Central por [flightEvents]: un rechazo mudo es lo peor que
+     * puede pasar en vuelo —el operador mueve la palanca, el dron no se mueve y
+     * no hay una sola pista de por qué—, y este archivo no tiene registro local
+     * propio.
+     *
+     * Avisa por TRANSICIÓN: solo cuando el motivo cambia. Los llamadores están
+     * adentro de lazos que corren a 10 Hz, así que el MISMO rechazo se repetía
+     * diez veces por segundo, y cada `Problema` termina en una fila de la tabla
+     * `events` del Comando Central más un broadcast a cada consola abierta: el
+     * contrato lo prohíbe justamente porque tapa el registro de la salida cuando
+     * hay algo real que mirar. El techo de PatrolManager es el que protege al hub
+     * de cualquier controlador; éste evita además llenar el logcat del celular y
+     * el buffer de [flightEvents].
+     */
+    private fun avisar(motivo: String) {
+        // Comparar y recordar en un solo paso: si dos hilos traen el mismo motivo,
+        // avisa uno.
+        if (ultimoAviso.getAndSet(motivo) == motivo) return
+        Log.w(TAG, motivo)
+        flightEvents.tryEmit(FlightEvent.Problema(motivo))
     }
 
     /**
-     * Habilita el Virtual Stick una sola vez. Es idempotente porque lo llaman
+     * El problema se resolvió. Borra la memoria de [avisar] para que, si el mismo
+     * motivo vuelve a aparecer más tarde, sea noticia otra vez en vez de quedar
+     * tapado por el aviso viejo.
+     */
+    private fun seResolvioElProblema() {
+        ultimoAviso.set(null)
+    }
+
+    /**
+     * Habilita el Virtual Stick si hace falta. Es idempotente porque lo llaman
      * todos los caminos que comandan velocidades (ruta, goto, órbita,
      * estacionario y mando manual), y pedírselo de nuevo al SDK diez veces por
      * segundo sería pelearse con él.
@@ -330,23 +542,91 @@ class DjiDroneController : DroneController {
      * La habilitación es asíncrona: los primeros comandos pueden caer mientras
      * el dron todavía la está aceptando y se pierden, pero como se manda a 10 Hz
      * el siguiente llega enseguida.
+     *
+     * Si el dron la rechaza, el reintento NO sale en la vuelta siguiente: entra
+     * por [reintentoDelMandoVirtual], que espera cada vez más. Un rechazo suele
+     * ser una condición que dura —el dron en el suelo sin punto de home, el RC-N3
+     * sin ceder la autoridad, un regreso a base en curso— y preguntar diez veces
+     * por segundo no la cambia.
      */
     private fun asegurarVirtualStick() {
+        // La app ya se despidió del dron: habilitarlo acá sería dejárselo
+        // prendido al operador (ver disconnect()).
+        if (desconectado) return
+        if (!reintentoDelMandoVirtual.sePuedeIntentar(System.currentTimeMillis())) return
         if (!virtualStickListo.compareAndSet(false, true)) return
         val vs = VirtualStickManager.getInstance()
         vs.enableVirtualStick(
             object : CommonCallbacks.CompletionCallback {
                 override fun onSuccess() {
+                    reintentoDelMandoVirtual.exito()
+                    // El dron aceptó: si más adelante vuelve a rechazar, es un
+                    // problema nuevo y tiene que volver a avisarse.
+                    seResolvioElProblema()
                     // El modo avanzado es el único que acepta velocidades y
                     // marco de coordenadas; sin esto sendVirtualStickAdvancedParam
                     // no tiene efecto.
                     vs.setVirtualStickAdvancedModeEnabled(true)
+                    // Si la app se cerró mientras el dron todavía lo aceptaba,
+                    // esta habilitación llegó tarde y hay que deshacerla. Va
+                    // derecho al apagado y no por apagarVirtualStick(): para
+                    // cuando llega este onSuccess, disconnect() ya consumió la
+                    // marca, así que el compareAndSet fallaría y el Virtual Stick
+                    // quedaría prendido con la app cerrada (ver mandarApagado()).
+                    if (desconectado) {
+                        virtualStickListo.set(false)
+                        mandarApagado()
+                    }
                 }
 
                 override fun onFailure(error: IDJIError) {
-                    // Quedó sin habilitar: se libera la marca para que el próximo
-                    // comando lo reintente, en vez de comandar al vacío para siempre.
+                    // Quedó sin habilitar: se libera la marca para que se pueda
+                    // reintentar, en vez de comandar al vacío para siempre. El
+                    // cuándo lo pone la espera creciente.
                     virtualStickListo.set(false)
+                    reintentoDelMandoVirtual.fracaso(System.currentTimeMillis())
+                    // Y se avisa: sin esto el dron ignoraba la consola en
+                    // silencio, porque sendVirtualStickAdvancedParam descarta el
+                    // parámetro cuando el modo avanzado no está prendido. El aviso
+                    // es por transición (ver avisar()).
+                    avisar("el dron no aceptó el mando virtual (${error.description()}): la consola no lo va a poder mover")
+                }
+            },
+        )
+    }
+
+    /**
+     * Le devuelve el mando al palito físico del RC-N3, una sola vez: el
+     * compareAndSet evita mandar un `disableVirtualStick` por cada lazo que
+     * termina.
+     */
+    private fun apagarVirtualStick() {
+        if (!virtualStickListo.compareAndSet(true, false)) return
+        mandarApagado()
+    }
+
+    /**
+     * El apagado propiamente dicho, SIN pasar por la marca. Existe aparte porque
+     * hay un camino donde la marca ya se consumió y el dron igual quedó con el
+     * Virtual Stick habilitado: [disconnect] apaga (compareAndSet true→false y
+     * manda el disable) mientras una habilitación está en vuelo, y cuando la
+     * aeronave contesta ese `onSuccess` tardío el Virtual Stick está prendido
+     * pero la marca ya dice false. Ruteado por [apagarVirtualStick], el
+     * compareAndSet fallaba y no se mandaba ningún disable: el Virtual Stick
+     * quedaba habilitado con la app cerrada y el operador no recuperaba el dron
+     * con las palancas del control, que es justo la falla grave que todo este
+     * orden existe para evitar.
+     */
+    private fun mandarApagado() {
+        VirtualStickManager.getInstance().disableVirtualStick(
+            object : CommonCallbacks.CompletionCallback {
+                override fun onSuccess() = Unit
+
+                override fun onFailure(error: IDJIError) {
+                    avisar(
+                        "no se pudo devolver el mando al control (${error.description()}): " +
+                            "el Virtual Stick puede haber quedado habilitado",
+                    )
                 }
             },
         )
@@ -404,5 +684,17 @@ class DjiDroneController : DroneController {
 
         /** El Virtual Stick se sostiene con comandos a 10 Hz. */
         const val INTERVALO_MANDO_MS = 100L
+
+        /**
+         * Espera del primer reintento de la habilitación del Virtual Stick y tope
+         * al que llega duplicándose. Medio segundo es holgado para un rechazo de
+         * un instante —el lazo manda a 10 Hz, así que se pierden cinco comandos—
+         * y cinco segundos es un ritmo con el que el operador sigue viendo el
+         * rechazo en la consola sin inundarla.
+         */
+        const val REINTENTO_MANDO_INICIAL_MS = 500L
+        const val REINTENTO_MANDO_TOPE_MS = 5_000L
+
+        const val TAG = "DjiDroneController"
     }
 }

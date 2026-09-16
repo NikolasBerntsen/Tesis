@@ -285,6 +285,7 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
           drone={selected}
           status={statuses[selected.droneId] ?? null}
           frame={frames[selected.droneId] ?? null}
+          conectado={conectado}
           liveEvents={liveEvents}
           routes={routes}
           onBack={() => setSelectedId(null)}

@@ -29,6 +29,26 @@ class MandoVirtualTest {
         assertEquals(-0.2, MandoVirtual.eje(-0.2), toleranciaMs)
     }
 
+    /**
+     * El borde exacto de la zona muerta, que es el único valor que distingue el
+     * `<` del `<=` en [MandoVirtual.eje]. Sin este caso se puede cambiar la
+     * comparación y toda la suite sigue verde: los demás asserts caen en 0,04 o
+     * en 0,2 y ninguno pisa el 0,05.
+     */
+    @Test
+    fun elBordeDeLaZonaMuertaQuedaAfuera() {
+        assertEquals(0.05, MandoVirtual.ZONA_MUERTA, toleranciaMs)
+        assertEquals(0.05, MandoVirtual.eje(0.05), toleranciaMs)
+        assertEquals(-0.05, MandoVirtual.eje(-0.05), toleranciaMs)
+    }
+
+    /** Y el valor inmediatamente por debajo del borde sí se lo come. */
+    @Test
+    fun justoPorDebajoDelBordeLaZonaMuertaCome() {
+        assertEquals(0.0, MandoVirtual.eje(0.0499), toleranciaMs)
+        assertEquals(0.0, MandoVirtual.eje(-0.0499), toleranciaMs)
+    }
+
     /** La consola no tendría que mandar esto, pero el dron no se entera de eso. */
     @Test
     fun losEjesSeRecortanAMenosUnoYUno() {
