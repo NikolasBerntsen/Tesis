@@ -115,11 +115,102 @@ jobs:
           echo "::error::services.gradle.org no respondió después de 5 intentos. No es un problema del código."
           exit 1
 
-      - name: Build + tests unitarios (flavor mock)
-        run: ./gradlew assembleMockDebug testMockDebugUnitTest --build-cache --no-daemon
+      # `createMockDebugUnitTestCoverageReport` depende de la tarea de tests, así
+      # que corre la suite igual; se nombra aparte para que se vea que además
+      # produce el XML de JaCoCo que consume SonarQube.
+      - name: Build + tests unitarios + cobertura (flavor mock)
+        run: ./gradlew assembleMockDebug testMockDebugUnitTest createMockDebugUnitTestCoverageReport --build-cache --no-daemon
       - name: Reporte de tests
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: tests-android
           path: android-app/app/build/reports/tests
+      # Las dos rutas cuelgan de android-app/app/build, así que el artefacto
+      # queda con esa raíz común y el job de Sonar lo descomprime ahí mismo para
+      # que las rutas vuelvan a ser las que espera sonar-project.properties.
+      - name: Cobertura y resultados de la app Android
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cobertura-android
+          path: |
+            android-app/app/build/reports/coverage/test/mock/debug/report.xml
+            android-app/app/build/test-results/testMockDebugUnitTest
+
+  sonar:
+    name: SonarQube (calidad y cobertura)
+    runs-on: ubuntu-latest
+    # Espera a los tres para juntar sus informes. `always()` no: si una suite
+    # falló, la cobertura que subió está incompleta y analizarla diría cualquier
+    # cosa. Lo que se analiza es un árbol con los tres en verde.
+    needs: [backend, frontend, android]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Sonar fecha cada línea con el historial de git para saber qué es
+          # "código nuevo" y a quién atribuirle cada issue. Con el clon
+          # superficial que hace checkout por defecto, pierde las dos cosas.
+          fetch-depth: 0
+
+      - name: Cobertura del backend
+        uses: actions/download-artifact@v4
+        with:
+          name: cobertura-backend
+          path: backend/coverage
+      - name: Cobertura de la consola
+        uses: actions/download-artifact@v4
+        with:
+          name: cobertura-frontend
+          path: frontend/coverage
+      - name: Cobertura de la app Android
+        uses: actions/download-artifact@v4
+        with:
+          name: cobertura-android
+          path: android-app/app/build
+
+      # Antes de analizar: que los informes estén donde el .properties dice. Si
+      # una ruta se movió, Sonar NO falla — publica cobertura cero y el tablero
+      # miente. Preferimos romper acá, con el archivo que falta escrito.
+      - name: Verificar que los informes están en su lugar
+        run: |
+          faltan=0
+          for informe in \
+            backend/coverage/lcov.info \
+            backend/coverage/tests-sonar.xml \
+            frontend/coverage/lcov.info \
+            frontend/coverage/tests-sonar.xml \
+            android-app/app/build/reports/coverage/test/mock/debug/report.xml
+          do
+            if [ -s "$informe" ]; then
+              echo "ok  $informe"
+            else
+              echo "::error::Falta el informe $informe: Sonar publicaría cobertura cero sin avisar."
+              faltan=1
+            fi
+          done
+          exit $faltan
+
+      # Sin el secreto configurado no hay análisis posible. En vez de dejar el CI
+      # en rojo (por ejemplo en un fork, que no recibe secretos), se saltea y
+      # explica qué falta: ver docs/SONARQUBE.md.
+      - name: ¿Está configurado el acceso a SonarQube?
+        id: acceso
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          if [ -n "$SONAR_TOKEN" ]; then
+            echo "configurado=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configurado=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Falta el secreto SONAR_TOKEN: se saltea el análisis (ver docs/SONARQUBE.md)."
+          fi
+
+      - name: Análisis de SonarQube
+        if: steps.acceso.outputs.configurado == 'true'
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          # Vacío para SonarQube Cloud; en una instancia propia se define como
+          # variable del repositorio (Settings › Variables) con su URL.
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}

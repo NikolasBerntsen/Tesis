@@ -12,9 +12,28 @@ export default mergeConfig(
       globals: true,
       setupFiles: './src/test/setup.ts',
       css: false,
+      // El segundo reporte es para SonarQube: el formato genérico de ejecución
+      // de tests que lee `sonar.testExecutionReportPaths`. Sin esto Sonar muestra
+      // la cobertura pero no cuántos tests corrieron ni cuánto tardaron.
+      // `onWritePath` prefija con el módulo porque el análisis corre desde la
+      // raíz del repo: sin el prefijo Sonar busca `src/...` ahí y no encuentra nada.
+      reporters: [
+        'default',
+        [
+          'vitest-sonar-reporter',
+          {
+            outputFile: 'coverage/tests-sonar.xml',
+            onWritePath: (ruta: string) => `frontend/${ruta}`,
+          },
+        ],
+      ],
       coverage: {
         provider: 'v8',
-        reporter: ['text', 'lcov', 'json-summary'],
+        // `projectRoot: '..'` NO es cosmético: sin él el lcov sale con rutas
+        // relativas a frontend/ (`SF:src/App.tsx`) y el análisis de Sonar, que
+        // corre desde la raíz, no resuelve ni un archivo — la cobertura aparece
+        // en cero sin ningún error. Con esto sale `SF:frontend/src/App.tsx`.
+        reporter: ['text', ['lcov', { projectRoot: '..' }], 'json-summary'],
         all: true,
         include: ['src/**/*.{ts,tsx}'],
         exclude: [

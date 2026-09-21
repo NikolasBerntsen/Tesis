@@ -18,12 +18,32 @@ export default defineConfig({
     },
     setupFiles: ['./tests/setup.ts'],
     include: ['tests/**/*.test.ts'],
+    // El segundo reporte es para SonarQube: el formato genérico de ejecución de
+    // tests, que es lo que lee `sonar.testExecutionReportPaths`. Sin esto Sonar
+    // muestra la cobertura pero no cuántos tests corrieron ni cuánto tardaron.
+    // `onWritePath` prefija con el módulo por el mismo motivo que el
+    // `projectRoot` de la cobertura: el análisis corre desde la raíz y sin el
+    // prefijo Sonar busca `tests/...` ahí y no encuentra nada.
+    reporters: [
+      'default',
+      [
+        'vitest-sonar-reporter',
+        {
+          outputFile: 'coverage/tests-sonar.xml',
+          onWritePath: (ruta: string) => `backend/${ruta}`,
+        },
+      ],
+    ],
     // Los tests de WebSocket y control abren sockets y esperan mensajes.
     testTimeout: 15000,
     hookTimeout: 20000,
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'lcov', 'json-summary'],
+      // `projectRoot: '..'` NO es cosmético: sin él el lcov sale con rutas
+      // relativas a backend/ (`SF:src/app.ts`) y el análisis de Sonar, que corre
+      // desde la raíz del repo, no puede resolver ni un archivo — la cobertura
+      // aparece en cero sin ningún error. Con esto sale `SF:backend/src/app.ts`.
+      reporter: ['text', ['lcov', { projectRoot: '..' }], 'json-summary'],
       all: true,
       include: ['src/**/*.ts'],
       // index.ts y seed.ts son entrypoints/datos, no lógica a testear.

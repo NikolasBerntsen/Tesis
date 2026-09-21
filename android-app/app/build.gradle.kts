@@ -1,3 +1,5 @@
+import org.gradle.testing.jacoco.plugins.JacocoTaskExtension
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -26,10 +28,36 @@ android {
         }
     }
 
+    buildTypes {
+        getByName("debug") {
+            // Instrumenta con JaCoCo los tests unitarios (los de Robolectric
+            // incluidos) para que AGP genere el informe de cobertura que lee
+            // SonarQube. Va solo en debug: el APK de release no se instrumenta.
+            enableUnitTestCoverage = true
+        }
+    }
+
     buildFeatures { viewBinding = true }
 
     // Robolectric corre los tests contra el framework de Android en la JVM
-    testOptions { unitTests { isIncludeAndroidResources = true } }
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            // Robolectric carga las clases con su propio classloader y las deja
+            // sin "location"; JaCoCo, por defecto, esas las ignora. Sin esta
+            // línea la cobertura de todo lo que solo se prueba con Robolectric
+            // —PatrolManager entero, por ejemplo— se informa como CERO, sin un
+            // solo error que lo delate: el tablero de Sonar muestra un 0 % que
+            // no es cierto. `jdk.internal.*` se excluye porque instrumentarlo
+            // rompe el arranque de la JVM.
+            all {
+                it.extensions.configure(JacocoTaskExtension::class.java) {
+                    isIncludeNoLocationClasses = true
+                    excludes = listOf("jdk.internal.*")
+                }
+            }
+        }
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
