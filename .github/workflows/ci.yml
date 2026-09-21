@@ -215,9 +215,12 @@ jobs:
 
       - name: Análisis de SonarQube
         if: steps.acceso.outputs.configurado == 'true'
-        uses: SonarSource/sonarqube-scan-action@v5
+        uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          # Vacío para SonarQube Cloud; en una instancia propia se define como
-          # variable del repositorio (Settings › Variables) con su URL.
-          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+          # Para SonarQube Cloud NO alcanza con dejar la variable vacía: el
+          # scanner la lee igual, arma la URL sin esquema y muere en un segundo
+          # con "Expected URL scheme 'http' or 'https'". Por eso el valor por
+          # defecto explícito. En una instancia propia se define la variable del
+          # repositorio (Settings › Variables) con su URL y esta línea la toma.
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}

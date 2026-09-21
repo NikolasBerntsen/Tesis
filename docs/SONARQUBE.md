@@ -33,19 +33,28 @@ públicos.
 2. **+ › Analyze new project**, elegí `NikolasBerntsen/Tesis` y creá el proyecto.
    Sonar te muestra la **organization key** y el **project key**.
 3. Abrí `sonar-project.properties` y verificá que `sonar.projectKey` y
-   `sonar.organization` sean exactamente esos dos valores. Si el proyecto lo
-   creaste importando el repo, ya coinciden con lo que está escrito.
+   `sonar.organization` sean exactamente esos dos valores. Para este repositorio
+   ya son los que están escritos: `NikolasBerntsen_Tesis` y `nikolasberntsen`.
 4. En el paso de configuración elegí **GitHub Actions** (no el análisis
    automático: nosotros ya tenemos el workflow y queremos que suba la cobertura).
    Si quedó prendido *Automatic Analysis*, apagalo en
    **Administration › Analysis Method**, porque compite con el del CI.
 5. Copiá el token que te da y guardalo en GitHub:
    **Settings › Secrets and variables › Actions › New repository secret**, con
-   nombre `SONAR_TOKEN`.
+   nombre `SONAR_TOKEN`. Que sea un **secret**, no una *variable*: en esa misma
+   pantalla hay dos pestañas y el job lee `secrets.SONAR_TOKEN`, así que un
+   token guardado como variable llega vacío y el análisis se saltea.
 6. Listo. El próximo push corre el análisis y publica en SonarCloud.
 
-No hace falta definir `SONAR_HOST_URL`: sin esa variable, el paso apunta a
-SonarQube Cloud.
+No hace falta definir `SONAR_HOST_URL`: si la variable no existe, el job apunta
+a `https://sonarcloud.io`.
+
+Lo que no funciona —y cuesta un rato darse cuenta— es pasarle la variable vacía
+esperando que el scanner caiga en ese default: no existe tal default. Con
+`SONAR_HOST_URL` vacía, el scanner igual la usa, arma una URL sin esquema y el
+análisis muere en un segundo con *Expected URL scheme 'http' or 'https' but no
+scheme was found for /api/v...*. Por eso el paso del workflow escribe el valor
+por defecto a mano: `${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}`.
 
 ## Prenderlo: instancia propia (SonarQube Server)
 
