@@ -35,3 +35,6 @@ logs/
 
 # Build del frontend copiado para produccion local
 backend/public/
+
+# Análisis de SonarQube corrido a mano (ver docs/SONARQUBE.md)
+.scannerwork/

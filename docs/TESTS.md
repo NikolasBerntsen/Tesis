@@ -2,7 +2,8 @@
 
 El sistema es de seguridad, así que la corrección importa. Cada componente
 tiene su propia suite y todas corren en CI (`.github/workflows/ci.yml`) en cada
-push y pull request. El objetivo de cobertura es **90% de líneas**; la cobertura
+push y pull request. Los resultados y la cobertura de las tres se publican
+además en SonarQube; cómo está armado eso está en [SONARQUBE.md](SONARQUBE.md). El objetivo de cobertura es **90% de líneas**; la cobertura
 actual lo supera: **99.6%** de líneas en backend y **98.3%** en frontend.
 
 ## Backend (`backend/`)
