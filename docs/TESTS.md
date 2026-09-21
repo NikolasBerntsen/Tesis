@@ -9,9 +9,9 @@ CI: si una entrega lo baja, la corrida se pone en rojo.
 | | Cobertura de líneas | Tests |
 |---|---|---|
 | Backend | 99,1 % | 302 |
-| Consola | 97,6 % | 413 |
+| Consola | 97,7 % | 415 |
 | App Android | 62,3 % | 135 |
-| **Proyecto entero** | **91,6 %** | **850** |
+| **Proyecto entero** | **91,7 %** | **852** |
 
 Dos cosas que conviene saber antes de citar un número de acá:
 

@@ -99,6 +99,17 @@ function fire(msg: unknown) {
   act(() => wsHandler(msg));
 }
 
+/**
+ * Abre el detalle del primer dron desde su mosaico. El mosaico entero es
+ * clickeable por CSS (`.tile-abrir` estirado encima), pero jsdom no calcula
+ * posiciones: acá se usa el control accesible, que es el que recibe el click
+ * en el navegador.
+ */
+async function abrirDetalleDelPrimerDron() {
+  await screen.findByText('Sin señal de video');
+  await userEvent.click((await screen.findAllByRole('button', { name: /^Ver detalle de / }))[0]);
+}
+
 describe('Console', () => {
   it('carga los datos al montar y muestra el dashboard conectado', async () => {
     render(<Console onLogout={() => {}} />);
@@ -219,8 +230,7 @@ describe('Console', () => {
   it('base_updated actualiza la base de los drones que la tienen asignada', async () => {
     dronesFix = [makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true, baseId: 4, base: { name: 'Base Vieja', lat: -34.6, lon: -58.4 } })];
     render(<Console onLogout={() => {}} />);
-    await screen.findByText('Sin señal de video');
-    await userEvent.click(screen.getByText('Sin señal de video'));
+    await abrirDetalleDelPrimerDron();
     await screen.findByRole('button', { name: /Volver a Drones/ });
     // La tarjeta de estado sólo se dibuja con telemetría: el buffer se vuelca
     // en el próximo tick.
@@ -243,8 +253,7 @@ describe('Console', () => {
   it('una base ajena no toca la ficha del dron', async () => {
     dronesFix = [makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true, baseId: 4, base: { name: 'Base Vieja', lat: -34.6, lon: -58.4 } })];
     render(<Console onLogout={() => {}} />);
-    await screen.findByText('Sin señal de video');
-    await userEvent.click(screen.getByText('Sin señal de video'));
+    await abrirDetalleDelPrimerDron();
     await screen.findByRole('button', { name: /Volver a Drones/ });
     fire({ type: 'status', ...makeStatus({ droneId: 'd1' }) });
     const estado = (await screen.findByText('Modo y posición', undefined, { timeout: 3000 })).closest(
@@ -302,8 +311,7 @@ describe('Console', () => {
 
   it('abre el detalle de un dron y permite renombrarlo', async () => {
     render(<Console onLogout={() => {}} />);
-    await screen.findByText('Sin señal de video');
-    await userEvent.click(screen.getByText('Sin señal de video'));
+    await abrirDetalleDelPrimerDron();
 
     const volver = await screen.findByRole('button', { name: /Volver a Drones/ });
     expect(volver).toBeInTheDocument();
@@ -328,8 +336,7 @@ describe('Console', () => {
   it('renombra un nodo de la ruta desde el mapa del detalle', async () => {
     routesFix = [makeRoute({ id: 7 })];
     render(<Console onLogout={() => {}} />);
-    await screen.findByText('Sin señal de video');
-    await userEvent.click(screen.getByText('Sin señal de video'));
+    await abrirDetalleDelPrimerDron();
     await screen.findByRole('button', { name: /Volver a Drones/ });
     // El mapa sólo dibuja los nodos de la ruta elegida en el selector.
     await userEvent.selectOptions(screen.getByLabelText('Ruta de patrullaje'), '7');
@@ -349,8 +356,7 @@ describe('Console', () => {
     rechazados.add('PATCH /drones/d1');
     const enConsola = vi.spyOn(console, 'error').mockImplementation(() => {});
     render(<Console onLogout={() => {}} />);
-    await screen.findByText('Sin señal de video');
-    await userEvent.click(screen.getByText('Sin señal de video'));
+    await abrirDetalleDelPrimerDron();
 
     const volver = await screen.findByRole('button', { name: /Volver a Drones/ });
     const header = volver.closest('.detail-main') as HTMLElement;
@@ -379,8 +385,7 @@ describe('Console', () => {
       }),
     ];
     render(<Console onLogout={() => {}} />);
-    await screen.findByText('Sin señal de video');
-    await userEvent.click(screen.getByText('Sin señal de video'));
+    await abrirDetalleDelPrimerDron();
     const mando = await screen.findByRole('group', { name: 'Mando virtual de vuelo continuo' });
     expect(mando).toHaveAttribute('aria-disabled', 'false');
 
@@ -414,8 +419,7 @@ describe('Console', () => {
       }),
     ];
     render(<Console onLogout={() => {}} />);
-    await screen.findByText('Sin señal de video');
-    await userEvent.click(screen.getByText('Sin señal de video'));
+    await abrirDetalleDelPrimerDron();
     await userEvent.click(await screen.findByRole('button', { name: 'Tomar control manual' }));
     expect(rutas()).toContain('POST /drones/d1/control');
 

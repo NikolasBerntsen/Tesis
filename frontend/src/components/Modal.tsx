@@ -103,6 +103,12 @@ export default function Modal({
       // mouse, y el equivalente de teclado (Escape) lo maneja el listener de
       // arriba. `presentation` lo saca del árbol de accesibilidad, que es lo
       // que corresponde para un fondo que no es un control.
+      //
+      // Sonar marca esto (S6819, "usá un elemento nativo en vez del rol"). Se
+      // deja igual a propósito: para un fondo de diálogo no existe elemento
+      // nativo, y la alternativa —un <button> invisible a pantalla completa—
+      // agregaría un segundo control "Cerrar" al árbol de accesibilidad, al
+      // lado del que ya tiene la cabecera. El rol es la respuesta correcta acá.
       role="presentation"
       onMouseDown={(ev) => {
         arrancoEnElVelo.current = ev.target === ev.currentTarget;

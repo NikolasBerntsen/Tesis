@@ -157,8 +157,8 @@ números miden lo mismo.
 |---|---|---|
 | `DronesMap.tsx` | excluido, 0 % en Sonar | 86 %, con 35 tests propios |
 | `seed.ts` | excluido, 0 % en Sonar | 100 %, con 10 tests propios |
-| Cobertura de líneas del proyecto | 88,2 % | **91,6 %** |
-| Tests | 803 | **850** |
+| Cobertura de líneas del proyecto | 88,2 % | **91,7 %** |
+| Tests | 803 | **852** |
 
 ## El piso de cobertura
 
