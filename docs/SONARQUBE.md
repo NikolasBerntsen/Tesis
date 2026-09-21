@@ -126,7 +126,7 @@ esto y lo otro:
 | `patrol` (PatrolManager) | 0,0 % | 78,4 % |
 | `drone` | 34,2 % | 82,6 % |
 | `comms` | 16,9 % | 42,5 % |
-| Proyecto entero (líneas) | 78,2 % | 88,1 % |
+| Proyecto entero (*Coverage*) | 78,2 % | 88,1 % |
 
 **El flavor `dji`.** No se compila en CI (necesita `-PenableDji`, la API key del
 MSDK y el hardware), así que ningún test puede cubrirlo. Está en
@@ -139,8 +139,31 @@ se puede testear, sacá esa línea.
 Esta configuración se probó de punta a punta contra un SonarQube 26.9 local
 antes de subirla: los tres componentes generaron sus informes, el scanner los
 importó y el tablero quedó con **803 tests** (287 del backend, 381 de la consola
-y 135 de la app, que es la suma exacta), **0 fallas** y **88,1 % de cobertura de
-líneas** — 96,4 % el backend, 93,2 % la consola y 53,6 % la app.
+y 135 de la app, que es la suma exacta), **0 fallas** y **88,1 % de cobertura**
+— 96,4 % el backend, 93,2 % la consola y 53,6 % la app.
+
+Cuidado con esa cifra al citarla: *Coverage*, el número grande del tablero, **no
+es la cobertura de líneas**. Mezcla líneas y condiciones (las ramas de cada
+`if`), y las ramas siempre cubren menos, así que tira el promedio para abajo. La
+cobertura de líneas sola es más alta y es la que compara contra el objetivo de
+[TESTS.md](TESTS.md).
+
+Después, ya en SonarQube Cloud, esto es lo que publicó el primer análisis que
+salió del CI (el del PR #18):
+
+| Métrica | Valor |
+|---|---|
+| Quality gate | pasa |
+| *Coverage* (líneas + condiciones) | 88,0 % |
+| Cobertura de **líneas** | 91,9 % — 6308 de 6867 |
+| Cobertura de condiciones | 79,6 % — 2548 de 3202 |
+| Duplicación | 0,3 % |
+| Issues en código nuevo | 0 |
+
+El 88,0 % de la nube y el 88,1 % del servidor local son la misma medición: los
+dos caminos dan lo mismo. Y el 91,9 % de líneas —con la app Android adentro, que
+es la que menos cubre— queda por arriba del 90 % que TESTS.md se pone como
+objetivo.
 
 ## Lo que conviene saber del tablero
 
@@ -162,3 +185,19 @@ tests del tablero son 287 + 381 + 135, y esos 135 son los de la app—, pero es 
 parte menos garantizada del armado: si algún día el total no cierra con la suma
 de las tres suites, el sospechoso es ese. La cobertura de Kotlin va por otro
 camino (JaCoCo) y no depende de esto.
+
+En el log del análisis se ve cuál de los tres importadores hizo qué, y conviene
+mirarlo si el número no cierra:
+
+- `Generic Test Executions Report` → `Imported test execution data for 18 files`
+  (backend) y `28 files` (consola);
+- `KotlinSurefireSensor` → una línea `Searching for ...` por cada clase de test
+  de la app;
+- `JaCoCo XML Report Importer` → la cobertura de Kotlin.
+
+Ese último avisa `6 of 23 files were not found in the analysed sources`. Los seis
+son las clases de *view binding* que genera el build
+(`com.tesis.dronepatrol.databinding.*`): JaCoCo las mide porque están en el
+bytecode, pero no son código escrito por nadie y no están en `sonar.sources`, así
+que no tienen dónde mostrarse. Es informativo, no un problema: los 17 archivos
+restantes, que son todo el código de la app, sí se importan.
