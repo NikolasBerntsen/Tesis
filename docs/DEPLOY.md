@@ -41,6 +41,25 @@ código ande, y son los que lo frenan.
 
 Medido: del merge a la VM actualizada, ~1 minuto en vez de ~7.
 
+## Las contraseñas de la demostración
+
+El seed crea los cuatro usuarios con las contraseñas que están en el informe.
+Son públicas a propósito: es lo que permite que cualquiera entre a probar el
+sistema. Cada una se puede pisar con `SEED_PASSWORD_<USUARIO>` (o
+`SEED_PASSWORD` para todas) en el `.env` de la VM.
+
+Con `NODE_ENV=production` y alguna de fábrica puesta, el seed **avisa** en el
+registro y sigue. Para que además **corte**, se define `SEED_STRICT=true`.
+
+Que cortar sea opt-in viene de haberlo hecho mal primero. Cuando el chequeo
+cortaba siempre, el despliegue del 21/9 dejó la VM sin backend: el contenedor
+arranca con `node dist/seed.js && node dist/index.js`, así que el seed que
+tiraba se llevaba puesta la aplicación y el contenedor quedó reiniciándose en
+loop. Dos arreglos, no uno: el chequeo dejó de ser terminante por defecto, y el
+`&&` pasó a `;` para que ningún error del seed pueda volver a tumbar al
+servidor. Los datos de demostración son deseables, no imprescindibles; el
+esquema de la base lo crea `db.ts` al importarse, no el seed.
+
 ## Convivencia con el otro proyecto
 
 | Situación | Qué pasa |

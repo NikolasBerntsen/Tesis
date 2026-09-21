@@ -189,14 +189,31 @@ function sembrarRutas(): void {
   }
 }
 
-/** Corta antes de escribir nada si una instalación real quedó con las de fábrica. */
-function exigirClavesPropias(): void {
+/**
+ * Avisa —y con SEED_STRICT corta— si una instalación de producción quedó con
+ * las contraseñas del informe.
+ *
+ * Cortar es OPT-IN, y el motivo es una cicatriz: este mismo chequeo, cuando
+ * cortaba siempre, dejó la VM de la demostración sin backend. El contenedor
+ * arranca con `node dist/seed.js && node dist/index.js`, así que un seed que
+ * tira se lleva puesta la aplicación entera y el contenedor queda reiniciándose
+ * para siempre. Una contraseña conocida es un problema; que no arranque nada es
+ * un problema peor, y encima sorprende.
+ *
+ * Así que por defecto grita y sigue. Quien quiera que sea terminante —una
+ * instalación de verdad, no la de la demostración— pone SEED_STRICT=true.
+ */
+export function revisarClaves(): void {
   const sinClave = usuariosSinClavePropia();
-  if (process.env.NODE_ENV !== 'production' || sinClave.length === 0) return;
-  throw new Error(
-    `El seed no corre en producción con las contraseñas de demostración puestas: ${sinClave.join(', ')}. ` +
-      'Definí SEED_PASSWORD_<USUARIO> (o SEED_PASSWORD) antes de sembrar.',
-  );
+  if (sinClave.length === 0) return;
+  if (process.env.NODE_ENV !== 'production') return;
+
+  const mensaje =
+    `Las contraseñas de demostración siguen puestas en producción: ${sinClave.join(', ')}. ` +
+    'Definí SEED_PASSWORD_<USUARIO> (o SEED_PASSWORD) para cambiarlas.';
+
+  if (process.env.SEED_STRICT === 'true') throw new Error(mensaje);
+  console.warn(`ATENCIÓN: ${mensaje}`);
 }
 
 /**
@@ -208,7 +225,7 @@ function exigirClavesPropias(): void {
  * importarlo no escriba en la base de nadie, y que se pueda probar.
  */
 export function sembrar(): void {
-  exigirClavesPropias();
+  revisarClaves();
   sembrarUsuarios();
   sembrarDrones();
   sembrarRutas();

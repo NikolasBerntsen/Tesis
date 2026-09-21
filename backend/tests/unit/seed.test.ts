@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import bcrypt from 'bcryptjs';
 import { db } from '../../src/db';
-import { sembrar, claveDe, usuariosSinClavePropia } from '../../src/seed';
+import { sembrar, claveDe, usuariosSinClavePropia, revisarClaves } from '../../src/seed';
 import { limpiarBase } from '../helpers';
 
 /*
@@ -20,7 +20,7 @@ function callar() {
   return vi.spyOn(console, 'log').mockImplementation(() => {});
 }
 
-const CLAVES_DEL_ENTORNO = ['SEED_PASSWORD', 'SEED_PASSWORD_ADMIN', 'SEED_PASSWORD_CAMPO'];
+const CLAVES_DEL_ENTORNO = ['SEED_PASSWORD', 'SEED_PASSWORD_ADMIN', 'SEED_PASSWORD_CAMPO', 'SEED_STRICT'];
 
 describe('seed de demostración', () => {
   let anotados: ReturnType<typeof callar>;
@@ -168,25 +168,68 @@ describe('seed de demostración', () => {
       expect(usuariosSinClavePropia()).toEqual([]);
     });
 
-    it('en producción se niega a sembrar con las contraseñas del informe', () => {
+    /*
+     * Esta parte tiene una cicatriz. El chequeo cortaba SIEMPRE en producción, y
+     * eso dejó la VM de la demostración sin backend: el contenedor arranca con
+     * `node dist/seed.js && node dist/index.js`, así que el seed que tiraba se
+     * llevaba puesta la aplicación entera y el contenedor quedó reiniciándose.
+     *
+     * Lo que faltaba no era el chequeo, era distinguir avisar de cortar. Estos
+     * tests fijan las dos cosas.
+     */
+    it('en producción avisa por consola, pero siembra igual', () => {
       process.env.NODE_ENV = 'production';
+      const avisos = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      expect(() => sembrar()).not.toThrow();
+      // Lo que importa: la aplicación queda utilizable.
+      expect((db.prepare('SELECT COUNT(*) AS n FROM users').get() as { n: number }).n).toBe(4);
+      // Y el aviso no pasa desapercibido.
+      expect(avisos).toHaveBeenCalledWith(expect.stringMatching(/ATENCIÓN.*demostración.*producción/i));
+      avisos.mockRestore();
+    });
+
+    it('con SEED_STRICT sí corta, y no deja nada a medio sembrar', () => {
+      process.env.NODE_ENV = 'production';
+      process.env.SEED_STRICT = 'true';
 
       expect(() => sembrar()).toThrow(/producción/i);
-      // Y no dejó nada a medio sembrar.
       expect((db.prepare('SELECT COUNT(*) AS n FROM users').get() as { n: number }).n).toBe(0);
 
-      // Con contraseñas propias sí siembra.
+      // Con contraseñas propias siembra aunque sea terminante.
       process.env.SEED_PASSWORD = 'una-clave-de-verdad';
       expect(() => sembrar()).not.toThrow();
       expect((db.prepare('SELECT COUNT(*) AS n FROM users').get() as { n: number }).n).toBe(4);
     });
 
-    it('el mensaje de error dice qué usuarios hay que arreglar', () => {
+    it('el mensaje dice qué usuarios hay que arreglar', () => {
       process.env.NODE_ENV = 'production';
+      process.env.SEED_STRICT = 'true';
       process.env.SEED_PASSWORD_ADMIN = 'propia';
 
       expect(() => sembrar()).toThrow(/campo, operador, supervisor/);
       expect(() => sembrar()).not.toThrow(/admin,/);
+    });
+
+    it('fuera de producción no dice nada: ahí las de demostración son las que van', () => {
+      process.env.NODE_ENV = 'test';
+      const avisos = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      revisarClaves();
+
+      expect(avisos).not.toHaveBeenCalled();
+      avisos.mockRestore();
+    });
+
+    it('con contraseñas propias no avisa ni con NODE_ENV=production', () => {
+      process.env.NODE_ENV = 'production';
+      process.env.SEED_PASSWORD = 'propia-de-verdad';
+      const avisos = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      revisarClaves();
+
+      expect(avisos).not.toHaveBeenCalled();
+      avisos.mockRestore();
     });
   });
 });
