@@ -3,13 +3,15 @@ name: Deploy a Oracle Cloud
 # Copia el código por rsync y la VM construye y levanta los contenedores. No hay registry
 # de imágenes ni agente en el servidor.
 #
-# Se dispara cuando el CI de main termina bien: un commit que rompe los tests
-# nunca llega a la VM.
+# Lo llama el CI de main apenas las TRES suites están en verde (ver el job
+# `desplegar` de ci.yml): un commit que rompe los tests nunca llega a la VM.
+#
+# Antes se disparaba con `workflow_run` al terminar TODO el CI, y eso incluía el
+# análisis de SonarQube: el despliegue quedaba esperando ~6 minutos a una
+# medición de calidad que no dice nada sobre si el código anda. Ahora corre en
+# paralelo con ese análisis, no atrás.
 on:
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
-    branches: [main]
+  workflow_call: {}
   workflow_dispatch: {}
 
 # Los despliegues se encolan en vez de pisarse: cortar un "compose up" a la
@@ -27,14 +29,10 @@ jobs:
   deploy:
     name: Desplegar en la VM de Oracle
     runs-on: ubuntu-latest
-    # Sólo si el CI pasó, o si se dispara a mano desde la pestaña Actions.
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     steps:
+      # Llamado desde el CI, `github.sha` ya es el commit que acaba de pasar los
+      # tests, así que el checkout por defecto despliega exactamente eso.
       - uses: actions/checkout@v4
-        with:
-          # Con workflow_run, checkout traería la punta de la rama por defecto.
-          # Fijamos el commit exacto que pasó el CI para desplegar eso mismo.
-          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
       # Un secret vacío da un "Permission denied (publickey)" sin explicación:
       # mejor fallar acá con un mensaje claro.

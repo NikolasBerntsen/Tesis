@@ -105,3 +105,37 @@ verificación manual, no parte de `npm test`).
 | Integración | Varios módulos juntos: API + base + WebSocket | backend |
 | Componente | Render y comportamiento de la UI | frontend |
 | Extremo a extremo | El circuito completo en un navegador real | Playwright (manual) |
+
+## Cuántas veces corren, y dónde se va el tiempo del CI
+
+Conviene aclararlo porque la intuición engaña: **SonarQube no corre los tests.**
+Importa los informes que ya produjeron los jobs de GitHub Actions —el lcov, el
+XML de JaCoCo y los de ejecución— y sobre eso analiza. No hay una segunda
+ejecución escondida ahí.
+
+Las suites corren **dos veces** por cambio, no tres:
+
+1. en el pull request, sobre la fusión simulada de la rama con `main`;
+2. al mergear, sobre el commit de merge, que es el que se despliega.
+
+La segunda no es un desperdicio: es la que autoriza el despliegue a la VM, y
+corre sobre un commit que hasta ese momento no existía. Cuesta 45 segundos.
+
+Y esos 45 segundos no son el problema. Medido sobre corridas reales:
+
+| Etapa | Tiempo |
+|---|---|
+| Backend + consola + app, en paralelo | **~45 s** |
+| Análisis de SonarQube | **~6 min** |
+| └─ de eso, el sensor `JsSecuritySensorV2` | **5 min 11 s** |
+
+El análisis de taint de JavaScript/TypeScript se lleva el 85 % del tiempo del
+pipeline entero, y en la corrida medida pasó cinco minutos en los últimos cuatro
+archivos de cuarenta y uno —un número redondo que tiene toda la pinta de ser un
+tope interno del motor, no trabajo útil. En los pull requests con pocos archivos
+tocados ni siquiera corre: el propio log avisa *"all relevant files are
+unchanged, skipping taint analysis"* y el análisis entero baja a 40 segundos.
+
+Por eso el despliegue ya no espera al análisis (ver [DEPLOY.md](DEPLOY.md)):
+recortar los 45 segundos de los tests para dejar intactos los seis minutos del
+análisis habría sido optimizar el lado equivocado.

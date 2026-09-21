@@ -36,5 +36,11 @@ VOLUME /data
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
   CMD wget -qO- http://localhost:4000/api/health || exit 1
 
-# Siembra (idempotente) y arranca
-CMD ["sh", "-c", "node dist/seed.js && node dist/index.js"]
+# Siembra (idempotente) y arranca.
+#
+# El `;` en vez de `&&` no es descuido: con `&&`, cualquier error del seed deja
+# al servidor sin arrancar y al contenedor reiniciándose para siempre. Ya pasó.
+# Los datos de demostración son deseables, no imprescindibles: si el seed falla,
+# queda el aviso en el registro y la aplicación levanta igual — el esquema de la
+# base lo crea db.ts al importarse, no el seed.
+CMD ["sh", "-c", "node dist/seed.js || echo 'AVISO: el seed falló; la aplicación arranca igual.' >&2; node dist/index.js"]
