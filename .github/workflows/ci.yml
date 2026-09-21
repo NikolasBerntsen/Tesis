@@ -145,6 +145,21 @@ jobs:
             android-app/app/build/reports/coverage/test/mock/debug/report.xml
             android-app/app/build/test-results/testMockDebugUnitTest
 
+  # El despliegue arranca apenas las tres suites están en verde, en PARALELO con
+  # el análisis de SonarQube y no atrás.
+  #
+  # Antes colgaba del workflow entero (`workflow_run` en deploy.yml), así que
+  # esperaba también al análisis: 6 minutos de medición de calidad entre el
+  # merge y la VM actualizada. El análisis igual corre y igual publica; lo que
+  # cambia es que ya no está en el camino crítico, porque no dice nada sobre si
+  # el código anda — eso lo dicen los tests, que son de quienes sí depende esto.
+  desplegar:
+    name: Desplegar
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [backend, frontend, android]
+    uses: ./.github/workflows/deploy.yml
+    secrets: inherit
+
   sonar:
     name: SonarQube (calidad y cobertura)
     runs-on: ubuntu-latest

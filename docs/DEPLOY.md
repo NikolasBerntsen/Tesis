@@ -15,10 +15,11 @@ el servidor**. El runner de GitHub copia el código y la VM construye.
 push / merge a main
       │
       ▼
- Workflow "CI"  (.github/workflows/ci.yml)      tests y cobertura
-      │  conclusion == success
-      ▼
- Workflow "Deploy a Oracle Cloud"  (.github/workflows/deploy.yml)
+ CI (.github/workflows/ci.yml): backend · consola · app Android   ~45 s en paralelo
+      │                                    │
+      │ las tres en verde                  └──▶ SonarQube (calidad y cobertura)  ~6 min
+      ▼                                             (publica el tablero; no frena nada)
+ deploy.yml, llamado como workflow reutilizable
       │  rsync -az --delete   (excluye .git, .env, node_modules, dist, android-app)
       ▼
  VM Oracle 144.22.138.149 · /home/ubuntu/tesis
@@ -27,8 +28,18 @@ push / merge a main
  Contenedor 'comando-central' en la red 'proxy'  ←— Caddy del otro proyecto
 ```
 
-Si el CI falla, el despliegue no corre. Se puede disparar a mano desde
-**Actions → Deploy a Oracle Cloud → Run workflow**.
+Si alguna de las tres suites falla, el despliegue no corre. Se puede disparar a
+mano desde **Actions → Deploy a Oracle Cloud → Run workflow**.
+
+**El análisis de SonarQube corre al costado, no adelante.** Antes el despliegue
+colgaba del workflow entero (`workflow_run`), así que esperaba también a ese
+análisis: seis minutos de medición de calidad entre el merge y la VM
+actualizada. Y ni siquiera funcionaba como control de calidad — la acción del
+scanner termina bien aunque el quality gate falle, así que lo único que aportaba
+al despliegue era la espera. Los tests son de quienes de verdad depende que el
+código ande, y son los que lo frenan.
+
+Medido: del merge a la VM actualizada, ~1 minuto en vez de ~7.
 
 ## Convivencia con el otro proyecto
 
