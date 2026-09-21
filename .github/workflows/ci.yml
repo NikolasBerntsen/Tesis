@@ -95,7 +95,14 @@ jobs:
           key: robolectric-${{ runner.os }}-${{ hashFiles('android-app/app/build.gradle.kts') }}
           restore-keys: robolectric-${{ runner.os }}-
 
+      # `packages` se fija a mano porque el default de la acción es
+      # "tools platform-tools", y `tools` es un paquete que Google retiró del
+      # repositorio del SDK: sdkmanager sale con "Failed to find package 'tools'"
+      # y el job muere antes de compilar nada. Del resto del SDK se encarga la
+      # imagen del runner, que ya trae la plataforma y las build-tools.
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       # El wrapper baja Gradle de services.gradle.org y NO reintenta: si ese
       # servidor corta la conexión, el job muere en menos de un segundo sin que
