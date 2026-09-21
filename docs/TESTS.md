@@ -3,8 +3,30 @@
 El sistema es de seguridad, así que la corrección importa. Cada componente
 tiene su propia suite y todas corren en CI (`.github/workflows/ci.yml`) en cada
 push y pull request. Los resultados y la cobertura de las tres se publican
-además en SonarQube; cómo está armado eso está en [SONARQUBE.md](SONARQUBE.md). El objetivo de cobertura es **90% de líneas**; la cobertura
-actual lo supera: **99.6%** de líneas en backend y **98.3%** en frontend.
+además en SonarQube; cómo está armado eso está en [SONARQUBE.md](SONARQUBE.md). El piso de cobertura es **90 % de líneas del proyecto entero**, y lo verifica el
+CI: si una entrega lo baja, la corrida se pone en rojo.
+
+| | Cobertura de líneas | Tests |
+|---|---|---|
+| Backend | 99,1 % | 302 |
+| Consola | 97,6 % | 413 |
+| App Android | 62,3 % | 135 |
+| **Proyecto entero** | **91,6 %** | **850** |
+
+Dos cosas que conviene saber antes de citar un número de acá:
+
+- **El piso es del proyecto, no de cada componente.** Cada uno tiene además su
+  propio umbral (vitest en el backend y la consola, muy por encima del 90 %),
+  pero ninguna de esas herramientas ve a las otras dos. La cifra del sistema
+  completo la calcula `scripts/cobertura.mjs`, que suma los mismos informes que
+  lee Sonar; se corre solo en CI y a mano con `node scripts/cobertura.mjs`.
+- **La app Android es lo que arrastra el promedio** (62,3 %), y ahí está el
+  trabajo que sigue: `FieldMenuActivity` y `CommandCenterClient` son los dos
+  archivos con más líneas sin cubrir.
+
+Lo que se agrega va con sus tests. No es una recomendación: bajar el piso para
+que pase una entrega sin cubrir es exactamente lo que el piso existe para
+impedir.
 
 ## Backend (`backend/`)
 

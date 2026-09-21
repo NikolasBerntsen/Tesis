@@ -51,7 +51,7 @@ describe('ws — bytesDelFrame', () => {
     // 'ñ' es UNA unidad de UTF-16 y DOS bytes de UTF-8: medir el string ya
     // decodificado deja pasar el doble de lo que el tope dice permitir.
     const texto = 'ñ'.repeat(600);
-    expect(texto.length).toBe(600);
+    expect(texto).toHaveLength(600);
     expect(bytesDelFrame(Buffer.from(texto, 'utf8'))).toBe(1200);
   });
 

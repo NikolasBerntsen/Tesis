@@ -55,7 +55,14 @@ export default function EditableName({
   };
 
   return (
-    <span className="editable-name" onClick={(e) => e.stopPropagation()}>
+    // Frena click Y tecla: el mosaico que envuelve a esto abre el detalle del
+    // dron al hacerle Enter, así que sin `onKeyDown` confirmar el nombre nuevo
+    // con Enter abriría el detalle encima.
+    <span
+      className="editable-name"
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => e.stopPropagation()}
+    >
       <input
         autoFocus
         maxLength={40}

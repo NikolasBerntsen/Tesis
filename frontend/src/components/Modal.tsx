@@ -99,6 +99,11 @@ export default function Modal({
   return createPortal(
     <div
       className="modal-fondo"
+      // El velo es decorativo: cerrar haciéndole click es una comodidad del
+      // mouse, y el equivalente de teclado (Escape) lo maneja el listener de
+      // arriba. `presentation` lo saca del árbol de accesibilidad, que es lo
+      // que corresponde para un fondo que no es un control.
+      role="presentation"
       onMouseDown={(ev) => {
         arrancoEnElVelo.current = ev.target === ev.currentTarget;
       }}

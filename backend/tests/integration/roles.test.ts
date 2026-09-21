@@ -28,7 +28,7 @@ describe('integración — jerarquía de roles', () => {
     expect((await api(srv.base, '/api/routes', op)).status).toBe(200);
     expect((await api(srv.base, '/api/routes', dron)).status).toBe(200);
     const r = await api(srv.base, '/api/routes', adm);
-    expect(r.body.length).toBe(3);
+    expect(r.body).toHaveLength(3);
     expect(r.body[0].waypoints.length).toBeGreaterThan(0);
   });
 

@@ -46,14 +46,20 @@ export default defineConfig({
       reporter: ['text', ['lcov', { projectRoot: '..' }], 'json-summary'],
       all: true,
       include: ['src/**/*.ts'],
-      // index.ts y seed.ts son entrypoints/datos, no lógica a testear.
-      exclude: ['src/index.ts', 'src/seed.ts'],
-      // Pegados a la cobertura real (99.8 / 97.2) con un margen chico: la idea
-      // es que una funcionalidad sin tests rompa el CI, no que quede pasando.
+      // index.ts es el único entrypoint de verdad: tres líneas que llaman a
+      // listen(). seed.ts SALIÓ de esta lista: decide con qué usuarios y con
+      // qué contraseñas arranca una instalación, así que sí es lógica a probar
+      // (tests/unit/seed.test.ts). Lo que se excluya acá hay que excluirlo
+      // también en sonar-project.properties, o Sonar lo cuenta como 0 %.
+      exclude: ['src/index.ts'],
+      // Pegados a la cobertura real (99,1 líneas / 95,1 ramas) con un margen
+      // chico: la idea es que una funcionalidad sin tests rompa el CI, no que
+      // quede pasando. El piso del PROYECTO entero, que es el que se prometió
+      // sostener en 90 %, lo verifica scripts/cobertura.mjs desde la raíz.
       thresholds: {
-        lines: 97,
+        lines: 98,
         functions: 97,
-        statements: 97,
+        statements: 98,
         branches: 94,
       },
     },

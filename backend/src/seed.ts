@@ -3,11 +3,42 @@ import bcrypt from 'bcryptjs';
 import { db } from './db';
 
 // Usuarios, drones y rutas de demostración. Ejecutar con: npm run seed
-const humans = [
-  { username: 'campo', password: 'campo123', role: 'field_operator', fullName: 'Camila Ferreira' },
-  { username: 'operador', password: 'operador123', role: 'operator', fullName: 'Martín Olivera' },
-  { username: 'supervisor', password: 'supervisor123', role: 'supervisor', fullName: 'Lucía Sosa' },
-  { username: 'admin', password: 'admin123', role: 'admin', fullName: 'Diego Antúnez' },
+
+/*
+ * Las contraseñas de abajo son PÚBLICAS a propósito: son data de demostración y
+ * están escritas en el informe de la tesis para que cualquiera pueda entrar a
+ * probar el sistema. El problema no es que se conozcan, es que se filtren a una
+ * instalación de verdad sin que nadie se dé cuenta. Por eso:
+ *
+ *   - cada una se puede pisar con SEED_PASSWORD_<USUARIO> (o SEED_PASSWORD para
+ *     todas), así una instalación real siembra con las suyas;
+ *   - y con NODE_ENV=production el seed se NIEGA a correr si quedó alguna de
+ *     fábrica, en vez de dejar un `admin/admin123` en producción.
+ */
+const DE_FABRICA = {
+  campo: 'campo123',
+  operador: 'operador123',
+  supervisor: 'supervisor123',
+  admin: 'admin123',
+} as const;
+
+type Usuario = keyof typeof DE_FABRICA;
+
+/** La contraseña del entorno si la hay; si no, la de demostración. */
+export function claveDe(usuario: Usuario): string {
+  return process.env[`SEED_PASSWORD_${usuario.toUpperCase()}`] ?? process.env.SEED_PASSWORD ?? DE_FABRICA[usuario];
+}
+
+/** Los usuarios que quedan con la contraseña de demostración puesta. */
+export function usuariosSinClavePropia(): Usuario[] {
+  return (Object.keys(DE_FABRICA) as Usuario[]).filter((u) => claveDe(u) === DE_FABRICA[u]);
+}
+
+const humans: { username: Usuario; role: string; fullName: string }[] = [
+  { username: 'campo', role: 'field_operator', fullName: 'Camila Ferreira' },
+  { username: 'operador', role: 'operator', fullName: 'Martín Olivera' },
+  { username: 'supervisor', role: 'supervisor', fullName: 'Lucía Sosa' },
+  { username: 'admin', role: 'admin', fullName: 'Diego Antúnez' },
 ];
 
 /**
@@ -86,68 +117,90 @@ const routes = [
   },
 ];
 
-for (const h of humans) {
-  const exists = db.prepare('SELECT 1 FROM users WHERE username = ?').get(h.username);
-  if (!exists) {
-    db.prepare('INSERT INTO users (username, full_name, password_hash, role, can_control) VALUES (?, ?, ?, ?, ?)').run(
-      h.username,
-      h.fullName,
-      bcrypt.hashSync(h.password, 10),
-      h.role,
-      // El operador de campo despliega drones, no los pilotea
-      h.role === 'field_operator' ? 0 : 1,
+/**
+ * Siembra usuarios, bases, drones y rutas de demostración. Es idempotente: se
+ * puede correr las veces que haga falta sin duplicar nada, que es lo que
+ * permite volver a sembrar una base ya usada.
+ *
+ * Está como función exportada, y no suelto en el módulo, por dos motivos: que
+ * importarlo no escriba en la base de nadie, y que se pueda probar.
+ */
+export function sembrar(): void {
+  // Ninguna instalación real debería arrancar con las contraseñas del informe.
+  const sinClave = usuariosSinClavePropia();
+  if (process.env.NODE_ENV === 'production' && sinClave.length > 0) {
+    throw new Error(
+      `El seed no corre en producción con las contraseñas de demostración puestas: ${sinClave.join(', ')}. ` +
+        'Definí SEED_PASSWORD_<USUARIO> (o SEED_PASSWORD) antes de sembrar.',
     );
-    console.log(`Usuario creado: ${h.username} (${h.role})`);
   }
-}
 
-/** Las bases son un activo propio: se dan de alta una vez y los drones apuntan. */
-function idDeBase(b: { name: string; lat: number; lon: number }): number {
-  const ya = db.prepare('SELECT id FROM bases WHERE name = ? AND deleted = 0').get(b.name) as { id: number } | undefined;
-  if (ya) return ya.id;
-  const info = db
-    .prepare("INSERT INTO bases (name, lat, lon, created_at, created_by) VALUES (?, ?, ?, ?, 'seed')")
-    .run(b.name, b.lat, b.lon, new Date().toISOString());
-  console.log(`Base creada: ${b.name}`);
-  return Number(info.lastInsertRowid);
-}
-
-console.log('Drones de demostración (el contenido del QR es el hash):');
-for (const d of drones) {
-  const hash = hashDemo(d.semilla);
-  // Si la base venía del esquema viejo, la migración ya creó este dron con otro
-  // hash: se respeta el existente en vez de duplicarlo.
-  const existente = db
-    .prepare('SELECT hash FROM drones WHERE hash = ? OR display_name = ?')
-    .get(hash, d.displayName) as { hash: string } | undefined;
-
-  if (existente) {
-    console.log(`  ${d.displayName.padEnd(8)} ${existente.hash}  (ya existía)`);
-    continue;
+  for (const h of humans) {
+    const exists = db.prepare('SELECT 1 FROM users WHERE username = ?').get(h.username);
+    if (!exists) {
+      db.prepare('INSERT INTO users (username, full_name, password_hash, role, can_control) VALUES (?, ?, ?, ?, ?)').run(
+        h.username,
+        h.fullName,
+        bcrypt.hashSync(claveDe(h.username), 10),
+        h.role,
+        // El operador de campo despliega drones, no los pilotea
+        h.role === 'field_operator' ? 0 : 1,
+      );
+      console.log(`Usuario creado: ${h.username} (${h.role})`);
+    }
   }
-  db.prepare(
-    `INSERT INTO drones (hash, display_name, model, inventory_code, base_id, created_at, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, 'seed')`,
-  ).run(hash, d.displayName, d.model, `INV-${d.semilla.toUpperCase()}`, idDeBase(d.base), new Date().toISOString());
-  console.log(`  ${d.displayName.padEnd(8)} ${hash}  (${d.model}, ${d.base.name})`);
-}
 
-for (const r of routes) {
-  const ya = db.prepare('SELECT id FROM patrol_routes WHERE name = ?').get(r.name) as { id: number } | undefined;
-  let routeId = ya?.id;
-  if (!routeId) {
+  /** Las bases son un activo propio: se dan de alta una vez y los drones apuntan. */
+  function idDeBase(b: { name: string; lat: number; lon: number }): number {
+    const ya = db.prepare('SELECT id FROM bases WHERE name = ? AND deleted = 0').get(b.name) as { id: number } | undefined;
+    if (ya) return ya.id;
     const info = db
-      .prepare('INSERT INTO patrol_routes (name, description, waypoints) VALUES (?, ?, ?)')
-      .run(r.name, r.description, JSON.stringify(r.waypoints));
-    routeId = Number(info.lastInsertRowid);
-    console.log(`Ruta creada: ${r.name} (${r.waypoints.length} nodos)`);
+      .prepare("INSERT INTO bases (name, lat, lon, created_at, created_by) VALUES (?, ?, ?, ?, 'seed')")
+      .run(b.name, b.lat, b.lon, new Date().toISOString());
+    console.log(`Base creada: ${b.name}`);
+    return Number(info.lastInsertRowid);
   }
-  // Sin esto la demostración arranca con todas las bases vacías y ningún dron
-  // tiene una sola ruta para patrullar.
-  for (const b of r.bases) {
-    db.prepare('INSERT OR IGNORE INTO base_routes (base_id, route_id) VALUES (?, ?)').run(idDeBase(b), routeId);
-    console.log(`  asignada a ${b.name}`);
+
+  console.log('Drones de demostración (el contenido del QR es el hash):');
+  for (const d of drones) {
+    const hash = hashDemo(d.semilla);
+    // Si la base venía del esquema viejo, la migración ya creó este dron con otro
+    // hash: se respeta el existente en vez de duplicarlo.
+    const existente = db
+      .prepare('SELECT hash FROM drones WHERE hash = ? OR display_name = ?')
+      .get(hash, d.displayName) as { hash: string } | undefined;
+
+    if (existente) {
+      console.log(`  ${d.displayName.padEnd(8)} ${existente.hash}  (ya existía)`);
+      continue;
+    }
+    db.prepare(
+      `INSERT INTO drones (hash, display_name, model, inventory_code, base_id, created_at, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, 'seed')`,
+    ).run(hash, d.displayName, d.model, `INV-${d.semilla.toUpperCase()}`, idDeBase(d.base), new Date().toISOString());
+    console.log(`  ${d.displayName.padEnd(8)} ${hash}  (${d.model}, ${d.base.name})`);
   }
+
+  for (const r of routes) {
+    const ya = db.prepare('SELECT id FROM patrol_routes WHERE name = ?').get(r.name) as { id: number } | undefined;
+    let routeId = ya?.id;
+    if (!routeId) {
+      const info = db
+        .prepare('INSERT INTO patrol_routes (name, description, waypoints) VALUES (?, ?, ?)')
+        .run(r.name, r.description, JSON.stringify(r.waypoints));
+      routeId = Number(info.lastInsertRowid);
+      console.log(`Ruta creada: ${r.name} (${r.waypoints.length} nodos)`);
+    }
+    // Sin esto la demostración arranca con todas las bases vacías y ningún dron
+    // tiene una sola ruta para patrullar.
+    for (const b of r.bases) {
+      db.prepare('INSERT OR IGNORE INTO base_routes (base_id, route_id) VALUES (?, ?)').run(idDeBase(b), routeId);
+      console.log(`  asignada a ${b.name}`);
+    }
+  }
+
+  console.log('Seed completo.');
 }
 
-console.log('Seed completo.');
+// Con `npm run seed` se ejecuta; importado desde un test, no hace nada solo.
+if (require.main === module) sembrar();

@@ -43,7 +43,24 @@ export default function CameraTile({
   const claseSenal = status ? signalClass(status.signalPct) : '';
 
   return (
-    <div className="camera-tile" onClick={onOpen} title="Ver detalle del dron">
+    // El mosaico ES un control: abre el detalle del dron. Sin `role`, `tabIndex`
+    // y el manejador de teclado, con el teclado no había forma de abrirlo —
+    // quedaba accesible solamente con el mouse.
+    <div
+      className="camera-tile"
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') {
+          // El espacio, sin esto, desplaza la página en vez de abrir el detalle.
+          ev.preventDefault();
+          onOpen();
+        }
+      }}
+      title="Ver detalle del dron"
+      aria-label={`Ver detalle de ${drone.displayName}`}
+    >
       {/* Marco de mármol con filo dorado: la cámara es la abertura en la piedra */}
       <div className="hueco filo-oro">
         <div className="tile-video">
