@@ -43,7 +43,17 @@ export default function CameraTile({
   const claseSenal = status ? signalClass(status.signalPct) : '';
 
   return (
-    <div className="camera-tile" onClick={onOpen} title="Ver detalle del dron">
+    // El mosaico abre el detalle del dron, y hasta hace poco lo hacía con un
+    // onClick colgado del div: con teclado no había forma de abrirlo.
+    //
+    // El arreglo no puede ser envolver todo en un <button>, porque adentro está
+    // el <input> de renombrar y un botón no puede contener controles. Se usa el
+    // patrón de "botón estirado": un <button> de verdad, vacío, que cubre el
+    // mosaico entero por CSS (.tile-abrir). Nativo, así que Enter, Espacio,
+    // foco, lector de pantalla y táctil vienen de arriba; y va ÚLTIMO en el
+    // marcado para quedar por encima de lo que no es interactivo, mientras que
+    // .editable-name se levanta con z-index para seguir clickeable.
+    <div className="camera-tile">
       {/* Marco de mármol con filo dorado: la cámara es la abertura en la piedra */}
       <div className="hueco filo-oro">
         <div className="tile-video">
@@ -94,6 +104,14 @@ export default function CameraTile({
           </div>
         )}
       </div>
+      {/* Último hijo a propósito: así cubre lo de arriba sin necesitar z-index. */}
+      <button
+        type="button"
+        className="tile-abrir"
+        title="Ver detalle del dron"
+        onClick={onOpen}
+        aria-label={`Ver detalle de ${drone.displayName}`}
+      />
     </div>
   );
 }

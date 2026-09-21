@@ -39,33 +39,33 @@ export default mergeConfig(
         exclude: [
           // Bootstrap de la app: sólo monta React en el DOM, sin lógica propia.
           'src/main.tsx',
-          // DronesMap manipula Leaflet de forma imperativa contra el DOM; en
-          // jsdom no hay canvas/tiles reales, así que se mockea el módulo en los
-          // tests de sus consumidores (Dashboard/DroneDetail) y se lo excluye de
-          // la cobertura en vez de forzar aserciones frágiles sobre Leaflet.
-          'src/components/DronesMap.tsx',
+          // DronesMap SALIÓ de esta lista. Estaba excluido por manipular Leaflet
+          // de forma imperativa, pero ya tenía tests propios con un doble del
+          // módulo: la exclusión solo servía para que sus 248 líneas no se
+          // contaran, y Sonar —que no conoce esta lista— las contaba igual como
+          // 0 %. Era el agujero de cobertura más grande del proyecto.
           // Sólo declaraciones de tipos/interfaces: no genera código ejecutable.
           'src/types.ts',
           // Infra de testing y los propios tests.
           'src/test/**',
           'src/**/*.test.{ts,tsx}',
         ],
-        // Pegados a la cobertura real (99.7 / 95.2) con un margen chico: la
-        // idea es que una funcionalidad sin tests rompa el CI, no que pase.
+        // Pegados a la cobertura real (97,6 líneas / 94,2 ramas / 90,4
+        // funciones) con un margen chico: la idea es que una funcionalidad sin
+        // tests rompa el CI, no que pase. El piso del PROYECTO entero, que es
+        // el que se prometió sostener en 90 %, lo verifica
+        // scripts/cobertura.mjs desde la raíz.
+        //
+        // El umbral de funciones había bajado dos veces (94 → 92 → 89) y eso
+        // era la señal de que faltaban manejadores sin ejercitar. Vuelve a
+        // subir a 90 ahora que DronesMap entró a la cuenta con sus tests; el
+        // camino sigue siendo 92 y después 94, cubriendo manejadores, nunca
+        // bajando el número.
         thresholds: {
           lines: 97,
-          // BAJADO A PROPÓSITO, de 94 a 92 y ahora a 89. Es la SEGUNDA vez
-          // que se baja, y eso ya es una señal: las vistas grandes (bases,
-          // rutas, su editor, Console, Dashboard, DroneDetail) entraron con
-          // tests de comportamiento, pero varios manejadores de sus
-          // subcomponentes quedaron sin ejercitar.
-          //
-          // No bajar más. Lo que corresponde es cubrir esos manejadores y
-          // subir esto de nuevo a 92 y después a 94; el umbral de LÍNEAS, que
-          // es el que más cuesta sostener, sigue intacto en 97%.
-          functions: 89,
+          functions: 90,
           statements: 97,
-          branches: 92,
+          branches: 93,
         },
       },
     },

@@ -126,7 +126,7 @@ esto y lo otro:
 | `patrol` (PatrolManager) | 0,0 % | 78,4 % |
 | `drone` | 34,2 % | 82,6 % |
 | `comms` | 16,9 % | 42,5 % |
-| Proyecto entero (*Coverage*) | 78,2 % | 88,1 % |
+| Proyecto entero (líneas) | 78,2 % | 88,1 % |
 
 **El flavor `dji`.** No se compila en CI (necesita `-PenableDji`, la API key del
 MSDK y el hardware), así que ningún test puede cubrirlo. Está en
@@ -136,34 +136,55 @@ se puede testear, sacá esa línea.
 
 ## Lo que dio la verificación
 
-Esta configuración se probó de punta a punta contra un SonarQube 26.9 local
-antes de subirla: los tres componentes generaron sus informes, el scanner los
-importó y el tablero quedó con **803 tests** (287 del backend, 381 de la consola
-y 135 de la app, que es la suma exacta), **0 fallas** y **88,1 % de cobertura**
-— 96,4 % el backend, 93,2 % la consola y 53,6 % la app.
+Antes de subir nada, la configuración se probó de punta a punta contra un
+SonarQube 26.9 local; después publicó en SonarQube Cloud desde el CI. Los dos
+caminos dan lo mismo.
 
-Cuidado con esa cifra al citarla: *Coverage*, el número grande del tablero, **no
-es la cobertura de líneas**. Mezcla líneas y condiciones (las ramas de cada
-`if`), y las ramas siempre cubren menos, así que tira el promedio para abajo. La
-cobertura de líneas sola es más alta y es la que compara contra el objetivo de
-[TESTS.md](TESTS.md).
+Lo que el primer análisis publicado dejó a la vista fue más interesante que la
+cobertura: **vitest informaba 99 % y Sonar 88,2 %** sobre el mismo código. La
+diferencia no era un error de Sonar. Eran cuatro archivos que la configuración
+de vitest tenía **excluidos de la cobertura** —`DronesMap.tsx`, el seed del
+backend y los dos entrypoints—, así que vitest ni los mencionaba; Sonar, que no
+conoce esa lista, los indexaba igual y los contaba como 0 %. Entre los cuatro,
+287 líneas sin cubrir que el número lindo escondía.
 
-Después, ya en SonarQube Cloud, esto es lo que publicó el primer análisis que
-salió del CI (el del PR #18):
+De esos cuatro, dos no tenían por qué estar excluidos y hoy tienen tests
+propios; los otros dos son entrypoints de tres líneas y ahora están declarados
+en `sonar.coverage.exclusions`, así que **las dos listas coinciden** y los dos
+números miden lo mismo.
 
-| Métrica | Valor |
-|---|---|
-| Quality gate | pasa |
-| *Coverage* (líneas + condiciones) | 88,0 % |
-| Cobertura de **líneas** | 91,9 % — 6308 de 6867 |
-| Cobertura de condiciones | 79,6 % — 2548 de 3202 |
-| Duplicación | 0,3 % |
-| Issues en código nuevo | 0 |
+| | Antes | Ahora |
+|---|---|---|
+| `DronesMap.tsx` | excluido, 0 % en Sonar | 86 %, con 35 tests propios |
+| `seed.ts` | excluido, 0 % en Sonar | 100 %, con 10 tests propios |
+| Cobertura de líneas del proyecto | 88,2 % | **91,7 %** |
+| Tests | 803 | **852** |
 
-El 88,0 % de la nube y el 88,1 % del servidor local son la misma medición: los
-dos caminos dan lo mismo. Y el 91,9 % de líneas —con la app Android adentro, que
-es la que menos cubre— queda por arriba del 90 % que TESTS.md se pone como
-objetivo.
+## El piso de cobertura
+
+El objetivo de 90 % de líneas de [TESTS.md](TESTS.md) no lo vigilaba nadie: cada
+componente tenía su umbral, pero la cifra del sistema completo —la que se
+publica y la que se cita— no era de nadie. La verifica
+[`scripts/cobertura.mjs`](../scripts/cobertura.mjs), que suma los mismos
+informes que lee Sonar y rompe el CI por debajo del piso:
+
+```bash
+node scripts/cobertura.mjs              # piso por defecto: 90 %
+node --test scripts/cobertura.test.mjs  # sus propios tests
+```
+
+Cuenta **líneas**, no la métrica *Coverage* del tablero, que mezcla líneas y
+condiciones y siempre da más bajo — sobre el análisis anterior eran 85,5 %
+contra 88,2 % del mismo código. El objetivo de TESTS.md está escrito en líneas,
+así que el piso se mide en líneas.
+Y descuenta dos cosas, para medir el mismo conjunto de archivos que Sonar: los
+dos entrypoints y el *view binding* que genera el build de Android. Esas 129
+líneas generadas son la diferencia entre leer la app al 60,9 % o al 62,3 %, que
+es lo que publica el tablero.
+
+No coincide al decimal con Sonar —Sonar decide por su cuenta qué línea es
+ejecutable— pero queda dentro de unas décimas, que es lo que hace falta para
+que sirva de alarma.
 
 ## Lo que conviene saber del tablero
 

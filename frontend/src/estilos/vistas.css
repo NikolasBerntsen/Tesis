@@ -231,6 +231,33 @@ details.meta pre {
   border-color: var(--oro);
   box-shadow: var(--sombra-flotante);
 }
+
+/* El control que abre el detalle del dron: un <button> de verdad, estirado
+   sobre el mosaico entero. No se ve —el mosaico ya se dibuja solo— pero trae
+   gratis el foco, Enter, Espacio, el táctil y el lector de pantalla, que con
+   un div y `role="button"` había que escribir a mano y aun así no se comportan
+   igual en todos lados.
+
+   Va último en el marcado y es un elemento POSICIONADO: por orden de pintado
+   eso lo deja sobre el contenido no posicionado del mosaico (el video, la
+   ficha) sin necesitar z-index. Lo que sí es interactivo adentro se levanta
+   por encima de él con z-index (ver .editable-name).
+   OJO: de este bloque depende que clickear en cualquier parte del mosaico abra
+   el detalle. Los tests corren en jsdom, que no calcula posiciones, así que
+   eso no lo comprueba ningún test: lo comprueban las reglas de pintado de CSS
+   y el ojo. */
+.tile-abrir {
+  position: absolute;
+  inset: 0;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  cursor: pointer; }
+/* El foco se dibuja sobre el mosaico entero, que es lo que el botón representa. */
+.tile-abrir:focus-visible {
+  outline: 2px solid var(--oro);
+  outline-offset: 2px; }
 .tile-info {
   display: flex;
   flex-direction: column;
@@ -556,7 +583,12 @@ details.meta pre {
 }
 
 /* --- Nombre editable -------------------------------------------------------- */
+/* `position` + `z-index` lo dejan por ENCIMA del botón estirado que cubre el
+   mosaico de cámara (.tile-abrir). Sin esto, renombrar un dron desde el
+   mosaico sería imposible: el click lo atajaría el botón de abrir el detalle. */
 .editable-name {
+  position: relative;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   gap: var(--e-2);

@@ -198,6 +198,15 @@ jobs:
           done
           exit $faltan
 
+      # El piso de cobertura del PROYECTO entero. Cada componente tiene el suyo
+      # (vitest, JaCoCo), pero ninguno ve a los otros dos: la cifra del sistema
+      # completo, que es la que se publica y la que se cita, no la vigilaba
+      # nadie. Este job es el único lugar donde los tres informes están juntos.
+      - name: Piso de cobertura del proyecto (90 % de líneas)
+        run: |
+          node --test scripts/cobertura.test.mjs
+          node scripts/cobertura.mjs --piso 90
+
       # Sin el secreto configurado no hay análisis posible. En vez de dejar el CI
       # en rojo (por ejemplo en un fork, que no recibe secretos), se saltea y
       # explica qué falta: ver docs/SONARQUBE.md.

@@ -122,9 +122,41 @@ describe('CameraTile', () => {
     });
   });
 
-  it('llama onOpen al clickear el tile', async () => {
+  it('abrir el detalle es un botón de verdad, con nombre accesible', async () => {
     const props = renderTile({ frame: null });
-    await userEvent.click(screen.getByText('Sin señal de video'));
+
+    // Antes era un onClick colgado del div del mosaico: con teclado no había
+    // forma de abrirlo. Ahora es un <button> estirado por CSS sobre el mosaico.
+    const abrir = screen.getByRole('button', { name: `Ver detalle de ${props.drone.displayName}` });
+    expect(abrir.tagName).toBe('BUTTON');
+
+    await userEvent.click(abrir);
     expect(props.onOpen).toHaveBeenCalled();
+  });
+
+  it('se abre con el teclado, sin manejadores propios', async () => {
+    const props = renderTile({ frame: null });
+    const abrir = screen.getByRole('button', { name: `Ver detalle de ${props.drone.displayName}` });
+
+    abrir.focus();
+    expect(abrir).toHaveFocus();
+    await userEvent.keyboard('{Enter}');
+    expect(props.onOpen).toHaveBeenCalledTimes(1);
+
+    await userEvent.keyboard(' ');
+    expect(props.onOpen).toHaveBeenCalledTimes(2);
+  });
+
+  it('renombrar no abre el detalle: el control de nombre no está dentro del botón', async () => {
+    const props = renderTile({ frame: null });
+    const abrir = screen.getByRole('button', { name: `Ver detalle de ${props.drone.displayName}` });
+    const renombrar = screen.getByRole('button', { name: 'Renombrar dron' });
+
+    // Un <button> no puede contener controles: si el de renombrar quedara
+    // adentro del de abrir, el marcado sería inválido y el teclado se rompería.
+    expect(abrir.contains(renombrar)).toBe(false);
+
+    await userEvent.click(renombrar);
+    expect(props.onOpen).not.toHaveBeenCalled();
   });
 });

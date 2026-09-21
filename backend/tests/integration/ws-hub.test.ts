@@ -127,7 +127,9 @@ describe('integración — hub WebSocket multi-dron', () => {
     await wait(150);
     // el hub sigue vivo: un status posterior se sigue reenviando
     d1.ws.send(mkStatus({ battery: 42 }));
-    await opWs.waitFor((m) => m.type === 'status' && m.battery === 42);
+    const posterior = await opWs.waitFor((m) => m.type === 'status' && m.battery === 42);
+    // La espera ya falla por timeout si el hub se murió; esto lo deja escrito.
+    expect(posterior.battery).toBe(42);
   });
 
   it('un `null` y un alert_request con basura no tumban el hub', async () => {

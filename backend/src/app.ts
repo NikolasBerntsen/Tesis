@@ -6,11 +6,15 @@ import express from 'express';
 import { authRouter } from './routes/auth.routes';
 import { apiRouter } from './routes/api.routes';
 import { setupWebSocket } from './ws';
+import { config } from './config';
 
 /** Arma la app y el servidor HTTP+WS sin ponerlo a escuchar. */
 export function createServer() {
   const app = express();
-  app.use(cors());
+  // Lista blanca de orígenes en vez de `cors()` a secas (ver config.corsOrigins).
+  // `*` sigue disponible, pero hay que pedirlo: no es el default.
+  const origenes = config.corsOrigins;
+  app.use(cors({ origin: origenes.includes('*') ? true : origenes }));
   // Límite alto porque las alertas pueden traer un snapshot JPEG en base64
   app.use(express.json({ limit: '8mb' }));
 

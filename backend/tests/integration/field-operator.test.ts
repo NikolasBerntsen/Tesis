@@ -112,7 +112,11 @@ describe('integración — sesión efímera del operador de campo', () => {
     const tok = (await login(srv.base, 'campo', CREDS.campo))!;
     const ws = await connectWs(srv.wsUrl, tok);
     const alta = await api(srv.base, '/api/drones', tok, { method: 'POST', body: JSON.stringify({ displayName: 'Aviso' }) });
-    await ws.waitFor((m) => m.type === 'drone_updated' && m.drone.hash === alta.body.hash);
+    const aviso = await ws.waitFor((m) => m.type === 'drone_updated' && m.drone.hash === alta.body.hash);
+    // `waitFor` ya falla por timeout si el aviso no llega, pero dejarlo
+    // implícito hace que este test se lea como si no comprobara nada.
+    expect(aviso.drone.hash).toBe(alta.body.hash);
+    expect(aviso.drone.displayName).toBe('Aviso');
     await ws.close();
   });
 

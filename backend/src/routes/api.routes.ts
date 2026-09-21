@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import { Router } from 'express';
 import { ROLE_RANK, requireAuth, requireRoles, signDroneToken, type AuthedRequest } from '../auth';
 import {
-  asignarRutas, basesDeRuta, contarDronesEnBase, createBase, createDrone, createLog, createRoute, createUser, distanciaM, generarContrasenia, getBase, restoreRoute, rutasDeBase, softDeleteRoute, updateRoute, listBases, restoreBase, softDeleteBase, updateBase, decideAlert, getAlert, getDrone, getDroneIdentity, getRoute, getRoutes,
+  asignarRutas, contarDronesEnBase, createBase, createDrone, createLog, createRoute, createUser, generarContrasenia, getBase, restoreRoute, rutasDeBase, softDeleteRoute, updateRoute, listBases, restoreBase, softDeleteBase, updateBase, decideAlert, getAlert, getDrone, getDroneIdentity, getRoute, getRoutes,
   getUser, listAlerts, listEvents, listLogs, listUsers, restoreDrone, restoreUser, setWaypointLabel,
   softDeleteDrone, softDeleteUser, updateDrone, updateUser,
   type BasePatch, type BaseView, type DroneAssetView, type DronePatch, type PatrolRoute, type RoutePatch, type Waypoint, type LogCategory, type Role,

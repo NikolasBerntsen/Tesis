@@ -55,7 +55,11 @@ export default function EditableName({
   };
 
   return (
-    <span className="editable-name" onClick={(e) => e.stopPropagation()}>
+    // Sin manejadores propios: el mosaico que envuelve a esto ya no es un
+    // control (es un <button> aparte, ver CameraTile), así que no hay nada de
+    // lo que frenar la propagación. Lo que mantiene este bloque clickeable por
+    // encima del botón estirado es el z-index de `.editable-name`.
+    <span className="editable-name">
       <input
         autoFocus
         maxLength={40}

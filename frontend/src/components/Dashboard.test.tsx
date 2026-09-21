@@ -79,7 +79,10 @@ describe('Dashboard', () => {
 
   it('abre el detalle al clickear una cámara', async () => {
     const props = renderDashboard();
-    await userEvent.click(screen.getByText('Sin señal de video'));
+    // El mosaico entero es clickeable por CSS (.tile-abrir), pero jsdom no
+    // calcula posiciones: acá se usa el control accesible, que es el que
+    // recibe el click en el navegador.
+    await userEvent.click(screen.getByRole('button', { name: /^Ver detalle de / }));
     expect(props.onOpenDrone).toHaveBeenCalledWith('d1');
   });
 });
