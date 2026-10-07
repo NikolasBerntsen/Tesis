@@ -2,9 +2,21 @@
 # La imagen se construye en la propia VM (deploy/deploy.sh), igual que el otro
 # proyecto que comparte esa máquina.
 #
-# No publica ningún puerto: la única puerta de entrada es el Caddy del otro
-# proyecto, que llega hasta acá por la red compartida 'proxy' y resuelve el
-# nombre del contenedor por DNS interno de Docker.
+# No publica ningún puerto: la única puerta de entrada es el Caddy general de
+# la VM (vive en ~/caddy, fuera de los repos), que llega hasta acá por la red
+# compartida 'proxy' y resuelve el nombre del contenedor por DNS interno de
+# Docker. deploy/deploy.sh le deja el sitio en ~/caddy/conf/sites/tesis.caddy.
+#
+# El nombre del proyecto es el que ya tenía en la VM (el de la carpeta): con
+# otro, Docker no encontraría el volumen de la base.
+name: tesis
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   comando-central:
     build:
@@ -21,6 +33,7 @@ services:
       - cc-data:/data
     networks:
       - proxy
+    logging: *logging
 
 volumes:
   cc-data:
