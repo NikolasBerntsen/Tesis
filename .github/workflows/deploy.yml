@@ -1,84 +1,162 @@
-name: Deploy a Oracle Cloud
+name: Deploy a la VM
 
-# Copia el código por rsync y la VM construye y levanta los contenedores. No hay registry
-# de imágenes ni agente en el servidor.
+# Despliegue continuo a la VM propia (Docker + Caddy general de la VM).
+# Copia el código por rsync y la VM construye y levanta los contenedores (deploy/deploy.sh). No hay
+# registry de imágenes ni agente en el servidor.
 #
-# Lo llama el CI de main apenas las TRES suites están en verde (ver el job
-# `desplegar` de ci.yml): un commit que rompe los tests nunca llega a la VM.
+# Lo llama el CI de main apenas las TRES suites están en verde (ver el job `desplegar` de ci.yml):
+# un commit que rompe los tests nunca llega a la VM. Antes se disparaba con `workflow_run` al
+# terminar TODO el CI, y eso incluía el análisis de SonarQube: el despliegue quedaba esperando
+# ~6 minutos a una medición de calidad que no dice nada sobre si el código anda.
 #
-# Antes se disparaba con `workflow_run` al terminar TODO el CI, y eso incluía el
-# análisis de SonarQube: el despliegue quedaba esperando ~6 minutos a una
-# medición de calidad que no dice nada sobre si el código anda. Ahora corre en
-# paralelo con ese análisis, no atrás.
+# También se lanza a mano (Actions → "Deploy a la VM" → Run workflow); con "ref" despliega una
+# versión anterior (rollback).
+#
+# Configuración: repo → Settings → Secrets and variables → Actions.
+#   Secret    VM_SSH_KEY       clave privada SSH con la que se entra a la VM (o ORACLE_SSH_KEY)
+#   Variable  VM_HOST          IP pública (o nombre) de la VM
+#   Variable  VM_USER          usuario SSH (por defecto: ubuntu)
+#   Variable  DEPLOY_PATH      carpeta del proyecto en la VM (por defecto: /home/<usuario>/tesis)
+#   Variable  APP_DOMAIN       dominio(s) público(s), separados por coma (ej. tesis.1-2-3-4.sslip.io)
+#   Variable  CADDY_CONTAINER  contenedor del Caddy general de la VM (por defecto: caddy)
+#   Variable  CADDY_SITES_DIR  carpeta de sitios de Caddy en la VM (por defecto: /home/<usuario>/caddy/conf/sites)
+#   Variable  DEV_WIPE_DB      ⚠ SOLO DESARROLLO: 'true' BORRA la base en CADA deploy
 on:
   workflow_call: {}
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Commit, tag o rama a desplegar (vacío = lo último de la rama). Sirve para rollback.'
+        required: false
+        default: ''
 
-# Los despliegues se encolan en vez de pisarse: cortar un "compose up" a la
-# mitad dejaría el stack a medio levantar.
+permissions:
+  contents: read
+
+# Los despliegues se encolan en vez de pisarse: cortar un "compose up" a la mitad dejaría el stack a
+# medio levantar.
 concurrency:
-  group: deploy-oracle
+  group: deploy-${{ github.repository }}
   cancel-in-progress: false
-
-env:
-  VM_HOST: 144.22.138.149
-  VM_USER: ubuntu
-  DEST: /home/ubuntu/tesis
 
 jobs:
   deploy:
-    name: Desplegar en la VM de Oracle
+    name: Desplegar en la VM
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VM_HOST: ${{ vars.VM_HOST }}
+      VM_USER: ${{ vars.VM_USER || 'ubuntu' }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || format('/home/{0}/tesis', vars.VM_USER || 'ubuntu') }}
+      APP_DOMAIN: ${{ vars.APP_DOMAIN }}
+      CADDY_CONTAINER: ${{ vars.CADDY_CONTAINER || 'caddy' }}
+      CADDY_SITES_DIR: ${{ vars.CADDY_SITES_DIR || format('/home/{0}/caddy/conf/sites', vars.VM_USER || 'ubuntu') }}
+      DEV_WIPE_DB: ${{ vars.DEV_WIPE_DB }}
+      # Ruta que la prueba final espera en 2xx/3xx: cruza hasta el backend.
+      HEALTH_PATH: '/api/health'
     steps:
-      # Llamado desde el CI, `github.sha` ya es el commit que acaba de pasar los
-      # tests, así que el checkout por defecto despliega exactamente eso.
-      - uses: actions/checkout@v4
-
-      # Un secret vacío da un "Permission denied (publickey)" sin explicación:
-      # mejor fallar acá con un mensaje claro.
-      - name: Verificar la clave SSH
+      # Un secret vacío da un "Permission denied (publickey)" sin explicación: mejor fallar acá con
+      # un mensaje claro.
+      - name: Verificar la configuración del repo
         env:
-          SSH_KEY: ${{ secrets.ORACLE_SSH_KEY || secrets.VM_SSH_KEY }}
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY || secrets.ORACLE_SSH_KEY }}
         run: |
-          if [ -z "$SSH_KEY" ]; then
-            echo "::error::Falta el secret ORACLE_SSH_KEY (o VM_SSH_KEY) con la clave privada de la VM."
+          falta=""
+          [ -n "$VM_SSH_KEY" ] || falta="$falta secret:VM_SSH_KEY"
+          [ -n "$VM_HOST" ]    || falta="$falta variable:VM_HOST"
+          [ -n "$APP_DOMAIN" ] || falta="$falta variable:APP_DOMAIN"
+          if [ -n "$falta" ]; then
+            echo "::error::Falta configurar:$falta (repo → Settings → Secrets and variables → Actions)."
             exit 1
           fi
+          # rsync --delete deja la carpeta destino IGUAL al repo: una ruta demasiado general
+          # (/, /home/ubuntu…) borraría los otros proyectos de la VM.
+          case "${DEPLOY_PATH%/}" in
+            /*/*/*) ;;
+            *) echo "::error::DEPLOY_PATH='$DEPLOY_PATH' es demasiado general: tiene que ser la carpeta propia del proyecto (ej. /home/ubuntu/tesis)."; exit 1 ;;
+          esac
+          if [ "$DEV_WIPE_DB" = "true" ]; then
+            echo "::warning::DEV_WIPE_DB=true: este deploy BORRA la base del proyecto en la VM (solo para desarrollo)."
+          fi
 
-      - name: Preparar la clave y el host conocido
+      # Llamado desde el CI, `github.sha` ya es el commit que acaba de pasar los tests.
+      - name: Traer el código
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Preparar SSH
         env:
-          SSH_KEY: ${{ secrets.ORACLE_SSH_KEY || secrets.VM_SSH_KEY }}
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY || secrets.ORACLE_SSH_KEY }}
         run: |
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VM_SSH_KEY" | tr -d '\r' > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
-          ssh-keyscan -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-
-      # --delete deja la VM igual al repo. Se excluye el .env (los secretos de
-      # producción viven sólo en la VM) y lo que se construye o no hace falta
-      # allá (la app Android no se despliega).
-      - name: Copiar el código a la VM
-        run: |
-          rsync -az --delete \
-            -e "ssh -i ~/.ssh/id_deploy" \
-            --exclude '.git/' \
-            --exclude '.env' \
-            --exclude 'node_modules/' \
-            --exclude 'dist/' \
-            --exclude 'coverage/' \
-            --exclude 'android-app/' \
-            --exclude '*.db' \
-            ./ "$VM_USER@$VM_HOST:$DEST/"
-
-      # DEV_WIPE_DB llega como variable del repositorio (Settings → Variables).
-      # Si no está definida, manda la del .env de la VM. En cualquiera de los
-      # dos lados, `true` significa que ESTE despliegue borra la base.
-      - name: Construir y levantar los contenedores
-        env:
-          DEV_WIPE_DB: ${{ vars.DEV_WIPE_DB }}
-        run: |
-          ssh -i ~/.ssh/id_deploy "$VM_USER@$VM_HOST" bash -s <<EOF
-          set -e
-          cd "$DEST"
-          DEV_WIPE_DB='${DEV_WIPE_DB}' bash deploy/deploy.sh update
+          ssh-keyscan -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          cat >> ~/.ssh/config <<EOF
+          Host vm
+            HostName $VM_HOST
+            User $VM_USER
+            IdentityFile ~/.ssh/id_deploy
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+            ServerAliveInterval 30
+            ServerAliveCountMax 10
           EOF
+          ssh vm 'echo "Conectado a $(hostname) ($(uname -m))"; command -v docker >/dev/null && command -v rsync >/dev/null' \
+            || { echo "::error::No pude entrar a la VM, o le falta Docker/rsync. Revisá VM_HOST, VM_USER, VM_SSH_KEY y el puerto 22 en la Security List."; exit 1; }
+
+      # --delete deja la VM igual al repo. Se excluye el .env (los secretos de producción viven sólo
+      # en la VM) y lo que se construye o no hace falta allá (la app Android no se despliega).
+      - name: Copiar el código a la VM (rsync)
+        run: |
+          DEPLOY_PATH="${DEPLOY_PATH%/}"
+          # Si la carpeta ya tiene un despliegue de OTRO repo, no se pisa.
+          ssh vm "mkdir -p '$DEPLOY_PATH' && { [ ! -f '$DEPLOY_PATH/.deploy-info' ] || grep -qx 'repo=$GITHUB_REPOSITORY' '$DEPLOY_PATH/.deploy-info'; }" \
+            || { echo "::error::$DEPLOY_PATH ya tiene el despliegue de otro repo (ver su .deploy-info). Revisá DEPLOY_PATH."; exit 1; }
+          rsync -az --delete \
+            --exclude='.git/' --exclude='.github/' --exclude='.env' --exclude='.deploy-info' \
+            --exclude='node_modules/' --exclude='dist/' --exclude='coverage/' \
+            --exclude='android-app/' --exclude='*.db' \
+            ./ "vm:$DEPLOY_PATH/"
+
+      - name: Desplegar en la VM (build + up)
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+          DEPLOY_REF: ${{ inputs.ref || github.ref_name }}
+          DEPLOY_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          DEPLOY_COMMIT="$(git rev-parse --short HEAD)"
+          [ -n "$INPUT_REF" ] && echo "::notice::Despliegue manual de '$INPUT_REF' ($DEPLOY_COMMIT)."
+          remoto="$(printf 'DEPLOY_PATH=%q APP_DOMAIN=%q CADDY_CONTAINER=%q CADDY_SITES_DIR=%q DEV_WIPE_DB=%q DEPLOY_REPO=%q DEPLOY_COMMIT=%q DEPLOY_REF=%q DEPLOY_RUN_URL=%q' \
+            "${DEPLOY_PATH%/}" "$APP_DOMAIN" "$CADDY_CONTAINER" "$CADDY_SITES_DIR" "${DEV_WIPE_DB:-false}" \
+            "$GITHUB_REPOSITORY" "$DEPLOY_COMMIT" "$DEPLOY_REF" "$DEPLOY_RUN_URL")"
+          ssh vm "$remoto bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+          if [ "$DEV_WIPE_DB" = "true" ]; then
+            echo "⚠ DEV_WIPE_DB=true → despliegue LIMPIO: se borra la base de este proyecto."
+            bash deploy/deploy.sh reset < /dev/null
+          else
+            echo "→ Despliegue incremental (conserva los datos)."
+            bash deploy/deploy.sh update
+          fi
+          REMOTE
+
+      - name: Comprobar que el sitio responde
+        run: |
+          host="$(printf '%s' "$APP_DOMAIN" | tr ',;' '  ' | awk '{print $1}')"
+          url="https://$host$HEALTH_PATH"
+          ok=0
+          for i in $(seq 1 20); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$url" || true)"
+            case "$code" in 2??|3??) ok=1; break ;; esac
+            echo "  intento $i: HTTP $code; reintento en 15 s…"
+            sleep 15
+          done
+          if [ "$ok" != 1 ]; then
+            echo "::error::$url no respondió bien después del despliegue. En la VM: bash deploy/deploy.sh status (y logs)."
+            exit 1
+          fi
+          echo "✓ $url → HTTP $code"
+          echo "### ✅ Desplegado en https://$host" >> "$GITHUB_STEP_SUMMARY"

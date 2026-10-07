@@ -1,0 +1,4 @@
+# Los scripts que corren en la VM van siempre con LF: con CRLF fallan con
+# "$'\r': command not found" aunque en Windows se vean bien.
+*.sh text eol=lf
+deploy/** text eol=lf
