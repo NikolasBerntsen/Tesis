@@ -4,9 +4,9 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:paddingStart="24dp"
-    android:paddingTop="8dp"
-    android:paddingEnd="24dp">
+    android:paddingStart="@dimen/espacio_grande"
+    android:paddingTop="@dimen/espacio_chico"
+    android:paddingEnd="@dimen/espacio_grande">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -19,7 +19,6 @@
             android:text="@string/login_url_comando_central" />
 
         <com.google.android.material.textfield.TextInputLayout
-            style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             app:hintEnabled="false">
@@ -43,9 +42,23 @@
             android:orientation="vertical">
 
             <com.google.android.material.radiobutton.MaterialRadioButton
+                android:id="@+id/radioAuto"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/enlace_auto" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="36dp"
+                android:text="@string/enlace_auto_ayuda"
+                android:textAppearance="@style/TextAppearance.DronePatrol.Apagado" />
+
+            <com.google.android.material.radiobutton.MaterialRadioButton
                 android:id="@+id/radioCable"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/espacio_chico"
                 android:text="@string/enlace_cable" />
 
             <TextView
@@ -53,13 +66,13 @@
                 android:layout_height="wrap_content"
                 android:layout_marginStart="36dp"
                 android:text="@string/enlace_cable_ayuda"
-                android:textSize="13sp" />
+                android:textAppearance="@style/TextAppearance.DronePatrol.Apagado" />
 
             <com.google.android.material.radiobutton.MaterialRadioButton
                 android:id="@+id/radioRed"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
+                android:layout_marginTop="@dimen/espacio_chico"
                 android:text="@string/enlace_red" />
 
             <TextView
@@ -67,7 +80,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginStart="36dp"
                 android:text="@string/enlace_red_ayuda"
-                android:textSize="13sp" />
+                android:textAppearance="@style/TextAppearance.DronePatrol.Apagado" />
         </RadioGroup>
 
         <TextView
@@ -76,10 +89,9 @@
 
         <com.google.android.material.textfield.TextInputLayout
             android:id="@+id/layoutUrlDeteccion"
-            style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="8dp"
+            android:layout_marginBottom="@dimen/espacio_chico"
             app:hintEnabled="false">
 
             <!-- La pista la carga FieldMenuActivity desde Config -->

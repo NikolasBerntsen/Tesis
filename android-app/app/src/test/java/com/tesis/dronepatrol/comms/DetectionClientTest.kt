@@ -87,6 +87,19 @@ class DetectionClientTest {
         assertEquals("ws://127.0.0.1:8766/phone", cliente.urlActual)
     }
 
+    /**
+     * En AUTO no hay URL hasta que la laptop se anuncie: mientras tanto la app
+     * dice que está buscando, que no es lo mismo que un fallo.
+     */
+    @Test
+    fun enAutoEsperaElAnuncioDeLaLaptopYLoDice() {
+        cliente.connect(ModoEnlace.AUTO)
+
+        assertEquals("", cliente.urlActual)
+        assertFalse(cliente.connected.value)
+        assertEquals(DetectionClient.BUSCANDO, cliente.ultimoFallo.value)
+    }
+
     @Test
     fun desconectarBorraElUltimoFallo() {
         cliente.connect(ModoEnlace.RED)

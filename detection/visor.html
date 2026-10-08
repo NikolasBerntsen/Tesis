@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Detección — visor</title>
+  <style>
+    :root { --fondo:#0c1218; --superficie:#151d26; --borde:#2e3b4a; --texto:#e8eef4; --medio:#a3b1bf; --acento:#f4b642; --ok:#3dd68c; --peligro:#ff5a5a; --info:#5ab0ff; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--fondo); color: var(--texto); margin: 0; padding: 20px; }
+    header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; }
+    h1 { font-size: 18px; margin: 0; letter-spacing: .02em; }
+    .pill { font-size: 12px; text-transform: uppercase; letter-spacing: .1em; padding: 4px 10px; border-radius: 999px; background: #243140; color: var(--medio); }
+    .pill.ok { color: var(--ok); } .pill.bad { color: var(--peligro); }
+    main { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 16px; }
+    @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+    .card { background: var(--superficie); border: 1px solid var(--borde); border-radius: 12px; padding: 14px; }
+    .card h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--medio); margin: 0 0 10px; }
+    #feed { width: 100%; background: #000; border-radius: 8px; display: block; aspect-ratio: 16/9; object-fit: contain; }
+    .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .stat span { display: block; font-size: 11px; color: var(--medio); text-transform: uppercase; letter-spacing: .08em; }
+    .stat strong { font-family: ui-monospace, Consolas, monospace; font-size: 20px; }
+    button { font: inherit; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--borde); background: #1c2733; color: var(--texto); cursor: pointer; }
+    button:hover { border-color: var(--acento); }
+    .fila { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+    #log { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--medio); max-height: 320px; overflow: auto; margin: 0; white-space: pre-wrap; }
+    .deteccion { color: var(--ok); font-weight: 700; }
+    .nota { color: var(--medio); font-size: 13px; margin: 6px 0 0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Software de detección</h1>
+    <span id="status" class="pill bad">celular desconectado</span>
+    <span id="modelo" class="pill">sin modelo</span>
+  </header>
+  <main>
+    <section class="card">
+      <h2>Video del dron, anotado</h2>
+      <img id="feed" alt="Video del dron" />
+      <p class="nota">Llega a 1280 px de ancho, hasta 2 cuadros por segundo. Cada cuadro procesado se contesta a la app con un mensaje <code>detection</code>.</p>
+    </section>
+    <aside>
+      <section class="card">
+        <h2>Modelo</h2>
+        <div class="stats">
+          <div class="stat"><span>Inferencia</span><strong id="ms">—</strong></div>
+          <div class="stat"><span>Procesados</span><strong id="procesados">0</strong></div>
+          <div class="stat"><span>Recibidos</span><strong id="recibidos">0</strong></div>
+          <div class="stat"><span>Descartados</span><strong id="descartados">0</strong></div>
+        </div>
+      </section>
+      <section class="card" style="margin-top:16px">
+        <h2>Simular una detección</h2>
+        <p class="nota">Para la demo sin dron: manda a la app el mismo mensaje que generaría el modelo.</p>
+        <div class="fila">
+          <button onclick="simular('PERSON')">Detectar PERSONA</button>
+          <button onclick="simular('VEHICLE')">Detectar VEHÍCULO</button>
+        </div>
+      </section>
+      <section class="card" style="margin-top:16px">
+        <h2>Detecciones</h2>
+        <pre id="log">—</pre>
+      </section>
+    </aside>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const lineas = [];
+    let ultima = '';
+    function anotar(texto, clase) {
+      lineas.unshift(`<span class="${clase || ''}">${new Date().toLocaleTimeString()}  ${texto}</span>`);
+      if (lineas.length > 60) lineas.pop();
+      $('log').innerHTML = lineas.join('\n');
+    }
+    function conectar() {
+      const ws = new WebSocket(`ws://${location.host}/viewer`);
+      ws.onmessage = (ev) => {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'video_frame') {
+          if (msg.jpegBase64) $('feed').src = 'data:image/jpeg;base64,' + msg.jpegBase64;
+          const d = msg.detection;
+          const clave = d.detected ? d.classes.join('+') : '';
+          if (clave !== ultima) {
+            ultima = clave;
+            anotar(d.detected ? `DETECCIÓN ${d.classes.join(', ')} (${d.confidence})` : 'sin detección', d.detected ? 'deteccion' : '');
+          }
+        } else if (msg.type === 'phone_status') {
+          $('status').textContent = msg.connected ? 'celular conectado' : 'celular desconectado';
+          $('status').className = 'pill ' + (msg.connected ? 'ok' : 'bad');
+        } else if (msg.type === 'stats') {
+          $('modelo').textContent = msg.modelo ? `${msg.modelo} · imgsz ${msg.imgsz}` : 'sin modelo';
+          $('ms').textContent = msg.ms != null ? `${msg.ms} ms` : '—';
+          $('procesados').textContent = msg.procesados;
+          $('recibidos').textContent = msg.recibidos;
+          $('descartados').textContent = msg.descartados;
+        }
+      };
+      ws.onclose = () => setTimeout(conectar, 2000);
+      window.simular = (cls) => {
+        ws.send(JSON.stringify({ type: 'detection', detected: true, classes: [cls], confidence: 0.9, ts: Date.now() }));
+        anotar(`simulada: ${cls}`, 'deteccion');
+      };
+    }
+    conectar();
+  </script>
+</body>
+</html>

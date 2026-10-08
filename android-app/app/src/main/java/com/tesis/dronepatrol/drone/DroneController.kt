@@ -1,9 +1,11 @@
 package com.tesis.dronepatrol.drone
 
+import com.tesis.dronepatrol.model.EstadoDelDron
 import com.tesis.dronepatrol.model.FlightEvent
 import com.tesis.dronepatrol.model.PatrolRoute
 import com.tesis.dronepatrol.model.Telemetry
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Abstracción del dron. La lógica de patrullaje (PatrolManager) habla solo con
@@ -11,24 +13,43 @@ import kotlinx.coroutines.flow.SharedFlow
  * Pro vía MSDK v5 (flavor dji).
  */
 interface DroneController {
+    /**
+     * Enlace, modelo, GPS, punto de retorno y si está en el aire. Es un
+     * StateFlow y no un SharedFlow porque la pantalla necesita el valor actual
+     * apenas se abre, no esperar al próximo cambio.
+     */
+    val estado: StateFlow<EstadoDelDron>
+
     /** Telemetría a ~2 Hz. Si el enlace RC se corta, este flujo se silencia. */
     val telemetry: SharedFlow<Telemetry>
 
     /**
-     * Cuadros JPEG del video del dron: 5 por segundo
-     * ([CuadroDeVideo.INTERVALO_CUADRO_MS]), tanto con el dron real como con el
-     * simulado. Todo lo que sale por acá va al Comando Central; al software de
-     * detección le llega uno cada 500 ms como techo —dos por segundo, el ritmo
-     * que fija el contrato para el enlace más flojo— y de eso se encarga
-     * PatrolManager.
+     * Cuadros JPEG del video del dron para el Comando Central: 640 px de ancho,
+     * 5 por segundo ([CuadroDeVideo.INTERVALO_CUADRO_MS]), tanto con el dron
+     * real como con el simulado. Es el video que mira el operador en la consola.
      */
     val videoFrames: SharedFlow<ByteArray>
+
+    /**
+     * Cuadros para el software de detección: más grandes
+     * ([CuadroDeVideo.ANCHO_DETECCION] px de ancho) y más espaciados (uno cada
+     * [CuadroDeVideo.INTERVALO_DETECCION_MS] como mucho, dos por segundo). Van
+     * aparte del video de la consola porque detectar una persona desde 50 m
+     * necesita resolución y no cuadros: a 640 px un peatón son diez pixeles.
+     */
+    val cuadrosParaDeteccion: SharedFlow<ByteArray>
 
     val flightEvents: SharedFlow<FlightEvent>
 
     fun connect()
 
-    /** Vuela la ruta en loop, empezando por el waypoint [fromWaypoint]. */
+    /**
+     * Vuela la ruta en loop, empezando por el waypoint [fromWaypoint]. Es la
+     * única orden que despega sola si el dron está en el suelo: emite
+     * [FlightEvent.Despegando], sube a la altura del primer waypoint, emite
+     * [FlightEvent.EnElAire] y recién ahí arranca la ruta. Las demás órdenes
+     * con el dron en el suelo se rechazan con [FlightEvent.Problema].
+     */
     fun startRoute(route: PatrolRoute, fromWaypoint: Int)
 
     /** Orbita alrededor del punto dado (modo seguimiento de objetivo). */
@@ -58,7 +79,11 @@ interface DroneController {
      */
     fun manualStick(pitch: Double, roll: Double, yaw: Double, throttle: Double)
 
+    /** Regreso a base del propio dron; al aterrizar emite [FlightEvent.ArrivedHome]. */
     fun returnHome()
+
+    /** Aterriza donde está; al tocar el suelo emite [FlightEvent.Aterrizado]. */
+    fun land()
 
     fun disconnect()
 }

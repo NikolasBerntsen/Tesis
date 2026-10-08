@@ -355,6 +355,12 @@ open class CommandCenterClient(private val scope: CoroutineScope) {
         signalPct: Int,
         heading: Double,
         mode: String,
+        /** Altura sobre el punto de despegue, en metros. */
+        altM: Double = 0.0,
+        /** Satélites GPS en uso; 0 si el dron no lo informa. */
+        satellites: Int = 0,
+        /** true con el dron en el aire (motores encendidos y despegado). */
+        flying: Boolean = false,
     ) = send(
         JSONObject()
             .put("type", "status")
@@ -368,7 +374,10 @@ open class CommandCenterClient(private val scope: CoroutineScope) {
             .put("signal", if (signalOk) "OK" else "LOST")
             .put("signalPct", signalPct)
             .put("heading", heading)
-            .put("mode", mode),
+            .put("mode", mode)
+            .put("alt", altM)
+            .put("satellites", satellites)
+            .put("flying", flying),
     )
 
     fun sendSetName(displayName: String) =
@@ -381,13 +390,26 @@ open class CommandCenterClient(private val scope: CoroutineScope) {
     open fun sendVideoFrame(jpegBase64: String) =
         send(JSONObject().put("type", "video_frame").put("jpegBase64", jpegBase64).put("ts", System.currentTimeMillis()))
 
-    fun sendAlertRequest(alertType: String, lat: Double, lon: Double, snapshotBase64: String?) =
-        send(
-            JSONObject()
-                .put("type", "alert_request")
-                .put("alertType", alertType)
-                .put("lat", lat)
-                .put("lon", lon)
-                .put("snapshotBase64", snapshotBase64 ?: JSONObject.NULL),
-        )
+    /**
+     * `open` para que el banco de pruebas vea qué captura y qué posición se
+     * mandan: la alerta tiene que llevar el cuadro anotado que disparó la
+     * detección y el lugar del objetivo, no el último cuadro y el dron.
+     */
+    open fun sendAlertRequest(
+        alertType: String,
+        lat: Double,
+        lon: Double,
+        snapshotBase64: String?,
+        confidence: Double = 0.0,
+        classes: List<String> = listOf(alertType),
+    ) = send(
+        JSONObject()
+            .put("type", "alert_request")
+            .put("alertType", alertType)
+            .put("lat", lat)
+            .put("lon", lon)
+            .put("snapshotBase64", snapshotBase64 ?: JSONObject.NULL)
+            .put("confidence", confidence)
+            .put("classes", JSONArray(classes)),
+    )
 }

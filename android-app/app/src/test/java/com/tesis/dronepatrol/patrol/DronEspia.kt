@@ -1,10 +1,12 @@
 package com.tesis.dronepatrol.patrol
 
 import com.tesis.dronepatrol.drone.DroneController
+import com.tesis.dronepatrol.model.EstadoDelDron
 import com.tesis.dronepatrol.model.FlightEvent
 import com.tesis.dronepatrol.model.PatrolRoute
 import com.tesis.dronepatrol.model.Telemetry
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 
 /**
@@ -24,7 +26,13 @@ internal class DronEspia : DroneController {
     private val telemetria = MutableSharedFlow<Telemetry>(replay = 1, extraBufferCapacity = 8)
     override val telemetry: SharedFlow<Telemetry> get() = telemetria
     override val videoFrames = MutableSharedFlow<ByteArray>(extraBufferCapacity = 4)
+    override val cuadrosParaDeteccion = MutableSharedFlow<ByteArray>(extraBufferCapacity = 4)
     override val flightEvents = MutableSharedFlow<FlightEvent>(extraBufferCapacity = 8)
+
+    /** Siempre en el aire y listo: lo que se prueba con este dron es el mando, no el despegue. */
+    override val estado = MutableStateFlow(
+        EstadoDelDron(sdkListo = true, conectado = true, modelo = "Espía", enVuelo = true, satelites = 14, baseFijada = true),
+    )
 
     /** Cada orden como texto, que es lo que los tests comparan. */
     private val recibidas = mutableListOf<String>()
@@ -43,8 +51,11 @@ internal class DronEspia : DroneController {
         lat: Double = -34.6037,
         lon: Double = -58.3816,
         bateria: Double = 100.0,
+        alt: Double = 40.0,
+        rumbo: Double = 0.0,
+        gimbal: Double = Telemetry.GIMBAL_PATRULLA,
     ) {
-        telemetria.emit(Telemetry(lat, lon, 40.0, bateria, 90, 0.0, System.currentTimeMillis()))
+        telemetria.emit(Telemetry(lat, lon, alt, bateria, 90, rumbo, System.currentTimeMillis(), gimbal))
     }
 
     /**
@@ -68,11 +79,19 @@ internal class DronEspia : DroneController {
 
     override fun connect() = anotar("connect")
     override fun startRoute(route: PatrolRoute, fromWaypoint: Int) = anotar("startRoute(${route.id}, $fromWaypoint)")
-    override fun startOrbit(centerLat: Double, centerLon: Double, radiusM: Double) = anotar("startOrbit")
+    /** Centro de la última órbita ordenada: es lo que dice si se orbita al objetivo o al dron. */
+    @Volatile
+    var ultimaOrbita: Pair<Double, Double>? = null
+
+    override fun startOrbit(centerLat: Double, centerLon: Double, radiusM: Double) {
+        ultimaOrbita = centerLat to centerLon
+        anotar("startOrbit")
+    }
     override fun hold() = anotar("hold")
     override fun gotoPoint(lat: Double, lon: Double) = anotar("gotoPoint")
     override fun manualStick(pitch: Double, roll: Double, yaw: Double, throttle: Double) =
         anotar("stick($pitch, $roll, $yaw, $throttle)")
     override fun returnHome() = anotar("returnHome")
+    override fun land() = anotar("land")
     override fun disconnect() = anotar("disconnect")
 }

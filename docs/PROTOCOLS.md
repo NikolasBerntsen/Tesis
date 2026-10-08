@@ -1,43 +1,33 @@
 # Contratos de mensajes (MVP)
 
 Todos los enlaces usan WebSocket con mensajes JSON en texto. Los cuadros de video
-viajan como JPEG codificado en base64: **640 px de ancho** (la altura sale de
-conservar la relación de aspecto del stream del dron, que llega en 1920x1080 o
-1280x720) y calidad 60.
+viajan como JPEG codificado en base64, y son **dos flujos distintos** que salen
+del controlador de vuelo de la app:
 
-El ritmo no es un número del protocolo: lo fija el **controlador de vuelo de la
-app**, y de ahí sale un solo flujo que se reparte a dos destinos con reglas
-distintas.
+- Al **Comando Central** le llegan **todos** los cuadros del flujo de la
+  consola: **640 px de ancho** (la altura sale de conservar la relación de
+  aspecto del stream del dron, que llega en 1920x1080 o 1280x720), calidad 60,
+  **5 por segundo** (`CuadroDeVideo.INTERVALO_CUADRO_MS`). Es el video que mira
+  el operador y con el que decide, y de ahí sale la captura de cada alerta.
+- Al **software de detección** le llega el flujo de la detección: **1280 px de
+  ancho** (`CuadroDeVideo.ANCHO_DETECCION`), calidad 75, **uno cada 500 ms como
+  mucho** (`CuadroDeVideo.INTERVALO_DETECCION_MS`), o sea **dos por segundo
+  como techo**. Va más grande porque el modelo está entrenado con VisDrone a
+  1280 px y desde 50 m una persona a 640 px son diez pixeles: a esa escala no
+  hay detector que la vea. Y va más espaciado porque detectar no necesita más
+  y el enlace con la notebook es el más flojo de los tres.
 
-- Al **Comando Central** le llegan **todos** los cuadros que el controlador
-  emite: es el video que mira el operador y con el que decide.
-- Al **software de detección** se le deja pasar uno cada
-  `PatrolManager.INTERVALO_DETECCION_MS` (500 ms), o sea **dos por segundo como
-  techo**: detectar no necesita más y el enlace con la laptop es el más flojo de
-  los tres.
-
-El techo de la detección se mide con **reloj y no contando cuadros**
-(`LimitadorDeRitmo`), y esa diferencia importa: contando, el ritmo de la
-detección quedaría atado al del controlador —sobre los cinco por segundo de hoy
-daría 2,5, un 25 % por encima de lo pactado y encima del enlace más flojo—, y si
-mañana el controlador emitiera diez, la detección se iría a cinco sin que nada la
-frene. Con reloj el techo vale sea cual sea el ritmo de entrada.
-
-Lo que se paga por medir con reloj: el flujo que llega al reparto ya viene
-raleado al intervalo del controlador, así que el limitador solo puede aceptar en
-múltiplos de ese intervalo. Con el dron real, que emite cada 200 ms
-(`CuadroDeVideo.INTERVALO_CUADRO_MS`), el primer cuadro que pasa los 500 ms es el
-de los 600, y la detección recibe uno cada 600 ms: **1,67 por segundo efectivos**
-contra un techo de 2. Queda por debajo del techo y no por encima, que es del lado
-que hay que errar. El dron **simulado** usa hoy el mismo intervalo
-(`SimulatedDroneController.FRAME_MS = CuadroDeVideo.INTERVALO_CUADRO_MS`), así
-que da los mismos números.
+El techo de la detección lo vuelve a medir `PatrolManager` con **reloj y no
+contando cuadros** (`LimitadorDeRitmo`), aunque el controlador ya emita
+raleado: es la garantía del contrato y no puede depender de que cada
+controlador la cumpla. Si mañana uno emitiera el doble, la detección NO recibe
+el doble. El dron **simulado** emite los dos flujos al mismo ritmo que el real,
+así que el banco de pruebas mide lo mismo que el campo.
 
 O sea: a la consola le llegan **cinco cuadros por segundo** y a la detección
-**1,67**, con un techo garantizado de 2. Quien dimensione el enlace de la
-detección tiene que hacerlo para ese techo. Antes de citar un número, mirá las
-**dos** constantes —el intervalo del controlador y el del reparto—, no este
-documento.
+**dos**, más grandes. Quien dimensione el enlace de la detección tiene que
+hacerlo para 2 cuadros de ~150 KB por segundo. Antes de citar un número, mirá
+las constantes de `CuadroDeVideo`, no este documento.
 
 El sistema soporta **varios drones simultáneos**. Un dron **no es una cuenta de
 usuario**: es un activo del inventario, identificado por un `hash` opaco de 32
@@ -202,8 +192,13 @@ Reemplaza al viejo inicio de sesión del dron con usuario y contraseña.
    eliminado y esté activo, y devuelve un **token de rol `drone`** con el que la
    app se conecta al WebSocket.
 5. El emparejamiento queda registrado (`DRONE_PAIRED`) con quién lo hizo, desde
-   dónde y con qué dispositivo. La sesión del operador de campo **se cierra ahí
-   mismo** (`FIELD_SESSION_CLOSED`).
+   dónde y con qué dispositivo. La sesión del operador de campo **sigue viva**
+   durante la operación (así el operador vuelve al menú de campo al terminar,
+   sin reingresar); se cierra cuando el operador la cierra (`FIELD_SESSION_CLOSED`
+   con su motivo) o vence sola a los 20 minutos del login.
+6. Antes de operar, la app muestra la pantalla de **conexión con el dron
+   físico**: verifica el SDK, el control por USB, la aeronave enlazada (modelo y
+   número de serie) y el GPS, y no deja desplegar hasta que el enlace esté.
 
 Por qué el hash suelto no alcanza para hacerse pasar por un dron: el
 emparejamiento **exige un JWT válido de operador de campo**. El sticker es un
@@ -219,14 +214,14 @@ Conexión: `ws://<backend>:4000/ws?token=<JWT>` (el rol `drone` sale del token).
 | `status` | ver tabla de abajo | Se guarda como último estado del dron y se reenvía a los operadores |
 | `event` | `eventType, message` | Se persiste en `events` y se reenvía a los operadores |
 | `video_frame` | `jpegBase64, ts` | Se reenvía a los operadores etiquetado con `droneId`. JPEG de 640 px de ancho, calidad 60; el ritmo es el del controlador (**5 por segundo con el dron real**; el simulado emite al suyo) |
-| `alert_request` | `alertType (PERSON\|VEHICLE), lat, lon, snapshotBase64` | Crea fila en `alerts` (PENDING) + evento `ALERT_CREATED`, y notifica a los operadores |
+| `alert_request` | `alertType (PERSON\|VEHICLE), lat, lon, snapshotBase64, confidence, classes` | Crea fila en `alerts` (PENDING) + evento `ALERT_CREATED`, y notifica a los operadores. `lat`/`lon` son la **posición estimada del objetivo** (no la del dron) y `snapshotBase64` el cuadro **anotado** que disparó la detección; `confidence` y `classes` son informativos y el hub hoy no los persiste |
 | `set_name` | `displayName` | Renombra el dron y avisa a los operadores con `drone_renamed` |
 
 ### Campos de `status`
 
 | Campo | Tipo | Notas |
 |---|---|---|
-| `state` | string | `IDLE`, `PATROLLING`, `ORBITING`, `RETURNING_HOME_SIGNAL`, `RETURNING_HOME_BATTERY`, `LANDED`, `PAUSED` (patrulla interrumpida), `MANUAL` (control manual), `FORCED` (desvío forzado a un nodo) |
+| `state` | string | `IDLE`, `PATROLLING`, `ORBITING`, `RETURNING_HOME_SIGNAL`, `RETURNING_HOME_BATTERY`, `RETURNING_HOME` (regreso ordenado por el operador de campo desde la app), `LANDED`, `PAUSED` (patrulla interrumpida), `MANUAL` (control manual), `FORCED` (desvío forzado a un nodo) |
 | `battery` | number | Porcentaje 0..100 |
 | `lat`, `lon` | number | Posición actual |
 | `routeId` | number \| null | Ruta que está patrullando |
@@ -236,10 +231,20 @@ Conexión: `ws://<backend>:4000/ws?token=<JWT>` (el rol `drone` sale del token).
 | `heading` | number | Rumbo 0..360° hacia donde mira la cámara (el mapa dibuja el cono) |
 | `signalPct` | number | Intensidad de señal 0..100 (0 cuando `signal` es `LOST`) |
 | `mode` | `TEST` \| `DEPLOY` | Modo elegido en la app tras iniciar sesión |
+| `alt` | number | Altura sobre el punto de despegue, en metros (barómetro del dron; 0 en el suelo) |
+| `satellites` | number | Satélites GPS en uso (el dron real; el simulado informa 14) |
+| `flying` | boolean | `true` con el dron en el aire. En el suelo la app rechaza toda orden de vuelo salvo comenzar un patrullaje, que despega solo |
 
-`eventType` usados por la app: `PATROL_STARTED`, `PATROL_RESUMED`, `SIGNAL_LOST`,
-`SIGNAL_RECOVERED`, `RTH_SIGNAL_LOSS`, `RTH_LOW_BATTERY`, `ORBIT_STARTED`,
-`LANDED`, `BATTERY_RECHARGED`.
+Los tres últimos son nuevos y el hub los reenvía tal cual: una consola que no
+los conozca los ignora.
+
+`eventType` usados por la app: `PATROL_STARTED`, `PATROL_RESUMED`,
+`PATROL_STOPPED`, `SIGNAL_LOST`, `SIGNAL_RECOVERED`, `RTH_SIGNAL_LOSS`,
+`RTH_LOW_BATTERY`, `RTH_MANUAL` (regreso ordenado desde la app), `TAKEOFF`
+(despegue automático en curso), `LANDING` (aterrizaje ordenado desde la app),
+`ORBIT_STARTED`, `GOTO_ARRIVED`, `FORCED_GOTO`, `CONTROL_RESUMED`, `LANDED`,
+`BATTERY_RECHARGED`, `DRONE_PROBLEM` (el dron o su SDK rechazó una orden: el
+motivo va en `message`, con un techo de repetición para no inundar el registro).
 
 ## 2. Comando Central → App de control
 
@@ -424,60 +429,86 @@ y taparía todo lo demás. Lo que queda registrado es tomar y soltar el control
 (`CONTROL_TAKEN` / `CONTROL_RELEASED`), que es lo que la auditoría necesita:
 quién tuvo el mando de qué dron y desde cuándo.
 
-## 4. App de control (celular) ↔ Software de detección (laptop)
+## 4. App de control (celular) ↔ Software de detección (notebook)
 
-El control con el celular montado se comunica con la laptop que corre la
-detección **por cable USB**. Hay dos modos, elegibles desde la app:
+El celular va enganchado al control RC-N2/RC-N3 por su **único puerto USB**,
+así que el enlace con la notebook que corre la detección es **por Wi-Fi, sí o
+sí** (el USB-C de abajo del control es solo carga y DJI Assistant). Celular y
+notebook tienen que estar en la misma red: el hotspot del celular o la Wi-Fi
+del lugar. Hay tres modos, elegibles desde la app:
 
-### Modo `CABLE` (por defecto)
+### Modo `AUTO` (por defecto): la notebook se anuncia
 
-Túnel de ADB sobre el propio cable USB. En la laptop se corre **una sola vez**:
+El servidor de detección (`detection/servidor.py`) manda **cada segundo**, por
+UDP a toda la red (broadcast, puerto **8766**), un anuncio:
 
-```bash
-adb reverse tcp:8765 tcp:8765
+```json
+{ "service": "dronepatrol-detection", "port": 8765, "name": "notebook-campo" }
 ```
 
-Con eso, el puerto 8765 del celular queda redirigido al 8765 de la laptop, y la
-app se conecta a `ws://127.0.0.1:8765/phone`. Requiere depuración USB activada
-en el teléfono. Es el modo recomendado porque **no depende de la red**: no hay
-que averiguar IPs, no importa si el predio no tiene wifi y no hay tráfico de
-video saliendo al aire.
+La app escucha ese puerto (`DescubridorDeDeteccion`), toma la dirección de la
+que vino el datagrama y se conecta a `ws://<esa-ip>:<port>/phone`. Cualquier
+otro datagrama se ignora: solo cuenta un JSON con ese `service` y un puerto
+válido. Si llega un anuncio de otra dirección (la notebook cambió de IP), la
+app cierra el socket y se va a la nueva. Mientras no llegó ninguno, la pantalla
+dice que está buscando; no es un fallo.
 
-Si el enlace no levanta, la app no muestra un error mudo: dice que revise el
-cable, la depuración USB y el `adb reverse`.
+El servidor manda el anuncio a `255.255.255.255` y al broadcast dirigido de
+cada red local (`x.y.z.255`), porque Windows no siempre rutea el limitado por
+todas las interfaces. La app toma un `MulticastLock` de Wi-Fi para que el
+teléfono no filtre los broadcast en el chip.
+
+### Modo `CABLE` (banco de pruebas)
+
+Túnel de ADB sobre el cable USB, **solo sin el control enchufado** (emulador o
+pruebas de escritorio). En la laptop, una vez: `adb reverse tcp:8765 tcp:8765`,
+y la app se conecta a `ws://127.0.0.1:8765/phone`.
 
 ### Modo `RED` (respaldo)
 
-URL manual contra la IP de la laptop (`ws://<ip-de-la-laptop>:8765`). Sirve
-cuando no hay depuración USB disponible, y también cubre el caso del **anclaje
-USB**, donde la laptop suele quedar en `192.168.42.x`.
+URL manual (`ws://<ip-de-la-notebook>:8765`), para cuando los anuncios no
+llegan (una red que filtra broadcast). Desde el emulador de Android Studio la
+PC es `ws://10.0.2.2:8765`.
 
 ### Contrato de mensajes
 
-Este es el contrato que debe implementar el software real de detección;
-`detection-mock/` es un placeholder que lo respeta.
+Este es el contrato que implementa `detection/servidor.py` (el software real,
+con YOLO11) y que `detection-mock/` respeta como placeholder sin GPU.
 
 | Dirección | Mensaje | Campos |
 |---|---|---|
-| celular → laptop | `video_frame` | `jpegBase64, ts` (JPEG de 640 px de ancho, **1,67 por segundo** con el dron real, con un techo de 2) |
-| laptop → celular | `detection` | `detected (bool), classes (["PERSON"\|"VEHICLE"]), confidence, ts` |
+| celular → notebook | `video_frame` | `jpegBase64, ts` (JPEG de **1280 px de ancho**, calidad 75, **hasta 2 por segundo**) |
+| notebook → celular | `detection` | `detected (bool), classes (["PERSON"\|"VEHICLE"]), confidence, boxes[], snapshotBase64?, ts` |
 
-Son los **mismos cuadros** que van al Comando Central, filtrados a menos ritmo:
-hacia la consola va todo lo que emite el controlador (donde hay una persona
-mirando y el salto se nota) y hacia la detección se deja pasar uno cada
-`PatrolManager.INTERVALO_DETECCION_MS` (500 ms). El algoritmo no necesita más, y
-este es el enlace más flojo de los tres.
+Cada elemento de `boxes` es `{cls, conf, x, y, w, h}` con **`x`, `y` el centro
+y `w`, `h` el tamaño, normalizados 0..1** sobre el cuadro (origen arriba a la
+izquierda): así valen igual sobre el cuadro de 1280 px que analizó el detector
+y sobre el de 640 px que mira la consola. `snapshotBase64` es el **cuadro
+anotado con las cajas**, reducido a 640 px, y viene solo con `detected: true`:
+es la captura que la app adjunta a la alerta. `boxes` y `snapshotBase64` son
+opcionales (el mock no los manda): sin ellos la app orbita su propia posición y
+adjunta el último cuadro de la consola.
 
-Ese techo de **dos por segundo** se mide con reloj, así que vale sea cual sea el
-ritmo del controlador: si mañana emitiera diez cuadros por segundo, acá seguirían
-llegando dos. Lo que llega hoy con el dron real es **1,67 por segundo**, porque
-el flujo ya viene raleado a 200 ms y el limitador solo puede aceptar en múltiplos
-de ese intervalo (ver §1).
+Es un flujo **aparte** del que va al Comando Central (ver el principio de este
+documento): más grande y más espaciado. El servidor contesta **un `detection`
+por cada cuadro procesado**, detecte o no; si la GPU no da abasto descarta el
+cuadro viejo y nunca acumula retraso.
 
-La app solo actúa ante `detected: true` y solo mientras está en estado
-`PATROLLING` (evita re-alertar mientras orbita o vuelve a base). Cuando actúa,
-manda `alert_request` al Comando Central con la captura y las coordenadas, y eso
-queda en el registro (ver "Trazabilidad de las detecciones").
+### Qué hace la app con una detección
+
+1. **Guarda las cajas** y las dibuja sobre el video que sube al Comando Central
+   durante 1,5 s (`PatrolManager.VIGENCIA_CAJAS_MS`), en cualquier estado: el
+   operador ve marcado lo que el detector ve, también mientras orbita.
+2. Solo en estado **`PATROLLING`** (evita re-alertar mientras orbita o vuelve a
+   base) **ubica al objetivo en el terreno**: proyecta el centro de la caja más
+   segura con la altura, el rumbo y la inclinación del gimbal
+   (`Georreferencia`), y **orbita alrededor de ese punto** a 30 m con la cámara
+   apuntada al centro, para no perderlo de vista.
+3. Manda `alert_request` al Comando Central con el tipo, la **captura anotada**
+   que disparó la detección, la posición del objetivo y la confianza; eso queda
+   en el registro (ver "Trazabilidad de las detecciones").
+4. Espera la decisión del operador: `alert_decision` con `DISMISSED` retoma la
+   ruta donde la dejó; `VALIDATED` mantiene la órbita hasta un `resume_patrol`.
 
 ## 5. REST del Comando Central
 

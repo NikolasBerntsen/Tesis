@@ -6,6 +6,7 @@ export const STATE_LABELS: Record<string, string> = {
   ORBITING: 'Orbitando objetivo',
   RETURNING_HOME_SIGNAL: 'Volviendo a base (pérdida de señal)',
   RETURNING_HOME_BATTERY: 'Volviendo a base (batería baja)',
+  RETURNING_HOME: 'Volviendo a base (orden del operador de campo)',
   LANDED: 'Aterrizado',
   PAUSED: 'Patrulla interrumpida',
   MANUAL: 'Control manual',

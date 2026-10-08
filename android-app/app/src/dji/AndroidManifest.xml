@@ -1,15 +1,48 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- El RC-N2 se conecta al celular como accesorio USB. required="false" para que
-         la app siga siendo instalable en dispositivos sin soporte de accesorios USB. -->
+    <!-- El RC-N2/RC-N3 se conecta al celular como accesorio USB. required="false"
+         para que la app siga siendo instalable en dispositivos sin soporte de
+         accesorios USB (en ellos simplemente no va a haber dron). -->
     <uses-feature android:name="android.hardware.usb.accessory" android:required="false" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
 
-    <application android:name="com.tesis.dronepatrol.dji.DjiApplication">
+    <!-- Permisos que pide el MSDK v5 (lista de "Run Sample Code" de la doc
+         oficial). Los de ubicación ya están en el manifest principal. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+
+    <!-- extractNativeLibs="true": lo exige el MSDK desde 5.17 (sus librerías
+         nativas tienen que estar extraídas en disco, no mapeadas desde el APK). -->
+    <application
+        android:name="com.tesis.dronepatrol.dji.DjiApplication"
+        android:extractNativeLibs="true"
+        tools:replace="android:extractNativeLibs">
+
         <meta-data
             android:name="com.dji.sdk.API_KEY"
             android:value="${DJI_API_KEY}" />
+
+        <!-- Al enchufar el control, Android ofrece abrir la app (y le da el
+             permiso del accesorio sin preguntar cada vez). La actividad no tiene
+             pantalla: trae la app al frente y se cierra. -->
+        <activity
+            android:name="com.tesis.dronepatrol.dji.UsbAttachActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED"
+                android:resource="@xml/accessory_filter" />
+        </activity>
     </application>
 </manifest>

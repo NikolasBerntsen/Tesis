@@ -2,6 +2,7 @@ package com.tesis.dronepatrol.patrol
 
 import com.tesis.dronepatrol.comms.CommandCenterClient
 import com.tesis.dronepatrol.comms.DetectionClient
+import com.tesis.dronepatrol.model.Deteccion
 import com.tesis.dronepatrol.model.PatrolRoute
 import com.tesis.dronepatrol.model.PatrolState
 import com.tesis.dronepatrol.model.Waypoint
@@ -90,7 +91,7 @@ class PatrolManagerPerdidaDeSenialTest {
         arrancarConTelemetria()
         patrulla.startPatrol(ruta)
         withTimeout(5_000) { patrulla.state.first { it == PatrolState.PATROLLING } }
-        deteccion.onDetection?.invoke(listOf("PERSON"))
+        deteccion.onDetection?.invoke(Deteccion(listOf("PERSON"), 0.9, emptyList(), null, 0L))
         withTimeout(5_000) { patrulla.state.first { it == PatrolState.ORBITING } }
 
         esperarElCorteDeSenial()

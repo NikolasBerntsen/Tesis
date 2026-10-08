@@ -9,6 +9,10 @@
          el diálogo de ubicación precisa se pide con las dos -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- Para recibir los anuncios UDP de la laptop de detección por Wi-Fi: sin
+         el MulticastLock algunos teléfonos filtran los broadcast en el chip -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
     <!-- required="false": el celular de vuelo siempre tiene cámara y GPS, pero así
          la app sigue siendo instalable en un emulador sin ellos -->
@@ -35,6 +39,11 @@
 
         <activity
             android:name=".FieldMenuActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:exported="false" />
+
+        <activity
+            android:name=".ConexionDronActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:exported="false" />
 
