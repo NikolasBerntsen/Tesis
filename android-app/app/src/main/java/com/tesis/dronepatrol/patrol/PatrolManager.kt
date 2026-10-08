@@ -3,9 +3,13 @@ package com.tesis.dronepatrol.patrol
 import android.util.Base64
 import com.tesis.dronepatrol.comms.CommandCenterClient
 import com.tesis.dronepatrol.comms.DetectionClient
+import com.tesis.dronepatrol.drone.AnotadorDeCuadros
 import com.tesis.dronepatrol.drone.DroneController
+import com.tesis.dronepatrol.drone.Georreferencia
 import com.tesis.dronepatrol.drone.LimitadorDeRitmo
 import com.tesis.dronepatrol.drone.MandoVirtual
+import com.tesis.dronepatrol.model.Caja
+import com.tesis.dronepatrol.model.Deteccion
 import com.tesis.dronepatrol.model.FlightEvent
 import com.tesis.dronepatrol.model.PatrolRoute
 import com.tesis.dronepatrol.model.PatrolState
@@ -47,6 +51,14 @@ class PatrolManager(
         const val LOW_BATTERY_PCT = 25.0
         const val ORBIT_RADIUS_M = 30.0
         const val METERS_PER_DEG_LAT = 111_320.0
+
+        /**
+         * Cuánto siguen dibujándose las cajas de la última detección sobre el
+         * video de la consola. El detector contesta cada 500 ms como mucho; con
+         * esto las cajas no parpadean entre una respuesta y la siguiente, y
+         * desaparecen solas cuando el detector deja de ver algo.
+         */
+        const val VIGENCIA_CAJAS_MS = 1_500L
         // Techo del flujo hacia el software de detección: uno cada tanto, o sea
         // dos por segundo como máximo (contrato §1). Al Comando Central le va
         // todo lo que emite el controlador (ver repartirVideo(), que explica por
@@ -164,6 +176,17 @@ class PatrolManager(
     private val _localLog = MutableSharedFlow<String>(replay = 20, extraBufferCapacity = 16)
     val localLog: SharedFlow<String> = _localLog
 
+    /**
+     * Las cajas de la última detección, para dibujarlas sobre el video: en la
+     * consola (ver [repartirVideo]) y en la pantalla de la app. Vacías cuando
+     * pasó su vigencia.
+     */
+    private val _cajasRecientes = MutableStateFlow<List<Caja>>(emptyList())
+    val cajasRecientes: StateFlow<List<Caja>> = _cajasRecientes
+
+    @Volatile
+    private var cajasHastaMs = 0L
+
     /** Rutas descargadas del Comando Central (para resolver start_route/force_goto por id). */
     var availableRoutes: List<PatrolRoute> = emptyList()
 
@@ -268,7 +291,7 @@ class PatrolManager(
                 aLaDeteccion = { cuadro -> detection.sendFrame(cuadro) },
             )
         }
-        detection.onDetection = { classes -> scope.launch { onDetection(classes) } }
+        detection.onDetection = { deteccion -> scope.launch { onDetection(deteccion) } }
         commandCenter.onAlertDecision = { decision, decidedBy ->
             scope.launch { onAlertDecision(decision, decidedBy) }
         }
@@ -330,7 +353,11 @@ class PatrolManager(
         launch {
             controller.videoFrames.collect { frame ->
                 lastFrame = frame
-                alComandoCentral(Base64.encodeToString(frame, Base64.NO_WRAP))
+                // Mientras el detector ve algo, la consola lo ve marcado: es la
+                // anotación en vivo de lo que disparó (o va a disparar) la alerta.
+                val cajas = cajasVigentes(ahoraMs())
+                val cuadro = if (cajas.isEmpty()) frame else AnotadorDeCuadros.anotar(frame, cajas)
+                alComandoCentral(Base64.encodeToString(cuadro, Base64.NO_WRAP))
             }
         }
         launch {
@@ -795,26 +822,54 @@ class PatrolManager(
         }
     }
 
-    /** Solo reacciona a detecciones mientras patrulla (evita re-alertar en órbita o RTH). */
-    private suspend fun onDetection(classes: List<String>) {
+    /** Las cajas de la última detección si todavía están vigentes; si no, ninguna. */
+    internal fun cajasVigentes(ahoraMs: Long): List<Caja> {
+        if (ahoraMs > cajasHastaMs) {
+            if (_cajasRecientes.value.isNotEmpty()) _cajasRecientes.value = emptyList()
+            return emptyList()
+        }
+        return _cajasRecientes.value
+    }
+
+    /**
+     * Una detección. Las cajas se guardan para dibujarlas sobre el video venga
+     * en el estado que venga —el operador quiere ver marcado lo que el detector
+     * ve también mientras orbita—, pero solo se ALERTA y se orbita patrullando:
+     * en órbita, volviendo a base o en manual re-alertar sería ruido.
+     */
+    private suspend fun onDetection(d: Deteccion) {
+        _cajasRecientes.value = d.cajas
+        cajasHastaMs = System.currentTimeMillis() + VIGENCIA_CAJAS_MS
         if (_state.value != PatrolState.PATROLLING) return
         val t = lastTelemetry ?: return
-        val alertType = if (classes.contains("VEHICLE")) "VEHICLE" else "PERSON"
+        val alertType = d.tipoDeAlerta
 
         resumeWaypoint = lastReachedWaypoint
-        // Simplificación del MVP: se orbita la posición actual del dron (el
-        // objetivo está dentro del campo visual). Georreferenciar la detección
-        // queda para la etapa del software de visión.
+        // El objetivo en el terreno: el centro de la caja más segura, proyectado
+        // con la altura, el rumbo y la inclinación del gimbal. Si no se puede
+        // (sin cajas, rayo al horizonte), se orbita la posición del dron, que es
+        // lo que había: el objetivo está dentro del campo visual.
+        val objetivo = d.principal?.let {
+            Georreferencia.proyectar(t.lat, t.lon, t.altM, t.heading, t.gimbalPitch, it.x, it.y)
+        }
+        val centroLat = objetivo?.lat ?: t.lat
+        val centroLon = objetivo?.lon ?: t.lon
         // El estado antes que la orden, como en el resto de las transiciones (ver
         // pasarA()). Acá no hay carrera —solo se orbita viniendo de PATROLLING, y
         // en PATROLLING el mando ya está descartado—, pero la disciplina es una y
         // la próxima transición que se agregue se copia de las que hay.
         pasarA(PatrolState.ORBITING)
-        controller.startOrbit(t.lat, t.lon, ORBIT_RADIUS_M)
-        report("ORBIT_STARTED", "Detección de $alertType: el dron pasa a modo órbita")
+        controller.startOrbit(centroLat, centroLon, ORBIT_RADIUS_M)
+        val donde = objetivo?.let { " a ${it.distanciaM.toInt()} m con rumbo ${it.rumboGrados.toInt()}°" } ?: " (sin posición del objetivo: se orbita la del dron)"
+        report(
+            "ORBIT_STARTED",
+            "Detección de $alertType (confianza ${"%.2f".format(d.confianza)})$donde: el dron pasa a modo órbita",
+        )
 
-        val snapshot = lastFrame?.let { Base64.encodeToString(it, Base64.NO_WRAP) }
-        commandCenter.sendAlertRequest(alertType, t.lat, t.lon, snapshot)
+        // La captura es el cuadro anotado que disparó la detección; si el
+        // detector no lo manda (el mock), el último cuadro que vio la consola.
+        val snapshot = d.snapshotBase64 ?: lastFrame?.let { Base64.encodeToString(it, Base64.NO_WRAP) }
+        commandCenter.sendAlertRequest(alertType, centroLat, centroLon, snapshot, d.confianza, d.clases)
     }
 
     private suspend fun onAlertDecision(decision: String, decidedBy: String) {

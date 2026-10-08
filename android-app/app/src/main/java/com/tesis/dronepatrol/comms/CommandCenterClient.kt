@@ -390,13 +390,26 @@ open class CommandCenterClient(private val scope: CoroutineScope) {
     open fun sendVideoFrame(jpegBase64: String) =
         send(JSONObject().put("type", "video_frame").put("jpegBase64", jpegBase64).put("ts", System.currentTimeMillis()))
 
-    fun sendAlertRequest(alertType: String, lat: Double, lon: Double, snapshotBase64: String?) =
-        send(
-            JSONObject()
-                .put("type", "alert_request")
-                .put("alertType", alertType)
-                .put("lat", lat)
-                .put("lon", lon)
-                .put("snapshotBase64", snapshotBase64 ?: JSONObject.NULL),
-        )
+    /**
+     * `open` para que el banco de pruebas vea qué captura y qué posición se
+     * mandan: la alerta tiene que llevar el cuadro anotado que disparó la
+     * detección y el lugar del objetivo, no el último cuadro y el dron.
+     */
+    open fun sendAlertRequest(
+        alertType: String,
+        lat: Double,
+        lon: Double,
+        snapshotBase64: String?,
+        confidence: Double = 0.0,
+        classes: List<String> = listOf(alertType),
+    ) = send(
+        JSONObject()
+            .put("type", "alert_request")
+            .put("alertType", alertType)
+            .put("lat", lat)
+            .put("lon", lon)
+            .put("snapshotBase64", snapshotBase64 ?: JSONObject.NULL)
+            .put("confidence", confidence)
+            .put("classes", JSONArray(classes)),
+    )
 }

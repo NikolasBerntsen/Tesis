@@ -5,6 +5,7 @@ import com.tesis.dronepatrol.drone.CuadroDeVideo
 import com.tesis.dronepatrol.drone.DroneController
 import com.tesis.dronepatrol.drone.EsperaCreciente
 import com.tesis.dronepatrol.drone.Geo
+import com.tesis.dronepatrol.drone.Georreferencia
 import com.tesis.dronepatrol.drone.LimitadorDeRitmo
 import com.tesis.dronepatrol.drone.MandoVirtual
 import com.tesis.dronepatrol.drone.Navegacion
@@ -18,10 +19,13 @@ import dji.sdk.keyvalue.key.BatteryKey
 import dji.sdk.keyvalue.key.DJIActionKeyInfo
 import dji.sdk.keyvalue.key.DJIKeyInfo
 import dji.sdk.keyvalue.key.FlightControllerKey
+import dji.sdk.keyvalue.key.GimbalKey
 import dji.sdk.keyvalue.key.KeyTools
 import dji.sdk.keyvalue.key.ProductKey
 import dji.sdk.keyvalue.value.common.ComponentIndexType
 import dji.sdk.keyvalue.value.common.EmptyMsg
+import dji.sdk.keyvalue.value.gimbal.GimbalAngleRotation
+import dji.sdk.keyvalue.value.gimbal.GimbalAngleRotationMode
 import dji.sdk.keyvalue.value.flightcontroller.FlightControlAuthorityChangeReason
 import dji.sdk.keyvalue.value.flightcontroller.FlightCoordinateSystem
 import dji.sdk.keyvalue.value.flightcontroller.RollPitchControlMode
@@ -135,6 +139,10 @@ class DjiDroneController : DroneController {
 
     @Volatile
     private var lastSignal = 100
+
+    /** Inclinación real del gimbal (0 horizonte, −90 nadir): con ella se ubica en el terreno lo que ve la cámara. */
+    @Volatile
+    private var lastGimbalPitch = Telemetry.GIMBAL_PATRULLA
 
     /** Enlace con la aeronave según el controlador de vuelo (KeyConnection). */
     @Volatile
@@ -358,6 +366,9 @@ class DjiDroneController : DroneController {
             modelo = tipo.name.replace('_', ' ').replace("DJI ", "")
             publicarEstado()
         }
+        // Inclinación del gimbal: va en la telemetría porque PatrolManager la
+        // necesita para proyectar al terreno la caja de una detección.
+        escuchar(GimbalKey.KeyGimbalAttitude) { actitud -> lastGimbalPitch = actitud.pitch }
         // El Mini pide confirmar el aterrizaje cerca del suelo (por si abajo hay
         // agua o algo que no es suelo). Si la app lo ordenó, la app lo confirma.
         escuchar(FlightControllerKey.KeyIsLandingConfirmationNeeded) { hace ->
@@ -427,6 +438,9 @@ class DjiDroneController : DroneController {
             // sale a 8 m/s hacia ningún lado.
             if (!subirA(alturaDeTrabajo)) return@relevarLazo
             flightEvents.tryEmit(FlightEvent.EnElAire)
+            // La cámara oblicua hacia abajo: la vista con la que se entrenó el
+            // detector, y la que deja ver adelante sin perder lo que hay debajo.
+            apuntarCamara(Telemetry.GIMBAL_PATRULLA)
             while (true) {
                 delay(INTERVALO_MANDO_MS) // Virtual Stick requiere comandos a ~10 Hz
                 if (lastLat.isNaN()) continue
@@ -490,6 +504,10 @@ class DjiDroneController : DroneController {
         relevarLazo(esMando = false) {
             asegurarVirtualStick()
             val altura = lastAlt
+            // La cámara apunta al centro del círculo: con la nariz hacia el
+            // centro (abajo) y el gimbal a esta inclinación, el objetivo queda
+            // en el medio del cuadro durante toda la órbita.
+            apuntarCamara(Georreferencia.inclinacionParaOrbitar(altura, radiusM))
             var angle = 0.0
             while (true) {
                 delay(INTERVALO_MANDO_MS)
@@ -607,7 +625,41 @@ class DjiDroneController : DroneController {
         // watchdog de PatrolManager que se perdió el dron.
         if (!enlaceVivo || lastLat.isNaN()) return
         telemetry.tryEmit(
-            Telemetry(lastLat, lastLon, lastAlt, lastBattery, lastSignal, lastHeading, System.currentTimeMillis()),
+            Telemetry(
+                lastLat, lastLon, lastAlt, lastBattery, lastSignal, lastHeading,
+                System.currentTimeMillis(), lastGimbalPitch,
+            ),
+        )
+    }
+
+    /**
+     * Inclina el gimbal a [pitchGrados] (0 horizonte, −90 nadir) en ángulo
+     * absoluto. Un rechazo se avisa, pero no frena nada: volar sin la cámara
+     * donde se quiere es peor que no volar solo si el operador no se entera.
+     */
+    private fun apuntarCamara(pitchGrados: Double) {
+        val giro = GimbalAngleRotation().apply {
+            mode = GimbalAngleRotationMode.ABSOLUTE_ANGLE
+            pitch = pitchGrados.coerceIn(-90.0, 0.0)
+            roll = 0.0
+            yaw = 0.0
+            pitchIgnored = false
+            rollIgnored = true
+            yawIgnored = true
+            duration = 1.0
+            jointReferenceUsed = false
+            timeout = 10
+        }
+        KeyManager.getInstance().performAction(
+            KeyTools.createKey(GimbalKey.KeyRotateByAngle),
+            giro,
+            object : CommonCallbacks.CompletionCallbackWithParam<EmptyMsg> {
+                override fun onSuccess(resultado: EmptyMsg?) = Unit
+
+                override fun onFailure(error: IDJIError) {
+                    avisar("el gimbal no aceptó apuntar la cámara a ${pitchGrados.toInt()}° (${error.description()})")
+                }
+            },
         )
     }
 

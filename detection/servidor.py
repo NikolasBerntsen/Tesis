@@ -8,9 +8,13 @@ Implementa el contrato de docs/PROTOCOLS.md §4 con la app de control:
 
   - La app se conecta por WebSocket a ws://<esta-pc>:8765/phone y manda
     `video_frame` (JPEG en base64, 1280 px de ancho, hasta 2 por segundo).
-  - Por cada cuadro procesado se le contesta un `detection`:
+  - Por cada cuadro procesado se le contesta un `detection`, con las cajas en
+    coordenadas normalizadas (centro y tamaño, 0..1) y, si detectó algo, la
+    captura anotada del cuadro (640 px, JPEG base64) para la alerta:
         {"type": "detection", "detected": true, "classes": ["PERSON"],
-         "confidence": 0.81, "ts": 1700000000000}
+         "confidence": 0.81, "boxes": [{"cls": "PERSON", "conf": 0.81,
+         "x": 0.52, "y": 0.41, "w": 0.02, "h": 0.05}],
+         "snapshotBase64": "...", "ts": 1700000000000}
   - Y para que la app encuentre esta notebook sin tipear IPs, cada segundo se
     anuncia por UDP a toda la red (puerto 8766):
         {"service": "dronepatrol-detection", "port": 8765, "name": "<hostname>"}
@@ -55,6 +59,9 @@ except ModuleNotFoundError as falta:  # pragma: no cover - mensaje para el opera
     )
 
 AQUI = Path(__file__).parent
+# El modelo de campo: YOLO11m entrenado directamente en PERSON / VEHICLE (ver
+# ml/ y detection/README.md). Si está en modelos/, arranca con él sin preguntar.
+MODELO_POR_DEFECTO = "yolo11m-2clases"
 PUERTO = 8765
 PUERTO_ANUNCIO = 8766
 SERVICIO = "dronepatrol-detection"
@@ -96,7 +103,7 @@ class Detector:
             self.yolo.predict(vacio, imgsz=self.imgsz, conf=self.conf, device=self.device, verbose=False)
 
     def detectar(self, cuadro: np.ndarray) -> tuple[dict[str, float], list[tuple[int, int, int, int, str, float]]]:
-        """(mejor confianza por clase, cajas) de un cuadro BGR."""
+        """(mejor confianza por clase, cajas en pixeles) de un cuadro BGR."""
         inicio = time.perf_counter()
         resultado = self.yolo.predict(cuadro, imgsz=self.imgsz, conf=self.conf, device=self.device, verbose=False)[0]
         self.tiempos.append(time.perf_counter() - inicio)
@@ -115,15 +122,49 @@ class Detector:
         return sum(self.tiempos) / len(self.tiempos) * 1000 if self.tiempos else 0.0
 
 
-def mensaje_detection(mejor: dict[str, float]) -> dict:
-    """La forma exacta del mensaje `detection` del contrato."""
-    return {
+def cajas_normalizadas(cajas, ancho: int, alto: int) -> list[dict]:
+    """Las cajas en coordenadas 0..1 (centro y tamaño): valen sobre cualquier
+    tamaño del mismo cuadro, que es lo que la app necesita para dibujarlas
+    sobre el video de 640 px de la consola y para ubicar el objetivo."""
+    return [
+        {
+            "cls": grupo,
+            "conf": round(confianza, 3),
+            "x": round((x1 + x2) / 2 / ancho, 4),
+            "y": round((y1 + y2) / 2 / alto, 4),
+            "w": round((x2 - x1) / ancho, 4),
+            "h": round((y2 - y1) / alto, 4),
+        }
+        for x1, y1, x2, y2, grupo, confianza in cajas
+    ]
+
+
+def mensaje_detection(mejor: dict[str, float], cajas: list[dict] | None = None, snapshot_b64: str | None = None) -> dict:
+    """La forma exacta del mensaje `detection` del contrato (PROTOCOLS §4)."""
+    mensaje = {
         "type": "detection",
         "detected": bool(mejor),
         "classes": sorted(mejor),
         "confidence": round(max(mejor.values()), 3) if mejor else 0.0,
+        "boxes": cajas or [],
         "ts": int(time.time() * 1000),
     }
+    if snapshot_b64:
+        # La captura anotada del cuadro que disparó la detección: es la que la
+        # app adjunta a la alerta. Solo cuando hay algo que mostrar.
+        mensaje["snapshotBase64"] = snapshot_b64
+    return mensaje
+
+
+ANCHO_SNAPSHOT = 640
+
+
+def snapshot_base64(anotado: np.ndarray) -> str:
+    """El cuadro anotado reducido al tamaño de la consola, en JPEG base64."""
+    alto = int(anotado.shape[0] * ANCHO_SNAPSHOT / anotado.shape[1])
+    chico = cv2.resize(anotado, (ANCHO_SNAPSHOT, alto), interpolation=cv2.INTER_AREA)
+    ok, jpeg = cv2.imencode(".jpg", chico, [cv2.IMWRITE_JPEG_QUALITY, 70])
+    return base64.b64encode(jpeg.tobytes()).decode("ascii") if ok else ""
 
 
 def dibujar(cuadro: np.ndarray, cajas, etiqueta: str) -> np.ndarray:
@@ -325,19 +366,24 @@ class Servidor:
                     log.exception("Falló la inferencia de un cuadro")
                     continue
             self.procesados += 1
-            mensaje = mensaje_detection(mejor)
-            self.ultima_deteccion = mensaje if mensaje["detected"] else self.ultima_deteccion
+            alto, ancho = cuadro.shape[:2]
             etiqueta = (
                 f"{self.detector.nombre}  {self.detector.ms:.0f} ms  imgsz {self.detector.imgsz}"
                 if self.detector else "sin modelo"
             )
             anotado = dibujar(cuadro, cajas, etiqueta)
+            mensaje = mensaje_detection(
+                mejor,
+                cajas_normalizadas(cajas, ancho, alto),
+                snapshot_base64(anotado) if mejor else None,
+            )
+            self.ultima_deteccion = {k: v for k, v in mensaje.items() if k != "snapshotBase64"} if mejor else self.ultima_deteccion
             ok, jpeg = cv2.imencode(".jpg", anotado, [cv2.IMWRITE_JPEG_QUALITY, 70])
             visor = {
                 "type": "video_frame",
                 "jpegBase64": base64.b64encode(jpeg.tobytes()).decode("ascii") if ok else "",
                 "ts": ts,
-                "detection": mensaje,
+                "detection": {k: v for k, v in mensaje.items() if k != "snapshotBase64"},
             }
             if self.loop is not None:
                 asyncio.run_coroutine_threadsafe(self._publicar(mensaje, visor), self.loop)
@@ -370,6 +416,10 @@ def elegir_modelo(args: argparse.Namespace) -> Path | None:
         return None
     if len(candidatos) == 1:
         return candidatos[0]
+    # El de campo es el de dos clases: si está, va sin preguntar.
+    for p in candidatos:
+        if p.stem == MODELO_POR_DEFECTO:
+            return p
     print("\nModelos disponibles:")
     for i, p in enumerate(candidatos, start=1):
         print(f"  {i}) {p.stem}")

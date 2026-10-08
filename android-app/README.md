@@ -131,6 +131,19 @@ Antes verifica `EstadoDelDron.listoParaDespegar`: SDK registrado, enlace con la
 aeronave, punto de retorno fijado y **8 satélites** como mínimo. Cualquier otra
 orden con el dron en el suelo se rechaza y se registra como `DRONE_PROBLEM`.
 
+**Detección → órbita → decisión.** El detector contesta cada cuadro con las
+cajas (normalizadas) y, si vio algo, la captura anotada. La app:
+1. dibuja las cajas sobre el video que sube a la consola (y sobre su propio
+   visor) mientras estén vigentes (1,5 s), en cualquier estado;
+2. solo **patrullando**, proyecta el centro de la caja más segura al terreno
+   con la altura, el rumbo y la inclinación del gimbal
+   (`drone/Georreferencia.kt`) y **orbita alrededor del objetivo** a 30 m con
+   la cámara apuntada al centro, para no perderlo de vista;
+3. manda la alerta con el tipo, la **captura anotada**, la posición del objetivo
+   y la confianza; y
+4. espera la decisión del operador: *falso positivo* retoma la ruta donde la
+   dejó; *validada* mantiene la órbita hasta que la consola ordene reanudar.
+
 **Mando virtual.** El operador de la consola toma el control y mueve una
 palanca; cada eje viaja en `[-1, 1]` en un `manual_stick` a ~10 Hz. Con el
 control tomado, si no llega ningún mando durante 1,5 s y el último no era todo

@@ -144,6 +144,16 @@
                         app:layout_constraintStart_toStartOf="parent"
                         app:layout_constraintTop_toTopOf="parent" />
 
+                    <!-- Las cajas de la detección, encima del video -->
+                    <com.tesis.dronepatrol.VistaDeCajas
+                        android:id="@+id/vistaCajas"
+                        android:layout_width="0dp"
+                        android:layout_height="0dp"
+                        app:layout_constraintBottom_toBottomOf="@id/imgVideo"
+                        app:layout_constraintEnd_toEndOf="@id/imgVideo"
+                        app:layout_constraintStart_toStartOf="@id/imgVideo"
+                        app:layout_constraintTop_toTopOf="@id/imgVideo" />
+
                     <TextView
                         android:id="@+id/chipVideo"
                         android:layout_width="wrap_content"

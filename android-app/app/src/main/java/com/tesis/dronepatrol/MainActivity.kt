@@ -456,7 +456,12 @@ class MainActivity : AppCompatActivity() {
             while (isActive) {
                 delay(1_000)
                 if (SystemClock.elapsedRealtime() - ultimoCuadroMs > SIN_VIDEO_MS) mostrarChipDeVideo(enVivo = false)
+                // Las cajas vencen solas aunque no llegue más video
+                manager.cajasVigentes(System.currentTimeMillis())
             }
+        }
+        lifecycleScope.launch {
+            manager.cajasRecientes.collect { cajas -> binding.vistaCajas.cajas = cajas }
         }
         lifecycleScope.launch {
             controller.flightEvents.collect { evento ->

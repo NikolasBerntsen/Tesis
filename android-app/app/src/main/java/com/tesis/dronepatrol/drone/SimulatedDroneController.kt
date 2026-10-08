@@ -128,6 +128,11 @@ class SimulatedDroneController(private val arrancaEnElAire: Boolean = false) : D
     // Rumbo hacia el objetivo mientras se mueve; estacionario conserva el último
     private var heading = 0.0
 
+    // Inclinación de la cámara: la de patrulla, salvo en órbita, donde apunta
+    // al centro del círculo (igual que el dron real).
+    @Volatile
+    private var gimbalPitch = Telemetry.GIMBAL_PATRULLA
+
     // Últimos ejes del mando virtual, ya convertidos a velocidades. Los escribe
     // el hilo del WebSocket y los lee el lazo de vuelo: se guarda el objeto
     // entero (y no cuatro campos sueltos) para que el lazo nunca vea media
@@ -191,6 +196,7 @@ class SimulatedDroneController(private val arrancaEnElAire: Boolean = false) : D
     override fun startRoute(route: PatrolRoute, fromWaypoint: Int) {
         this.route = route
         targetWaypoint = fromWaypoint.coerceIn(0, route.waypoints.size - 1)
+        gimbalPitch = Telemetry.GIMBAL_PATRULLA
         if (enElSuelo) {
             // Despegue automático: sube derecho a la altura del primer waypoint
             // y recién ahí arranca la ruta (ver DroneController.startRoute).
@@ -210,6 +216,7 @@ class SimulatedDroneController(private val arrancaEnElAire: Boolean = false) : D
         orbitRadiusM = radiusM
         orbitAngle = 0.0
         alturaObjetivo = ALTURA_CRUCERO_M
+        gimbalPitch = Georreferencia.inclinacionParaOrbitar(altM, radiusM)
         mode = Mode.ORBIT
     }
 
@@ -379,7 +386,9 @@ class SimulatedDroneController(private val arrancaEnElAire: Boolean = false) : D
 
             publicarEstado()
             if (!signalLost) {
-                telemetry.tryEmit(Telemetry(lat, lon, altM, battery, signalPct(), heading, System.currentTimeMillis()))
+                telemetry.tryEmit(
+                    Telemetry(lat, lon, altM, battery, signalPct(), heading, System.currentTimeMillis(), gimbalPitch),
+                )
             }
         }
     }

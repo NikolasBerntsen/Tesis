@@ -18,6 +18,57 @@ data class Telemetry(
     /** Rumbo 0..360° hacia donde mira la cámara. */
     val heading: Double,
     val ts: Long,
+    /**
+     * Inclinación del gimbal en grados: 0 es el horizonte, −90 es mirar derecho
+     * al suelo. Hace falta para ubicar en el terreno lo que la cámara ve.
+     */
+    val gimbalPitch: Double = GIMBAL_PATRULLA,
+) {
+    companion object {
+        /**
+         * Inclinación de la cámara mientras patrulla: oblicua y hacia abajo, que
+         * es la vista con la que se entrenó el detector y la que deja ver hacia
+         * adelante sin perder lo que pasa debajo.
+         */
+        const val GIMBAL_PATRULLA = -70.0
+    }
+}
+
+/**
+ * Una detección tal como la contesta el software de detección (ver
+ * docs/PROTOCOLS.md §4): qué vio, con cuánta certeza, dónde en el cuadro y la
+ * captura anotada del cuadro exacto que la disparó.
+ */
+data class Deteccion(
+    /** `PERSON` y/o `VEHICLE`. */
+    val clases: List<String>,
+    /** La confianza más alta entre las cajas, 0..1. */
+    val confianza: Double,
+    val cajas: List<Caja>,
+    /** JPEG en base64 del cuadro anotado con las cajas; null si el detector no lo manda (el mock). */
+    val snapshotBase64: String?,
+    val ts: Long,
+) {
+    /** La caja más segura: es la que define el objetivo a orbitar. */
+    val principal: Caja? get() = cajas.maxByOrNull { it.confianza }
+
+    /** `VEHICLE` manda si aparece: es la alerta más urgente de las dos. */
+    val tipoDeAlerta: String get() = if (clases.contains("VEHICLE")) "VEHICLE" else "PERSON"
+}
+
+/**
+ * Una caja de detección en coordenadas normalizadas del cuadro (0..1, el
+ * origen arriba a la izquierda), así vale igual sobre el cuadro de 1280 px
+ * que analizó el detector y sobre el de 640 px que mira la consola.
+ */
+data class Caja(
+    val clase: String,
+    val confianza: Double,
+    /** Centro de la caja. */
+    val x: Double,
+    val y: Double,
+    val ancho: Double,
+    val alto: Double,
 )
 
 /**

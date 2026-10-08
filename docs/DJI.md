@@ -14,19 +14,33 @@ revisar antes de despegar.
 | **Cuenta de desarrollador DJI + App Key** | Sin ella el SDK no se registra y no habla con el dron (ver abajo) |
 | **Internet en el teléfono la primera vez** | El SDK se registra contra los servidores de DJI al arrancar; después cachea el registro |
 
-## 1. Conseguir la App Key
+## 1. Conseguir la App Key (paso a paso)
 
-1. Crear una cuenta en <https://developer.dji.com> (pide mail, teléfono y una
-   tarjeta de crédito solo para verificar: no cobra).
-2. En el **Developer Center → Apps → CREATE APP**:
-   - *App Type*: Mobile SDK
+1. **Cuenta de desarrollador.** Entrar a <https://developer.dji.com> y tocar
+   *Register* arriba a la derecha (si ya tenés cuenta DJI —la de DJI Fly—,
+   *Login* y completar el perfil de desarrollador cuando lo pida). El registro
+   pide mail, teléfono y una tarjeta de crédito **solo para verificar la
+   identidad: no cobra nada**.
+2. **Developer Center.** Ir a <https://developer.dji.com/user/apps> (menú de
+   usuario → *Developer Center* → pestaña **Apps**).
+3. **CREATE APP** (botón a la derecha) y completar:
+   - *App Type*: **Mobile SDK**
    - *App Name*: el que quieras (por ejemplo `Drone Patrol`)
    - *Software Platform*: **Android**
-   - *Package Name*: **`com.tesis.dronepatrol`** — tiene que ser exactamente
-     el `applicationId` de la app. Con otro package el SDK contesta
-     `INVALID_METADATA` al registrarse.
-3. Activar la app desde el mail que manda DJI. Al volver al Developer Center
-   aparece la **App Key** (un hash de 24 caracteres).
+   - *Package Name*: **`com.tesis.dronepatrol`** — exactamente el
+     `applicationId` de la app. Con otro package el SDK contesta
+     `INVALID_METADATA` al registrarse y no habla con el dron.
+   - *Category* y *Description*: cualquiera (por ejemplo "Patrullaje
+     autónomo — tesis").
+4. **Activar por mail.** DJI manda un correo con un enlace de activación de la
+   app; hay que abrirlo.
+5. **Copiar la App Key.** Volver a <https://developer.dji.com/user/apps>: la
+   app aparece en la lista con su **App Key** (24 caracteres hexadecimales).
+   Esa es la que va en `local.properties` (sección 2).
+
+> La App Key está atada al package name y a tu cuenta: no va al repo (git
+> ignora `local.properties`). Si alguna vez cambia el `applicationId`, hay que
+> crear otra app en el Developer Center.
 
 ## 2. Cargar la App Key en el proyecto
 
@@ -98,6 +112,13 @@ lazo a 10 Hz que manda velocidades.
   tests. Mandarlo al revés gira cada orden 90°.
 - La altura de cada waypoint (`alt`, relativa al punto de despegue) se corrige
   en el mismo lazo; el barómetro del dron (`KeyAltitude`) es la referencia.
+- **La cámara.** Patrullando, el gimbal va a −70° (oblicua hacia abajo: la
+  vista con la que se entrenó el detector). Ante una detección, la app ubica
+  al objetivo en el terreno proyectando la caja con la altura, el rumbo y la
+  inclinación del gimbal (`drone/Georreferencia.kt`, con tests), **orbita
+  alrededor de ese punto** a 30 m con la nariz hacia el centro y el gimbal
+  inclinado a `atan(altura / radio)` (unos −56° a 45 m), así el objetivo queda
+  en el medio del cuadro toda la órbita. Al reanudar la ruta vuelve a −70°.
 - El Virtual Stick se devuelve al control al cerrar la app, al ordenar un
   regreso a base o un aterrizaje, y cuando la aeronave lo revoca.
 

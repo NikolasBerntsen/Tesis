@@ -1,6 +1,8 @@
 package com.tesis.dronepatrol.comms
 
 import com.tesis.dronepatrol.Config
+import com.tesis.dronepatrol.model.Caja
+import com.tesis.dronepatrol.model.Deteccion
 import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
@@ -46,7 +48,8 @@ open class DetectionClient(
     private val descubridor: DescubridorDeDeteccion = DescubridorDeDeteccion(),
 ) {
 
-    var onDetection: ((classes: List<String>) -> Unit)? = null
+    /** Solo las detecciones positivas: qué vio, dónde y la captura anotada (ver [interpretarDeteccion]). */
+    var onDetection: ((deteccion: Deteccion) -> Unit)? = null
     val connected = MutableStateFlow(false)
 
     /**
@@ -139,12 +142,7 @@ open class DetectionClient(
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
-                    val msg = runCatching { JSONObject(text) }.getOrNull() ?: return
-                    if (msg.optString("type") == "detection" && msg.optBoolean("detected")) {
-                        val arr = msg.optJSONArray("classes")
-                        val classes = if (arr == null) emptyList() else (0 until arr.length()).map { arr.getString(it) }
-                        onDetection?.invoke(classes)
-                    }
+                    interpretarDeteccion(text)?.let { onDetection?.invoke(it) }
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -221,5 +219,46 @@ open class DetectionClient(
     companion object {
         /** Lo que se muestra en AUTO mientras no llegó ningún anuncio. */
         const val BUSCANDO = "Buscando el software de detección en la red Wi-Fi… (la laptop tiene que estar en la misma red y con el servidor corriendo)"
+
+        /**
+         * Traduce un mensaje del software de detección a una [Deteccion], o null
+         * si no es una detección positiva (ver docs/PROTOCOLS.md §4). Las cajas y
+         * la captura son opcionales: el mock no las manda y la app tiene que
+         * seguir orbitando igual, solo que alrededor de su propia posición.
+         *
+         * Es el ÚNICO lugar donde el JSON del detector se convierte en lo que la
+         * app usa, y va aparte para poder probarlo sin socket.
+         */
+        internal fun interpretarDeteccion(texto: String): Deteccion? {
+            val msg = runCatching { JSONObject(texto) }.getOrNull() ?: return null
+            if (msg.optString("type") != "detection" || !msg.optBoolean("detected")) return null
+            val clases = msg.optJSONArray("classes")?.let { arr -> (0 until arr.length()).map { arr.getString(it) } }.orEmpty()
+            val cajas = msg.optJSONArray("boxes")?.let { arr ->
+                (0 until arr.length()).mapNotNull { i ->
+                    val c = arr.optJSONObject(i) ?: return@mapNotNull null
+                    val x = c.optDouble("x", Double.NaN)
+                    val y = c.optDouble("y", Double.NaN)
+                    val w = c.optDouble("w", Double.NaN)
+                    val h = c.optDouble("h", Double.NaN)
+                    if (x.isNaN() || y.isNaN() || w.isNaN() || h.isNaN()) return@mapNotNull null
+                    Caja(
+                        clase = c.optString("cls").ifBlank { "PERSON" },
+                        confianza = c.optDouble("conf", 0.0).coerceIn(0.0, 1.0),
+                        x = x.coerceIn(0.0, 1.0),
+                        y = y.coerceIn(0.0, 1.0),
+                        ancho = w.coerceIn(0.0, 1.0),
+                        alto = h.coerceIn(0.0, 1.0),
+                    )
+                }
+            }.orEmpty()
+            if (clases.isEmpty() && cajas.isEmpty()) return null
+            return Deteccion(
+                clases = clases.ifEmpty { cajas.map { it.clase }.distinct() },
+                confianza = msg.optDouble("confidence", cajas.maxOfOrNull { it.confianza } ?: 0.0).coerceIn(0.0, 1.0),
+                cajas = cajas,
+                snapshotBase64 = msg.optString("snapshotBase64").takeIf { it.isNotBlank() },
+                ts = msg.optLong("ts", 0L),
+            )
+        }
     }
 }

@@ -46,10 +46,16 @@ nueva (una GPU NVIDIA hace falta para que sea en tiempo real):
 python -m venv .venv && .venv\Scripts\pip install -r requirements.txt
 ```
 
-Los pesos van en `modelos/*.pt` (git los ignora: pesan 40 MB). Los entrenados
-en la tesis son `yolo11m-mix.pt` (mejor sobre video continuo, el escenario
-real) y `yolo11m-2clases.pt` (mejor sobre fotos sueltas); se copian desde
-`ml/results` o desde el proyecto de entrenamiento.
+Los pesos van en `modelos/*.pt` (git los ignora: pesan 40 MB). **El modelo de
+campo es `yolo11m-2clases.pt`** (YOLO11m entrenado directamente en PERSON /
+VEHICLE): si está en la carpeta, el servidor arranca con él sin preguntar.
+`yolo11m-mix.pt` queda como alternativa (`--modelo yolo11m-mix`). Se copian
+desde `ml/results` o desde el proyecto de entrenamiento.
+
+Por cada cuadro procesado el servidor contesta un `detection` con las **cajas
+normalizadas** (centro y tamaño 0..1) y, si detectó algo, la **captura anotada**
+del cuadro (640 px) que la app adjunta a la alerta y con la que el operador ve
+en la consola qué disparó la detección.
 
 El visor queda en **http://localhost:8765**: el video anotado, el estado del
 enlace con el celular, los tiempos del modelo y dos botones para **simular una

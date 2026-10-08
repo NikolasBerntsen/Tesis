@@ -51,8 +51,11 @@ internal class DronEspia : DroneController {
         lat: Double = -34.6037,
         lon: Double = -58.3816,
         bateria: Double = 100.0,
+        alt: Double = 40.0,
+        rumbo: Double = 0.0,
+        gimbal: Double = Telemetry.GIMBAL_PATRULLA,
     ) {
-        telemetria.emit(Telemetry(lat, lon, 40.0, bateria, 90, 0.0, System.currentTimeMillis()))
+        telemetria.emit(Telemetry(lat, lon, alt, bateria, 90, rumbo, System.currentTimeMillis(), gimbal))
     }
 
     /**
@@ -76,7 +79,14 @@ internal class DronEspia : DroneController {
 
     override fun connect() = anotar("connect")
     override fun startRoute(route: PatrolRoute, fromWaypoint: Int) = anotar("startRoute(${route.id}, $fromWaypoint)")
-    override fun startOrbit(centerLat: Double, centerLon: Double, radiusM: Double) = anotar("startOrbit")
+    /** Centro de la última órbita ordenada: es lo que dice si se orbita al objetivo o al dron. */
+    @Volatile
+    var ultimaOrbita: Pair<Double, Double>? = null
+
+    override fun startOrbit(centerLat: Double, centerLon: Double, radiusM: Double) {
+        ultimaOrbita = centerLat to centerLon
+        anotar("startOrbit")
+    }
     override fun hold() = anotar("hold")
     override fun gotoPoint(lat: Double, lon: Double) = anotar("gotoPoint")
     override fun manualStick(pitch: Double, roll: Double, yaw: Double, throttle: Double) =

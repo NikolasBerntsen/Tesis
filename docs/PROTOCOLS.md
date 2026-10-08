@@ -209,7 +209,7 @@ Conexión: `ws://<backend>:4000/ws?token=<JWT>` (el rol `drone` sale del token).
 | `status` | ver tabla de abajo | Se guarda como último estado del dron y se reenvía a los operadores |
 | `event` | `eventType, message` | Se persiste en `events` y se reenvía a los operadores |
 | `video_frame` | `jpegBase64, ts` | Se reenvía a los operadores etiquetado con `droneId`. JPEG de 640 px de ancho, calidad 60; el ritmo es el del controlador (**5 por segundo con el dron real**; el simulado emite al suyo) |
-| `alert_request` | `alertType (PERSON\|VEHICLE), lat, lon, snapshotBase64` | Crea fila en `alerts` (PENDING) + evento `ALERT_CREATED`, y notifica a los operadores |
+| `alert_request` | `alertType (PERSON\|VEHICLE), lat, lon, snapshotBase64, confidence, classes` | Crea fila en `alerts` (PENDING) + evento `ALERT_CREATED`, y notifica a los operadores. `lat`/`lon` son la **posición estimada del objetivo** (no la del dron) y `snapshotBase64` el cuadro **anotado** que disparó la detección; `confidence` y `classes` son informativos y el hub hoy no los persiste |
 | `set_name` | `displayName` | Renombra el dron y avisa a los operadores con `drone_renamed` |
 
 ### Campos de `status`
@@ -473,17 +473,37 @@ con YOLO11) y que `detection-mock/` respeta como placeholder sin GPU.
 | Dirección | Mensaje | Campos |
 |---|---|---|
 | celular → notebook | `video_frame` | `jpegBase64, ts` (JPEG de **1280 px de ancho**, calidad 75, **hasta 2 por segundo**) |
-| notebook → celular | `detection` | `detected (bool), classes (["PERSON"\|"VEHICLE"]), confidence, ts` |
+| notebook → celular | `detection` | `detected (bool), classes (["PERSON"\|"VEHICLE"]), confidence, boxes[], snapshotBase64?, ts` |
+
+Cada elemento de `boxes` es `{cls, conf, x, y, w, h}` con **`x`, `y` el centro
+y `w`, `h` el tamaño, normalizados 0..1** sobre el cuadro (origen arriba a la
+izquierda): así valen igual sobre el cuadro de 1280 px que analizó el detector
+y sobre el de 640 px que mira la consola. `snapshotBase64` es el **cuadro
+anotado con las cajas**, reducido a 640 px, y viene solo con `detected: true`:
+es la captura que la app adjunta a la alerta. `boxes` y `snapshotBase64` son
+opcionales (el mock no los manda): sin ellos la app orbita su propia posición y
+adjunta el último cuadro de la consola.
 
 Es un flujo **aparte** del que va al Comando Central (ver el principio de este
 documento): más grande y más espaciado. El servidor contesta **un `detection`
 por cada cuadro procesado**, detecte o no; si la GPU no da abasto descarta el
 cuadro viejo y nunca acumula retraso.
 
-La app solo actúa ante `detected: true` y solo mientras está en estado
-`PATROLLING` (evita re-alertar mientras orbita o vuelve a base). Cuando actúa,
-manda `alert_request` al Comando Central con la captura y las coordenadas, y eso
-queda en el registro (ver "Trazabilidad de las detecciones").
+### Qué hace la app con una detección
+
+1. **Guarda las cajas** y las dibuja sobre el video que sube al Comando Central
+   durante 1,5 s (`PatrolManager.VIGENCIA_CAJAS_MS`), en cualquier estado: el
+   operador ve marcado lo que el detector ve, también mientras orbita.
+2. Solo en estado **`PATROLLING`** (evita re-alertar mientras orbita o vuelve a
+   base) **ubica al objetivo en el terreno**: proyecta el centro de la caja más
+   segura con la altura, el rumbo y la inclinación del gimbal
+   (`Georreferencia`), y **orbita alrededor de ese punto** a 30 m con la cámara
+   apuntada al centro, para no perderlo de vista.
+3. Manda `alert_request` al Comando Central con el tipo, la **captura anotada**
+   que disparó la detección, la posición del objetivo y la confianza; eso queda
+   en el registro (ver "Trazabilidad de las detecciones").
+4. Espera la decisión del operador: `alert_decision` con `DISMISSED` retoma la
+   ruta donde la dejó; `VALIDATED` mantiene la órbita hasta un `resume_patrol`.
 
 ## 5. REST del Comando Central
 
