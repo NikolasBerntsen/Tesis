@@ -355,6 +355,12 @@ open class CommandCenterClient(private val scope: CoroutineScope) {
         signalPct: Int,
         heading: Double,
         mode: String,
+        /** Altura sobre el punto de despegue, en metros. */
+        altM: Double = 0.0,
+        /** Satélites GPS en uso; 0 si el dron no lo informa. */
+        satellites: Int = 0,
+        /** true con el dron en el aire (motores encendidos y despegado). */
+        flying: Boolean = false,
     ) = send(
         JSONObject()
             .put("type", "status")
@@ -368,7 +374,10 @@ open class CommandCenterClient(private val scope: CoroutineScope) {
             .put("signal", if (signalOk) "OK" else "LOST")
             .put("signalPct", signalPct)
             .put("heading", heading)
-            .put("mode", mode),
+            .put("mode", mode)
+            .put("alt", altM)
+            .put("satellites", satellites)
+            .put("flying", flying),
     )
 
     fun sendSetName(displayName: String) =

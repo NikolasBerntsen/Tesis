@@ -6,4 +6,9 @@
         android:id="@+id/action_renombrar"
         android:title="@string/main_renombrar"
         app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_cerrar_sesion"
+        android:title="@string/menu_cerrar_sesion"
+        app:showAsAction="never" />
 </menu>

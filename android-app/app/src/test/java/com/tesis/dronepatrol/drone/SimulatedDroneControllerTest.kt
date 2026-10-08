@@ -34,7 +34,9 @@ class SimulatedDroneControllerTest {
         val M_POR_GRADO_LON = M_POR_GRADO_LAT * cos(Math.toRadians(BASE_LAT))
     }
 
-    private val dron = SimulatedDroneController()
+    // En el aire desde el arranque: lo que se prueba acá es el vuelo, no el
+    // despegue (ese tiene sus propios casos en SimulatedDroneControllerSueloTest).
+    private val dron = SimulatedDroneController(arrancaEnElAire = true)
 
     @After
     fun bajarDron() {

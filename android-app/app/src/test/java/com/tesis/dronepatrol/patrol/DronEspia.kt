@@ -1,10 +1,12 @@
 package com.tesis.dronepatrol.patrol
 
 import com.tesis.dronepatrol.drone.DroneController
+import com.tesis.dronepatrol.model.EstadoDelDron
 import com.tesis.dronepatrol.model.FlightEvent
 import com.tesis.dronepatrol.model.PatrolRoute
 import com.tesis.dronepatrol.model.Telemetry
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 
 /**
@@ -24,7 +26,13 @@ internal class DronEspia : DroneController {
     private val telemetria = MutableSharedFlow<Telemetry>(replay = 1, extraBufferCapacity = 8)
     override val telemetry: SharedFlow<Telemetry> get() = telemetria
     override val videoFrames = MutableSharedFlow<ByteArray>(extraBufferCapacity = 4)
+    override val cuadrosParaDeteccion = MutableSharedFlow<ByteArray>(extraBufferCapacity = 4)
     override val flightEvents = MutableSharedFlow<FlightEvent>(extraBufferCapacity = 8)
+
+    /** Siempre en el aire y listo: lo que se prueba con este dron es el mando, no el despegue. */
+    override val estado = MutableStateFlow(
+        EstadoDelDron(sdkListo = true, conectado = true, modelo = "Espía", enVuelo = true, satelites = 14, baseFijada = true),
+    )
 
     /** Cada orden como texto, que es lo que los tests comparan. */
     private val recibidas = mutableListOf<String>()
@@ -74,5 +82,6 @@ internal class DronEspia : DroneController {
     override fun manualStick(pitch: Double, roll: Double, yaw: Double, throttle: Double) =
         anotar("stick($pitch, $roll, $yaw, $throttle)")
     override fun returnHome() = anotar("returnHome")
+    override fun land() = anotar("land")
     override fun disconnect() = anotar("disconnect")
 }

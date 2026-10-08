@@ -13,6 +13,7 @@ import com.tesis.dronepatrol.model.Telemetry
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -167,6 +168,9 @@ class PatrolManager(
     var availableRoutes: List<PatrolRoute> = emptyList()
 
     private var route: PatrolRoute? = null
+
+    /** Hay una ruta cargada a la que volver con "Reanudar". */
+    val tieneRuta: Boolean get() = route != null
     private var lastReachedWaypoint = 0
     private var resumeWaypoint = 0
     /** Nodo del desvío forzado en curso (solo para el mensaje de llegada). */
@@ -295,25 +299,24 @@ class PatrolManager(
     }
 
     /**
-     * Reparto del video. El Comando Central recibe TODOS los cuadros que emite
-     * el controlador —5 por segundo, tanto con el dron real como con el
-     * simulado ([com.tesis.dronepatrol.drone.CuadroDeVideo.INTERVALO_CUADRO_MS])—:
-     * es el video que mira el operador y con el que decide. A la detección se le
-     * deja pasar uno cada [INTERVALO_DETECCION_MS] —**dos por segundo como
-     * techo**, lo que fija el contrato §1—: el enlace con la laptop es el más
-     * flojo de los tres y detectar una persona o un vehículo no necesita más.
+     * Reparto del video. Son dos flujos distintos del controlador, con destinos
+     * distintos:
      *
-     * El techo se mide con RELOJ y no contando cuadros. Contando salía la mitad
-     * de lo que entra, así que el ritmo de la detección quedaba atado al del
-     * controlador: sobre los 5 por segundo de hoy daban 2,5 —un 25 % más de lo
-     * pactado, encima del enlace más flojo— y si mañana el controlador emitiera
-     * 10, la detección se iba a 5 sin que nada la frene. Con reloj el techo vale
-     * cualquiera sea el ritmo de entrada, que es lo que fija el contrato §1.
+     *  - [DroneController.videoFrames] va ENTERO al Comando Central —5 por
+     *    segundo a 640 px, tanto con el dron real como con el simulado
+     *    ([com.tesis.dronepatrol.drone.CuadroDeVideo.INTERVALO_CUADRO_MS])—: es
+     *    el video que mira el operador y con el que decide, y de acá sale la
+     *    captura que se adjunta a cada alerta.
+     *  - [DroneController.cuadrosParaDeteccion] va al software de detección: más
+     *    grande (1280 px, porque desde 50 m una persona a 640 px son diez
+     *    pixeles) y con un techo de uno cada [INTERVALO_DETECCION_MS] —**dos por
+     *    segundo**, lo que fija el contrato §1—: el enlace con la laptop es el
+     *    más flojo de los tres y detectar no necesita más.
      *
-     * Lo que se paga: como el flujo que llega acá ya viene raleado a 200 ms, el
-     * limitador solo puede aceptar en múltiplos de esos 200 ms, así que sobre 5
-     * por segundo acepta uno de cada tres (1,67 por segundo). Queda por debajo
-     * del techo y no por encima, que es del lado que hay que errar.
+     * El techo se vuelve a medir acá con RELOJ aunque el controlador ya emita
+     * raleado: es la garantía del contrato y no puede depender de que cada
+     * controlador la cumpla. Si mañana uno emitiera el doble, la detección NO
+     * recibe el doble.
      *
      * Los dos destinos llegan por parámetro para poder probar el reparto sin
      * sockets: quién recibe qué es justamente lo que hay que verificar. El reloj
@@ -323,17 +326,30 @@ class PatrolManager(
         alComandoCentral: (String) -> Unit,
         aLaDeteccion: (String) -> Unit,
         ahoraMs: () -> Long = System::currentTimeMillis,
-    ) {
-        val techoDeLaDeteccion = LimitadorDeRitmo(INTERVALO_DETECCION_MS)
-        controller.videoFrames.collect { frame ->
-            lastFrame = frame
-            val b64 = Base64.encodeToString(frame, Base64.NO_WRAP)
-            alComandoCentral(b64)
-            if (techoDeLaDeteccion.aceptar(ahoraMs())) aLaDeteccion(b64)
+    ) = coroutineScope {
+        launch {
+            controller.videoFrames.collect { frame ->
+                lastFrame = frame
+                alComandoCentral(Base64.encodeToString(frame, Base64.NO_WRAP))
+            }
+        }
+        launch {
+            val techoDeLaDeteccion = LimitadorDeRitmo(INTERVALO_DETECCION_MS)
+            controller.cuadrosParaDeteccion.collect { frame ->
+                if (techoDeLaDeteccion.aceptar(ahoraMs())) aLaDeteccion(Base64.encodeToString(frame, Base64.NO_WRAP))
+            }
         }
     }
 
     fun startPatrol(route: PatrolRoute) {
+        // En el suelo, el controlador despega solo (ver DroneController.startRoute),
+        // pero solo si el dron está en condiciones: sin GPS o sin punto de retorno
+        // un despegue automático es un dron que no sabe volver.
+        val dron = controller.estado.value
+        if (!dron.enVuelo && !dron.listoParaDespegar) {
+            report("DRONE_PROBLEM", "No se puede despegar: ${dron.detalle.ifBlank { "el dron no está listo" }}")
+            return
+        }
         this.route = route
         lastReachedWaypoint = 0
         resumeWaypoint = 0
@@ -343,6 +359,49 @@ class PatrolManager(
         pasarA(PatrolState.PATROLLING)
         controller.startRoute(route, 0)
         report("PATROL_STARTED", "Patrullaje iniciado en ruta \"${route.name}\"")
+    }
+
+    // ---- Órdenes del operador de campo, desde la propia app ----
+    // Son las mismas que manda el Comando Central, pero desde el teléfono que
+    // está al lado del dron: en el campo hay que poder frenarlo sin pedirle a
+    // nadie en la consola que lo haga.
+
+    /** Interrumpe el patrullaje: el dron queda en vuelo estacionario. */
+    fun detenerPatrullaje() = onStopPatrol("el operador de campo")
+
+    /** Retoma la ruta desde el último nodo alcanzado. */
+    fun reanudarPatrullaje() {
+        scope.launch { resumePatrol("orden del operador de campo") }
+    }
+
+    /**
+     * Regreso a base ordenado desde el campo. Pisa cualquier otra orden, incluido
+     * el control manual de la consola: el que está al lado del dron manda.
+     */
+    fun volverABase() {
+        if (!controller.estado.value.enVuelo) {
+            log("El dron está en el suelo: no hay a dónde volver")
+            return
+        }
+        if (_state.value == PatrolState.PATROLLING) resumeWaypoint = lastReachedWaypoint
+        controlTomado = false
+        // Sin frenar: el regreso a base es la orden que manda (ver checkLowBattery()).
+        pasarA(PatrolState.RETURNING_HOME)
+        controller.returnHome()
+        report("RTH_MANUAL", "El operador de campo ordenó volver a la base")
+    }
+
+    /** Aterriza donde está. Al tocar el suelo (FlightEvent.Aterrizado) queda en base. */
+    fun aterrizar() {
+        if (!controller.estado.value.enVuelo) {
+            log("El dron ya está en el suelo")
+            return
+        }
+        if (_state.value == PatrolState.PATROLLING) resumeWaypoint = lastReachedWaypoint
+        controlTomado = false
+        pasarA(PatrolState.PAUSED)
+        controller.land()
+        report("LANDING", "El operador de campo ordenó aterrizar: el dron desciende donde está")
     }
 
     // ---- Órdenes del Comando Central ----
@@ -690,11 +749,22 @@ class PatrolManager(
     private suspend fun onFlightEvent(e: FlightEvent) {
         when (e) {
             is FlightEvent.WaypointReached -> lastReachedWaypoint = e.index
-            is FlightEvent.ArrivedHome -> {
-                if (_state.value == PatrolState.RETURNING_HOME_BATTERY) {
+            is FlightEvent.ArrivedHome -> when (_state.value) {
+                PatrolState.RETURNING_HOME_BATTERY -> {
                     pasarA(PatrolState.LANDED)
                     report("LANDED", "Dron aterrizado en base (batería baja)")
                 }
+                PatrolState.RETURNING_HOME, PatrolState.RETURNING_HOME_SIGNAL -> {
+                    pasarA(PatrolState.IDLE)
+                    report("LANDED", "Dron aterrizado en la base")
+                }
+                else -> Unit
+            }
+            is FlightEvent.Despegando -> report("TAKEOFF", "Despegue automático: el dron sube a la altura de trabajo")
+            is FlightEvent.EnElAire -> log("Despegue completado: el dron está a la altura de trabajo")
+            is FlightEvent.Aterrizado -> {
+                pasarA(PatrolState.IDLE)
+                report("LANDED", "Dron aterrizado por orden del operador de campo")
             }
             is FlightEvent.GotoArrived -> {
                 // El salto puntual terminó: desde acá el mando vuelve a mandar
@@ -777,6 +847,7 @@ class PatrolManager(
         while (true) {
             delay(1_000)
             val t = lastTelemetry ?: continue
+            val dron = controller.estado.value
             commandCenter.sendStatus(
                 state = _state.value.name,
                 battery = t.batteryPct,
@@ -789,6 +860,9 @@ class PatrolManager(
                 signalPct = _signalPct.value,
                 heading = t.heading,
                 mode = mode,
+                altM = t.altM,
+                satellites = dron.satelites,
+                flying = dron.enVuelo,
             )
         }
     }

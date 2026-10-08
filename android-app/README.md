@@ -1,28 +1,36 @@
 # Drone Patrol — App de control (Android)
 
-App que corre en el celular montado en el **DJI RC-N3** —el control sin pantalla
-que usa el teléfono del operador como pantalla— y ejecuta la lógica de
-patrullaje (`patrol/PatrolManager.kt`). El celular habla con el dron a través
-del control: por eso es el que publica el video y el que ejecuta las órdenes de
-mando que llegan del Comando Central.
+App que corre en el celular enganchado al **DJI RC-N3** (o RC-N2) —el control
+sin pantalla que usa el teléfono del operador como pantalla— y ejecuta la
+lógica de patrullaje (`patrol/PatrolManager.kt`). El celular habla con el dron
+a través del control: por eso es el que publica el video, el que ejecuta las
+órdenes de vuelo que llegan del Comando Central y el que puede frenar el dron
+desde el campo.
 
-Tiene tres pantallas:
+Tiene tres pantallas, en una **consola de campo oscura**: fondo oscuro de alto
+contraste para usar a pleno sol, botones altos para el pulgar, un solo acento
+ámbar para la acción principal.
 
 1. **Login** (`LoginActivity`) — entra la *persona* que despliega el dron: el
    operador de campo, o un supervisor/admin, con su cuenta del Comando Central.
-   La URL del Comando Central viene precargada
-   (`https://tesis.144-22-138-149.sslip.io`) y es editable.
+   La URL del Comando Central viene precargada y es editable.
 2. **Menú de campo** (`FieldMenuActivity`) — quién inició sesión, la cuenta
-   regresiva de la sesión efímera y las tres acciones: escanear el QR del dron,
-   configurar el enlace y cerrar sesión.
-3. **Principal** (`MainActivity`) — estado del dron, ruta a patrullar y —solo en
-   modo prueba— los controles de simulación. El registro local de eventos vive
-   en el menú lateral.
+   regresiva de la sesión efímera y las acciones: escanear el QR del dron (o
+   escribir su identificador), configurar el enlace y cerrar sesión.
+3. **Operación** (`MainActivity`) — de arriba a abajo: el **estado del dron**
+   (enlace, modelo, satélites GPS, en vuelo o en el suelo, y qué falta para
+   despegar), el **video en vivo** con el estado del patrullaje encima, la
+   **telemetría** (batería, señal RC, altura, rumbo, posición), los **enlaces**
+   (Comando Central y detección) y las **acciones de vuelo**: *Despegar y
+   patrullar*, *Detener*, *Reanudar*, *Volver a base* y *Aterrizar acá* (las
+   tres últimas con confirmación). La pestaña *Registro* tiene el log local.
+   En modo prueba, con el dron simulado, aparece además la tarjeta de
+   simulación.
 
 **El dron no tiene cuenta.** Se identifica con el hash de 32 hexadecimales del
 QR pegado en su fuselaje: al escanearlo, la app llama a `POST /api/drones/pair`
 con ese hash y la ubicación del momento, recibe el token del dron y **cierra la
-sesión del operador de campo**. De la pantalla principal en adelante la app
+sesión del operador de campo**. De la pantalla de operación en adelante la app
 habla como máquina, no como persona. La sesión del operador dura 20 minutos: si
 vence antes de terminar, se vuelve al login con el aviso correspondiente.
 
@@ -30,22 +38,14 @@ vence antes de terminar, se vuelve al login con el aviso correspondiente.
 
 | Flavor | Qué hace | Cuándo usarlo |
 |---|---|---|
-| `mock` | Dron **simulado** (`SimulatedDroneController`): waypoints, órbita, RTH, drenaje de batería, failsafe por pérdida de enlace y video sintético. | Desarrollo y demo sin hardware. Corre en emulador o cualquier teléfono. |
-| `dji` | Integración real con **DJI MSDK v5** (`DjiDroneController`). Requiere API key y un dron real; **no funciona en el emulador**. | Pruebas de campo con el Mini 4 Pro. |
+| `mock` | Dron **simulado** (`SimulatedDroneController`): arranca en el suelo, despega solo al comenzar un patrullaje, waypoints con su altura, órbita, RTH, aterrizaje, drenaje de batería, failsafe por pérdida de enlace y video sintético (en los dos tamaños del contrato). | Desarrollo y demo sin hardware. Corre en el emulador o en cualquier teléfono. |
+| `dji` | Integración real con **DJI MSDK v5.18** (`DjiDroneController`): Mini 4 Pro con RC-N2/RC-N3. Requiere App Key y un teléfono ARM64; **no corre en el emulador**. | Salidas de campo. Ver [docs/DJI.md](../docs/DJI.md). |
 
-> El flavor `dji` está **deshabilitado por defecto**: Android Studio solo ofrece
-> `mockDebug` y `mockRelease`. Esto es a propósito — `djiDebug` ordena antes que
-> `mockDebug` alfabéticamente, así que Studio lo elegía solo, y al correrlo en un
-> emulador la app se cerraba al instante (el SDK de DJI se inicializa en la clase
-> `Application` y no puede registrarse sin API key ni hardware).
-> Para compilarlo cuando tengas la key y el dron: `./gradlew assembleDjiDebug -PenableDji`.
->
-> **El flavor `dji` necesita un dispositivo ARM.** El MSDK v5 no publica todas sus
-> librerías nativas para `x86_64`: en ese ABI falta `libSdkyclx_clx.so`, que es la
-> que carga `Helper.install()`. En un emulador x86_64 eso da `UnsatisfiedLinkError`
-> durante `attachBaseContext`, o sea antes de que exista la Activity. Hoy queda
-> atrapado y solo se registra en el log, pero el SDK no va a funcionar ahí:
-> las pruebas del flavor `dji` van sobre el teléfono real conectado al RC-N3.
+> El flavor `dji` aparece en Android Studio **solo si hay App Key** en
+> `local.properties` (`DJI_API_KEY=...`) o se compila con `-PenableDji`. Sin
+> clave queda oculto, para que el emulador siga arrancando con `mockDebug` sin
+> tocar nada: el SDK de DJI se inicializa en la clase `Application` y en un
+> emulador x86 no puede ni cargar sus librerías nativas.
 
 La lógica (máquina de estados, watchdogs, comunicación) es la misma en ambos:
 solo cambia la implementación de `DroneController` que inyecta `ControllerFactory`.
@@ -53,171 +53,92 @@ solo cambia la implementación de `DroneController` que inyecta `ControllerFacto
 ## Correr la demo (flavor mock)
 
 1. Abrir `android-app/` en Android Studio y sincronizar.
-2. Correr en un emulador. La única variante disponible es `mockDebug`, así que no
-   hay nada que elegir.
-3. Con el backend y el detection-mock levantados (ver README raíz), en la app:
+2. Correr en un emulador con la variante `mockDebug`.
+3. Con el backend levantado (ver README raíz) y, si se quiere detección real,
+   `detection/correr.bat` en esta PC:
    - **Login**: la URL del Comando Central ya viene cargada; entrar con la cuenta
      del operador de campo → **Iniciar sesión**.
-   - **Menú de campo** → **Escanear QR del dron**. El QR lo imprime la consola
-     web desde la vista *Drones*, y su contenido es solo el hash.
+   - **Menú de campo** → **Configuración del enlace** → *Dirección manual* →
+     `ws://10.0.2.2:8765` (así el emulador llega a la detección de esta PC).
+   - **Escanear QR del dron** (o escribir el identificador que imprime el seed).
    - Elegir **Modo prueba** (muestra los controles de simulación) o **Despliegue**.
-     El modo viaja en el campo `mode` de cada `status`.
-   - Elegir ruta → **Comenzar patrullaje**.
+   - Elegir ruta → **Despegar y patrullar** → confirmar. El dron simulado
+     despega, sube a la altura del primer waypoint y arranca la ruta.
    - *Forzar batería baja*, *Recargar batería* y el switch *Simular pérdida de
-     señal* disparan los flujos de failsafe.
-   - El menú ⋮ tiene **Renombrar dron**; el nombre también se actualiza solo si
-     lo cambia el operador desde el Comando Central.
+     señal* disparan los flujos de failsafe. *Volver a base* y *Aterrizar acá*
+     están siempre a mano.
 
 En el emulador la cámara y el GPS son simulados (controles extendidos →
 *Camera* y *Location*). Si no hay ubicación el emparejamiento procede igual y el
 registro queda con `ubicacion: null`: el despliegue no se frena por el GPS.
 
-## Enlace con la computadora de detección
+## Enlace con la notebook de detección
 
-El celular va montado en el control y la detección corre en la laptop. Hay dos
-modos, elegibles en **Menú de campo → Configuración del enlace**.
+El celular va enganchado al control por su **único puerto USB**, así que el
+enlace con la notebook que corre la detección es **por Wi-Fi**: el hotspot del
+celular o la Wi-Fi del lugar, con los dos equipos en la misma red. Hay tres
+modos en **Menú de campo → Configuración del enlace**:
 
-### CABLE (el que viene por defecto)
+| Modo | Qué hace | Cuándo |
+|---|---|---|
+| **Automático** (de fábrica) | La notebook anuncia su servicio por UDP (puerto 8766) cada segundo y la app se conecta a la dirección de la que vino el anuncio. Sin tipear IPs. | En el campo |
+| Cable USB | Túnel `adb reverse tcp:8765 tcp:8765` hacia `127.0.0.1`. Solo sin el control enchufado. | Banco de pruebas |
+| Dirección manual | `ws://<ip-de-la-notebook>:8765`. Desde el emulador, `ws://10.0.2.2:8765`. | Respaldo / emulador |
 
-Túnel de ADB sobre el mismo cable USB que une el celular con la laptop. Es el
-recomendado porque no depende de la red ni de qué IP le tocó a cada uno.
-
-1. En el celular: *Opciones de desarrollador* → **Depuración USB** activada.
-2. Enchufar el cable y aceptar la huella RSA que aparece en el celular.
-3. En la laptop, una vez por cada sesión de ADB:
-
-   ```bash
-   adb reverse tcp:8765 tcp:8765
-   ```
-
-   Con eso el `localhost:8765` del celular sale por el cable hacia el
-   `localhost:8765` de la laptop, que es donde escucha la detección.
-4. En la app no hay nada que escribir: la URL es fija, `ws://127.0.0.1:8765/phone`.
-
-El `adb reverse` se pierde al desenchufar el cable o al reiniciar el servidor de
-ADB, y hay que volver a correrlo. Si la detección no engancha, la pantalla
-principal lo dice con todas las letras (incluido el recordatorio del
-`adb reverse`) en vez de quedarse muda.
-
-### RED (respaldo)
-
-URL manual `ws://<ip-de-la-laptop>:8765` —la app le agrega el `/phone`—. Sirve
-cuando no hay depuración USB; con anclaje USB la laptop suele quedar en
-`192.168.42.x`.
-
-> **Solo funciona en compilaciones `debug`.** El Comando Central va por HTTPS,
-> así que la *network security config* de release prohíbe el texto plano salvo
-> contra `127.0.0.1`/`localhost`, que es el túnel del cable; la IP de la laptop
-> no se puede declarar de antemano. `src/debug/res/xml/network_security_config.xml`
-> lo habilita para el banco de pruebas y las salidas de campo.
+Si el enlace no engancha, la pantalla de operación lo dice con todas las letras
+(qué revisar: red, firewall de la notebook, `adb reverse`) en vez de quedarse muda.
+El patrullaje sigue andando sin detección; lo que no hay son alertas automáticas.
 
 ## Video en vivo
 
-El controlador emite cuadros JPEG y `PatrolManager` los reparte:
+El controlador emite **dos flujos** y `PatrolManager` los reparte:
 
-| Destino | Ritmo | Por qué |
-|---|---|---|
-| Comando Central | **5 por segundo** (`CuadroDeVideo.INTERVALO_CUADRO_MS`) | Es el video que mira el operador y con el que decide |
-| Software de detección | **2 por segundo como techo**: uno cada `PatrolManager.INTERVALO_DETECCION_MS` | El enlace con la laptop es el más flojo de los tres y detectar no necesita más |
+| Destino | Cuadro | Ritmo | Por qué |
+|---|---|---|---|
+| Comando Central | 640 px, calidad 60 | **5 por segundo** (`CuadroDeVideo.INTERVALO_CUADRO_MS`) | Es el video que mira el operador y con el que decide; de acá sale la captura de cada alerta |
+| Software de detección | **1280 px**, calidad 75 | **2 por segundo como techo** (`CuadroDeVideo.INTERVALO_DETECCION_MS`) | El modelo está entrenado a 1280 px: desde 50 m una persona a 640 px son diez pixeles. El enlace con la notebook es el más flojo de los tres y detectar no necesita más cuadros |
 
-El techo de la detección se mide con **reloj y no contando cuadros**, y eso es a
-propósito. Contando salía la mitad de lo que entra, así que el ritmo de la
-detección quedaba atado al del controlador: sobre los 5 por segundo de hoy daba
-2,5 —un 25 % más de lo que fija el contrato, encima del enlace más flojo de los
-tres— y si mañana `CuadroDeVideo.INTERVALO_CUADRO_MS` bajara a 100 ms, la
-detección pasaba a 5 por segundo sin que nada la frenara. Con reloj el techo vale
-cualquiera sea el ritmo de entrada, que es lo que fija el **contrato §1** de la
-entrega: cinco por segundo a la consola y dos a la detección. `docs/PROTOCOLS.md`
-—que es del frente backend— tiene que citar este mismo techo; si alguna vez dicen
-números distintos, el que manda es el contrato.
+El techo de la detección lo vuelve a medir `PatrolManager` **con reloj**
+(`LimitadorDeRitmo`), aunque el controlador ya emita raleado: es la garantía
+del contrato §1 de `docs/PROTOCOLS.md` y no depende de que cada controlador la
+cumpla. El dron simulado emite los dos flujos al mismo ritmo que el real.
 
-Lo que se paga: como el flujo que llega al reparto ya viene raleado a 200 ms, el
-limitador solo puede aceptar en múltiplos de esos 200 ms, así que sobre 5 por
-segundo acepta uno de cada tres: **1,67 por segundo efectivos**. Queda por debajo
-del techo de 2 y no por encima, que es del lado que hay que errar cuando lo que
-está en juego es el enlace más flojo.
+Con el dron real el cuadro llega en NV21 (1920x1080 o 1280x720) y se reescala
+con submuestreo de vecino más cercano antes de comprimirlo (`drone/CuadroDeVideo.kt`,
+en `main` y con pruebas: es justo lo que el flavor `dji` no permite probar).
+La propia app también muestra el flujo de 640 px en la pantalla de operación.
 
-El dron simulado emite al mismo ritmo que el real (5 por segundo): así el banco
-de pruebas mide los mismos números que el campo, que es para lo que está.
+## Vuelo
 
-Con el dron real el cuadro llega en NV21 a 1920x1080 o 1280x720 y se reescala a
-**640 px de ancho** conservando la relación de aspecto, con submuestreo de vecino
-más cercano, antes de comprimirlo en JPEG con calidad 60. La conversión
-(`drone/CuadroDeVideo.kt`) vive en el sourceSet `main`, no en el del flavor:
-así se prueba sin dron, que es justo lo que el flavor `dji` no permite.
+Todo lo que se puede probar sin dron vive en `main`, con pruebas, y el flavor
+`dji` queda como el pegamento con el SDK:
 
-## Mando virtual
+- `drone/Navegacion.kt`: la cuenta de cada vuelta del lazo (velocidad hacia un
+  punto con frenado proporcional, control de altura, umbrales de llegada).
+- `drone/OrdenVirtualStick.kt`: la traducción a los campos del Virtual Stick
+  del MSDK. En modo VELOCITY el SDK usa `roll` para el eje X (norte / adelante)
+  y `pitch` para el Y (este / derecha), al revés de lo intuitivo; está tomado
+  de la tabla oficial y cubierto por tests porque mandarlo al revés gira cada
+  orden 90° y con el dron real no hay otra prueba antes de volar.
+- `drone/MandoVirtual.kt`: los ejes del mando de la consola → velocidades
+  (5 m/s horizontal, 2 m/s vertical, 45 °/s de giro, zona muerta de 0,05).
+- `drone/Geo.kt`: rumbos y metros por grado.
 
-El operador toma el control desde la consola y mueve una palanca en pantalla;
-cada eje viaja en `[-1, 1]` dentro de un mensaje `manual_stick` del WebSocket, a
-unos 10 por segundo. `drone/MandoVirtual.kt` los traduce a velocidades (5 m/s
-horizontal, 2 m/s vertical, 45 °/s de giro, zona muerta de 0,05) y el
-controlador las ejecuta: el simulado moviendo su posición, el DJI mandando
-`VirtualStickFlightControlParam` en coordenadas BODY a 10 Hz.
+**Despegue.** Solo "Comenzar patrullaje" despega, y pide confirmación: el
+controlador ordena el despegue automático (1,2 m), **sube derecho a la altura
+del primer waypoint** sin moverse en el plano, y recién ahí arranca la ruta.
+Antes verifica `EstadoDelDron.listoParaDespegar`: SDK registrado, enlace con la
+aeronave, punto de retorno fijado y **8 satélites** como mínimo. Cualquier otra
+orden con el dron en el suelo se rechaza y se registra como `DRONE_PROBLEM`.
 
-> **Watchdog de mando.** Con el control tomado, si no llega ningún mando durante
-> 1,5 s y el último no era todo ceros, la app manda ceros por su cuenta y lo
-> anota en el registro local. Es la red de seguridad ante un corte de internet
-> del celular: el dron sostiene la última velocidad comandada hasta que le
-> llegue otra, así que sin esto seguiría andando con nadie al mando. Vigila
-> mientras el control esté **tomado** y no mientras el estado sea `MANUAL`:
-> atarlo al estado lo apagaba justo en la transición que lo necesita. Que el
-> corte no pueda caerle encima a un regreso a base —donde el dron tiene su propia
-> orden y unos ejes en cero no la frenan, se la relevan— no lo decide ese guard
-> sino el cerrojo del mando: las marcas que el watchdog vigila solo se escriben
-> con el estado en `MANUAL`, y salir de `MANUAL` las limpia, las dos cosas con el
-> cerrojo tomado.
+**Mando virtual.** El operador de la consola toma el control y mueve una
+palanca; cada eje viaja en `[-1, 1]` en un `manual_stick` a ~10 Hz. Con el
+control tomado, si no llega ningún mando durante 1,5 s y el último no era todo
+ceros, la app manda ceros por su cuenta (watchdog). Toda salida de `MANUAL`
+pasa por `PatrolManager.pasarA()`, que frena cuando nadie más le habla al dron.
 
-El mando se aplica **solo** en estado `MANUAL`; en cualquier otro se descarta.
-
-> **Frenar y soltar el mando son dos cosas distintas.** Toda transición pasa por
-> `PatrolManager.pasarA()`. Al **salir de `MANUAL`** limpia lo que el watchdog
-> vigila, para que no le corte a los 1,5 s la orden nueva (una ruta, un desvío, el
-> regreso a base). Y **frena** —vuelo estacionario— cuando la transición no le da
-> otra orden al dron (pérdida de señal, control liberado), venga del estado que
-> venga: el dron sostiene la última velocidad comandada sin importar quién se la
-> dio, y el lazo de la ruta o de la órbita sigue vivo mandándole velocidades a
-> 10 Hz hasta que otra orden lo releve. Con el freno colgado de la salida de
-> `MANUAL`, perder la señal patrullando dejaba la ruta corriendo mientras la
-> consola mostraba "volviendo a base".
->
-> El orden dentro de cada transición también es parte del arreglo: **primero se
-> pisa el estado y después se le habla al dron**. El estado es la puerta que mira
-> `onManualStick` desde el hilo del WebSocket, y con la orden primero un mando que
-> llega a 10 Hz se cuela entre las dos y le releva la ruta recién ordenada.
->
-> Por el mismo motivo, al recuperar la señal el estado siempre tiene
-> salida: vuelve a `MANUAL` si el operador nunca soltó el control, retoma la ruta
-> si hay una, y si no queda en `PAUSED` y en vuelo estacionario.
-
-**Desplazamiento puntual y palanca.** Manda el último comando *deliberado*. Un
-`manual_stick` con los cuatro ejes en cero es el mensaje de cierre de la palanca
-—lo manda la consola al soltarla—, así que **no** aborta un `manual_move` en
-curso; cualquier eje fuera de la zona muerta sí lo aborta, porque ahí el
-operador agarró la palanca a propósito.
-
-## Flavor dji — estado y pasos pendientes
-
-`app/src/dji/` registra el SDK, escucha posición, batería, rumbo de la brújula,
-calidad del enlace y conexión vía KeyManager, publica el video real de la cámara
-principal y comanda el vuelo —patrullaje, órbita, goto, estacionario y mando
-manual— por **Virtual Stick** (el Mini 4 Pro **no** soporta las misiones de
-waypoints del SDK: son solo Enterprise). Antes de volar hace falta:
-
-1. Crear una app en https://developer.dji.com y poner la key en
-   `gradle.properties` → `DJI_API_KEY=...`, y compilar con `-PenableDji`.
-2. Queda un `TODO(hardware)`: escuchar `KeyIsFlying`/`KeyAreMotorsOn` para emitir
-   `FlightEvent.ArrivedHome` cuando el dron aterriza al volver a la base.
-3. Probar en campo con las validaciones de seguridad correspondientes (RTH
-   configurado, altura, geocercas).
-
-> Este flavor **no fue probado con hardware** en esta entrega y CI no lo compila
-> (hace falta `-PenableDji`). Por eso todo lo que se puede probar sin dron —la
-> conversión de los cuadros, el limitador de ritmo, la espera creciente entre
-> reintentos y la escala del mando— vive en el sourceSet `main` con sus pruebas —y, desde el contraste, también el rumbo
-> hacia un punto (`drone/Geo.kt`), que estaba duplicado a mano en los dos
-> controladores y en uno de ellos sin escalar la longitud por `cos(lat)`—, y el
-> archivo del flavor quedó lo más flaco posible: apenas el pegamento con el SDK.
+**Desde el campo**, *Volver a base* y *Aterrizar acá* pisan cualquier orden,
+incluido el control manual de la consola: el que está al lado del dron manda.
 
 ## Tests
 
@@ -227,71 +148,37 @@ waypoints del SDK: son solo Enterprise). Antes de volar hace falta:
 
 | Suite | Qué cubre |
 |---|---|
-| `LoginActivityLaunchTest` | Smoke test de arranque de `LoginActivity` y `MainActivity` en las APIs 26, 30 y 34 —si algo revienta al abrir la app, el test falla con el stack trace en vez de dejarte un cierre silencioso en el dispositivo— más la URL del Comando Central precargada y los avisos de vuelta al login |
-| `FieldMenuActivityTest` | Cuenta regresiva de la sesión efímera, las tres acciones y la vuelta al login cuando vence o se cierra |
-| `SesionDeCampoTest` | Vencimiento del JWT del operador de campo y roles habilitados para emparejar |
-| `PreferenciasEnlaceTest` | URL del Comando Central por defecto y modo CABLE de fábrica |
-| `HashDeDronTest` | Filtro del contenido del QR: 32 hexadecimales y nada más |
-| `DetectionClientTest` | Armado de la URL del enlace en CABLE y en RED |
-| `SimulatedDroneControllerTest` | Navegación, rumbo, altura y drenaje de batería del dron simulado, y el mando virtual: sube con throttle, gira con yaw, avanza con pitch y se queda quieto con los cuatro ejes en cero |
-| `CuadroDeVideoTest` | Tamaño de destino y conversión NV21 → ARGB: submuestreo, `offset`, cuadro corto y recorte de los canales |
-| `CuadroDeVideoJpegTest` | La compresión a JPEG, que es la parte que necesita `android.graphics` |
-| `LimitadorDeRitmoTest` | El limitador que ralea el flujo de 30 fps del SDK a los 5 que se publican y pone el techo de la detección |
-| `EsperaCrecienteTest` | La espera que se duplica entre reintentos de la habilitación del mando virtual: sin ella el rechazo del dron se reintentaba —y se avisaba— diez veces por segundo |
-| `MandoVirtualTest` | Zona muerta, recorte, signos de cada eje y rotación por rumbo |
-| `PatrolManagerMandoTest` | El mando se ignora fuera de `MANUAL`, llega entero (pitch, roll, yaw, throttle), el watchdog manda ceros cuando el mando se calla —y no salta de prepo—, y el mensaje de cierre de la palanca no aborta un `manual_move` en curso |
-| `PatrolManagerSalidasDeManualTest` | Toda salida de `MANUAL` deja al dron quieto y no le deja el mando colgado al watchdog, y las dos carreras contra el mando que llega a 10 Hz desde el hilo del WebSocket: ni se cuela después de un regreso a base ni entre la orden de ruta y el estado (con un dron espía que anota cada orden) |
-| `PatrolManagerPerdidaDeSenialTest` | Perder el enlace de radio frena al dron desde CADA estado de vuelo —patrullando, orbitando y en un desvío—, no solo con el control manual tomado |
-| `PatrolManagerAvisosDelDronTest` | Un rechazo del dron se avisa por transición y no por intento: treinta iguales son un aviso, uno distinto avisa, y el mismo motivo recién vuelve pasado el minuto |
-| `PatrolManagerVideoTest` | El reparto del video: todos los cuadros al Comando Central, uno cada 500 ms a la detección (con reloj de mentira), que el techo no se mueva si el controlador emite más rápido, y el cableado real de `start()` |
-| `CommandCenterClientTest` | El mapeo de los mensajes del WebSocket a órdenes, eje por eje |
-| `GeoTest` | Rumbo y metros por grado de longitud, que comparten el simulador y el DJI |
-
-`DetectionClientTest`, `HashDeDronTest`, `CuadroDeVideoTest`,
-`LimitadorDeRitmoTest`, `MandoVirtualTest`, `EsperaCrecienteTest` y `GeoTest`
-corren en la JVM pelada, sin Robolectric.
+| `LoginActivityLaunchTest` | Arranque de `LoginActivity` y `MainActivity` en las APIs 26, 30 y 34, URL precargada y avisos de vuelta al login |
+| `FieldMenuActivityTest` | Cuenta regresiva de la sesión efímera, las acciones y la vuelta al login |
+| `SesionDeCampoTest`, `PreferenciasEnlaceTest`, `HashDeDronTest`, `MenuOperativoTest` | Sesión, preferencias (modo AUTO de fábrica), validación del QR |
+| `DetectionClientTest`, `DescubridorDeDeteccionTest` | URL del enlace en cada modo; la lectura de los anuncios UDP |
+| `SimulatedDroneControllerTest` | Navegación, rumbo, altura, mando y batería del simulador en vuelo |
+| `SimulatedDroneControllerSueloTest` | Arranca en el suelo, despega al comenzar una ruta, rechaza el resto, aterriza y vuelve a base |
+| `OrdenVirtualStickTest` | Los ejes del Virtual Stick, fila por fila de la tabla oficial del MSDK |
+| `NavegacionTest` | Velocidades, frenado, llegada y control de altura |
+| `CuadroDeVideoTest`, `CuadroDeVideoJpegTest`, `LimitadorDeRitmoTest`, `EsperaCrecienteTest`, `MandoVirtualTest`, `GeoTest` | Las piezas puras del vuelo y del video |
+| `PatrolManager*Test` | La máquina de estados: mando, salidas de manual, pérdida de señal, avisos del dron y el reparto del video en sus dos flujos |
+| `CommandCenterClientTest` | El mapeo de los mensajes del WebSocket a órdenes |
 
 ## Estructura
 
 ```
 app/src/main/java/com/tesis/dronepatrol/
-├── LoginActivity.kt         Login del operador de campo contra el Comando Central
-├── FieldMenuActivity.kt     Menú de campo: QR del dron, enlace y cierre de sesión
-├── SesionDeCampo.kt         Sesión efímera del operador (el JWT vive en el proceso)
-├── Config.kt                URLs por defecto + preferencias del enlace
-├── MainActivity.kt          Estado, selección de ruta, simulación y registro
-├── model/Models.kt          Waypoint, PatrolRoute, Telemetry, PatrolState
-├── drone/DroneController.kt Interfaz que abstrae el dron
+├── LoginActivity.kt           Login del operador de campo
+├── FieldMenuActivity.kt       Menú de campo: QR, enlace, cierre de sesión
+├── MainActivity.kt            Pantalla de operación
+├── SesionDeCampo.kt           Sesión efímera del operador
+├── Config.kt                  URLs, puertos y preferencias del enlace
+├── model/Models.kt            Waypoint, PatrolRoute, Telemetry, EstadoDelDron, PatrolState, FlightEvent
+├── drone/DroneController.kt   Interfaz que abstrae el dron (estado, dos flujos de video, órdenes)
 ├── drone/SimulatedDroneController.kt
-├── drone/CuadroDeVideo.kt   NV21 → ARGB reescalado → JPEG (sin SDK: se prueba sin dron)
-├── drone/LimitadorDeRitmo.kt  Deja pasar un cuadro cada N ms
-├── drone/MandoVirtual.kt    Ejes del mando → velocidades (y rotación por rumbo)
-├── patrol/PatrolManager.kt  ★ Máquina de estados del patrullaje
-└── comms/                   Clientes WS: Comando Central y software de detección
+├── drone/Navegacion.kt        La cuenta de los lazos de vuelo
+├── drone/OrdenVirtualStick.kt Ejes del Virtual Stick del MSDK
+├── drone/MandoVirtual.kt      Ejes del mando → velocidades
+├── drone/CuadroDeVideo.kt     NV21 → JPEG en los dos tamaños
+├── patrol/PatrolManager.kt    ★ Máquina de estados del patrullaje
+└── comms/                     Comando Central, detección y el descubridor UDP
 app/src/mock/  → ControllerFactory (simulador)
-app/src/dji/   → ControllerFactory + DjiApplication + DjiDroneController (MSDK v5)
-app/src/debug/ → network security config permisiva (habilita el modo RED en pruebas)
+app/src/dji/   → ControllerFactory + DjiApplication + DjiSdk + DjiDroneController + UsbAttachActivity (MSDK v5)
+app/src/debug/ → network security config permisiva (texto plano en pruebas)
 ```
-
-## Menú de la pantalla de operación
-
-El cajón lateral tiene tres acciones:
-
-| Acción | Qué hace |
-|---|---|
-| **Vista operativa** | El panel de vuelo: estado, batería, señal, ruta y —en modo prueba— los controles de simulación |
-| **Ver registro** | El registro local del vuelo, que antes vivía dentro del propio cajón y no se podía leer sin taparlo |
-| **Cerrar sesión** | Corta el enlace del dron y vuelve al login. El token de máquina no queda vivo esperando a que alguien reabra la app |
-
-Durante la operación **la pantalla no se apaga**: el operador mira el video y
-casi no toca el teléfono, así que dejarla apagarse cortaría justo lo que vino a
-vigilar.
-
-Las tres pantallas sobreviven a la rotación sin recrearse, así que un diálogo
-abierto —el de emparejamiento, el del identificador a mano— ya no se cierra al
-girar el teléfono.
-
-El escaneo del QR abre **en vertical**: el sticker está pegado en el dron y
-girar el teléfono mientras se apunta es justo lo que no se quiere. Si el código
-está rayado o el teléfono no enfoca, **"Escribir el identificador"** permite
-tipear los 32 caracteres a mano, con la misma validación que el QR.

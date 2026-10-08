@@ -1,39 +1,74 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.drawerlayout.widget.DrawerLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    android:id="@+id/drawerLayout"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:orientation="vertical">
 
-    <!-- Contenido -->
-    <LinearLayout
+    <com.google.android.material.appbar.AppBarLayout
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:orientation="vertical">
+        android:layout_height="wrap_content">
 
-        <com.google.android.material.appbar.AppBarLayout
+        <com.google.android.material.appbar.MaterialToolbar
+            android:id="@+id/toolbar"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content">
+            android:layout_height="?attr/actionBarSize" />
+    </com.google.android.material.appbar.AppBarLayout>
 
-            <com.google.android.material.appbar.MaterialToolbar
-                android:id="@+id/toolbar"
-                android:layout_width="match_parent"
-                android:layout_height="?attr/actionBarSize" />
-        </com.google.android.material.appbar.AppBarLayout>
+    <!-- Las dos vistas: operación y registro -->
+    <com.google.android.material.button.MaterialButtonToggleGroup
+        android:id="@+id/grupoVistas"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="@dimen/espacio"
+        android:layout_marginEnd="@dimen/espacio"
+        android:layout_marginBottom="@dimen/espacio_chico"
+        app:checkedButton="@id/btnVistaOperativa">
 
-        <ScrollView
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnVistaOperativa"
+            style="@style/Widget.DronePatrol.Boton.Pestania"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/main_vista_operacion"
+            app:icon="@drawable/ic_operacion"
+            app:iconGravity="textStart" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnVerLogs"
+            style="@style/Widget.DronePatrol.Boton.Pestania"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/main_vista_registro"
+            app:icon="@drawable/ic_registro"
+            app:iconGravity="textStart" />
+    </com.google.android.material.button.MaterialButtonToggleGroup>
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <androidx.core.widget.NestedScrollView
             android:id="@+id/panelOperativo"
             android:layout_width="match_parent"
-            android:layout_height="match_parent">
+            android:layout_height="match_parent"
+            android:clipToPadding="false"
+            android:paddingBottom="@dimen/espacio_grande">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:padding="16dp">
+                android:paddingStart="@dimen/espacio"
+                android:paddingEnd="@dimen/espacio">
 
-                <!-- Estado, batería y señal -->
+                <!-- El dron: enlace, modelo, GPS, en vuelo o en el suelo -->
                 <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/cardDron"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content">
 
@@ -41,130 +76,310 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="vertical"
-                        android:padding="16dp">
+                        android:padding="@dimen/espacio">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <View
+                                android:id="@+id/puntoDron"
+                                android:layout_width="@dimen/punto_estado"
+                                android:layout_height="@dimen/punto_estado"
+                                android:background="@drawable/punto_estado" />
+
+                            <TextView
+                                android:id="@+id/txtDroneStatus"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="@dimen/espacio_medio"
+                                android:layout_weight="1"
+                                android:textAppearance="@style/TextAppearance.DronePatrol.Cuerpo"
+                                tools:text="Esperando al dron" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="@dimen/espacio_medio"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                android:id="@+id/txtModelo"
+                                style="@style/Insignia"
+                                android:text="@string/main_modelo_desconocido" />
+
+                            <TextView
+                                android:id="@+id/txtGps"
+                                style="@style/Insignia"
+                                android:layout_marginStart="@dimen/espacio_chico"
+                                tools:text="GPS 14 sat" />
+
+                            <TextView
+                                android:id="@+id/txtVuelo"
+                                style="@style/Insignia"
+                                android:layout_marginStart="@dimen/espacio_chico"
+                                android:text="@string/main_en_suelo" />
+                        </LinearLayout>
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <!-- Video en vivo, con el estado del patrullaje encima -->
+                <androidx.constraintlayout.widget.ConstraintLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/espacio_medio"
+                    android:background="@drawable/fondo_video">
+
+                    <ImageView
+                        android:id="@+id/imgVideo"
+                        android:layout_width="0dp"
+                        android:layout_height="0dp"
+                        android:contentDescription="@string/main_video_descripcion"
+                        android:scaleType="fitCenter"
+                        app:layout_constraintDimensionRatio="16:9"
+                        app:layout_constraintEnd_toEndOf="parent"
+                        app:layout_constraintStart_toStartOf="parent"
+                        app:layout_constraintTop_toTopOf="parent" />
+
+                    <TextView
+                        android:id="@+id/chipVideo"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_margin="@dimen/espacio_medio"
+                        android:background="@drawable/fondo_chip_video"
+                        android:paddingStart="10dp"
+                        android:paddingTop="4dp"
+                        android:paddingEnd="10dp"
+                        android:paddingBottom="4dp"
+                        android:text="@string/main_video_sin_senal"
+                        android:textAppearance="@style/TextAppearance.DronePatrol.Versalita"
+                        android:textColor="@color/texto_medio"
+                        app:layout_constraintEnd_toEndOf="parent"
+                        app:layout_constraintTop_toTopOf="parent" />
+
+                    <TextView
+                        android:id="@+id/txtState"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_margin="@dimen/espacio_medio"
+                        android:background="@drawable/fondo_chip_video"
+                        android:paddingStart="12dp"
+                        android:paddingTop="6dp"
+                        android:paddingEnd="12dp"
+                        android:paddingBottom="6dp"
+                        android:text="@string/estado_idle"
+                        android:textAppearance="@style/TextAppearance.Material3.TitleMedium"
+                        android:textColor="@color/texto"
+                        android:textStyle="bold"
+                        app:layout_constraintBottom_toBottomOf="@id/imgVideo"
+                        app:layout_constraintStart_toStartOf="parent" />
+                </androidx.constraintlayout.widget.ConstraintLayout>
+
+                <!-- Aviso de vuelo: despegue en curso, problema del dron -->
+                <TextView
+                    android:id="@+id/txtAviso"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/espacio_medio"
+                    android:background="@drawable/fondo_insignia"
+                    android:paddingStart="@dimen/espacio"
+                    android:paddingTop="@dimen/espacio_medio"
+                    android:paddingEnd="@dimen/espacio"
+                    android:paddingBottom="@dimen/espacio_medio"
+                    android:textAppearance="@style/TextAppearance.DronePatrol.Cuerpo"
+                    android:textStyle="bold"
+                    android:visibility="gone"
+                    tools:text="Despegando"
+                    tools:visibility="visible" />
+
+                <!-- Telemetría -->
+                <com.google.android.material.card.MaterialCardView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/espacio_medio">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="@dimen/espacio">
 
                         <TextView
                             style="@style/TituloTarjeta"
-                            android:text="@string/main_estado" />
+                            android:text="@string/main_telemetria" />
 
-                        <TextView
-                            android:id="@+id/txtState"
+                        <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="4dp"
-                            android:text="@string/estado_idle"
-                            android:textSize="22sp"
-                            android:textStyle="bold" />
+                            android:orientation="horizontal">
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <TextView
+                                    style="@style/EtiquetaTelemetria"
+                                    android:text="@string/main_bateria" />
+
+                                <TextView
+                                    android:id="@+id/txtBattery"
+                                    style="@style/CifraTelemetria"
+                                    android:text="@string/main_sin_dato" />
+
+                                <com.google.android.material.progressindicator.LinearProgressIndicator
+                                    android:id="@+id/progressBattery"
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="6dp"
+                                    android:max="100" />
+                            </LinearLayout>
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="@dimen/espacio"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <TextView
+                                    style="@style/EtiquetaTelemetria"
+                                    android:text="@string/main_senal" />
+
+                                <TextView
+                                    android:id="@+id/txtSignal"
+                                    style="@style/CifraTelemetria"
+                                    android:text="@string/main_sin_dato" />
+
+                                <com.google.android.material.progressindicator.LinearProgressIndicator
+                                    android:id="@+id/progressSignal"
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginTop="6dp"
+                                    android:max="100" />
+                            </LinearLayout>
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="@dimen/espacio"
+                            android:orientation="horizontal">
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <TextView
+                                    style="@style/EtiquetaTelemetria"
+                                    android:text="@string/main_altura" />
+
+                                <TextView
+                                    android:id="@+id/txtAltitude"
+                                    style="@style/CifraTelemetria"
+                                    android:text="@string/main_sin_dato" />
+                            </LinearLayout>
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="@dimen/espacio"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <TextView
+                                    style="@style/EtiquetaTelemetria"
+                                    android:text="@string/main_rumbo" />
+
+                                <TextView
+                                    android:id="@+id/txtHeading"
+                                    style="@style/CifraTelemetria"
+                                    android:text="@string/main_sin_dato" />
+                            </LinearLayout>
+                        </LinearLayout>
+
+                        <TextView
+                            style="@style/EtiquetaTelemetria"
+                            android:layout_marginTop="@dimen/espacio"
+                            android:text="@string/main_posicion" />
+
+                        <TextView
+                            android:id="@+id/txtPosition"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:text="@string/main_sin_dato"
+                            android:textAppearance="@style/TextAppearance.DronePatrol.Mono"
+                            android:textColor="@color/texto" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <!-- Enlaces con el Comando Central y la detección -->
+                <com.google.android.material.card.MaterialCardView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/espacio_medio">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="@dimen/espacio">
+
+                        <TextView
+                            style="@style/TituloTarjeta"
+                            android:text="@string/main_enlaces" />
 
                         <TextView
                             android:id="@+id/txtConnStatus"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:text="@string/main_conectando"
-                            android:textSize="13sp" />
-
-                        <TextView
-                            android:id="@+id/txtDetectionStatus"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:textSize="13sp" />
+                            android:textAppearance="@style/TextAppearance.DronePatrol.Cuerpo" />
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/btnRetry"
-                            style="@style/Widget.Material3.Button.TextButton"
+                            style="@style/Widget.DronePatrol.Boton.Texto"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="@string/main_reintentar"
                             android:visibility="gone" />
 
-                        <View
-                            android:layout_width="match_parent"
-                            android:layout_height="1dp"
-                            android:layout_marginTop="12dp"
-                            android:layout_marginBottom="12dp"
-                            android:background="?attr/colorOutlineVariant" />
-
-                        <LinearLayout
+                        <TextView
+                            android:id="@+id/txtDetectionStatus"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:orientation="horizontal">
-
-                            <TextView
-                                android:layout_width="0dp"
-                                android:layout_height="wrap_content"
-                                android:layout_weight="1"
-                                android:text="@string/main_bateria" />
-
-                            <TextView
-                                android:id="@+id/txtBattery"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="@string/main_sin_dato"
-                                android:textStyle="bold" />
-                        </LinearLayout>
-
-                        <com.google.android.material.progressindicator.LinearProgressIndicator
-                            android:id="@+id/progressBattery"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="4dp"
-                            android:max="100"
-                            app:trackCornerRadius="4dp"
-                            app:trackThickness="8dp" />
-
-                        <LinearLayout
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="14dp"
-                            android:orientation="horizontal">
-
-                            <TextView
-                                android:layout_width="0dp"
-                                android:layout_height="wrap_content"
-                                android:layout_weight="1"
-                                android:text="@string/main_senal" />
-
-                            <TextView
-                                android:id="@+id/txtSignal"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="@string/main_sin_dato"
-                                android:textStyle="bold" />
-                        </LinearLayout>
-
-                        <com.google.android.material.progressindicator.LinearProgressIndicator
-                            android:id="@+id/progressSignal"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="4dp"
-                            android:max="100"
-                            app:trackCornerRadius="4dp"
-                            app:trackThickness="8dp" />
+                            android:layout_marginTop="6dp"
+                            android:textAppearance="@style/TextAppearance.DronePatrol.Apagado" />
                     </LinearLayout>
                 </com.google.android.material.card.MaterialCardView>
 
-                <!-- Patrullaje -->
+                <!-- Patrullaje y acciones de vuelo -->
                 <com.google.android.material.card.MaterialCardView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="16dp">
+                    android:layout_marginTop="@dimen/espacio_medio">
 
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="vertical"
-                        android:padding="16dp">
+                        android:padding="@dimen/espacio">
 
                         <TextView
                             style="@style/TituloTarjeta"
                             android:text="@string/main_patrullaje" />
 
                         <com.google.android.material.textfield.TextInputLayout
-                            android:id="@+id/layoutRoutes"
-                            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.ExposedDropdownMenu"
+                            style="@style/Widget.DronePatrol.CampoTexto.Menu"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="8dp"
                             android:hint="@string/main_ruta">
 
                             <com.google.android.material.textfield.MaterialAutoCompleteTextView
@@ -172,135 +387,183 @@
                                 android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
                                 android:inputType="none"
-                                android:text="@string/main_sin_rutas_cargadas" />
+                                android:text="@string/main_sin_rutas" />
                         </com.google.android.material.textfield.TextInputLayout>
 
                         <TextView
                             android:id="@+id/txtRouteInfo"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="4dp"
-                            android:textSize="13sp" />
+                            android:layout_marginTop="6dp"
+                            android:textAppearance="@style/TextAppearance.DronePatrol.Apagado" />
 
                         <com.google.android.material.button.MaterialButton
                             android:id="@+id/btnStartPatrol"
+                            style="@style/Widget.DronePatrol.Boton.Principal"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="12dp"
+                            android:layout_marginTop="@dimen/espacio"
                             android:enabled="false"
-                            android:text="@string/main_comenzar_patrullaje" />
+                            android:text="@string/main_despegar_y_patrullar"
+                            app:icon="@drawable/ic_despegar"
+                            app:iconGravity="textStart" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="@dimen/espacio_medio"
+                            android:orientation="horizontal">
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnStopPatrol"
+                                style="@style/Widget.DronePatrol.Boton.Secundario"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:enabled="false"
+                                android:text="@string/main_detener"
+                                app:icon="@drawable/ic_pausa"
+                                app:iconGravity="textStart" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnResumePatrol"
+                                style="@style/Widget.DronePatrol.Boton.Secundario"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="@dimen/espacio_medio"
+                                android:layout_weight="1"
+                                android:enabled="false"
+                                android:text="@string/main_reanudar"
+                                app:icon="@drawable/ic_play"
+                                app:iconGravity="textStart" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="@dimen/espacio_medio"
+                            android:orientation="horizontal">
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnReturnHome"
+                                style="@style/Widget.DronePatrol.Boton.Peligro"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:enabled="false"
+                                android:text="@string/main_volver_base"
+                                app:icon="@drawable/ic_base"
+                                app:iconGravity="textStart" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnLand"
+                                style="@style/Widget.DronePatrol.Boton.Peligro"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="@dimen/espacio_medio"
+                                android:layout_weight="1"
+                                android:enabled="false"
+                                android:text="@string/main_aterrizar"
+                                app:icon="@drawable/ic_aterrizar"
+                                app:iconGravity="textStart" />
+                        </LinearLayout>
                     </LinearLayout>
                 </com.google.android.material.card.MaterialCardView>
 
-                <!-- Simulación: solo en modo prueba y con el dron simulado -->
+                <!-- Simulación: solo con el dron simulado y en modo prueba -->
                 <com.google.android.material.card.MaterialCardView
                     android:id="@+id/cardSim"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="16dp">
+                    android:layout_marginTop="@dimen/espacio_medio"
+                    app:strokeColor="@color/estado_info">
 
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="vertical"
-                        android:padding="16dp">
+                        android:padding="@dimen/espacio">
 
                         <TextView
                             style="@style/TituloTarjeta"
-                            android:text="@string/main_simulacion" />
+                            android:text="@string/main_simulacion"
+                            android:textColor="@color/estado_info" />
 
                         <TextView
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:text="@string/main_simulacion_ayuda"
-                            android:textSize="13sp" />
+                            android:textAppearance="@style/TextAppearance.DronePatrol.Apagado" />
 
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnLowBattery"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
+                        <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="12dp"
-                            android:text="@string/main_forzar_bateria" />
+                            android:layout_marginTop="@dimen/espacio_medio"
+                            android:orientation="horizontal">
 
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnRecharge"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="8dp"
-                            android:text="@string/main_recargar_bateria" />
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnLowBattery"
+                                style="@style/Widget.DronePatrol.Boton.Secundario"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="@string/main_forzar_bateria" />
 
-                        <!-- Declarado explícito: con tema Material el inflador cambia
-                             <Switch> por SwitchMaterial y ViewBinding no castea -->
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnRecharge"
+                                style="@style/Widget.DronePatrol.Boton.Secundario"
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="@dimen/espacio_medio"
+                                android:layout_weight="1"
+                                android:text="@string/main_recargar_bateria" />
+                        </LinearLayout>
+
                         <com.google.android.material.materialswitch.MaterialSwitch
                             android:id="@+id/switchSignalLoss"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="12dp"
-                            android:text="@string/main_simular_perdida_senal" />
+                            android:layout_marginTop="@dimen/espacio_chico"
+                            android:text="@string/main_simular_perdida_senal"
+                            android:textColor="@color/texto" />
                     </LinearLayout>
                 </com.google.android.material.card.MaterialCardView>
             </LinearLayout>
-        </ScrollView>
+        </androidx.core.widget.NestedScrollView>
 
-        <!-- El registro deja de vivir dentro del cajón: es una vista más, que se
-             elige desde el menú. Adentro del cajón no se podía leer sin taparlo. -->
         <ScrollView
             android:id="@+id/panelLogs"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:padding="16dp"
             android:visibility="gone">
 
-            <TextView
-                android:id="@+id/txtLocalLog"
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fontFamily="monospace"
-                android:text="@string/main_registro_vacio"
-                android:textSize="12sp" />
+                android:orientation="vertical"
+                android:padding="@dimen/espacio">
+
+                <TextView
+                    style="@style/TituloTarjeta"
+                    android:text="@string/main_registro_local" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/main_registro_local_ayuda"
+                    android:textAppearance="@style/TextAppearance.DronePatrol.Apagado" />
+
+                <TextView
+                    android:id="@+id/txtLocalLog"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/espacio_medio"
+                    android:lineSpacingExtra="6dp"
+                    android:text="@string/main_registro_vacio"
+                    android:textAppearance="@style/TextAppearance.DronePatrol.Mono"
+                    android:textColor="@color/texto"
+                    android:textIsSelectable="true" />
+            </LinearLayout>
         </ScrollView>
-    </LinearLayout>
-
-    <!-- Menú lateral: registro local -->
-    <LinearLayout
-        android:layout_width="300dp"
-        android:layout_height="match_parent"
-        android:layout_gravity="start"
-        android:background="?attr/colorSurface"
-        android:orientation="vertical"
-        android:padding="16dp">
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/main_menu_titulo"
-            android:textSize="20sp"
-            android:textStyle="bold" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnVistaOperativa"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="@string/menu_vista_operativa" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnVerLogs"
-            style="@style/Widget.Material3.Button.OutlinedButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/menu_ver_logs" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnSalirOperacion"
-            style="@style/Widget.Material3.Button.TextButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:text="@string/menu_cerrar_sesion" />
-
-    </LinearLayout>
-</androidx.drawerlayout.widget.DrawerLayout>
+    </FrameLayout>
+</LinearLayout>

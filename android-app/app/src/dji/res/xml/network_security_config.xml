@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Flavor dji: la detección corre en una notebook de la misma red Wi-Fi y
+     habla ws:// en claro, y su IP no se puede declarar de antemano (la anuncia
+     por UDP). Por eso acá el texto plano se permite para cualquier destino,
+     también en release: el Comando Central va por https igual, y el enlace en
+     claro queda dentro de la red local del campo. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

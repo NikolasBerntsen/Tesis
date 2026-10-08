@@ -294,11 +294,14 @@ class FieldMenuActivity : AppCompatActivity() {
         vista.editUrlDeteccion.setText(preferencias.urlDeteccionRed)
         vista.editUrlDeteccion.hint = Config.PLANTILLA_URL_DETECCION_RED
 
-        val porCable = preferencias.modoEnlace == ModoEnlace.CABLE
-        vista.radioCable.isChecked = porCable
-        vista.radioRed.isChecked = !porCable
-        // En CABLE la URL es fija, así que el campo no tiene nada que hacer
-        vista.layoutUrlDeteccion.isEnabled = !porCable
+        when (preferencias.modoEnlace) {
+            ModoEnlace.AUTO -> vista.radioAuto.isChecked = true
+            ModoEnlace.CABLE -> vista.radioCable.isChecked = true
+            ModoEnlace.RED -> vista.radioRed.isChecked = true
+        }
+        // Solo en RED la URL la escribe el operador: en CABLE es fija y en AUTO
+        // la anuncia la laptop.
+        vista.layoutUrlDeteccion.isEnabled = preferencias.modoEnlace == ModoEnlace.RED
         vista.grupoModo.setOnCheckedChangeListener { _, elegido ->
             vista.layoutUrlDeteccion.isEnabled = elegido == R.id.radioRed
         }
@@ -312,7 +315,11 @@ class FieldMenuActivity : AppCompatActivity() {
     }
 
     private fun guardarEnlace(vista: DialogConfigEnlaceBinding, urlPrevia: String) {
-        val modo = if (vista.radioRed.isChecked) ModoEnlace.RED else ModoEnlace.CABLE
+        val modo = when {
+            vista.radioRed.isChecked -> ModoEnlace.RED
+            vista.radioCable.isChecked -> ModoEnlace.CABLE
+            else -> ModoEnlace.AUTO
+        }
         preferencias.modoEnlace = modo
         preferencias.urlDeteccionRed = vista.editUrlDeteccion.text.toString()
         if (modo == ModoEnlace.RED && preferencias.urlDeteccionRed.isEmpty()) {

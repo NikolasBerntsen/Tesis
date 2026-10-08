@@ -1,49 +1,51 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Paleta "mármol y oro", la misma que usa la consola web: mármol blanco cálido
-     y, donde la piedra está gastada, un oro metalizado. El oro es un acento
-     (filos, estados activos, botones principales); nunca un fondo grande. -->
+<!-- Consola de campo. La app se usa a pleno sol, con el teléfono enganchado al
+     control: fondo oscuro de alto contraste, texto claro, y UN acento ámbar
+     para lo que hay que encontrar con el pulgar sin mirar (la acción principal).
+     Los colores de estado son los mismos que usa la consola web, para que
+     "batería en rojo" signifique lo mismo en los dos lados. -->
 <resources>
 
-    <!-- Mármol: del más claro (fondo de ventana) al más gastado (relieves) -->
-    <color name="marmol_0">#FBFAF7</color>
-    <color name="marmol_1">#F5F2EC</color>
-    <color name="marmol_2">#EDE8DE</color>
-    <color name="marmol_3">#E3DCCE</color>
+    <!-- Superficies: del fondo de ventana a la tarjeta más elevada -->
+    <color name="fondo">#0C1218</color>
+    <color name="superficie">#151D26</color>
+    <color name="superficie_alta">#1C2733</color>
+    <color name="superficie_maxima">#243140</color>
 
-    <!-- Veta: es lo que hace de borde en toda la interfaz -->
-    <color name="veta">#D8CFBE</color>
-    <color name="veta_fuerte">#C4B8A2</color>
+    <!-- Bordes -->
+    <color name="borde">#2E3B4A</color>
+    <color name="borde_fuerte">#45566A</color>
 
-    <!-- Tinta: negro cálido. El texto nunca es gris frío -->
-    <color name="tinta">#2B2620</color>
-    <color name="tinta_media">#5C544A</color>
-    <color name="tinta_suave">#8A8073</color>
+    <!-- Texto: tres niveles, todos AA sobre las superficies -->
+    <color name="texto">#E8EEF4</color>
+    <color name="texto_medio">#A3B1BF</color>
+    <color name="texto_suave">#75859A</color>
 
-    <!-- Oro. Sobre mármol solo "oro_oscuro" llega a contraste AA para texto:
-         los demás van en rellenos con tinta encima, en filos y en íconos. -->
-    <color name="oro">#B8912F</color>
-    <color name="oro_claro">#E4CE8A</color>
-    <color name="oro_oscuro">#8A6A1C</color>
+    <!-- Acento ámbar: botones principales, selección, cifras clave -->
+    <color name="acento">#F4B642</color>
+    <color name="acento_oscuro">#D99A1E</color>
+    <color name="acento_tenue">#2EF4B642</color>
+    <!-- Texto encima del ámbar -->
+    <color name="sobre_acento">#1A1200</color>
 
-    <!-- Paradas del degradé de lámina de oro (el resto son "oro" y "oro_oscuro") -->
-    <color name="oro_lamina_reflejo">#F0E3B8</color>
-    <color name="oro_lamina_medio">#D9BE6B</color>
+    <!-- Estados -->
+    <color name="estado_ok">#3DD68C</color>
+    <color name="estado_alerta">#F4B642</color>
+    <color name="estado_peligro">#FF5A5A</color>
+    <color name="estado_info">#5AB0FF</color>
+    <color name="estado_apagado">#5A6A7B</color>
 
-    <!-- Estados, apagados a propósito: nada de neón -->
-    <color name="estado_ok">#4F7A46</color>
-    <color name="estado_alerta">#B07A1E</color>
-    <color name="estado_peligro">#9C3B30</color>
-    <color name="estado_info">#3D6076</color>
+    <!-- Versión tenue de cada estado, para el fondo de una insignia -->
+    <color name="estado_ok_tenue">#263DD68C</color>
+    <color name="estado_alerta_tenue">#26F4B642</color>
+    <color name="estado_peligro_tenue">#26FF5A5A</color>
+    <color name="estado_info_tenue">#265AB0FF</color>
 
-    <!-- Versión tenue de cada estado, para pintar el fondo de una insignia -->
-    <color name="estado_ok_tenue">#1A4F7A46</color>
-    <color name="estado_alerta_tenue">#1AB07A1E</color>
-    <color name="estado_peligro_tenue">#1A9C3B30</color>
-    <color name="estado_info_tenue">#1A3D6076</color>
+    <!-- Pulsaciones -->
+    <color name="pulsacion_clara">#33E8EEF4</color>
+    <color name="pulsacion_oscura">#331A1200</color>
 
-    <!-- Pulsaciones: el oro para lo que se apoya sobre mármol, la tinta para lo
-         que se apoya sobre oro -->
-    <color name="pulsacion_oro">#26B8912F</color>
-    <color name="pulsacion_tinta">#1F2B2620</color>
+    <!-- El visor de video: negro de verdad, para que el cuadro se vea entero -->
+    <color name="video_fondo">#000000</color>
 
 </resources>

@@ -1,0 +1,12 @@
+# PyTorch con CUDA: el paquete de PyPI en Windows viene solo con CPU, por eso el
+# índice extra. cu128 anda en las RTX 40xx, tanto de escritorio como de notebook.
+# Si ya tenés el entorno del proyecto de entrenamiento (tests ia tesis/.venv),
+# correr.bat lo usa y acá solo falta aiohttp.
+--extra-index-url https://download.pytorch.org/whl/cu128
+
+torch==2.11.0+cu128
+torchvision
+ultralytics==8.4.118
+opencv-python
+numpy
+aiohttp>=3.9

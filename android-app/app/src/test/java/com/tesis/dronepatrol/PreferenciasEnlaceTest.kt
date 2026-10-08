@@ -24,10 +24,13 @@ class PreferenciasEnlaceTest {
         assertEquals("https://tesis.144-22-138-149.sslip.io", preferencias.urlComandoCentral)
     }
 
-    /** El cable es el modo recomendado, así que es el que sale de fábrica. */
+    /**
+     * En el campo el puerto USB del teléfono lo ocupa el control, así que de
+     * fábrica la laptop se descubre sola por la red.
+     */
     @Test
-    fun sinNadaGuardadoElEnlaceEsPorCable() {
-        assertEquals(ModoEnlace.CABLE, preferencias.modoEnlace)
+    fun sinNadaGuardadoElEnlaceEsAutomatico() {
+        assertEquals(ModoEnlace.AUTO, preferencias.modoEnlace)
         assertEquals("", preferencias.urlDeteccionRed)
     }
 

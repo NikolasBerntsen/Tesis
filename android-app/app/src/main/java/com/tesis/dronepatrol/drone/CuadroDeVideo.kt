@@ -27,6 +27,24 @@ object CuadroDeVideo {
     /** 5 cuadros por segundo hacia el Comando Central, como fija el contrato. */
     const val INTERVALO_CUADRO_MS = 200L
 
+    /**
+     * Ancho de los cuadros que van al software de detección. Es el doble que
+     * el de la consola porque el modelo está entrenado con VisDrone a 1280 px y
+     * desde 50 m una persona ocupa diez pixeles a 640: a esa escala no hay
+     * detector que la vea. El costo es por cuadro y van pocos (ver
+     * [INTERVALO_DETECCION_MS]).
+     */
+    const val ANCHO_DETECCION = 1280
+
+    /** La detección necesita nitidez más que tamaño: un poco más de calidad que la consola. */
+    const val CALIDAD_JPEG_DETECCION = 75
+
+    /**
+     * Uno cada medio segundo como mucho hacia la detección: dos por segundo,
+     * el techo que fija el contrato §1 para el enlace más flojo de los tres.
+     */
+    const val INTERVALO_DETECCION_MS = 500L
+
     /** Medidas en pixeles de un cuadro. */
     data class Tamanio(val ancho: Int, val alto: Int)
 
@@ -38,11 +56,11 @@ object CuadroDeVideo {
      * (V,U) por cada bloque de 2x2 pixeles: un lado impar deja media muestra
      * colgada y no aporta nada.
      */
-    fun tamanioDestino(anchoOrigen: Int, altoOrigen: Int): Tamanio {
+    fun tamanioDestino(anchoOrigen: Int, altoOrigen: Int, anchoMaximo: Int = ANCHO_MAXIMO): Tamanio {
         require(anchoOrigen >= 2 && altoOrigen >= 2) {
             "Un cuadro de ${anchoOrigen}x$altoOrigen no es un cuadro de video"
         }
-        val ancho = aPar(minOf(anchoOrigen, ANCHO_MAXIMO))
+        val ancho = aPar(minOf(anchoOrigen, anchoMaximo))
         val alto = aPar(Math.round(ancho.toDouble() * altoOrigen / anchoOrigen).toInt())
         return Tamanio(ancho, alto)
     }
@@ -121,11 +139,18 @@ object CuadroDeVideo {
      * Devuelve null por el mismo motivo que [nv21AArgb]: el cuadro vino corto o
      * con medidas imposibles y se descarta sin hacer ruido.
      */
-    fun nv21AJpeg(nv21: ByteArray, offset: Int, anchoOrigen: Int, altoOrigen: Int): ByteArray? {
+    fun nv21AJpeg(
+        nv21: ByteArray,
+        offset: Int,
+        anchoOrigen: Int,
+        altoOrigen: Int,
+        anchoMaximo: Int = ANCHO_MAXIMO,
+        calidad: Int = CALIDAD_JPEG,
+    ): ByteArray? {
         if (anchoOrigen < 2 || altoOrigen < 2) return null
-        val destino = tamanioDestino(anchoOrigen, altoOrigen)
+        val destino = tamanioDestino(anchoOrigen, altoOrigen, anchoMaximo)
         val pixeles = nv21AArgb(nv21, offset, anchoOrigen, altoOrigen, destino) ?: return null
-        return aJpeg(pixeles, destino)
+        return aJpeg(pixeles, destino, calidad)
     }
 
     /**

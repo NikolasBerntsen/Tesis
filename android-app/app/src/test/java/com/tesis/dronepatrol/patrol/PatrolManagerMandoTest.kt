@@ -51,7 +51,9 @@ class PatrolManagerMandoTest {
     }
 
     private val alcance = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val dron = SimulatedDroneController()
+    // En el aire desde el arranque: en el suelo el simulador rechaza el mando,
+    // igual que el dron real, y lo que se prueba acá es el mando.
+    private val dron = SimulatedDroneController(arrancaEnElAire = true)
     private val comandoCentral = CommandCenterClient(alcance)
     private val deteccion = DetectionClient(alcance)
     private lateinit var patrulla: PatrolManager
