@@ -57,14 +57,26 @@ oculto, para que el emulador siga arrancando con `mockDebug` sin tocar nada.
 También se puede forzar con `-PenableDji` o con la variable de entorno
 `DJI_API_KEY`.
 
+**El build de campo es `djiRelease`, no `djiDebug`.** El código real del MSDK
+viene empaquetado y `Helper.install()` lo desempaqueta al arrancar; ese
+cargador trae detección de depuración y **en una app `debuggable` no carga el
+SDK**: el log muestra `No implementation found for ... Helper.i()` y después
+`ClassNotFoundException: dji.v5.manager.interfaces.SDKManagerCallback`, y la
+pantalla queda en *"el SDK de DJI no carga en un build depurable"*. Es lo que
+reportan los issues [#623](https://github.com/dji-sdk/Mobile-SDK-Android-V5/issues/623)
+y [#671](https://github.com/dji-sdk/Mobile-SDK-Android-V5/issues/671) del
+repo del MSDK sin respuesta de DJI; comprobado en un Galaxy S23 Ultra con
+Android 16: `djiDebug` falla, `djiRelease` registra el SDK. El release del
+proyecto se firma con el keystore de debug de la máquina (no hay keystore
+propio), así que se instala igual que un debug.
+
 ```bash
-./gradlew assembleDjiDebug          # con DJI_API_KEY en local.properties
-./gradlew assembleDjiDebug -PenableDji
+./gradlew assembleDjiRelease        # con DJI_API_KEY en local.properties
+adb install -r app/build/outputs/apk/dji/release/app-dji-release.apk
 ```
 
-El APK queda en `app/build/outputs/apk/dji/debug/`. Para instalarlo en el
-teléfono sin cable (el puerto USB va a estar ocupado por el control):
-activar *Depuración inalámbrica* en el teléfono y `adb pair` / `adb connect`,
+Instalarlo **antes** de enchufar el control (el puerto USB del teléfono queda
+ocupado); o activar *Depuración inalámbrica* y usar `adb pair` / `adb connect`,
 o copiar el APK y abrirlo desde el teléfono.
 
 > El build de `release` del flavor `dji` permite tráfico en claro (`ws://`)
@@ -128,6 +140,7 @@ lazo a 10 Hz que manda velocidades.
 |---|---|
 | *"DJI rechazó el registro de la app (INVALID_METADATA)"* | La App Key es de una app con otro package name, o no hay internet la primera vez |
 | *"la app se compiló sin App Key"* | Falta `DJI_API_KEY` en `local.properties` (y se compiló con `-PenableDji`) |
+| *"el SDK de DJI no carga en un build depurable"* / `ClassNotFoundException: SDKManagerCallback` | Se instaló `djiDebug`. El cargador del MSDK no desempaqueta el SDK en una app `debuggable`: usar `djiRelease` |
 | La app se cierra al abrir en el emulador | El flavor `dji` no corre en x86: usar `mockDebug` |
 | *"Conectá el control al teléfono…"* y no cambia | El cable del control va en el puerto **superior** del RC-N3; probar otro cable (tiene que ser de datos) |
 | *"el dron no aceptó el mando virtual"* | Control en modo S o C, o un regreso a base en curso |

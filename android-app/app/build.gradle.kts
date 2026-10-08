@@ -24,12 +24,14 @@ val djiApiKey: String = run {
 
 android {
     namespace = "com.tesis.dronepatrol"
-    compileSdk = 34
+    // 35: la configuración sugerida por DJI para el MSDK desde 5.17 ("Android
+    // API upgraded to 35"); el sample oficial compila y apunta a 35.
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.tesis.dronepatrol"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 35
         versionCode = 2
         versionName = "0.2.0"
     }
@@ -55,6 +57,13 @@ android {
             // incluidos) para que AGP genere el informe de cobertura que lee
             // SonarQube. Va solo en debug: el APK de release no se instrumenta.
             enableUnitTestCoverage = true
+        }
+        getByName("release") {
+            // No hay un keystore propio del proyecto: sin firma el APK de release
+            // no se puede instalar en ningún teléfono. Se firma con el keystore
+            // de debug de la máquina, que alcanza para las salidas de campo (no
+            // para publicar en una tienda).
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 

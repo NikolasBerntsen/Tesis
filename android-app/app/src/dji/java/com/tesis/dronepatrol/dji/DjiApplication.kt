@@ -2,6 +2,7 @@ package com.tesis.dronepatrol.dji
 
 import android.app.Application
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.util.Log
 import dji.v5.common.error.IDJIError
@@ -19,6 +20,14 @@ import dji.v5.manager.interfaces.SDKManagerCallback
  * ocurriera fuera de un try/catch, la app se cerraría al instante y sin UI,
  * porque pasa antes de que exista la Activity. Lo que pasa queda en [DjiSdk]
  * para que la pantalla de operación lo muestre con todas las letras.
+ *
+ * **Solo funciona en un build NO depurable (`djiRelease`).** El código real del
+ * MSDK viene empaquetado y `Helper.install()` lo desempaqueta e inyecta en el
+ * classloader; ese cargador trae detección de depuración y en una app con
+ * `android:debuggable="true"` no inyecta nada: el SDK queda sin cargar y la app
+ * muere más tarde con `ClassNotFoundException: SDKManagerCallback` (es lo que
+ * reportan los issues #623 y #671 del repo del MSDK). Comprobado en un Galaxy
+ * S23 Ultra con Android 16: `djiDebug` falla, `djiRelease` registra el SDK.
  */
 class DjiApplication : Application() {
 
@@ -50,7 +59,16 @@ class DjiApplication : Application() {
         runCatching { initSdk() }
             .onFailure {
                 Log.e(TAG, "Falló la inicialización del SDK de DJI", it)
-                DjiSdk.actualizar { e -> e.copy(ultimoError = "falló la inicialización del SDK: ${it.message}") }
+                val depurable = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+                DjiSdk.actualizar { e ->
+                    e.copy(
+                        ultimoError = if (depurable) {
+                            "el SDK de DJI no carga en un build depurable: instalá la variante djiRelease"
+                        } else {
+                            "falló la inicialización del SDK: ${it.message}"
+                        },
+                    )
+                }
             }
     }
 

@@ -39,7 +39,7 @@ vence antes de terminar, se vuelve al login con el aviso correspondiente.
 | Flavor | Qué hace | Cuándo usarlo |
 |---|---|---|
 | `mock` | Dron **simulado** (`SimulatedDroneController`): arranca en el suelo, despega solo al comenzar un patrullaje, waypoints con su altura, órbita, RTH, aterrizaje, drenaje de batería, failsafe por pérdida de enlace y video sintético (en los dos tamaños del contrato). | Desarrollo y demo sin hardware. Corre en el emulador o en cualquier teléfono. |
-| `dji` | Integración real con **DJI MSDK v5.18** (`DjiDroneController`): Mini 4 Pro con RC-N2/RC-N3. Requiere App Key y un teléfono ARM64; **no corre en el emulador**. | Salidas de campo. Ver [docs/DJI.md](../docs/DJI.md). |
+| `dji` | Integración real con **DJI MSDK v5.18** (`DjiDroneController`): Mini 4 Pro con RC-N2/RC-N3. Requiere App Key y un teléfono ARM64; **no corre en el emulador** y **solo carga en la variante `djiRelease`** (el cargador del SDK no desempaqueta el SDK en un build depurable). | Salidas de campo. Ver [docs/DJI.md](../docs/DJI.md). |
 
 > El flavor `dji` aparece en Android Studio **solo si hay App Key** en
 > `local.properties` (`DJI_API_KEY=...`) o se compila con `-PenableDji`. Sin
