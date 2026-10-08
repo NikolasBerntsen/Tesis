@@ -91,10 +91,14 @@ o copiar el APK y abrirlo desde el teléfono.
 2. **Dron encendido, control encendido, teléfono enganchado por el cable
    superior.** Android ofrece abrir Drone Patrol al enchufar el control
    (`USB_ACCESSORY_ATTACHED`); si no, abrirla a mano.
-3. En la pantalla de operación, la tarjeta **Dron** tiene que decir *"En el
-   suelo, listo para despegar"* con el punto en verde. Hasta entonces dice qué
-   falta, en este orden: SDK registrado → control conectado → enlace con la
-   aeronave → punto de retorno fijado → GPS con **8 satélites** como mínimo.
+3. Después de escanear el QR, la pantalla **Conectar el dron** muestra la
+   verificación en vivo: SDK registrado → control por USB → aeronave enlazada
+   (con su modelo y número de serie; avisa si no coincide con la ficha) → GPS
+   y punto de retorno, más la distancia entre el teléfono y el dron. **Hasta que
+   la aeronave no está enlazada, *Desplegar* queda deshabilitado.** Ya en la
+   pantalla de operación, la tarjeta **Dron** tiene que decir *"En el suelo,
+   listo para despegar"* con el punto en verde (hace falta el punto de retorno
+   y **8 satélites** como mínimo).
 4. **Área de despegue despejada.** "Despegar y patrullar" enciende los motores
    solo: el dron salta a 1,2 m (despegue automático del SDK), **sube derecho a
    la altura del primer waypoint** sin moverse en el plano, y recién entonces

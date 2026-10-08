@@ -12,6 +12,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
@@ -26,7 +27,6 @@ import com.journeyapps.barcodescanner.ScanOptions
 import com.tesis.dronepatrol.comms.ModoEnlace
 import com.tesis.dronepatrol.databinding.ActivityFieldMenuBinding
 import com.tesis.dronepatrol.databinding.DialogConfigEnlaceBinding
-import com.tesis.dronepatrol.databinding.DialogModoOperacionBinding
 import com.tesis.dronepatrol.model.Emparejamiento
 import kotlin.coroutines.resume
 import kotlinx.coroutines.delay
@@ -121,7 +121,12 @@ class FieldMenuActivity : AppCompatActivity() {
             while (isActive) {
                 val restante = SesionDeCampo.restanteMs()
                 if (restante == 0L) {
-                    volverAlLogin(getString(R.string.aviso_sesion_vencida), SesionDeCampo.Motivo.VENCIDA)
+                    // Si la pantalla está atrás —con la operación encima— no se
+                    // salta al login desde acá: eso cortaría la operación. Al
+                    // volver, onResume() se encarga.
+                    if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                        volverAlLogin(getString(R.string.aviso_sesion_vencida), SesionDeCampo.Motivo.VENCIDA)
+                    }
                     return@launch
                 }
                 val segundos = restante / 1_000
@@ -202,7 +207,7 @@ class FieldMenuActivity : AppCompatActivity() {
                     deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}",
                 )
                 binding.txtEstado.text = ""
-                elegirModoDeOperacion(emparejamiento, donde != null)
+                irAConectarElDron(emparejamiento, donde != null)
             } catch (e: Exception) {
                 val motivo = e.message.orEmpty()
                 if (!SesionDeCampo.vigente || motivo.contains(MOTIVO_SESION_VENCIDA)) {
@@ -240,51 +245,26 @@ class FieldMenuActivity : AppCompatActivity() {
         }
     }
 
-    private fun elegirModoDeOperacion(emparejamiento: Emparejamiento, conUbicacion: Boolean) {
-        val dron = emparejamiento.drone
-        val vista = DialogModoOperacionBinding.inflate(layoutInflater)
-        vista.txtDron.text = dron.displayName
-        vista.txtDetalleDron.text = listOf(dron.model, hashAbreviado(dron.hash))
-            .filter { it.isNotBlank() }
-            .joinToString(" · ")
-        vista.txtUbicacion.setText(
-            if (conUbicacion) R.string.modo_con_ubicacion else R.string.modo_sin_ubicacion,
-        )
-
-        val dialogo = MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.modo_titulo)
-            .setView(vista.root)
-            .setNegativeButton(R.string.cancelar, null)
-            .create()
-        vista.btnModoPrueba.setOnClickListener {
-            dialogo.dismiss()
-            desplegar(emparejamiento, "TEST")
-        }
-        vista.btnModoDespliegue.setOnClickListener {
-            dialogo.dismiss()
-            desplegar(emparejamiento, "DEPLOY")
-        }
-        dialogo.show()
-    }
-
     /**
-     * Arranca la operación con el token del dron. La sesión del operador de
-     * campo termina acá: de la pantalla principal para adelante la app habla
-     * como máquina, no como persona.
+     * Emparejado: sigue la pantalla que conecta con el dron físico, y recién
+     * desde ahí la operación. La sesión del operador de campo NO se cierra:
+     * sigue viva por debajo para volver al menú al terminar la operación, o
+     * para desplegar otro dron, sin reingresar. Vence sola a los 20 minutos del
+     * login, y de eso se entera el menú al volver (ver onResume).
      */
-    private fun desplegar(emparejamiento: Emparejamiento, modo: String) {
+    private fun irAConectarElDron(emparejamiento: Emparejamiento, conUbicacion: Boolean) {
         val dron = emparejamiento.drone
-        SesionDeCampo.cerrar(SesionDeCampo.Motivo.EMPAREJAMIENTO)
         startActivity(
-            Intent(this, MainActivity::class.java)
+            Intent(this, ConexionDronActivity::class.java)
                 .putExtra(MainActivity.EXTRA_DRONE_TOKEN, emparejamiento.token)
                 .putExtra(MainActivity.EXTRA_DRONE_HASH, dron.hash)
                 .putExtra(MainActivity.EXTRA_DISPLAY_NAME, dron.displayName)
                 .putExtra(MainActivity.EXTRA_BASE_LAT, dron.base?.lat ?: Double.NaN)
                 .putExtra(MainActivity.EXTRA_BASE_LON, dron.base?.lon ?: Double.NaN)
-                .putExtra(MainActivity.EXTRA_MODE, modo),
+                .putExtra(ConexionDronActivity.EXTRA_MODELO_FICHA, dron.model)
+                .putExtra(ConexionDronActivity.EXTRA_BASE_NOMBRE, dron.base?.name.orEmpty())
+                .putExtra(ConexionDronActivity.EXTRA_CON_UBICACION, conUbicacion),
         )
-        finish()
     }
 
     private fun configurarEnlace() {

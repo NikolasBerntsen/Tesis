@@ -58,11 +58,36 @@
     <string name="identificador_ayuda">Son los 32 caracteres que están impresos debajo del código QR del dron.</string>
     <string name="identificador_pista">a3f9c1b27d5e4408f61a9c3e772b7e42</string>
 
-    <!-- Elección del modo de operación -->
-    <string name="modo_titulo">Dron emparejado</string>
+    <!-- Conexión con el dron físico -->
+    <string name="conexion_titulo">Conectar el dron</string>
+    <string name="conexion_subtitulo">Enchufá el control al teléfono por el puerto superior, encendé el dron y esperá el enlace. Hasta que no esté, no se puede desplegar.</string>
+    <string name="conexion_ficha">Dron emparejado</string>
+    <string name="conexion_base">Base: %1$s</string>
     <string name="modo_con_ubicacion">Ubicación del despliegue registrada.</string>
     <string name="modo_sin_ubicacion">Queda registrado sin ubicación.</string>
-    <string name="modo_pregunta">¿Cómo vas a operar?</string>
+    <string name="conexion_verificacion">Verificación del dron</string>
+    <string name="conexion_sdk">SDK de DJI</string>
+    <string name="conexion_sdk_ok">Registrado</string>
+    <string name="conexion_sdk_esperando">Registrando la app ante DJI…</string>
+    <string name="conexion_control">Control (USB)</string>
+    <string name="conexion_control_ok">Conectado al teléfono</string>
+    <string name="conexion_control_esperando">Enchufá el cable del control al teléfono</string>
+    <string name="conexion_aeronave">Aeronave</string>
+    <string name="conexion_aeronave_ok">%1$s · serie %2$s</string>
+    <string name="conexion_aeronave_esperando">Sin enlace: encendé el dron y esperá</string>
+    <string name="conexion_gps">GPS y punto de retorno</string>
+    <string name="conexion_gps_ok">%1$d satélites · punto de retorno fijado</string>
+    <string name="conexion_gps_esperando">%1$d satélites · esperando el punto de retorno</string>
+    <string name="conexion_distancia">Distancia al dron</string>
+    <string name="conexion_distancia_m">%1$.0f m</string>
+    <string name="conexion_distancia_sin_dato">—</string>
+    <string name="conexion_distancia_ayuda">Entre el teléfono y la aeronave, por GPS de los dos.</string>
+    <string name="conexion_bateria">Batería del dron</string>
+    <string name="conexion_modelo_distinto">La ficha dice "%1$s" y la aeronave enlazada es "%2$s": revisá que sea el dron correcto.</string>
+    <string name="conexion_listo">Dron conectado: podés desplegar.</string>
+    <string name="conexion_desplegar">Desplegar</string>
+    <string name="conexion_modo_prueba">Modo prueba</string>
+    <string name="conexion_volver">Volver al menú de campo</string>
     <string name="modo_prueba">Modo prueba</string>
     <string name="modo_prueba_ayuda">Con los controles de simulación a mano (solo con el dron simulado).</string>
     <string name="modo_despliegue">Despliegue</string>
@@ -158,6 +183,9 @@
     <string name="main_renombrar">Renombrar dron</string>
     <string name="main_nombre_visible">Nombre visible</string>
     <string name="main_menu_titulo">Menú</string>
+    <string name="main_menu_terminar">Terminar operación</string>
+    <string name="main_confirmar_salir_titulo">¿Terminar la operación?</string>
+    <string name="main_confirmar_salir_texto">El dron está en el aire. Al terminar, la app deja de comandarlo y el control físico recupera el mando: tenelo en la mano.</string>
     <string name="menu_vista_operativa">Vista operativa</string>
     <string name="menu_ver_logs">Ver registro</string>
     <string name="menu_cerrar_sesion">Cerrar sesión</string>

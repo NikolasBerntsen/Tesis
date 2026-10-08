@@ -192,8 +192,13 @@ Reemplaza al viejo inicio de sesión del dron con usuario y contraseña.
    eliminado y esté activo, y devuelve un **token de rol `drone`** con el que la
    app se conecta al WebSocket.
 5. El emparejamiento queda registrado (`DRONE_PAIRED`) con quién lo hizo, desde
-   dónde y con qué dispositivo. La sesión del operador de campo **se cierra ahí
-   mismo** (`FIELD_SESSION_CLOSED`).
+   dónde y con qué dispositivo. La sesión del operador de campo **sigue viva**
+   durante la operación (así el operador vuelve al menú de campo al terminar,
+   sin reingresar); se cierra cuando el operador la cierra (`FIELD_SESSION_CLOSED`
+   con su motivo) o vence sola a los 20 minutos del login.
+6. Antes de operar, la app muestra la pantalla de **conexión con el dron
+   físico**: verifica el SDK, el control por USB, la aeronave enlazada (modelo y
+   número de serie) y el GPS, y no deja desplegar hasta que el enlace esté.
 
 Por qué el hash suelto no alcanza para hacerse pasar por un dron: el
 emparejamiento **exige un JWT válido de operador de campo**. El sticker es un

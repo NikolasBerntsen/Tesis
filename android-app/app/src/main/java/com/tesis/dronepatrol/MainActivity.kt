@@ -21,7 +21,8 @@ import com.tesis.dronepatrol.comms.CommandCenterClient
 import com.tesis.dronepatrol.comms.DetectionClient
 import com.tesis.dronepatrol.comms.ModoEnlace
 import com.tesis.dronepatrol.databinding.ActivityMainBinding
-import com.tesis.dronepatrol.drone.ControllerFactory
+import androidx.activity.OnBackPressedCallback
+import com.tesis.dronepatrol.drone.DronEnCurso
 import com.tesis.dronepatrol.drone.SimulatedDroneController
 import com.tesis.dronepatrol.model.EstadoDelDron
 import com.tesis.dronepatrol.model.FlightEvent
@@ -90,7 +91,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private lateinit var binding: ActivityMainBinding
-    private val controller = ControllerFactory.create()
+
+    /** El controlador que la pantalla de conexión ya encendió (o uno nuevo, si se llega directo). */
+    private val controller = DronEnCurso.obtener()
     private lateinit var commandCenter: CommandCenterClient
     private lateinit var detection: DetectionClient
     private lateinit var manager: PatrolManager
@@ -151,6 +154,13 @@ class MainActivity : AppCompatActivity() {
             getString(if (modo == "TEST") R.string.main_modo_prueba else R.string.main_modo_despliegue),
             hashAbreviado(droneHash),
         )
+        // "Atrás" es terminar la operación: con el dron volando, se confirma
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() = pedirTerminarOperacion()
+            },
+        )
     }
 
     /** Las dos vistas: operación y registro. */
@@ -175,26 +185,42 @@ class MainActivity : AppCompatActivity() {
             mostrarDialogoRenombrar()
             true
         }
-        R.id.action_cerrar_sesion -> {
-            desconectarYVolverAlLogin()
+        R.id.action_terminar -> {
+            pedirTerminarOperacion()
             true
         }
         else -> super.onOptionsItemSelected(item)
     }
 
+    /** Con el dron en el aire, terminar se confirma: al cortar, el control físico recupera el mando. */
+    private fun pedirTerminarOperacion() {
+        if (!ultimoEstadoDron.enVuelo) {
+            terminarOperacion()
+            return
+        }
+        confirmar(R.string.main_confirmar_salir_titulo, getString(R.string.main_confirmar_salir_texto), R.string.main_menu_terminar) {
+            terminarOperacion()
+        }
+    }
+
     /**
-     * Corta el enlace del dron y vuelve al login. La sesión de máquina termina
-     * acá: el token del dron no queda vivo esperando a que alguien reabra.
+     * Corta el enlace del dron y los sockets y vuelve atrás. Si la sesión del
+     * operador de campo sigue viva, atrás es el menú de campo (quedó debajo y
+     * no hay que reingresar); si venció, el login. El token del dron no queda
+     * vivo esperando a que alguien reabra.
      */
-    private fun desconectarYVolverAlLogin() {
+    private fun terminarOperacion() {
         controller.disconnect()
+        DronEnCurso.soltar()
         commandCenter.disconnect()
         detection.disconnect()
-        startActivity(
-            Intent(this, LoginActivity::class.java).addFlags(
-                Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK,
-            ),
-        )
+        if (!SesionDeCampo.vigente) {
+            startActivity(
+                Intent(this, LoginActivity::class.java)
+                    .putExtra(LoginActivity.EXTRA_AVISO, getString(R.string.aviso_sesion_vencida))
+                    .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK),
+            )
+        }
         finish()
     }
 
@@ -550,6 +576,7 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         runCatching { multicastLock?.release() }
         controller.disconnect()
+        DronEnCurso.soltar()
         commandCenter.disconnect()
         detection.disconnect()
     }

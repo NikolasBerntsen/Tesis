@@ -69,6 +69,7 @@ class SimulatedDroneController(private val arrancaEnElAire: Boolean = false) : D
         const val SIGNAL_MIN_PCT = 10
         const val SATELITES_SIMULADOS = 14
         const val MODELO = "Simulado"
+        const val SERIE = "SIM-0001"
     }
 
     /**
@@ -257,7 +258,7 @@ class SimulatedDroneController(private val arrancaEnElAire: Boolean = false) : D
         scope.coroutineContext.cancelChildren()
         loops = null
         mode = Mode.IDLE
-        _estado.update { it.copy(conectado = false, enVuelo = false, detalle = "Simulador desconectado") }
+        _estado.update { it.copy(conectado = false, controlConectado = false, enVuelo = false, detalle = "Simulador desconectado") }
     }
 
     /**
@@ -279,6 +280,8 @@ class SimulatedDroneController(private val arrancaEnElAire: Boolean = false) : D
         _estado.update {
             it.copy(
                 conectado = true,
+                controlConectado = true,
+                serie = SERIE,
                 enVuelo = !enElSuelo,
                 detalle = when {
                     enElSuelo -> "En el suelo, listo para despegar"

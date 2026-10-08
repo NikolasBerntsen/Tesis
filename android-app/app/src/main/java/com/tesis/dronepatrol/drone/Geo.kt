@@ -2,6 +2,7 @@ package com.tesis.dronepatrol.drone
 
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.hypot
 
 /**
  * Las cuentas de geografía que comparten el dron simulado y el DJI.
@@ -37,5 +38,15 @@ object Geo {
         val dy = (latDestino - lat) * METROS_POR_GRADO_LAT
         val dx = (lonDestino - lon) * metrosPorGradoLon(lat)
         return Math.toDegrees(atan2(dx, dy))
+    }
+
+    /**
+     * Distancia en metros entre dos puntos. Plano a esta escala: a cientos de
+     * metros la curvatura de la Tierra no mueve ni un decímetro.
+     */
+    fun distanciaM(lat: Double, lon: Double, latDestino: Double, lonDestino: Double): Double {
+        val dy = (latDestino - lat) * METROS_POR_GRADO_LAT
+        val dx = (lonDestino - lon) * metrosPorGradoLon(lat)
+        return hypot(dx, dy)
     }
 }

@@ -8,7 +8,7 @@
         app:showAsAction="never" />
 
     <item
-        android:id="@+id/action_cerrar_sesion"
-        android:title="@string/menu_cerrar_sesion"
+        android:id="@+id/action_terminar"
+        android:title="@string/main_menu_terminar"
         app:showAsAction="never" />
 </menu>

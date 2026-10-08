@@ -104,8 +104,10 @@ correr. La app arranca con la URL del Comando Central ya cargada
 cambiarla por la IP de LAN que imprime `start.sh` al arrancar.
 
 El flujo es: **iniciar sesión como operador de campo** → **escanear el QR del
-dron** (el hash que imprime el seed) → elegir modo de operación → **Despegar y
-patrullar**.
+dron** (el hash que imprime el seed) → **conectar el dron físico** (la pantalla
+verifica SDK, control, aeronave y GPS, y solo deja desplegar con el enlace
+hecho) → **Desplegar y patrullar**. La sesión del operador de campo sigue viva
+durante la operación: al terminarla se vuelve al menú de campo.
 
 Para volar el **Mini 4 Pro real** hace falta la App Key de DJI en
 `android-app/local.properties` y un teléfono ARM64 enganchado al RC-N3: el

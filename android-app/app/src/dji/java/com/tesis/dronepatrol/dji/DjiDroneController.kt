@@ -160,6 +160,13 @@ class DjiDroneController : DroneController {
     @Volatile
     private var modelo = ""
 
+    @Volatile
+    private var serie = ""
+
+    /** true entre [connect] y [disconnect]: conectar dos veces registraría dos veces cada oyente. */
+    @Volatile
+    private var escuchando = false
+
     /** Qué aterrizaje se está esperando, para avisar el evento que corresponde al tocar el suelo. */
     private enum class Aterrizaje { NINGUNO, EN_BASE, AQUI }
 
@@ -305,6 +312,10 @@ class DjiDroneController : DroneController {
     }
 
     override fun connect() {
+        // La pantalla de conexión enciende el controlador y la de operación lo
+        // vuelve a pedir: la segunda vez no hay nada que hacer.
+        if (escuchando) return
+        escuchando = true
         desconectado = false
         aterrizajeEsperado = Aterrizaje.NINGUNO
         // Un solo consumidor de cuadros, y se relanza por si se reconecta
@@ -366,6 +377,12 @@ class DjiDroneController : DroneController {
             modelo = tipo.name.replace('_', ' ').replace("DJI ", "")
             publicarEstado()
         }
+        // El número de serie de la aeronave: es lo que dice CUÁL dron está
+        // enlazado, que es lo que la pantalla de conexión tiene que mostrar.
+        escuchar(FlightControllerKey.KeySerialNumber) { numero ->
+            serie = numero
+            publicarEstado()
+        }
         // Inclinación del gimbal: va en la telemetría porque PatrolManager la
         // necesita para proyectar al terreno la caja de una detección.
         escuchar(GimbalKey.KeyGimbalAttitude) { actitud -> lastGimbalPitch = actitud.pitch }
@@ -422,6 +439,8 @@ class DjiDroneController : DroneController {
             satelites = satelites,
             baseFijada = baseFijada,
             detalle = detalle,
+            controlConectado = sdk.productoConectado,
+            serie = serie,
         )
     }
 
@@ -605,6 +624,7 @@ class DjiDroneController : DroneController {
     override fun disconnect() {
         // 1) Se cierra la puerta: ningún lazo puede volver a habilitarlo.
         desconectado = true
+        escuchando = false
         // 2) Se corta el lazo de comandos, sin esperarlo (ver arriba).
         cortarLazo()
         // 3) Se corta todo lo demás que sigue emitiendo: sin esto las

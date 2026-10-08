@@ -1,0 +1,240 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:fitsSystemWindows="true"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="@dimen/espacio"
+        android:paddingTop="@dimen/espacio_grande"
+        android:paddingEnd="@dimen/espacio"
+        android:paddingBottom="@dimen/espacio_grande">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/conexion_titulo"
+            android:textAppearance="@style/TextAppearance.DronePatrol.Titulo" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/espacio_chico"
+            android:text="@string/conexion_subtitulo"
+            android:textAppearance="@style/TextAppearance.DronePatrol.Apagado" />
+
+        <!-- El dron emparejado por QR, según el Comando Central -->
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/espacio">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:padding="@dimen/espacio">
+
+                <ImageView
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_dron"
+                    app:tint="@color/acento" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="@dimen/espacio_medio"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/TituloTarjeta"
+                        android:layout_marginBottom="2dp"
+                        android:text="@string/conexion_ficha" />
+
+                    <TextView
+                        android:id="@+id/txtNombreDron"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textAppearance="@style/TextAppearance.Material3.TitleMedium"
+                        android:textColor="@color/texto"
+                        tools:text="Alfa" />
+
+                    <TextView
+                        android:id="@+id/txtDetalleDron"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textAppearance="@style/TextAppearance.DronePatrol.Mono"
+                        tools:text="DJI Mini 4 Pro · c54ae4…335c" />
+
+                    <TextView
+                        android:id="@+id/txtBase"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textAppearance="@style/TextAppearance.DronePatrol.Apagado"
+                        tools:text="Base: Base Obelisco" />
+
+                    <TextView
+                        android:id="@+id/txtUbicacionDespliegue"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textAppearance="@style/TextAppearance.DronePatrol.Apagado" />
+                </LinearLayout>
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- La verificación del dron físico, en vivo -->
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/espacio_medio">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="@dimen/espacio">
+
+                <TextView
+                    style="@style/TituloTarjeta"
+                    android:text="@string/conexion_verificacion" />
+
+                <include
+                    android:id="@+id/filaSdk"
+                    layout="@layout/fila_verificacion" />
+
+                <include
+                    android:id="@+id/filaControl"
+                    layout="@layout/fila_verificacion" />
+
+                <include
+                    android:id="@+id/filaAeronave"
+                    layout="@layout/fila_verificacion" />
+
+                <include
+                    android:id="@+id/filaGps"
+                    layout="@layout/fila_verificacion" />
+
+                <View
+                    style="@style/Widget.DronePatrol.Divisor"
+                    android:layout_marginTop="@dimen/espacio_medio"
+                    android:layout_marginBottom="@dimen/espacio_medio" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            style="@style/EtiquetaTelemetria"
+                            android:text="@string/conexion_distancia" />
+
+                        <TextView
+                            android:id="@+id/txtDistancia"
+                            style="@style/CifraTelemetria"
+                            android:text="@string/conexion_distancia_sin_dato" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/conexion_distancia_ayuda"
+                            android:textAppearance="@style/TextAppearance.DronePatrol.Apagado" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="@dimen/espacio"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            style="@style/EtiquetaTelemetria"
+                            android:text="@string/conexion_bateria" />
+
+                        <TextView
+                            android:id="@+id/txtBateria"
+                            style="@style/CifraTelemetria"
+                            android:text="@string/main_sin_dato" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/txtAvisoModelo"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/espacio_medio"
+                    android:textAppearance="@style/TextAppearance.DronePatrol.Cuerpo"
+                    android:textColor="@color/estado_alerta"
+                    android:visibility="gone"
+                    tools:text="La ficha dice DJI Mini 3 y la aeronave enlazada es MINI 4 PRO"
+                    tools:visibility="visible" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <TextView
+            android:id="@+id/txtAyuda"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/espacio"
+            android:textAppearance="@style/TextAppearance.DronePatrol.Cuerpo"
+            tools:text="Conectá el control al teléfono por USB y encendé el dron" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnDesplegar"
+            style="@style/Widget.DronePatrol.Boton.Principal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/espacio"
+            android:enabled="false"
+            android:text="@string/conexion_desplegar"
+            app:icon="@drawable/ic_despegar"
+            app:iconGravity="textStart" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/modo_despliegue_ayuda"
+            android:textAppearance="@style/TextAppearance.DronePatrol.Apagado" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnModoPrueba"
+            style="@style/Widget.DronePatrol.Boton.Secundario"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/espacio_medio"
+            android:enabled="false"
+            android:text="@string/conexion_modo_prueba" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/modo_prueba_ayuda"
+            android:textAppearance="@style/TextAppearance.DronePatrol.Apagado" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnVolver"
+            style="@style/Widget.DronePatrol.Boton.Texto"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/espacio"
+            android:text="@string/conexion_volver" />
+    </LinearLayout>
+</ScrollView>

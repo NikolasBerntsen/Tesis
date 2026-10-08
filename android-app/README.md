@@ -7,9 +7,9 @@ a través del control: por eso es el que publica el video, el que ejecuta las
 órdenes de vuelo que llegan del Comando Central y el que puede frenar el dron
 desde el campo.
 
-Tiene tres pantallas, en una **consola de campo oscura**: fondo oscuro de alto
-contraste para usar a pleno sol, botones altos para el pulgar, un solo acento
-ámbar para la acción principal.
+Tiene cuatro pantallas, en una **consola de campo oscura**: fondo oscuro de
+alto contraste para usar a pleno sol, botones altos para el pulgar, un solo
+acento ámbar para la acción principal.
 
 1. **Login** (`LoginActivity`) — entra la *persona* que despliega el dron: el
    operador de campo, o un supervisor/admin, con su cuenta del Comando Central.
@@ -17,7 +17,13 @@ contraste para usar a pleno sol, botones altos para el pulgar, un solo acento
 2. **Menú de campo** (`FieldMenuActivity`) — quién inició sesión, la cuenta
    regresiva de la sesión efímera y las acciones: escanear el QR del dron (o
    escribir su identificador), configurar el enlace y cerrar sesión.
-3. **Operación** (`MainActivity`) — de arriba a abajo: el **estado del dron**
+3. **Conectar el dron** (`ConexionDronActivity`) — el QR identificó al dron en
+   el Comando Central; acá se verifica que la **aeronave física** esté enchufada
+   y enlazada: SDK registrado → control por USB → aeronave (modelo y número de
+   serie) → GPS y punto de retorno, más la **distancia entre el teléfono y el
+   dron** y su batería. Si el modelo enlazado no coincide con la ficha, avisa.
+   *Desplegar* y *Modo prueba* se habilitan **solo con el dron conectado**.
+4. **Operación** (`MainActivity`) — de arriba a abajo: el **estado del dron**
    (enlace, modelo, satélites GPS, en vuelo o en el suelo, y qué falta para
    despegar), el **video en vivo** con el estado del patrullaje encima, la
    **telemetría** (batería, señal RC, altura, rumbo, posición), los **enlaces**
@@ -29,10 +35,14 @@ contraste para usar a pleno sol, botones altos para el pulgar, un solo acento
 
 **El dron no tiene cuenta.** Se identifica con el hash de 32 hexadecimales del
 QR pegado en su fuselaje: al escanearlo, la app llama a `POST /api/drones/pair`
-con ese hash y la ubicación del momento, recibe el token del dron y **cierra la
-sesión del operador de campo**. De la pantalla de operación en adelante la app
-habla como máquina, no como persona. La sesión del operador dura 20 minutos: si
-vence antes de terminar, se vuelve al login con el aviso correspondiente.
+con ese hash y la ubicación del momento y recibe el token del dron. De la
+pantalla de conexión en adelante la app habla como máquina, no como persona,
+pero **la sesión del operador de campo sigue viva por debajo**: al terminar la
+operación (*Terminar operación* en el menú, o "atrás", con confirmación si el
+dron está en el aire) se vuelve al menú de campo sin reingresar, listo para
+desplegar otro dron. La sesión dura 20 minutos desde el login: si venció
+mientras se operaba, al volver se va al login con el aviso. La cuenta regresiva
+nunca interrumpe la operación.
 
 ## Flavors
 
@@ -61,7 +71,9 @@ solo cambia la implementación de `DroneController` que inyecta `ControllerFacto
    - **Menú de campo** → **Configuración del enlace** → *Dirección manual* →
      `ws://10.0.2.2:8765` (así el emulador llega a la detección de esta PC).
    - **Escanear QR del dron** (o escribir el identificador que imprime el seed).
-   - Elegir **Modo prueba** (muestra los controles de simulación) o **Despliegue**.
+   - **Conectar el dron**: con el simulado la verificación se pone en verde
+     sola; elegir **Desplegar** o **Modo prueba** (muestra los controles de
+     simulación).
    - Elegir ruta → **Despegar y patrullar** → confirmar. El dron simulado
      despega, sube a la altura del primer waypoint y arranca la ruta.
    - *Forzar batería baja*, *Recargar batería* y el switch *Simular pérdida de

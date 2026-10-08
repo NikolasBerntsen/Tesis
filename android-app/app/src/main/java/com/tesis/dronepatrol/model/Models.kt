@@ -92,6 +92,10 @@ data class EstadoDelDron(
     val baseFijada: Boolean,
     /** Qué falta o qué pasa, redactado para el operador; vacío si está todo bien. */
     val detalle: String = "",
+    /** El control está enchufado al teléfono (el paso previo al enlace con la aeronave). */
+    val controlConectado: Boolean = conectado,
+    /** Número de serie de la aeronave, para identificar cuál es la que está enlazada. */
+    val serie: String = "",
 ) {
     /** Todo lo que hace falta para que la app ordene un despegue. */
     val listoParaDespegar: Boolean
