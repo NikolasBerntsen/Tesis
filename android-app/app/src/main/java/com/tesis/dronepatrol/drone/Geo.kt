@@ -2,6 +2,7 @@ package com.tesis.dronepatrol.drone
 
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.hypot
 
 /**
  * Las cuentas de geografía que comparten el dron simulado y el DJI.
@@ -37,5 +38,25 @@ object Geo {
         val dy = (latDestino - lat) * METROS_POR_GRADO_LAT
         val dx = (lonDestino - lon) * metrosPorGradoLon(lat)
         return Math.toDegrees(atan2(dx, dy))
+    }
+
+    /**
+     * Si (lat, lon) es una posición GPS creíble: números finitos, dentro de
+     * rango y NO 0,0. El 0,0 importa: es lo que el SDK de DJI entrega sin fix
+     * (el valor por defecto de LocationCoordinate3D) y no es una posición, es
+     * el golfo de Guinea.
+     */
+    fun esPosicionValida(lat: Double, lon: Double): Boolean =
+        lat.isFinite() && lon.isFinite() && lat in -90.0..90.0 && lon in -180.0..180.0 &&
+            !(kotlin.math.abs(lat) < 1e-6 && kotlin.math.abs(lon) < 1e-6)
+
+    /**
+     * Distancia en metros entre dos puntos. Plano a esta escala: a cientos de
+     * metros la curvatura de la Tierra no mueve ni un decímetro.
+     */
+    fun distanciaM(lat: Double, lon: Double, latDestino: Double, lonDestino: Double): Double {
+        val dy = (latDestino - lat) * METROS_POR_GRADO_LAT
+        val dx = (lonDestino - lon) * metrosPorGradoLon(lat)
+        return hypot(dx, dy)
     }
 }

@@ -4,10 +4,12 @@ import {
   armarQuery,
   cerrarSesion,
   clearSession,
+  ErrorDeApi,
   getRole,
   getToken,
   getUsername,
   login,
+  motivoDelRechazoDeDecision,
   parsearMeta,
   traerDrones,
   traerLogs,
@@ -203,6 +205,56 @@ describe('api.ts', () => {
       await expect(api('/cosa')).rejects.toThrow('Sesión expirada');
       expect(getToken()).toBeNull();
       expect(reload).toHaveBeenCalled();
+    });
+
+    // El código viaja con el error: quien llama distingue un 409 de un 403 sin
+    // comparar textos, que el backend puede reescribir cuando quiera.
+    it('el error lleva el código HTTP además del texto del backend', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(mockResponse({ error: 'Alerta inexistente o ya decidida' }, { ok: false, status: 409 })),
+      );
+      const error = await api('/cosa').catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(ErrorDeApi);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as ErrorDeApi).status).toBe(409);
+      expect((error as ErrorDeApi).message).toBe('Alerta inexistente o ya decidida');
+    });
+
+    it('el 401 también sale con su código', async () => {
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: { ...window.location, reload: vi.fn() },
+      });
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse({}, { ok: false, status: 401 })));
+      const error = await api('/cosa').catch((e: unknown) => e);
+      expect((error as ErrorDeApi).status).toBe(401);
+    });
+  });
+
+  describe('motivoDelRechazoDeDecision', () => {
+    it('el 409 dice que otro operador ya la decidió, no el texto genérico', () => {
+      expect(motivoDelRechazoDeDecision(new ErrorDeApi('Alerta inexistente o ya decidida', 409))).toBe(
+        'Esta alerta ya la decidió otro operador: la lista se actualiza sola.',
+      );
+    });
+
+    it.each([
+      [404, 'La alerta ya no existe.'],
+      [401, 'La sesión venció: volvé a iniciar sesión para decidir la alerta.'],
+      [403, 'Tu usuario no puede decidir alertas.'],
+    ])('el %i tiene su propio motivo', (status, motivo) => {
+      expect(motivoDelRechazoDeDecision(new ErrorDeApi('x', status))).toBe(motivo);
+    });
+
+    it('cualquier otro rechazo conserva el detalle', () => {
+      expect(motivoDelRechazoDeDecision(new ErrorDeApi('Error 500', 500))).toBe(
+        'No se pudo registrar la decisión: Error 500',
+      );
+      expect(motivoDelRechazoDeDecision(new Error('Failed to fetch'))).toBe(
+        'No se pudo registrar la decisión: Failed to fetch',
+      );
+      expect(motivoDelRechazoDeDecision('raro')).toBe('No se pudo registrar la decisión: raro');
     });
   });
 

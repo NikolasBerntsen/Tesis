@@ -110,6 +110,22 @@ describe('integración — comandos de ruta y renombres', () => {
     await alfa.waitFor((m) => m.type === 'resume_patrol' && m.fromIndex === 3);
   });
 
+  // Sin nodo elegido el dron NO vuelve al último que pasó: sigue hacia el que
+  // tenía por delante (§2). El registro tiene que decir eso.
+  it('el registro de la reanudación dice hacia qué nodo va el dron', async () => {
+    operWs.got.length = 0;
+    await api(srv.base, `/api/drones/${DRON.alfa}/resume`, op, { method: 'POST' });
+    const sinNodo = await operWs.waitFor((m) => m.type === 'event' && m.event.type === 'PATROL_RESUME_ORDERED');
+    expect(sinNodo.event.message).toBe('operador ordenó reanudar el patrullaje hacia el próximo nodo de la ruta');
+    expect(JSON.parse(sinNodo.event.meta).detalle).toEqual({ por: 'operador', desdeNodo: null });
+
+    operWs.got.length = 0;
+    await api(srv.base, `/api/drones/${DRON.alfa}/resume`, op, { method: 'POST', body: JSON.stringify({ fromIndex: 3 }) });
+    const conNodo = await operWs.waitFor((m) => m.type === 'event' && m.event.type === 'PATROL_RESUME_ORDERED');
+    expect(conNodo.event.message).toBe('operador ordenó reanudar el patrullaje hacia el nodo 4');
+    expect(JSON.parse(conNodo.event.meta).detalle).toEqual({ por: 'operador', desdeNodo: 4 });
+  });
+
   it('reanudar en dron inexistente da 404', async () => {
     expect((await api(srv.base, '/api/drones/fantasma/resume', op, { method: 'POST' })).status).toBe(404);
   });

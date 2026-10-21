@@ -3,6 +3,7 @@ package com.tesis.dronepatrol.comms
 import com.tesis.dronepatrol.model.DroneBase
 import com.tesis.dronepatrol.model.DroneProfile
 import com.tesis.dronepatrol.model.Emparejamiento
+import com.tesis.dronepatrol.model.ObjetivoReportado
 import com.tesis.dronepatrol.model.PatrolRoute
 import com.tesis.dronepatrol.model.SesionOperador
 import com.tesis.dronepatrol.model.Waypoint
@@ -36,7 +37,21 @@ import org.json.JSONObject
  */
 open class CommandCenterClient(private val scope: CoroutineScope) {
 
-    var onAlertDecision: ((decision: String, decidedBy: String) -> Unit)? = null
+    /**
+     * Decisión del operador sobre una alerta. [alertId] es null solo si el
+     * mensaje no lo trae (un hub viejo): PatrolManager aplica la decisión
+     * únicamente si es la alerta del objetivo en curso.
+     */
+    var onAlertDecision: ((alertId: Long?, decision: String, decidedBy: String, reenvio: Boolean) -> Unit)? = null
+
+    /** El hub registró la alerta pedida con [ref] y le dio este id (ver sendAlertRequest). */
+    var onAlertAck: ((ref: String, alertId: Long) -> Unit)? = null
+
+    /** Despegue en el lugar pedido desde la consola por el titular del control. */
+    var onTakeoff: ((by: String) -> Unit)? = null
+
+    /** Aterrizaje pedido desde la consola por el titular del control. */
+    var onLand: ((by: String) -> Unit)? = null
     /** Reanudar el patrullaje; [fromIndex] nulo = desde el último nodo alcanzado. */
     var onResumePatrol: ((fromIndex: Int?) -> Unit)? = null
     var onStartRoute: ((routeId: Int, fromIndex: Int, orderedBy: String) -> Unit)? = null
@@ -293,9 +308,20 @@ open class CommandCenterClient(private val scope: CoroutineScope) {
         val msg = runCatching { JSONObject(text) }.getOrNull() ?: return
         when (msg.optString("type")) {
             "alert_decision" -> onAlertDecision?.invoke(
+                if (msg.has("alertId") && !msg.isNull("alertId")) msg.optLong("alertId") else null,
                 msg.optString("decision"),
                 msg.optString("decidedBy"),
+                // El hub reenvía las decisiones recientes al reconectarse el dron
+                msg.optBoolean("resent", false),
             )
+            // Sin ref o sin id no hay nada que asociar: se ignora.
+            "alert_ack" -> {
+                val ref = msg.optString("ref")
+                val id = msg.optLong("alertId", -1L)
+                if (ref.isNotEmpty() && id >= 0) onAlertAck?.invoke(ref, id)
+            }
+            "takeoff" -> onTakeoff?.invoke(msg.optString("by"))
+            "land" -> onLand?.invoke(msg.optString("by"))
             "resume_patrol" -> onResumePatrol?.invoke(
                 if (msg.isNull("fromIndex")) null else msg.optInt("fromIndex"),
             )
@@ -339,10 +365,24 @@ open class CommandCenterClient(private val scope: CoroutineScope) {
         }
     }
 
-    private fun send(obj: JSONObject) {
+    /**
+     * Lo que sale por el socket. `protected open` para que el banco de pruebas
+     * vea el JSON exacto de cada mensaje (los nombres del contrato son lo que
+     * hay que verificar), sin levantar un socket.
+     */
+    protected open fun send(obj: JSONObject) {
         ws?.send(obj.toString())
     }
 
+    /**
+     * Estado del dron, una vez por segundo. Sin GPS [lat]/[lon] llegan en NaN y
+     * salen como null con `gpsFix: false` (docs/PROTOCOLS.md §1): el status
+     * tiene que salir igual, porque es lo único que le dice a la consola si el
+     * dron vuela, cuánta batería tiene y si ya entró en control manual.
+     *
+     * Ningún número sale como NaN o infinito: org.json los rechaza con una
+     * excepción, y en el lazo del status eso es la app cerrándose en pleno vuelo.
+     */
     fun sendStatus(
         state: String,
         battery: Double,
@@ -355,39 +395,106 @@ open class CommandCenterClient(private val scope: CoroutineScope) {
         signalPct: Int,
         heading: Double,
         mode: String,
-    ) = send(
-        JSONObject()
-            .put("type", "status")
-            .put("state", state)
-            .put("battery", battery)
-            .put("lat", lat)
-            .put("lon", lon)
-            .put("routeId", routeId ?: JSONObject.NULL)
-            .put("waypointIndex", waypointIndex)
-            .put("waypointTotal", waypointTotal)
-            .put("signal", if (signalOk) "OK" else "LOST")
-            .put("signalPct", signalPct)
-            .put("heading", heading)
-            .put("mode", mode),
-    )
+        /** Altura sobre el punto de despegue, en metros. */
+        altM: Double = 0.0,
+        /** Satélites GPS en uso; 0 si el dron no lo informa. */
+        satellites: Int = 0,
+        /** true con el dron en el aire (motores encendidos y despegado). */
+        flying: Boolean = false,
+        /** Modo de vuelo que informa la aeronave; vacío si no lo informa. */
+        flightMode: String = "",
+        /** El objetivo que se orbita o se sigue; null si no hay. */
+        target: ObjetivoReportado? = null,
+    ) {
+        val gpsFix = lat.isFinite() && lon.isFinite()
+        send(
+            JSONObject()
+                .put("type", "status")
+                .put("state", state)
+                .put("battery", numero(battery))
+                .put("lat", if (gpsFix) lat else JSONObject.NULL)
+                .put("lon", if (gpsFix) lon else JSONObject.NULL)
+                .put("gpsFix", gpsFix)
+                .put("routeId", routeId ?: JSONObject.NULL)
+                .put("waypointIndex", waypointIndex)
+                .put("waypointTotal", waypointTotal)
+                .put("signal", if (signalOk) "OK" else "LOST")
+                .put("signalPct", signalPct)
+                .put("heading", numero(heading))
+                .put("mode", mode)
+                .put("alt", numero(altM))
+                .put("satellites", satellites)
+                .put("flying", flying)
+                .put("flightMode", flightMode)
+                .put("target", target?.let(::objetivoEnJson) ?: JSONObject.NULL),
+        )
+    }
+
+    /** El objetivo con los nombres del contrato (§1, `target`). */
+    internal fun objetivoEnJson(o: ObjetivoReportado): JSONObject = JSONObject()
+        .put("alertId", o.alertId ?: JSONObject.NULL)
+        .put("type", o.tipo)
+        .put("lat", numero(o.lat))
+        .put("lon", numero(o.lon))
+        .put("speedMs", numero(o.velocidadMs))
+        .put("courseDeg", numero(o.rumboGrados))
+        .put("moving", o.enMovimiento)
+        .put("lost", o.perdido)
+        .put("lastSeenMs", o.vistoHaceMs)
+        .put("decision", o.decision)
+
+    /** Un número para el JSON, o null si no es finito (org.json no acepta NaN). */
+    private fun numero(valor: Double): Any = if (valor.isFinite()) valor else JSONObject.NULL
 
     fun sendSetName(displayName: String) =
         send(JSONObject().put("type", "set_name").put("displayName", displayName))
 
-    fun sendEvent(eventType: String, message: String) =
-        send(JSONObject().put("type", "event").put("eventType", eventType).put("message", message))
+    /**
+     * Un evento para el registro. Los de seguimiento llevan el [alertId] de su
+     * alerta (el hub encadena la fila a ella) y la posición del OBJETIVO, que
+     * es la que queda en el registro para el equipo de tierra.
+     */
+    fun sendEvent(eventType: String, message: String, alertId: Long? = null, lat: Double? = null, lon: Double? = null) {
+        val o = JSONObject().put("type", "event").put("eventType", eventType).put("message", message)
+        if (alertId != null) o.put("alertId", alertId)
+        if (lat != null && lon != null && lat.isFinite() && lon.isFinite()) o.put("lat", lat).put("lon", lon)
+        send(o)
+    }
 
     /** `open` para poder verificar el cableado del reparto de video (ver la clase). */
     open fun sendVideoFrame(jpegBase64: String) =
         send(JSONObject().put("type", "video_frame").put("jpegBase64", jpegBase64).put("ts", System.currentTimeMillis()))
 
-    fun sendAlertRequest(alertType: String, lat: Double, lon: Double, snapshotBase64: String?) =
-        send(
-            JSONObject()
-                .put("type", "alert_request")
-                .put("alertType", alertType)
-                .put("lat", lat)
-                .put("lon", lon)
-                .put("snapshotBase64", snapshotBase64 ?: JSONObject.NULL),
-        )
+    /**
+     * `open` para que el banco de pruebas vea qué captura y qué posición se
+     * mandan: la alerta tiene que llevar el cuadro anotado que disparó la
+     * detección y el lugar del objetivo, no el último cuadro y el dron.
+     */
+    open fun sendAlertRequest(
+        alertType: String,
+        lat: Double,
+        lon: Double,
+        snapshotBase64: String?,
+        confidence: Double = 0.0,
+        classes: List<String> = listOf(alertType),
+        /** Identificador propio: vuelve en el `alert_ack` con el id de la alerta. */
+        ref: String? = null,
+        /** Pose del dron cuando se detectó: queda en el registro de la alerta. */
+        droneLat: Double = Double.NaN,
+        droneLon: Double = Double.NaN,
+        droneAlt: Double = Double.NaN,
+    ) = send(
+        JSONObject()
+            .put("type", "alert_request")
+            .put("alertType", alertType)
+            .put("lat", numero(lat))
+            .put("lon", numero(lon))
+            .put("snapshotBase64", snapshotBase64 ?: JSONObject.NULL)
+            .put("confidence", numero(confidence))
+            .put("classes", JSONArray(classes))
+            .put("ref", ref ?: JSONObject.NULL)
+            .put("droneLat", numero(droneLat))
+            .put("droneLon", numero(droneLon))
+            .put("droneAlt", numero(droneAlt)),
+    )
 }

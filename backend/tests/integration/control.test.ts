@@ -105,6 +105,69 @@ describe('integración — control manual exclusivo', () => {
     expect(malo.status).toBe(400);
   });
 
+  it('el titular despega y aterriza el dron en el lugar, y queda registrado', async () => {
+    await api(srv.base, `/api/drones/${DRON.alfa}/control`, op, { method: 'POST' });
+    for (const [orden, evento] of [['takeoff', 'TAKEOFF_ORDERED'], ['land', 'LANDING_ORDERED']]) {
+      const r = await api(srv.base, `/api/drones/${DRON.alfa}/${orden}`, op, { method: 'POST' });
+      expect(r.status, orden).toBe(200);
+      expect(r.body).toEqual({ ok: true, delivered: true });
+      const msg = await alfa.waitFor((m) => m.type === orden);
+      expect(msg).toEqual({ type: orden, by: 'operador' });
+
+      const ev = await operWs.waitFor((m) => m.type === 'event' && m.event.type === evento);
+      expect(ev.event.drone_id).toBe(DRON.alfa);
+      expect(ev.event.source).toBe('operador');
+      expect(JSON.parse(ev.event.meta)).toEqual({
+        drone: { hash: DRON.alfa, displayName: 'Alfa', model: 'DJI Mini 3' },
+        detalle: { por: 'operador' },
+      });
+    }
+  });
+
+  it('despegar o aterrizar sin ser el titular da 409, aunque sea un supervisor', async () => {
+    for (const orden of ['takeoff', 'land']) {
+      // nadie tiene el control
+      const libre = await api(srv.base, `/api/drones/${DRON.alfa}/${orden}`, op, { method: 'POST' });
+      expect(libre.status, orden).toBe(409);
+      expect(libre.body.error).toBe('No tenés el control manual de este dron');
+    }
+    // el control lo tiene otro: ni el operador ni el supervisor despegan por encima del titular
+    await api(srv.base, `/api/drones/${DRON.alfa}/control`, oper2, { method: 'POST' });
+    alfa.got.length = 0;
+    for (const tok of [op, sup]) {
+      for (const orden of ['takeoff', 'land']) {
+        expect((await api(srv.base, `/api/drones/${DRON.alfa}/${orden}`, tok, { method: 'POST' })).status).toBe(409);
+      }
+    }
+    await new Promise((r) => setTimeout(r, 120));
+    expect(alfa.got.some((m) => m.type === 'takeoff' || m.type === 'land')).toBe(false);
+  });
+
+  it('despegar o aterrizar: sin canControl da 403 y un dron inexistente da 404', async () => {
+    for (const orden of ['takeoff', 'land']) {
+      expect((await api(srv.base, `/api/drones/${DRON.alfa}/${orden}`, noControl, { method: 'POST' })).status).toBe(403);
+      expect((await api(srv.base, `/api/drones/fantasma/${orden}`, op, { method: 'POST' })).status).toBe(404);
+    }
+    // canControl se lee de la base en cada request: quitárselo al titular le
+    // suelta el lock, y aunque volviera a tenerlo, sin el permiso no despega
+    await api(srv.base, `/api/drones/${DRON.alfa}/control`, op, { method: 'POST' });
+    await api(srv.base, '/api/users/operador', adm, { method: 'PATCH', body: JSON.stringify({ canControl: false }) });
+    expect((await api(srv.base, `/api/drones/${DRON.alfa}/takeoff`, op, { method: 'POST' })).status).toBe(403);
+  });
+
+  it('despegar un dron desconectado responde delivered=false y la orden queda registrada', async () => {
+    await api(srv.base, `/api/drones/${DRON.charlie}/control`, op, { method: 'POST' });
+    try {
+      const r = await api(srv.base, `/api/drones/${DRON.charlie}/takeoff`, op, { method: 'POST' });
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({ ok: true, delivered: false });
+      const evs = (await api(srv.base, `/api/events?droneId=${DRON.charlie}`, op)).body;
+      expect(evs.some((e: any) => e.type === 'TAKEOFF_ORDERED' && e.message.includes('Charlie'))).toBe(true);
+    } finally {
+      await api(srv.base, `/api/drones/${DRON.charlie}/control`, op, { method: 'DELETE', body: JSON.stringify({ resume: 'none' }) });
+    }
+  });
+
   it('un supervisor fuerza la liberación; el dron recibe control_released y resume', async () => {
     await api(srv.base, `/api/drones/${DRON.alfa}/control`, op, { method: 'POST' });
     alfa.got.length = 0;

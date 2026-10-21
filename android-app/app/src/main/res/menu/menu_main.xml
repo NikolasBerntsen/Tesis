@@ -6,4 +6,9 @@
         android:id="@+id/action_renombrar"
         android:title="@string/main_renombrar"
         app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_terminar"
+        android:title="@string/main_menu_terminar"
+        app:showAsAction="never" />
 </menu>

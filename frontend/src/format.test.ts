@@ -1,14 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import type { DroneStatus } from './types';
+import type { DroneStatus, ObjetivoEnSeguimiento } from './types';
 import {
   batteryClass,
+  coordenadas,
+  decisionDelObjetivo,
   formatDistance,
+  haceCuanto,
   initials,
+  posicionDelDron,
+  posicionValida,
+  rumbo,
   signalClass,
+  situacionDelObjetivo,
+  sobreObjetivo,
   fechaYHora,
   STATE_LABELS,
   stateLabel,
+  textoSinGps,
   time,
+  tipoDeObjetivo,
+  velocidad,
   waypointLabel,
 } from './format';
 
@@ -47,6 +58,164 @@ describe('stateLabel', () => {
 
   it('el diccionario expone todas las etiquetas', () => {
     expect(Object.keys(STATE_LABELS)).toContain('PAUSED');
+  });
+
+  it('siguiendo al objetivo tiene su propia etiqueta', () => {
+    expect(stateLabel('FOLLOWING')).toBe('Siguiendo objetivo');
+    expect(stateLabel('RETURNING_HOME')).toBe('Volviendo a base (orden del operador de campo)');
+  });
+
+  // La lista de `state` de §1 de docs/PROTOCOLS.md. Si el contrato suma un
+  // estado, se suma acá y el test pide la etiqueta: si no, la consola lo
+  // mostraría crudo, en inglés, justo cuando el operador más necesita leerlo.
+  const ESTADOS_DEL_CONTRATO = [
+    'IDLE',
+    'PATROLLING',
+    'ORBITING',
+    'FOLLOWING',
+    'RETURNING_HOME_SIGNAL',
+    'RETURNING_HOME_BATTERY',
+    'RETURNING_HOME',
+    'LANDED',
+    'PAUSED',
+    'MANUAL',
+    'FORCED',
+  ];
+
+  it.each(ESTADOS_DEL_CONTRATO)('%s tiene etiqueta en castellano', (estado) => {
+    expect(STATE_LABELS[estado]).toBeTruthy();
+    expect(stateLabel(estado)).not.toBe(estado);
+  });
+});
+
+describe('sobreObjetivo', () => {
+  it('orbitar y seguir son el mismo momento para la consola', () => {
+    expect(sobreObjetivo('ORBITING')).toBe(true);
+    expect(sobreObjetivo('FOLLOWING')).toBe(true);
+  });
+
+  it('ningún otro estado, ni la falta de estado', () => {
+    expect(sobreObjetivo('PATROLLING')).toBe(false);
+    expect(sobreObjetivo('MANUAL')).toBe(false);
+    expect(sobreObjetivo(null)).toBe(false);
+    expect(sobreObjetivo(undefined)).toBe(false);
+  });
+});
+
+describe('posición del dron', () => {
+  it('una posición normal es válida', () => {
+    expect(posicionValida(-34.6, -58.4)).toBe(true);
+  });
+
+  it.each([
+    ['null', null, null],
+    ['0,0 exacto (el SDK de DJI sin fix)', 0, 0],
+    ['NaN', Number.NaN, -58.4],
+    ['infinito', -34.6, Number.POSITIVE_INFINITY],
+    ['latitud fuera de rango', 91, -58.4],
+    ['longitud fuera de rango', -34.6, 181],
+    ['texto', '-34.6', '-58.4'],
+  ])('descarta %s', (_caso, lat, lon) => {
+    expect(posicionValida(lat, lon)).toBe(false);
+  });
+
+  it('un meridiano o un paralelo sueltos en cero sí son posiciones', () => {
+    // Sólo el par 0,0 es la marca de "sin dato": el ecuador existe.
+    expect(posicionValida(0, -58.4)).toBe(true);
+    expect(posicionValida(-34.6, 0)).toBe(true);
+  });
+
+  it('posicionDelDron devuelve el par cuando hay fix', () => {
+    expect(posicionDelDron(fakeStatus({ lat: -34.6, lon: -58.4, gpsFix: true }))).toEqual([-34.6, -58.4]);
+  });
+
+  it('una app vieja no manda gpsFix: se juzga por las coordenadas', () => {
+    expect(posicionDelDron(fakeStatus({ lat: -34.6, lon: -58.4 }))).toEqual([-34.6, -58.4]);
+  });
+
+  it('sin status, con lat/lon null, con 0,0 o con gpsFix false no hay posición', () => {
+    expect(posicionDelDron(null)).toBeNull();
+    expect(posicionDelDron(fakeStatus({ lat: null, lon: null }))).toBeNull();
+    expect(posicionDelDron(fakeStatus({ lat: 0, lon: 0 }))).toBeNull();
+    // gpsFix manda aunque las coordenadas parezcan buenas: son las últimas
+    // que el SDK tenía, no dónde está el dron.
+    expect(posicionDelDron(fakeStatus({ lat: -34.6, lon: -58.4, gpsFix: false }))).toBeNull();
+  });
+
+  it('textoSinGps cuenta los satélites, en singular y plural', () => {
+    expect(textoSinGps(3)).toBe('Sin GPS (3 satélites)');
+    expect(textoSinGps(1)).toBe('Sin GPS (1 satélite)');
+    expect(textoSinGps(0)).toBe('Sin GPS (0 satélites)');
+    expect(textoSinGps(undefined)).toBe('Sin GPS');
+  });
+});
+
+describe('datos del objetivo', () => {
+  function objetivo(over: Partial<ObjetivoEnSeguimiento> = {}): ObjetivoEnSeguimiento {
+    return {
+      alertId: 12,
+      type: 'VEHICLE',
+      lat: -34.60412,
+      lon: -58.3817,
+      speedMs: 4.2,
+      courseDeg: 118,
+      moving: true,
+      lost: false,
+      lastSeenMs: 600,
+      decision: 'PENDING',
+      ...over,
+    };
+  }
+
+  it('coordenadas con seis decimales, listas para pegar en un mapa', () => {
+    expect(coordenadas(-34.60412, -58.3817)).toBe('-34.604120, -58.381700');
+  });
+
+  it('rumbo en grados y punto cardinal', () => {
+    expect(rumbo(118)).toBe('118° SE');
+    expect(rumbo(0)).toBe('0° N');
+    expect(rumbo(359.6)).toBe('0° N');
+    expect(rumbo(270)).toBe('270° O');
+    expect(rumbo(-45)).toBe('315° NO');
+  });
+
+  it('velocidad en m/s y km/h', () => {
+    expect(velocidad(4.2)).toBe('4.2 m/s (15 km/h)');
+    expect(velocidad(0)).toBe('0.0 m/s (0 km/h)');
+  });
+
+  // La app manda null en vez de NaN (org.json no acepta NaN). Con null la
+  // velocidad tiraba un TypeError en pleno render, y el rumbo decía "0° N".
+  it('sin estimación de la app (null o no finito) no se inventa un número ni se rompe', () => {
+    expect(velocidad(null)).toBe('—');
+    expect(velocidad(undefined)).toBe('—');
+    expect(velocidad(Number.NaN)).toBe('—');
+    expect(rumbo(null)).toBe('—');
+    expect(rumbo(Number.POSITIVE_INFINITY)).toBe('—');
+  });
+
+  it('hace cuánto se lo vio', () => {
+    expect(haceCuanto(600)).toBe('hace menos de 1 s');
+    expect(haceCuanto(4200)).toBe('hace 4 s');
+    expect(haceCuanto(75_000)).toBe('hace 1 min 15 s');
+    expect(haceCuanto(Number.NaN)).toBe('hace menos de 1 s');
+  });
+
+  it('tipo en castellano, y crudo si viene uno desconocido', () => {
+    expect(tipoDeObjetivo('PERSON')).toBe('Persona');
+    expect(tipoDeObjetivo('VEHICLE')).toBe('Vehículo');
+    expect(tipoDeObjetivo('OTRO')).toBe('OTRO');
+  });
+
+  it('situación: perdido manda sobre el movimiento', () => {
+    expect(situacionDelObjetivo(objetivo())).toBe('En movimiento');
+    expect(situacionDelObjetivo(objetivo({ moving: false }))).toBe('Quieto');
+    expect(situacionDelObjetivo(objetivo({ lost: true }))).toBe('Perdido');
+  });
+
+  it('decisión', () => {
+    expect(decisionDelObjetivo(objetivo())).toBe('Sin decidir');
+    expect(decisionDelObjetivo(objetivo({ decision: 'VALIDATED' }))).toBe('Validada por un operador');
   });
 });
 

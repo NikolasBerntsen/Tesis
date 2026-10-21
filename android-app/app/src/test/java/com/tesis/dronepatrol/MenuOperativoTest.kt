@@ -20,8 +20,8 @@ class MenuOperativoTest {
     private fun preferencias() = PreferenciasEnlace(ApplicationProvider.getApplicationContext())
 
     @Test
-    fun `el modo de enlace por defecto es el cable`() {
-        assertEquals(ModoEnlace.CABLE, preferencias().modoEnlace)
+    fun `el modo de enlace por defecto es el automatico`() {
+        assertEquals(ModoEnlace.AUTO, preferencias().modoEnlace)
     }
 
     @Test

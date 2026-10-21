@@ -1,12 +1,16 @@
 package com.tesis.dronepatrol.comms
 
 import com.tesis.dronepatrol.Config
+import com.tesis.dronepatrol.model.Caja
+import com.tesis.dronepatrol.model.Deteccion
 import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -17,24 +21,37 @@ import org.json.JSONObject
 
 /** Por dónde llega la app al software de detección que corre en la laptop. */
 enum class ModoEnlace {
-    /** Túnel de ADB sobre el cable USB. Es el recomendado: no depende de la red. */
+    /**
+     * La laptop se descubre sola en la red Wi-Fi por sus anuncios UDP (ver
+     * [DescubridorDeDeteccion]). Es el modo del campo: el puerto USB del
+     * teléfono lo ocupa el control, así que el enlace es por red sí o sí.
+     */
+    AUTO,
+
+    /** Túnel de ADB sobre el cable USB (`adb reverse`). Para el banco de pruebas y el emulador. */
     CABLE,
 
-    /** URL manual contra la IP de la laptop; respaldo si no hay depuración USB. */
+    /** URL manual contra la IP de la laptop; respaldo si los anuncios no llegan. */
     RED,
 }
 
 /**
  * Enlace con el software de detección que corre en la laptop (ver
- * docs/PROTOCOLS.md). Le envía los frames de video y recibe las detecciones.
+ * docs/PROTOCOLS.md). Le envía los cuadros de video y recibe las detecciones.
  *
  * `open` por lo mismo que [com.tesis.dronepatrol.comms.CommandCenterClient]: sin
  * socket no se puede ver qué cuadro se le mandó a cada destino, y el banco de
  * pruebas tiene que poder distinguirlos.
  */
-open class DetectionClient(private val scope: CoroutineScope) {
+open class DetectionClient(
+    private val scope: CoroutineScope,
+    /** Por qué red sale el WebSocket (ver [RedLocal]); la misma que usa el descubridor. */
+    private val red: RedLocal = RedPorDefecto,
+    private val descubridor: DescubridorDeDeteccion = DescubridorDeDeteccion(red = red),
+) {
 
-    var onDetection: ((classes: List<String>) -> Unit)? = null
+    /** Solo las detecciones positivas: qué vio, dónde y la captura anotada (ver [interpretarDeteccion]). */
+    var onDetection: ((deteccion: Deteccion) -> Unit)? = null
     val connected = MutableStateFlow(false)
 
     /**
@@ -51,19 +68,43 @@ open class DetectionClient(private val scope: CoroutineScope) {
     private var url = ""
     private var modo = ModoEnlace.CABLE
     private var wantConnected = false
+    private var escuchaDeAnuncios: Job? = null
 
     /** URL efectiva del enlace, para mostrarla en la pantalla de configuración. */
     val urlActual: String get() = url
 
     /**
      * Abre el enlace y lo sostiene reintentando. En [ModoEnlace.CABLE] la URL es
-     * fija ([Config.URL_DETECCION_CABLE]); en [ModoEnlace.RED] se usa [urlManual].
-     * Nunca tira excepción: los problemas quedan en [ultimoFallo]. Para cambiar
-     * de modo hay que llamar antes a [disconnect].
+     * fija ([Config.URL_DETECCION_CABLE]); en [ModoEnlace.RED] se usa [urlManual];
+     * en [ModoEnlace.AUTO] se espera el anuncio de la laptop y se va a esa
+     * dirección. Nunca tira excepción: los problemas quedan en [ultimoFallo].
+     * Para cambiar de modo hay que llamar antes a [disconnect].
      */
     fun connect(modo: ModoEnlace, urlManual: String = "") {
         if (wantConnected) return
         this.modo = modo
+        if (modo == ModoEnlace.AUTO) {
+            wantConnected = true
+            url = ""
+            ultimoFallo.value = BUSCANDO
+            descubridor.empezar()
+            escuchaDeAnuncios = scope.launch {
+                descubridor.anuncio.filterNotNull().collect { anuncio ->
+                    if (anuncio.url != url) {
+                        // Otra laptop (o la misma con otra IP): se cambia de destino
+                        url = anuncio.url
+                        ws?.close(1000, null)
+                        ws = null
+                        connected.value = false
+                        open()
+                    }
+                }
+            }
+            scope.launch {
+                descubridor.fallo.filterNotNull().collect { if (wantConnected && !connected.value) ultimoFallo.value = it }
+            }
+            return
+        }
         val destino = if (modo == ModoEnlace.CABLE) Config.URL_DETECCION_CABLE else conPath(urlManual)
         if (destino.isEmpty()) {
             ultimoFallo.value =
@@ -78,6 +119,9 @@ open class DetectionClient(private val scope: CoroutineScope) {
 
     fun disconnect() {
         wantConnected = false
+        escuchaDeAnuncios?.cancel()
+        escuchaDeAnuncios = null
+        descubridor.parar()
         ws?.close(1000, null)
         ws = null
         connected.value = false
@@ -91,30 +135,44 @@ open class DetectionClient(private val scope: CoroutineScope) {
                 "La dirección '$url' no es válida: escribila como ${Config.PLANTILLA_URL_DETECCION_RED}."
             return
         }
-        ws = http.newWebSocket(
+        // El cliente se arma con la red de este momento (la Wi-Fi puede haber
+        // cambiado desde el intento anterior); newBuilder comparte el pool.
+        val cliente = red.fabricaDeSockets()?.let { http.newBuilder().socketFactory(it).build() } ?: http
+        ws = cliente.newWebSocket(
             pedido,
             object : WebSocketListener() {
+                // Los avisos de un socket que ya no es el vigente se ignoran:
+                // al cambiar de URL se cierra el viejo, y su onClosed tardío
+                // marcaba "desconectado" y agendaba un reintento que abría un
+                // TERCER socket encima del nuevo, en ciclo.
+                private fun esElVigente(webSocket: WebSocket) = webSocket === ws
+
                 override fun onOpen(webSocket: WebSocket, response: Response) {
+                    if (!esElVigente(webSocket)) return
                     connected.value = true
                     ultimoFallo.value = null
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
-                    val msg = runCatching { JSONObject(text) }.getOrNull() ?: return
-                    if (msg.optString("type") == "detection" && msg.optBoolean("detected")) {
-                        val arr = msg.optJSONArray("classes")
-                        val classes = if (arr == null) emptyList() else (0 until arr.length()).map { arr.getString(it) }
-                        onDetection?.invoke(classes)
-                    }
+                    if (!esElVigente(webSocket)) return
+                    interpretarDeteccion(text)?.let { onDetection?.invoke(it) }
+                }
+
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    // Completar el cierre que pidió el servidor; si no, OkHttp
+                    // deja el socket colgado hasta que vence.
+                    webSocket.close(1000, null)
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    if (!esElVigente(webSocket)) return
                     connected.value = false
                     ultimoFallo.value = motivo(t, response)
                     reconnect()
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    if (!esElVigente(webSocket)) return
                     connected.value = false
                     if (wantConnected) {
                         ultimoFallo.value =
@@ -140,6 +198,9 @@ open class DetectionClient(private val scope: CoroutineScope) {
             modo == ModoEnlace.CABLE ->
                 "Se cortó el enlace por cable con la detección ($detalle). Revisá el cable USB y volvé a " +
                     "correr '$adbReverse' en la laptop."
+            modo == ModoEnlace.AUTO && rechazada ->
+                "La laptop se anunció en $url pero no contesta: revisá el firewall de la notebook y que el " +
+                    "servidor de detección siga corriendo."
             rechazada ->
                 "La laptop no contesta en $url. Revisá que esa sea su IP, que el celular esté en la misma " +
                     "red y que el software de detección esté corriendo."
@@ -159,20 +220,74 @@ open class DetectionClient(private val scope: CoroutineScope) {
 
     private fun reconnect() {
         if (!wantConnected) return
+        val intento = ws
         scope.launch {
             delay(3_000)
-            if (wantConnected) open()
+            // Si en el medio ya se abrió otro (cambio de URL), este reintento sobra.
+            if (wantConnected && url.isNotEmpty() && ws === intento) open()
         }
     }
 
-    /** `open` para poder verificar el cableado del reparto de video (ver la clase). */
-    open fun sendFrame(jpegBase64: String) {
+    /**
+     * `open` para poder verificar el cableado del reparto de video (ver la clase).
+     * [capturaMs] es la hora del cuadro con el reloj del teléfono: el detector
+     * la devuelve como `frameTs` y con ella se busca la pose del dron de ese
+     * instante (docs/PROTOCOLS.md §4).
+     */
+    open fun sendFrame(jpegBase64: String, capturaMs: Long = System.currentTimeMillis()) {
         ws?.send(
             JSONObject()
                 .put("type", "video_frame")
                 .put("jpegBase64", jpegBase64)
-                .put("ts", System.currentTimeMillis())
+                .put("ts", capturaMs)
                 .toString(),
         )
+    }
+
+    companion object {
+        /** Lo que se muestra en AUTO mientras no llegó ningún anuncio. */
+        const val BUSCANDO = "Buscando el software de detección en la red Wi-Fi… (la laptop tiene que estar en la misma red y con el servidor corriendo)"
+
+        /**
+         * Traduce un mensaje del software de detección a una [Deteccion], o null
+         * si no es una detección positiva (ver docs/PROTOCOLS.md §4). Las cajas y
+         * la captura son opcionales: el mock no las manda y la app tiene que
+         * seguir orbitando igual, solo que alrededor de su propia posición.
+         *
+         * Es el ÚNICO lugar donde el JSON del detector se convierte en lo que la
+         * app usa, y va aparte para poder probarlo sin socket.
+         */
+        internal fun interpretarDeteccion(texto: String): Deteccion? {
+            val msg = runCatching { JSONObject(texto) }.getOrNull() ?: return null
+            if (msg.optString("type") != "detection" || !msg.optBoolean("detected")) return null
+            val clases = msg.optJSONArray("classes")?.let { arr -> (0 until arr.length()).map { arr.getString(it) } }.orEmpty()
+            val cajas = msg.optJSONArray("boxes")?.let { arr ->
+                (0 until arr.length()).mapNotNull { i ->
+                    val c = arr.optJSONObject(i) ?: return@mapNotNull null
+                    val x = c.optDouble("x", Double.NaN)
+                    val y = c.optDouble("y", Double.NaN)
+                    val w = c.optDouble("w", Double.NaN)
+                    val h = c.optDouble("h", Double.NaN)
+                    if (x.isNaN() || y.isNaN() || w.isNaN() || h.isNaN()) return@mapNotNull null
+                    Caja(
+                        clase = c.optString("cls").ifBlank { "PERSON" },
+                        confianza = c.optDouble("conf", 0.0).coerceIn(0.0, 1.0),
+                        x = x.coerceIn(0.0, 1.0),
+                        y = y.coerceIn(0.0, 1.0),
+                        ancho = w.coerceIn(0.0, 1.0),
+                        alto = h.coerceIn(0.0, 1.0),
+                    )
+                }
+            }.orEmpty()
+            if (clases.isEmpty() && cajas.isEmpty()) return null
+            return Deteccion(
+                clases = clases.ifEmpty { cajas.map { it.clase }.distinct() },
+                confianza = msg.optDouble("confidence", cajas.maxOfOrNull { it.confianza } ?: 0.0).coerceIn(0.0, 1.0),
+                cajas = cajas,
+                snapshotBase64 = msg.optString("snapshotBase64").takeIf { it.isNotBlank() },
+                ts = msg.optLong("ts", 0L),
+                frameTs = msg.optLong("frameTs", 0L).takeIf { it > 0L },
+            )
+        }
     }
 }

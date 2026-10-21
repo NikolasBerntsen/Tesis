@@ -2,8 +2,9 @@ import type { Server } from 'node:http';
 import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import { ROLE_RANK, verifyToken } from './auth';
 import {
-  createAlert, createLog, getActiveUser, getDrone, getDroneIdentity, listDrones, renameDrone,
-  type DroneAssetView, type DroneBase, type EventRow, type Role,
+  createAlert, createLog, getActiveUser, getAlert, getDrone, getDroneIdentity, listDecisionsSince, listDrones,
+  renameDrone,
+  type Alert, type DroneAssetView, type DroneBase, type EventRow, type Role,
 } from './store';
 
 /** Todo lo que sale hacia las consolas lleva `type`: es lo que decide quién lo ve. */
@@ -204,6 +205,45 @@ export function metaDron(droneId: string): MetaDron | undefined {
   return d ? { hash: d.hash, displayName: d.displayName, model: d.model } : undefined;
 }
 
+/**
+ * Lo que el pop-up pinta bajo la clave `alerta`: con el id trae la alerta
+ * completa y muestra la captura. Es la misma forma en el `ALERT_CREATED` y en
+ * los eventos de seguimiento que la app encadena a esa alerta.
+ */
+function metaAlerta(a: Alert) {
+  return { id: a.id, tipo: a.type, lat: a.lat, lon: a.lon, ts: a.created_at };
+}
+
+/** Por debajo de esto, en grados, una coordenada se toma como cero (~11 cm). */
+const CASI_CERO = 1e-6;
+
+/**
+ * Una posición que llega del celular, validada: dos números finitos, dentro de
+ * rango y que no sean el 0,0. Devuelve null si no es una posición de verdad, y
+ * las dos coordenadas van juntas: una latitud buena con la longitud rota no
+ * ubica nada.
+ *
+ * El 0,0 se descarta porque es lo que entrega el SDK de DJI SIN fix de GPS (su
+ * `LocationCoordinate3D` arranca en 0.0, no en NaN): no es una posición, es
+ * "no sé". Creerle dibuja al dron en el golfo de Guinea ("Null Island") y deja
+ * en el registro un objetivo a miles de kilómetros del equipo de tierra. Nadie
+ * patrulla ahí, así que descartarlo no pierde nada real; la comparación es
+ * contra un umbral y no contra `=== 0` porque lo que venga redondeado o con
+ * ruido del filtro de la app sigue siendo el mismo "no sé".
+ *
+ * `Number.isFinite` y no `Number(...)` porque no convierte: `Number(null)` es 0
+ * y `Number('')` también, así que con la conversión un campo ausente o un texto
+ * se colaría como coordenada.
+ */
+export function posicionValida(lat: unknown, lon: unknown): { lat: number; lon: number } | null {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  const la = lat as number;
+  const lo = lon as number;
+  if (Math.abs(la) > 90 || Math.abs(lo) > 180) return null;
+  if (Math.abs(la) < CASI_CERO && Math.abs(lo) < CASI_CERO) return null;
+  return { lat: la, lon: lo };
+}
+
 /** Aplica un renombre y avisa a los dos lados: operadores y el propio dron. */
 export function applyRename(droneId: string, displayName: string, notifyDrone: boolean) {
   const identity = renameDrone(droneId, displayName);
@@ -273,14 +313,39 @@ export function releaseControl(droneId: string, byUser: string, opts: ReleaseOpt
   return true;
 }
 
+/**
+ * Con qué reanuda un dron cuando el hub le suelta el control POR SU CUENTA, sin
+ * que nadie haya elegido: se le cayó la consola al titular, lo suspendieron o
+ * lo borraron.
+ *
+ * Si el último status trae un `target`, el dron está sobre un objetivo
+ * (orbitándolo o siguiéndolo) y se suelta con 'none': al recibir
+ * `control_released` la app vuelve sola al objetivo. Con 'last' le llegaría
+ * además un `resume_patrol`, que TERMINA el seguimiento (§2), y que al operador
+ * se le corte internet no puede ser el motivo para abandonar a la persona o al
+ * vehículo que el dron tenía a la vista. Sin objetivo, 'last' como siempre: el
+ * dron vuelve a su ruta en vez de quedarse estacionario esperando a alguien que
+ * ya no está.
+ */
+function reanudacionAlSoltar(droneId: string): 'none' | 'last' {
+  const target = lastStatus.get(droneId)?.target;
+  return typeof target === 'object' && target !== null && !Array.isArray(target) ? 'none' : 'last';
+}
+
 /** Libera todos los drones controlados por un usuario (suspensión, borrado o desconexión). */
 export function releaseAllControlledBy(username: string, byUser: string, reason: string) {
   for (const [droneId, holder] of controlledBy) {
-    if (holder === username) releaseControl(droneId, byUser, { resume: 'last', forced: byUser !== username, reason });
+    if (holder === username) {
+      releaseControl(droneId, byUser, { resume: reanudacionAlSoltar(droneId), forced: byUser !== username, reason });
+    }
   }
 }
 
-/** Mensaje que llega del celular: viene de la red, así que todo campo es opcional. */
+/**
+ * Mensaje que llega del celular: viene de la red, así que todo campo es
+ * opcional. Los que el hub valida antes de usarlos van como `unknown` a
+ * propósito: así el compilador no deja leerlos como si ya fueran lo que dicen.
+ */
 interface MensajeDron {
   type?: string;
   eventType?: string;
@@ -288,11 +353,114 @@ interface MensajeDron {
   jpegBase64?: string;
   ts?: number;
   alertType?: string;
-  lat?: number;
-  lon?: number;
+  lat?: unknown;
+  lon?: unknown;
+  gpsFix?: unknown;
+  alertId?: unknown;
+  ref?: unknown;
+  confidence?: unknown;
+  classes?: unknown;
+  droneLat?: unknown;
+  droneLon?: unknown;
+  droneAlt?: unknown;
   snapshotBase64?: string;
   displayName?: string;
   [clave: string]: unknown;
+}
+
+/**
+ * Normalización defensiva del `status`. El contrato dice que sin fix la app
+ * manda `lat`/`lon` en null y `gpsFix: false`, pero una app vieja (sin el
+ * filtro del 0,0 en el controlador del dron real) manda el 0,0 del SDK como si
+ * fuera una posición:
+ * el hub es el único punto por el que pasan TODAS las consolas, así que se
+ * corrige acá una vez en vez de confiar en que cada pantalla lo filtre.
+ *
+ * - Sin posición válida, `lat`/`lon` quedan en null y `gpsFix` en false, diga
+ *   lo que diga la app: un fix sin posición no se puede dibujar.
+ * - Con posición válida y sin `gpsFix` (la app vieja no lo conoce), se asume
+ *   true. Si la app lo manda en false se respeta: ella sabe si tiene fix.
+ *
+ * Todo lo demás —`target` incluido— se reenvía tal cual: el hub no filtra
+ * campos, y una consola que no conozca uno lo ignora.
+ */
+function normalizarPosicion(msg: MensajeDron): { lat: number | null; lon: number | null; gpsFix: boolean } {
+  const posicion = posicionValida(msg.lat, msg.lon);
+  if (!posicion) return { lat: null, lon: null, gpsFix: false };
+  return { ...posicion, gpsFix: typeof msg.gpsFix === 'boolean' ? msg.gpsFix : true };
+}
+
+/**
+ * La alerta a la que un evento del dron dice pertenecer, solo si existe y es
+ * de ESE dron. El id viaja desde el celular: sin este control, una app con un
+ * id viejo (de antes de reinstalarla, o de otro dron emparejado en el mismo
+ * teléfono) colgaría sus eventos de la alerta de otro, y el pop-up del
+ * registro mostraría como prueba la captura equivocada.
+ *
+ * `isSafeInteger` y no `isInteger`: un 1e300 es "entero" para JS pero no es un
+ * id que SQLite pueda tener, y no hace falta preguntarle.
+ */
+function alertaDelDron(alertId: unknown, droneId: string): Alert | null {
+  if (!Number.isSafeInteger(alertId) || (alertId as number) <= 0) return null;
+  const alerta = getAlert(alertId as number);
+  return alerta?.drone_id === droneId ? alerta : null;
+}
+
+/** Valor de `meta.detalle`: el pop-up lo pinta como lista de clave/valor, así que va plano. */
+type ValorPlano = string | number | boolean | null;
+
+/**
+ * Las clases que vio el detector, como texto separado por comas: es lo que
+ * entra en un valor plano del `detalle` y lo que el operador lee. Llegan como
+ * lista (`["PERSON", "VEHICLE"]`); se acepta también un texto suelto, y lo que
+ * no sea texto adentro de la lista se descarta en vez de pintarse como
+ * `[object Object]`.
+ */
+function textoDeClases(classes: unknown): string {
+  if (typeof classes === 'string') return classes.trim();
+  if (!Array.isArray(classes)) return '';
+  const nombres = classes.filter((c): c is string => typeof c === 'string').map((c) => c.trim()).filter(Boolean);
+  return [...new Set(nombres)].join(', ');
+}
+
+/**
+ * Lo que la detección sabía al disparar la alerta y que la fila de `alerts` no
+ * guarda: con qué confianza, qué clases y desde dónde miraba el dron. Sin la
+ * pose del dron no hay forma de revisar después si la georreferencia del
+ * objetivo tenía sentido.
+ *
+ * Entra solo lo que viene válido y cada campo puede faltar (§7): una confianza
+ * fuera de [0, 1] o una pose en 0,0 no son un dato, son ruido, y en el registro
+ * de una alerta un dato falso es peor que uno ausente. Si no queda ninguno,
+ * devuelve null y el evento sale sin `detalle`.
+ */
+function detalleDeDeteccion(msg: MensajeDron): Record<string, ValorPlano> | null {
+  const detalle: Record<string, ValorPlano> = {};
+  if (Number.isFinite(msg.confidence) && (msg.confidence as number) >= 0 && (msg.confidence as number) <= 1) {
+    detalle.confianza = msg.confidence as number;
+  }
+  const clases = textoDeClases(msg.classes);
+  if (clases) detalle.clases = clases;
+  const dron = posicionValida(msg.droneLat, msg.droneLon);
+  if (dron) {
+    detalle.dronLat = dron.lat;
+    detalle.dronLon = dron.lon;
+  }
+  if (Number.isFinite(msg.droneAlt)) detalle.dronAlt = msg.droneAlt as number;
+  return Object.keys(detalle).length > 0 ? detalle : null;
+}
+
+/** Largo máximo del `ref` de un `alert_request` (§1). */
+const TOPE_REF = 64;
+
+/**
+ * El `ref` con el que la app reconoce el `alert_ack` de su alerta, o null si no
+ * vino o no sirve. Se devuelve TAL CUAL llegó (sin recortar ni limpiar): la app
+ * lo compara contra el que inventó, y un ref retocado no le coincidiría nunca.
+ * Por lo mismo uno de más de 64 caracteres no se trunca: se descarta.
+ */
+function refDeAlerta(ref: unknown): string | null {
+  return typeof ref === 'string' && ref.length > 0 && ref.length <= TOPE_REF ? ref : null;
 }
 
 /**
@@ -359,6 +527,7 @@ function handleDroneMessage(droneId: string, raw: string) {
     case 'status': {
       const status: MensajeHub = {
         ...msg,
+        ...normalizarPosicion(msg),
         type: 'status',
         droneId,
         displayName,
@@ -372,16 +541,38 @@ function handleDroneMessage(droneId: string, raw: string) {
       broadcastOperators({ type: 'video_frame', droneId, jpegBase64: msg.jpegBase64, ts: msg.ts });
       break;
     case 'event': {
+      // Los eventos de seguimiento (TARGET_MOVING, TARGET_LOST, …) traen la
+      // alerta del objetivo y su posición: encadenados a la alerta, el registro
+      // cuenta la historia entera de esa detección, y con la posición el equipo
+      // de tierra sabe dónde quedó el objetivo aunque el dron ya no lo vea. Lo
+      // que venga mal se ignora sin perder el evento, que igual se registra.
+      const alerta = alertaDelDron(msg.alertId, droneId);
+      const ubicacion = posicionValida(msg.lat, msg.lon);
+      const meta: Record<string, unknown> = { drone: metaDron(droneId) };
+      if (alerta) meta.alerta = metaAlerta(alerta);
+      if (ubicacion) meta.ubicacion = { ...ubicacion, accuracyM: null };
       const ev = createLog('drone', String(msg.eventType), droneId, String(msg.message ?? ''), {
         droneId,
-        meta: { drone: metaDron(droneId) },
+        alertId: alerta?.id ?? null,
+        meta,
       });
       broadcastOperators({ type: 'event', event: ev });
       break;
     }
     case 'alert_request': {
       const alertType = msg.alertType === 'VEHICLE' ? 'VEHICLE' : 'PERSON';
-      const alert = createAlert(alertType, droneId, msg.lat ?? null, msg.lon ?? null, msg.snapshotBase64 ?? null);
+      // lat/lon son la posición estimada del OBJETIVO, no la del dron: se
+      // validan igual que cualquier posición, y una inválida queda en null en
+      // vez de mandar al equipo de tierra al 0,0.
+      const objetivo = posicionValida(msg.lat, msg.lon);
+      const alert = createAlert(
+        alertType,
+        droneId,
+        objetivo?.lat ?? null,
+        objetivo?.lon ?? null,
+        msg.snapshotBase64 ?? null,
+      );
+      const detalle = detalleDeDeteccion(msg);
       const ev = createLog(
         'drone',
         'ALERT_CREATED',
@@ -390,14 +581,16 @@ function handleDroneMessage(droneId: string, raw: string) {
         {
           droneId,
           alertId: alert.id,
-          meta: {
-            alerta: { id: alert.id, tipo: alert.type, lat: alert.lat, lon: alert.lon, ts: alert.created_at },
-            drone: metaDron(droneId),
-          },
+          meta: { alerta: metaAlerta(alert), drone: metaDron(droneId), ...(detalle ? { detalle } : {}) },
         },
       );
       broadcastOperators({ type: 'alert_created', alert });
       broadcastOperators({ type: 'event', event: ev });
+      // El id de la alerta lo decide la base, no la app: sin este acuse el dron
+      // no sabría cuál es la alerta del objetivo que está siguiendo, y no podría
+      // distinguir la decisión sobre ESA alerta de la de una vieja.
+      const ref = refDeAlerta(msg.ref);
+      if (ref) sendToDrone(droneId, { type: 'alert_ack', ref, alertId: alert.id });
       break;
     }
     // El dron se renombró desde la app: no hace falta devolverle el eco
@@ -584,6 +777,41 @@ function sinTumbarElHub(quien: string, trabajo: () => void) {
   }
 }
 
+/**
+ * Hasta cuánto hacia atrás se le reenvían a un dron que se (re)conecta las
+ * decisiones de sus alertas (§2). Un corte de enlace en el campo dura segundos
+ * o minutos: diez cubren el corte largo de verdad. Más atrás ya no sirve, porque
+ * para entonces el dron dejó ese objetivo (por batería, por un regreso o porque
+ * el operador reanudó la ruta) y la app descarta la decisión de una alerta que
+ * no es la de su objetivo en curso.
+ */
+const VENTANA_DECISIONES_MS = 10 * 60 * 1000;
+
+/**
+ * Reenvía las decisiones recientes al dron que acaba de conectarse.
+ * `sendToDrone` no encola: una alerta descartada mientras el dron estaba caído
+ * se perdía, y el dron seguía orbitando el falso positivo. Mandarlas de nuevo
+ * aunque ya le hubieran llegado no hace daño, porque la app aplica una decisión
+ * solo si es la de la alerta del objetivo que sigue, y la misma decisión dos
+ * veces deja todo igual.
+ *
+ * El único caso delicado lo abre el propio contrato (§2): la app también aplica
+ * una decisión mientras todavía no conoce el id de su alerta (el `alert_ack` no
+ * llegó). Si el dron se reconecta justo en ese hueco, una decisión vieja
+ * reenviada acá le pegaría al objetivo nuevo. Por eso los reenvíos van marcados
+ * con `resent: true`: la app aplica un reenvío solo si es EXACTAMENTE la alerta
+ * que ella conoce, nunca por la excepción del id todavía desconocido.
+ */
+function reenviarDecisionesRecientes(droneId: string) {
+  // Mismo formato que escribe decideAlert: la consulta compara texto (ver listDecisionsSince)
+  const desde = new Date(Date.now() - VENTANA_DECISIONES_MS).toISOString();
+  for (const d of listDecisionsSince(droneId, desde)) {
+    sendToDrone(droneId, {
+      type: 'alert_decision', alertId: d.id, decision: d.status, decidedBy: d.decided_by, resent: true,
+    });
+  }
+}
+
 export function setupWebSocket(server: Server) {
   const wss = new WebSocketServer({ server, path: '/ws', maxPayload: TOPE_FRAME_BYTES });
 
@@ -632,6 +860,7 @@ export function setupWebSocket(server: Server) {
       });
       broadcastOperators({ type: 'event', event: ev });
       broadcastOperators({ type: 'drone_online', drone: droneCard(droneId) });
+      reenviarDecisionesRecientes(droneId);
 
       ws.on('message', (data) => sinTumbarElHub(`el dron ${droneId}`, () => handleDroneMessage(droneId, data.toString())));
       ws.on('close', () => {

@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:fitsSystemWindows="true"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:fillViewport="true">
@@ -9,26 +10,28 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="24dp">
+        android:paddingStart="@dimen/espacio"
+        android:paddingTop="@dimen/espacio_grande"
+        android:paddingEnd="@dimen/espacio"
+        android:paddingBottom="@dimen/espacio_grande">
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="@string/menu_campo_titulo"
-            android:textSize="24sp"
-            android:textStyle="bold" />
+            android:textAppearance="@style/TextAppearance.DronePatrol.Titulo" />
 
         <!-- Quién está operando y cuánto le queda de sesión -->
         <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp">
+            android:layout_marginTop="@dimen/espacio">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:padding="16dp">
+                android:padding="@dimen/espacio">
 
                 <TextView
                     style="@style/TituloTarjeta"
@@ -38,82 +41,113 @@
                     android:id="@+id/txtQuien"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:textSize="20sp"
-                    android:textStyle="bold" />
+                    android:textAppearance="@style/TextAppearance.Material3.TitleMedium"
+                    android:textColor="@color/texto" />
 
                 <View
-                    android:layout_width="match_parent"
-                    android:layout_height="1dp"
-                    android:layout_marginTop="12dp"
-                    android:layout_marginBottom="12dp"
-                    android:background="?attr/colorOutlineVariant" />
+                    style="@style/Widget.DronePatrol.Divisor"
+                    android:layout_marginTop="@dimen/espacio_medio"
+                    android:layout_marginBottom="@dimen/espacio_medio" />
 
-                <TextView
-                    style="@style/TituloTarjeta"
-                    android:text="@string/menu_campo_restante" />
-
-                <TextView
-                    android:id="@+id/txtCuentaRegresiva"
+                <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:fontFamily="monospace"
-                    android:textSize="34sp"
-                    android:textStyle="bold" />
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <ImageView
+                        android:layout_width="@dimen/icono"
+                        android:layout_height="@dimen/icono"
+                        android:contentDescription="@null"
+                        android:src="@drawable/ic_reloj"
+                        app:tint="@color/texto_suave" />
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="@dimen/espacio_medio"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            style="@style/TituloTarjeta"
+                            android:layout_marginBottom="0dp"
+                            android:text="@string/menu_campo_restante" />
+
+                        <TextView
+                            android:id="@+id/txtCuentaRegresiva"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:textAppearance="@style/TextAppearance.DronePatrol.Cifra"
+                            android:textColor="@color/acento" />
+                    </LinearLayout>
+                </LinearLayout>
 
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
+                    android:layout_marginTop="@dimen/espacio_chico"
                     android:text="@string/menu_campo_restante_ayuda"
-                    android:textSize="13sp" />
+                    android:textAppearance="@style/TextAppearance.DronePatrol.Apagado" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
         <!-- Acción principal: emparejar el dron que se va a desplegar -->
+        <TextView
+            style="@style/TituloTarjeta"
+            android:layout_marginTop="@dimen/espacio_grande"
+            android:text="@string/menu_campo_desplegar" />
+
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnEscanear"
+            style="@style/Widget.DronePatrol.Boton.Principal"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:text="@string/menu_campo_escanear" />
+            android:text="@string/menu_campo_escanear"
+            app:icon="@drawable/ic_qr"
+            app:iconGravity="textStart" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
+            android:layout_marginTop="@dimen/espacio_chico"
             android:text="@string/menu_campo_escanear_ayuda"
-            android:textSize="13sp" />
+            android:textAppearance="@style/TextAppearance.DronePatrol.Apagado" />
 
         <TextView
             android:id="@+id/txtEstado"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp" />
+            android:layout_marginTop="@dimen/espacio_medio"
+            android:textAppearance="@style/TextAppearance.DronePatrol.Cuerpo"
+            android:textColor="@color/estado_alerta" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnIdentificador"
-            style="@style/Widget.Material3.Button.OutlinedButton"
+            style="@style/Widget.DronePatrol.Boton.Secundario"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
+            android:layout_marginTop="@dimen/espacio"
             android:text="@string/menu_campo_identificador" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnConfiguracion"
-            style="@style/Widget.Material3.Button.OutlinedButton"
+            style="@style/Widget.DronePatrol.Boton.Secundario"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:text="@string/menu_campo_configuracion" />
+            android:layout_marginTop="@dimen/espacio_medio"
+            android:text="@string/menu_campo_configuracion"
+            app:icon="@drawable/ic_ajustes"
+            app:iconGravity="textStart" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnCerrarSesion"
-            style="@style/Widget.Material3.Button.TextButton"
+            style="@style/Widget.DronePatrol.Boton.Texto"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/menu_campo_cerrar_sesion" />
+            android:layout_marginTop="@dimen/espacio"
+            android:text="@string/menu_campo_cerrar_sesion"
+            app:icon="@drawable/ic_cerrar_sesion"
+            app:iconGravity="textStart" />
     </LinearLayout>
 </ScrollView>

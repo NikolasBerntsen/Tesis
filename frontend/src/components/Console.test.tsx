@@ -2,18 +2,23 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Console from './Console';
-import type { WaypointsLayer } from './DronesMap';
+import type { MapItem, WaypointsLayer } from './DronesMap';
 import { makeDrone, makeMe, makeRoute, makeStatus } from '../test/fixtures';
-import type { Me } from '../types';
+import type { Me, ObjetivoEnSeguimiento } from '../types';
 
 // El mapa se sustituye por un botón que dispara el renombre de un nodo: Leaflet
 // no corre en jsdom, pero el cable que baja hasta Console sí se puede probar.
+// Además anota los items que recibe, para seguir el rastro del objetivo.
+const { mapa } = vi.hoisted(() => ({ mapa: { items: [] as MapItem[] } }));
 vi.mock('./DronesMap', () => ({
-  default: ({ waypoints }: { waypoints?: WaypointsLayer | null }) => (
-    <button data-testid="mapa-mock" onClick={() => waypoints?.onLabel(1, 'Portón')}>
-      mapa
-    </button>
-  ),
+  default: ({ items, waypoints }: { items: MapItem[]; waypoints?: WaypointsLayer | null }) => {
+    mapa.items = items;
+    return (
+      <button data-testid="mapa-mock" onClick={() => waypoints?.onLabel(1, 'Portón')}>
+        mapa
+      </button>
+    );
+  },
 }));
 
 // Captura el handler de mensajes que Console le pasa a useWebSocket y anota todo
@@ -41,6 +46,8 @@ type Pedido = { metodo: string; ruta: string; cuerpo: string };
 let pedidos: Pedido[] = [];
 /** Pedidos que el backend rechaza en este test, como `PATCH /drones/d1`. */
 let rechazados = new Set<string>();
+/** Con qué código se rechaza cada uno (400 si no se dice otra cosa). */
+let codigos: Record<string, number> = {};
 
 let meFix: Me = makeMe({ username: 'oper1', role: 'operator' });
 let dronesFix = [makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true })];
@@ -71,6 +78,8 @@ beforeEach(() => {
   pedidos = [];
   enviados = [];
   rechazados = new Set();
+  codigos = {};
+  mapa.items = [];
   meFix = makeMe({ username: 'oper1', role: 'operator' });
   dronesFix = [makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true })];
   routesFix = [];
@@ -84,7 +93,7 @@ beforeEach(() => {
       const ok = !rechazados.has(`${metodo} ${ruta}`);
       return {
         ok,
-        status: ok ? 200 : 400,
+        status: ok ? 200 : (codigos[`${metodo} ${ruta}`] ?? 400),
         json: async () => (ok ? responder(metodo, ruta, cuerpo) : { error: 'El backend dijo que no' }),
       } as Response;
     }),
@@ -439,6 +448,113 @@ describe('Console', () => {
     expect(enviados).toContainEqual({ type: 'manual_stick', droneId: 'd1', pitch: 1, roll: 0, yaw: 0, throttle: 0 });
     fireEvent.keyUp(mando, { key: 'ArrowUp' });
     expect(enviados.at(-1)).toEqual({ type: 'manual_stick', droneId: 'd1', pitch: 0, roll: 0, yaw: 0, throttle: 0 });
+  });
+
+  it('un 409 al decidir una alerta se le explica al operador en la campana', async () => {
+    rechazados.add('POST /alerts/1/decision');
+    codigos['POST /alerts/1/decision'] = 409;
+    render(<Console onLogout={() => {}} />);
+    await screen.findByText('Alfa');
+    fire({ type: 'alert_created', alert: { id: 1, type: 'PERSON', status: 'PENDING', drone_id: 'd1', created_at: '2024-01-01T12:00:00.000Z' } });
+
+    await userEvent.click(await screen.findByRole('button', { name: /1 pendiente/ }));
+    const panel = screen.getByRole('region', { name: /alertas de detección/i });
+    await userEvent.click(within(panel).getByRole('button', { name: 'Validar' }));
+
+    expect(await within(panel).findByRole('alert')).toHaveTextContent(
+      'Esta alerta ya la decidió otro operador: la lista se actualiza sola.',
+    );
+    expect(pedidos).toContainEqual({
+      metodo: 'POST',
+      ruta: '/alerts/1/decision',
+      cuerpo: JSON.stringify({ decision: 'VALIDATED' }),
+    });
+  });
+
+  it('la alerta pendiente del dron se decide desde su vista, al lado del video', async () => {
+    render(<Console onLogout={() => {}} />);
+    await abrirDetalleDelPrimerDron();
+    fire({
+      type: 'alert_created',
+      alert: { id: 4, type: 'VEHICLE', status: 'PENDING', drone_id: 'd1', created_at: '2024-01-01T12:00:00.000Z', snapshot: 'QUFB' },
+    });
+
+    const tarjeta = await screen.findByRole('region', { name: 'Alerta en curso' });
+    await userEvent.click(within(tarjeta).getByRole('button', { name: 'Descartar' }));
+    await waitFor(() =>
+      expect(pedidos).toContainEqual({
+        metodo: 'POST',
+        ruta: '/alerts/4/decision',
+        cuerpo: JSON.stringify({ decision: 'DISMISSED' }),
+      }),
+    );
+
+    // Decidida, la tarjeta se va sola cuando el backend avisa.
+    fire({
+      type: 'alert_updated',
+      alert: { id: 4, type: 'VEHICLE', status: 'DISMISSED', drone_id: 'd1', created_at: '2024-01-01T12:00:00.000Z' },
+    });
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Alerta en curso' })).not.toBeInTheDocument());
+  });
+
+  it('arma el rastro del objetivo con cada status y lo borra cuando el seguimiento termina', async () => {
+    const objetivo = (lon: number): ObjetivoEnSeguimiento => ({
+      alertId: 12,
+      type: 'VEHICLE',
+      lat: -34.6,
+      lon,
+      speedMs: 4,
+      courseDeg: 90,
+      moving: true,
+      lost: false,
+      lastSeenMs: 500,
+      decision: 'PENDING',
+    });
+    render(<Console onLogout={() => {}} />);
+    await abrirDetalleDelPrimerDron();
+
+    // Dos status en el mismo segundo: los dos puntos cuentan, aunque al mapa
+    // le llegue un solo volcado.
+    fire({ type: 'status', ...makeStatus({ droneId: 'd1', state: 'FOLLOWING', target: objetivo(-58.38) }) });
+    fire({ type: 'status', ...makeStatus({ droneId: 'd1', state: 'FOLLOWING', target: objetivo(-58.379) }) });
+    await waitFor(() => expect(mapa.items[0]?.rastroObjetivo).toHaveLength(2), { timeout: 3000 });
+
+    fire({ type: 'status', ...makeStatus({ droneId: 'd1', state: 'FOLLOWING', target: objetivo(-58.378) }) });
+    await waitFor(() => expect(mapa.items[0]?.rastroObjetivo).toHaveLength(3), { timeout: 3000 });
+    expect(mapa.items[0].rastroObjetivo?.[2]).toEqual([-34.6, -58.378]);
+
+    fire({ type: 'status', ...makeStatus({ droneId: 'd1', state: 'PATROLLING', target: null }) });
+    await waitFor(() => expect(mapa.items[0]?.rastroObjetivo).toBeUndefined(), { timeout: 3000 });
+  });
+
+  it('el rastro arranca con el último status de la carga inicial, y se va con el dron', async () => {
+    const objetivo: ObjetivoEnSeguimiento = {
+      alertId: 12,
+      type: 'PERSON',
+      lat: -34.6,
+      lon: -58.38,
+      speedMs: 0,
+      courseDeg: 0,
+      moving: false,
+      lost: false,
+      lastSeenMs: 500,
+      decision: 'VALIDATED',
+    };
+    dronesFix = [
+      makeDrone({
+        droneId: 'd1',
+        displayName: 'Alfa',
+        online: true,
+        lastStatus: makeStatus({ droneId: 'd1', state: 'ORBITING', target: objetivo }),
+      }),
+    ];
+    render(<Console onLogout={() => {}} />);
+    await abrirDetalleDelPrimerDron();
+    fire({ type: 'status', ...makeStatus({ droneId: 'd1', state: 'ORBITING', target: { ...objetivo, lon: -58.379 } }) });
+    await waitFor(() => expect(mapa.items[0]?.rastroObjetivo).toHaveLength(2), { timeout: 3000 });
+
+    fire({ type: 'drone_offline', drone: makeDrone({ droneId: 'd1', displayName: 'Alfa', online: false }) });
+    await waitFor(() => expect(mapa.items[0]?.rastroObjetivo).toBeUndefined(), { timeout: 3000 });
   });
 
   it('cierra sesión con el botón Salir', async () => {

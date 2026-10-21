@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { makeAlert, makeDrone } from '../test/fixtures';
 import CampanaDeAlertas from './CampanaDeAlertas';
@@ -48,6 +48,60 @@ describe('CampanaDeAlertas', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Descartar' }));
     expect(onDecidir).toHaveBeenCalledWith(42, 'DISMISSED');
+  });
+
+  // Antes el rechazo iba a console.error: el operador apretaba "Validar", no
+  // pasaba nada, y creía que había decidido.
+  it('si el backend rechaza la decisión, el motivo aparece junto a esa alerta', async () => {
+    const onDecidir = vi.fn().mockRejectedValue(new Error('Esta alerta ya la decidió otro operador.'));
+    montar([makeAlert({ id: 1, drone_id: 'd1' }), makeAlert({ id: 2, drone_id: 'd2' })], { onDecidir });
+    await userEvent.click(screen.getByRole('button', { name: /2 pendientes/ }));
+
+    const alertas = screen.getAllByRole('button', { name: 'Validar' });
+    await userEvent.click(alertas[1]);
+
+    const aviso = await screen.findByRole('alert');
+    expect(aviso).toHaveTextContent('Esta alerta ya la decidió otro operador.');
+    // Pegado a la alerta que falló, no a la otra.
+    expect(aviso.closest('.campana-alerta')).toHaveTextContent('Bravo');
+    expect(aviso.closest('.campana-alerta')).not.toHaveTextContent('Alfa');
+  });
+
+  it('mientras la decisión viaja, esa alerta no acepta otro click', async () => {
+    let terminar: () => void = () => {};
+    const onDecidir = vi.fn(() => new Promise<void>((r) => (terminar = r)));
+    montar([makeAlert({ id: 5 })], { onDecidir });
+    await userEvent.click(screen.getByRole('button', { name: /1 pendiente/ }));
+
+    await userEvent.click(screen.getByRole('button', { name: 'Descartar' }));
+    expect(screen.getByRole('button', { name: 'Validar' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Descartar' })).toBeDisabled();
+
+    terminar();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Validar' })).toBeEnabled());
+  });
+
+  // Con un único "en curso", decidir la segunda rehabilitaba los botones de la
+  // primera con su pedido todavía en viaje: el segundo click volvía como 409.
+  it('decidir otra alerta no rehabilita los botones de la que todavía viaja', async () => {
+    const terminar: Record<number, () => void> = {};
+    const onDecidir = vi.fn((id: number) => new Promise<void>((r) => (terminar[id] = r)));
+    montar([makeAlert({ id: 1, drone_id: 'd1' }), makeAlert({ id: 2, drone_id: 'd2' })], { onDecidir });
+    await userEvent.click(screen.getByRole('button', { name: /2 pendientes/ }));
+
+    await userEvent.click(screen.getAllByRole('button', { name: 'Validar' })[0]);
+    await userEvent.click(screen.getAllByRole('button', { name: 'Descartar' })[1]);
+    for (const nombre of ['Validar', 'Descartar']) {
+      for (const boton of screen.getAllByRole('button', { name: nombre })) expect(boton).toBeDisabled();
+    }
+
+    // Termina la segunda: la primera sigue en viaje y sigue bloqueada.
+    terminar[2]();
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Validar' })[1]).toBeEnabled());
+    expect(screen.getAllByRole('button', { name: 'Validar' })[0]).toBeDisabled();
+
+    terminar[1]();
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Validar' })[0]).toBeEnabled());
   });
 
   it('el nombre del dron lleva a su vista y cierra el desplegable', async () => {

@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import DronesMap, { type MapItem } from './DronesMap';
-import type { DroneStatus, PatrolRoute } from '../types';
+import type { DroneStatus, ObjetivoEnSeguimiento, PatrolRoute } from '../types';
 
 /*
  * Leaflet no corre en jsdom: no hay canvas, ni teselas, ni tamaño de
@@ -39,6 +39,8 @@ const { estado } = vi.hoisted(() => ({
     creadas: [] as string[],
     capas: [] as CapaFalsa[],
     encuadres: 0,
+    /** Los puntos del último encuadre: lo que el mapa decidió mostrar. */
+    encuadrados: [] as unknown[],
   },
 }));
 
@@ -108,7 +110,12 @@ vi.mock('leaflet', () => {
               capa.elementoGlobo = div;
             }
             const div = capa.elementoGlobo as HTMLElement;
-            div.innerHTML = capa.htmlGlobo as string;
+            // Se repinta sólo si el contenido cambió, como Leaflet: si no, el
+            // refresco del globo abierto (que toca textos sueltos) no se vería.
+            if (capa.htmlPintado !== capa.htmlGlobo) {
+              div.innerHTML = capa.htmlGlobo as string;
+              capa.htmlPintado = capa.htmlGlobo;
+            }
             return div;
           },
         };
@@ -173,7 +180,7 @@ vi.mock('leaflet', () => {
     default: {
       map: () => mapa,
       tileLayer: capaDeFondo,
-      divIcon: (opts: { html?: string }) => ({ html: opts?.html ?? '' }),
+      divIcon: (opts: { html?: string; className?: string }) => ({ html: opts?.html ?? '', className: opts?.className }),
       marker: (pos: unknown, opts: { icon?: unknown } = {}) => nuevaCapa('marker', { pos, icono: opts.icon ?? null }),
       polyline: (puntos: unknown, estilo: Record<string, unknown>) => nuevaCapa('polyline', { puntos, estilo: { ...estilo } }),
       circleMarker: (pos: unknown, estilo: Record<string, unknown>) =>
@@ -186,7 +193,10 @@ vi.mock('leaflet', () => {
       },
       DomUtil: { create: () => paneFalso },
       DomEvent: { disableClickPropagation: vi.fn(), disableScrollPropagation: vi.fn(), on: vi.fn() },
-      latLngBounds: () => ({ isValid: () => true, pad: () => ({}) }),
+      latLngBounds: (puntos: unknown[]) => {
+        estado.encuadrados = puntos;
+        return { isValid: () => true, pad: () => ({}) };
+      },
     },
   };
 });
@@ -244,6 +254,7 @@ beforeEach(() => {
   estado.creadas.length = 0;
   estado.capas.length = 0;
   estado.encuadres = 0;
+  estado.encuadrados = [];
 });
 
 describe('DronesMap — fondo del mapa', () => {
@@ -592,6 +603,330 @@ describe('DronesMap — nodos de la ruta', () => {
       const caja = document.createElement('div');
       caja.innerHTML = globo;
       expect(caja.querySelector('b')).toBeNull();
+    });
+  });
+});
+
+describe('DronesMap — dron sin GPS', () => {
+  /*
+   * Sin fix el SDK de DJI entrega 0,0, y la app nueva manda null con
+   * `gpsFix: false`. Creerle a cualquiera de los dos pintaba el dron en el
+   * golfo de Guinea, con una línea de miles de kilómetros hasta su base.
+   */
+  const SIN_GPS = [
+    ['lat/lon null', { lat: null, lon: null, gpsFix: false }],
+    ['el 0,0 del SDK', { lat: 0, lon: 0 }],
+    ['gpsFix false con coordenadas viejas', { gpsFix: false }],
+  ] as const;
+
+  it.each(SIN_GPS)('%s: ni marcador, ni cono, ni línea; la base queda', (_caso, over) => {
+    render(<DronesMap items={[item({ status: status({ heading: 90, ...over }) })]} alwaysShowLine />);
+    expect(enMapa('marker')).toHaveLength(1);
+    expect(enMapa('marker')[0].htmlGlobo as string).toContain('Base Obelisco');
+    expect(enMapa('polygon')).toHaveLength(0);
+    expect(enMapa('polyline')).toHaveLength(0);
+  });
+
+  it('un dron sin GPS no entra en el encuadre: sólo la base', () => {
+    render(<DronesMap items={[item({ status: status({ lat: 0, lon: 0 }) })]} />);
+    expect(estado.encuadres).toBe(1);
+    expect(estado.encuadrados).toEqual([[BASE.lat, BASE.lon]]);
+  });
+
+  it('sin base y sin GPS no hay nada que encuadrar', () => {
+    render(<DronesMap items={[item({ base: null, status: status({ lat: null, lon: null }) })]} />);
+    expect(estado.encuadres).toBe(0);
+    expect(enMapa('marker')).toHaveLength(0);
+  });
+
+  it('cuando entra el fix el dron aparece, y si se pierde se va', () => {
+    const { rerender } = render(<DronesMap items={[item({ status: status({ lat: null, lon: null }) })]} />);
+    expect(enMapa('marker')).toHaveLength(1);
+
+    rerender(<DronesMap items={[item({ status: status({ gpsFix: true }) })]} />);
+    expect(enMapa('marker')).toHaveLength(2);
+
+    rerender(<DronesMap items={[item({ status: status({ gpsFix: false }) })]} />);
+    expect(enMapa('marker')).toHaveLength(1);
+  });
+});
+
+describe('DronesMap — objetivo', () => {
+  function objetivo(over: Partial<ObjetivoEnSeguimiento> = {}): ObjetivoEnSeguimiento {
+    return {
+      alertId: 12,
+      type: 'VEHICLE',
+      lat: -34.60412,
+      lon: -58.3817,
+      speedMs: 4.2,
+      courseDeg: 118,
+      moving: true,
+      lost: false,
+      lastSeenMs: 600,
+      decision: 'PENDING',
+      ...over,
+    };
+  }
+
+  const conObjetivo = (over: Partial<ObjetivoEnSeguimiento> = {}, extra: Partial<MapItem> = {}) =>
+    item({ status: status({ state: 'FOLLOWING', target: objetivo(over) }), ...extra });
+
+  /** Los marcadores del objetivo: se reconocen por la clase de su ícono. */
+  const miras = () =>
+    estado.capas.filter((c) => c.tipo === 'marker' && (c.icono as { className?: string })?.className === 'objetivo-icon');
+  const mirasEnMapa = () => miras().filter((c) => c.enMapa);
+  const htmlIcono = (c: CapaFalsa) => (c.icono as { html: string }).html;
+  /** El rastro es la polilínea gruesa; el hilo al dron, la fina. */
+  const rastros = () => todas('polyline').filter((c) => c.estilo.weight === 2.5);
+  const hilos = () => todas('polyline').filter((c) => c.estilo.weight === 1.5 && c.estilo.dashArray === '4 6');
+
+  const escribirEnPortapapeles = vi.fn();
+  beforeEach(() => {
+    escribirEnPortapapeles.mockReset();
+    escribirEnPortapapeles.mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: escribirEnPortapapeles }, configurable: true });
+  });
+
+  it('dibuja la mira en la posición estimada y el hilo que la une al dron', () => {
+    render(<DronesMap items={[conObjetivo()]} />);
+    expect(mirasEnMapa()).toHaveLength(1);
+    expect(mirasEnMapa()[0].pos).toEqual([-34.60412, -58.3817]);
+    // El hilo se ve siempre, también en el mapa de la flota: dice qué dron
+    // está sobre qué objetivo.
+    expect(hilos()).toHaveLength(1);
+    expect(hilos()[0].enMapa).toBe(true);
+    expect(hilos()[0].puntos).toEqual([
+      [-34.6, -58.38],
+      [-34.60412, -58.3817],
+    ]);
+  });
+
+  it('rojo mientras la alerta espera, oro una vez validada (sin crear otra mira)', () => {
+    const { rerender } = render(<DronesMap items={[conObjetivo()]} />);
+    const mira = miras()[0];
+    expect(htmlIcono(mira)).toContain('#9C3B30');
+    expect(hilos()[0].estilo.color).toBe('#9C3B30');
+
+    rerender(<DronesMap items={[conObjetivo({ decision: 'VALIDATED' })]} />);
+    expect(miras()).toHaveLength(1);
+    expect(htmlIcono(mira)).toContain('#B8912F');
+    expect(htmlIcono(mira)).not.toContain('#9C3B30');
+    expect(hilos()[0].estilo.color).toBe('#B8912F');
+  });
+
+  it('perdido: la mira y el rastro van apagados y punteados', () => {
+    const rastro: [number, number][] = [
+      [-34.604, -58.382],
+      [-34.60412, -58.3817],
+    ];
+    render(<DronesMap items={[conObjetivo({ lost: true }, { rastroObjetivo: rastro })]} />);
+    expect(htmlIcono(miras()[0])).toContain('stroke-dasharray');
+    expect(htmlIcono(miras()[0])).toContain('opacity="0.55"');
+    expect(rastros()[0].estilo.dashArray).toBe('2 6');
+    expect(rastros()[0].estilo.opacity).toBeLessThan(0.6);
+  });
+
+  it('el ícono no se rehace en cada status: sólo si cambia la decisión o si se pierde', () => {
+    const { rerender } = render(<DronesMap items={[conObjetivo()]} />);
+    const mira = miras()[0];
+    const icono = mira.icono;
+    rerender(<DronesMap items={[conObjetivo({ lat: -34.6042, lastSeenMs: 1200 })]} />);
+    expect(mira.icono).toBe(icono);
+    expect(mira.pos).toEqual([-34.6042, -58.3817]);
+  });
+
+  it('el rastro aparece con dos puntos y se alarga en el lugar', () => {
+    const { rerender } = render(<DronesMap items={[conObjetivo({}, { rastroObjetivo: [[-34.604, -58.382]] })]} />);
+    // Un punto solo no es una trayectoria.
+    expect(rastros()).toHaveLength(0);
+
+    rerender(
+      <DronesMap
+        items={[
+          conObjetivo(
+            {},
+            {
+              rastroObjetivo: [
+                [-34.604, -58.382],
+                [-34.6041, -58.3818],
+              ],
+            },
+          ),
+        ]}
+      />,
+    );
+    expect(rastros()).toHaveLength(1);
+    const rastro = rastros()[0];
+    expect(rastro.enMapa).toBe(true);
+
+    rerender(
+      <DronesMap
+        items={[
+          conObjetivo(
+            {},
+            {
+              rastroObjetivo: [
+                [-34.604, -58.382],
+                [-34.6041, -58.3818],
+                [-34.60412, -58.3817],
+              ],
+            },
+          ),
+        ]}
+      />,
+    );
+    expect(rastros()).toHaveLength(1);
+    expect(rastro.puntos).toHaveLength(3);
+  });
+
+  it('si el rastro vuelve a un solo punto (otro objetivo), la línea vieja se va', () => {
+    const largo: [number, number][] = [
+      [-34.604, -58.382],
+      [-34.60412, -58.3817],
+    ];
+    const { rerender } = render(<DronesMap items={[conObjetivo({}, { rastroObjetivo: largo })]} />);
+    expect(rastros()[0].enMapa).toBe(true);
+
+    rerender(<DronesMap items={[conObjetivo({ alertId: 13 }, { rastroObjetivo: [[-34.61, -58.39]] })]} />);
+    expect(rastros()[0].enMapa).toBe(false);
+  });
+
+  it('sin objetivo se van la mira, el hilo y el rastro', () => {
+    const rastro: [number, number][] = [
+      [-34.604, -58.382],
+      [-34.60412, -58.3817],
+    ];
+    const { rerender } = render(<DronesMap items={[conObjetivo({}, { rastroObjetivo: rastro })]} />);
+    expect(mirasEnMapa()).toHaveLength(1);
+
+    rerender(<DronesMap items={[item({ status: status({ state: 'PATROLLING', target: null }) })]} />);
+    expect(mirasEnMapa()).toHaveLength(0);
+    expect(hilos().filter((c) => c.enMapa)).toHaveLength(0);
+    expect(rastros().filter((c) => c.enMapa)).toHaveLength(0);
+  });
+
+  it('con el dron sin GPS la mira queda, pero no hay hilo: le falta una punta', () => {
+    render(<DronesMap items={[item({ status: status({ lat: null, lon: null, gpsFix: false, target: objetivo() }) })]} />);
+    expect(mirasEnMapa()).toHaveLength(1);
+    expect(hilos()).toHaveLength(0);
+  });
+
+  it('el hilo se va si el dron pierde el GPS en pleno seguimiento', () => {
+    const { rerender } = render(<DronesMap items={[conObjetivo()]} />);
+    expect(hilos()[0].enMapa).toBe(true);
+    rerender(<DronesMap items={[item({ status: status({ gpsFix: false, target: objetivo() }) })]} />);
+    expect(hilos()[0].enMapa).toBe(false);
+    expect(mirasEnMapa()).toHaveLength(1);
+  });
+
+  it('un objetivo con posición rota no se dibuja', () => {
+    render(<DronesMap items={[conObjetivo({ lat: 0, lon: 0 })]} />);
+    expect(miras()).toHaveLength(0);
+  });
+
+  it('el encuadre inicial también incluye al objetivo', () => {
+    render(<DronesMap items={[conObjetivo()]} />);
+    expect(estado.encuadrados).toContainEqual([-34.60412, -58.3817]);
+  });
+
+  it('un dron que sale de la lista se lleva su objetivo', () => {
+    const { rerender } = render(<DronesMap items={[conObjetivo()]} />);
+    rerender(<DronesMap items={[]} />);
+    expect(mirasEnMapa()).toHaveLength(0);
+    expect(hilos()[0].enMapa).toBe(false);
+  });
+
+  describe('globo del objetivo', () => {
+    function abrir() {
+      const mira = miras()[0];
+      mira.globoAbierto = true;
+      mira.handlers.popupopen();
+      return { mira, el: mira.elementoGlobo as HTMLElement };
+    }
+
+    it('trae lo que necesita el equipo de tierra', () => {
+      render(<DronesMap items={[conObjetivo()]} />);
+      const globo = miras()[0].htmlGlobo as string;
+      for (const dato of ['Vehículo', '4.2 m/s (15 km/h)', '118° SE', 'hace menos de 1 s', 'Sin decidir', '-34.604120, -58.381700']) {
+        expect(globo).toContain(dato);
+      }
+      expect(globo).toContain('obj-copiar');
+    });
+
+    // La app manda null en vez de NaN: antes el globo tiraba un TypeError
+    // adentro del efecto del mapa y se llevaba puesta la consola entera.
+    it('sin velocidad ni rumbo estimados la mira se dibuja igual, con la raya', () => {
+      render(<DronesMap items={[conObjetivo({ speedMs: null, courseDeg: null })]} />);
+      expect(mirasEnMapa()).toHaveLength(1);
+      const caja = document.createElement('div');
+      caja.innerHTML = miras()[0].htmlGlobo as string;
+      expect(caja.querySelector('[data-campo="velocidad"]')!.textContent).toBe('—');
+      expect(caja.querySelector('[data-campo="rumbo"]')!.textContent).toBe('—');
+    });
+
+    it('quieto no muestra rumbo', () => {
+      render(<DronesMap items={[conObjetivo({ moving: false })]} />);
+      const caja = document.createElement('div');
+      caja.innerHTML = miras()[0].htmlGlobo as string;
+      expect(caja.querySelector('[data-campo="rumbo"]')!.textContent).toBe('—');
+      expect(caja.querySelector('[data-campo="situacion"]')!.textContent).toBe('Quieto');
+    });
+
+    it('con el globo abierto se refrescan los datos sin rehacerlo: el botón sigue siendo el mismo', () => {
+      const { rerender } = render(<DronesMap items={[conObjetivo()]} />);
+      const { mira, el } = abrir();
+      const htmlAntes = mira.htmlGlobo;
+      const boton = el.querySelector('.obj-copiar');
+
+      rerender(<DronesMap items={[conObjetivo({ lat: -34.605, lastSeenMs: 4200 })]} />);
+
+      expect(mira.htmlGlobo).toBe(htmlAntes);
+      expect(el.querySelector('.obj-copiar')).toBe(boton);
+      expect(el.querySelector('[data-campo="coordenadas"]')!.textContent).toBe('-34.605000, -58.381700');
+      expect(el.querySelector('[data-campo="visto"]')!.textContent).toBe('hace 4 s');
+    });
+
+    it('cerrado, el globo se rehace con los datos nuevos', () => {
+      const { rerender } = render(<DronesMap items={[conObjetivo()]} />);
+      rerender(<DronesMap items={[conObjetivo({ decision: 'VALIDATED' })]} />);
+      expect(miras()[0].htmlGlobo as string).toContain('Validada por un operador');
+    });
+
+    it('"Copiar" copia las coordenadas vigentes al momento del click', async () => {
+      const { rerender } = render(<DronesMap items={[conObjetivo()]} />);
+      const { el } = abrir();
+      // El objetivo se movió con el globo abierto: se copia donde está ahora.
+      rerender(<DronesMap items={[conObjetivo({ lat: -34.605 })]} />);
+
+      const boton = el.querySelector('.obj-copiar') as HTMLButtonElement;
+      boton.onclick!(new MouseEvent('click'));
+      await waitFor(() => expect(escribirEnPortapapeles).toHaveBeenCalledWith('-34.605000, -58.381700'));
+      await waitFor(() => expect(boton.textContent).toBe('Copiado'));
+    });
+
+    it('un globo que quedó abierto de un objetivo que ya no está no copia nada', () => {
+      const { rerender } = render(<DronesMap items={[conObjetivo()]} />);
+      const { el } = abrir();
+      rerender(<DronesMap items={[item({ status: status({ target: null }) })]} />);
+      (el.querySelector('.obj-copiar') as HTMLButtonElement).onclick!(new MouseEvent('click'));
+      expect(escribirEnPortapapeles).not.toHaveBeenCalled();
+    });
+
+    it('si el navegador no deja copiar, el botón lo dice', async () => {
+      escribirEnPortapapeles.mockRejectedValue(new Error('sin permiso'));
+      render(<DronesMap items={[conObjetivo()]} />);
+      const { el } = abrir();
+      const boton = el.querySelector('.obj-copiar') as HTMLButtonElement;
+      boton.onclick!(new MouseEvent('click'));
+      await waitFor(() => expect(boton.textContent).toBe('No se pudo copiar'));
+    });
+
+    it('un tipo con HTML adentro se escapa', () => {
+      const malicioso = '<img src=x onerror="alert(1)">' as ObjetivoEnSeguimiento['type'];
+      render(<DronesMap items={[conObjetivo({ type: malicioso })]} />);
+      const caja = document.createElement('div');
+      caja.innerHTML = miras()[0].htmlGlobo as string;
+      expect(caja.querySelector('img')).toBeNull();
     });
   });
 });

@@ -1,0 +1,5 @@
+# Los pesos entrenados pesan decenas de MB y viven en ml/results y en el
+# proyecto de entrenamiento: acá se copian para correr, no se versionan.
+modelos/
+.venv/
+__pycache__/

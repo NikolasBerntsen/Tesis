@@ -2,10 +2,18 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import Dashboard from './Dashboard';
+import type { MapItem } from './DronesMap';
 import { makeAlert, makeDrone, makeStatus } from '../test/fixtures';
 
-// DronesMap manipula Leaflet contra el DOM real: se mockea con un stub.
-vi.mock('./DronesMap', () => ({ default: () => <div data-testid="mapa-mock" /> }));
+// DronesMap manipula Leaflet contra el DOM real: se mockea con un stub que
+// anota los items que recibe, para ver qué le llega al mapa de la flota.
+const { mapa } = vi.hoisted(() => ({ mapa: { items: [] as MapItem[] } }));
+vi.mock('./DronesMap', () => ({
+  default: ({ items }: { items: MapItem[] }) => {
+    mapa.items = items;
+    return <div data-testid="mapa-mock" />;
+  },
+}));
 
 function renderDashboard(props: Partial<Parameters<typeof Dashboard>[0]> = {}) {
   const base = {
@@ -75,6 +83,39 @@ describe('Dashboard', () => {
   it('no muestra la franja cuando no hay alertas pendientes', () => {
     renderDashboard({ alerts: [makeAlert({ status: 'VALIDATED' })] });
     expect(screen.queryByText(/sin atender/)).not.toBeInTheDocument();
+  });
+
+  it('"en vuelo" cuenta sólo los que están en el aire: uno apoyado tiene cámara pero no vuela', () => {
+    renderDashboard({
+      drones: [
+        makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true }),
+        makeDrone({ droneId: 'd2', displayName: 'Bravo', online: true }),
+        makeDrone({ droneId: 'd3', displayName: 'Charlie', online: true }),
+      ],
+      statuses: {
+        d1: makeStatus({ droneId: 'd1', flying: true }),
+        d2: makeStatus({ droneId: 'd2', flying: false, state: 'LANDED' }),
+        // Una app vieja no manda `flying`: se la cuenta como antes.
+        d3: makeStatus({ droneId: 'd3' }),
+      },
+    });
+    expect(screen.getByText('2 en vuelo · 3 registrados')).toBeInTheDocument();
+    // Las tres cámaras se muestran igual: el que está apoyado también transmite.
+    expect(screen.getAllByRole('button', { name: /^Ver detalle de / })).toHaveLength(3);
+  });
+
+  it('le pasa al mapa de la flota el rastro del objetivo de cada dron', async () => {
+    renderDashboard({
+      rastros: { d1: { alertId: 12, puntos: [[-34.6, -58.38], [-34.6, -58.379]] } },
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'Mapa' }));
+    expect(mapa.items[0].rastroObjetivo).toEqual([[-34.6, -58.38], [-34.6, -58.379]]);
+  });
+
+  it('sin rastros el mapa recibe los items sin rastro', async () => {
+    renderDashboard();
+    await userEvent.click(screen.getByRole('button', { name: 'Mapa' }));
+    expect(mapa.items[0].rastroObjetivo).toBeUndefined();
   });
 
   it('abre el detalle al clickear una cámara', async () => {

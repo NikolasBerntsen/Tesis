@@ -1,13 +1,18 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { api, rutasDeBase } from '../api';
-import { stateLabel } from '../format';
-import type { Drone, DroneStatus, EventRow, Me, PatrolRoute } from '../types';
+import { posicionDelDron, stateLabel } from '../format';
+import type { RastroObjetivo } from '../rastro';
+import type { Alert, Drone, DroneStatus, EventRow, Me, PatrolRoute } from '../types';
+import type { DecidirAlerta } from '../useDecisionDeAlerta';
+import AlertaEnCurso from './AlertaEnCurso';
 import DroneStatusCard from './DroneStatusCard';
 import DronesMap, { type MapItem, type WaypointsLayer } from './DronesMap';
 import EditableName from './EditableName';
 import EventLog from './EventLog';
 import LiveVideo from './LiveVideo';
 import MandoVirtual, { type Ejes } from './MandoVirtual';
+import Modal from './Modal';
+import PanelObjetivo from './PanelObjetivo';
 
 // Estados en los que el patrullaje normal está interrumpido: habilitan
 // "Retomar ruta" y "Continuar desde acá" en los nodos.
@@ -34,6 +39,29 @@ function Flecha({ rumbo }: { rumbo: number }) {
   );
 }
 
+/** Despegar o aterrizar: las dos órdenes de vuelo que piden confirmación. */
+type OrdenDeVuelo = 'despegar' | 'aterrizar';
+
+/**
+ * Lo que dice el diálogo antes de cada orden. Son las dos únicas órdenes de la
+ * consola que mueven el dron en vertical sin que el operador lo esté guiando,
+ * y las dos tienen algo que revisar en el terreno antes de darlas.
+ */
+const CONFIRMACION: Record<OrdenDeVuelo, { titulo: string; texto: string; aviso: string; boton: string }> = {
+  despegar: {
+    titulo: 'Despegar',
+    texto: 'El dron despega en el lugar y queda suspendido a ~1,2 m; funciona sin GPS.',
+    aviso: 'Revisá que no haya nadie ni nada encima ni alrededor del dron antes de confirmar.',
+    boton: 'Despegar',
+  },
+  aterrizar: {
+    titulo: 'Aterrizar',
+    texto: 'El dron baja y aterriza donde está ahora. El control manual sigue tomado: después lo podés volver a despegar.',
+    aviso: 'Revisá que abajo del dron no haya gente, agua ni obstáculos.',
+    boton: 'Aterrizar',
+  },
+};
+
 export default function DroneDetail({
   me,
   drone,
@@ -42,6 +70,9 @@ export default function DroneDetail({
   conectado,
   liveEvents,
   routes,
+  alertas,
+  rastro = null,
+  onDecidir,
   onBack,
   onRename,
   onWaypointLabel,
@@ -55,6 +86,11 @@ export default function DroneDetail({
   conectado: boolean;
   liveEvents: EventRow[];
   routes: PatrolRoute[];
+  /** Las alertas de la consola: de acá sale la pendiente de este dron. */
+  alertas: Alert[];
+  /** Rastro del objetivo que el dron está siguiendo, si hay uno (rastro.ts). */
+  rastro?: RastroObjetivo | null;
+  onDecidir: DecidirAlerta;
   onBack: () => void;
   onRename: (displayName: string) => void;
   onWaypointLabel: (routeId: number, index: number, label: string) => void;
@@ -71,6 +107,17 @@ export default function DroneDetail({
   // Ids de las rutas que la base de este dron tiene habilitadas. `null` mientras
   // no llegaron: no es lo mismo que "la base no tiene ninguna".
   const [idsDeLaBase, setIdsDeLaBase] = useState<number[] | null>(null);
+  /** La orden de vuelo que espera confirmación en el diálogo. */
+  const [aConfirmar, setAConfirmar] = useState<OrdenDeVuelo | null>(null);
+  /**
+   * La orden que el backend ya aceptó y el dron todavía no cumplió. El backend
+   * contesta en el acto, pero el dron recién informa que despegó cuando está
+   * en el aire: mientras tanto el mando sigue inerte, y sin este aviso el
+   * operador cree que el botón no anduvo y lo vuelve a apretar.
+   */
+  const [ordenEnCurso, setOrdenEnCurso] = useState<OrdenDeVuelo | null>(null);
+  const idTitulo = useId();
+  const idTexto = useId();
 
   // Un dron sólo puede patrullar las rutas de la base de la que sale. Ofrecerle
   // todas las del sistema era mandarlo a volar a la otra punta de la ciudad.
@@ -104,10 +151,17 @@ export default function DroneDetail({
     return [...fresh, ...history];
   }, [history, liveEvents, drone.droneId]);
 
-
   const items = useMemo<MapItem[]>(
-    () => [{ droneId: drone.droneId, displayName: drone.displayName, base: drone.base, status }],
-    [drone.droneId, drone.displayName, drone.base, status],
+    () => [
+      {
+        droneId: drone.droneId,
+        displayName: drone.displayName,
+        base: drone.base,
+        status,
+        rastroObjetivo: rastro?.puntos,
+      },
+    ],
+    [drone.droneId, drone.displayName, drone.base, status, rastro],
   );
 
   // La ruta en curso sale de la lista completa: si se la desasignó de la base
@@ -122,6 +176,37 @@ export default function DroneDetail({
   const soyControlador = !!me && controlador === me.username;
   const puedeControlar = !!me && me.canControl;
   const esSupervisor = me?.role === 'supervisor' || me?.role === 'admin';
+
+  /** El objetivo que el dron orbita o sigue, con lo último que estimó la app. */
+  const objetivo = status?.target ?? null;
+  // `flying` lo manda la app nueva siempre; una vieja no, y ahí no se afirma
+  // ni lo uno ni lo otro: ni se ofrece despegar ni se bloquea el mando.
+  const enElSuelo = status?.flying === false;
+  const enElAire = status?.flying === true;
+  const sinGps = !!status && posicionDelDron(status) === null;
+
+  // La alerta que se decide al lado del video: la pendiente más nueva de ESTE
+  // dron. Los ids crecen con cada alerta, así que la más nueva es la de id más
+  // alto, llegue en el orden que llegue la lista.
+  const pendientes = useMemo(
+    () =>
+      alertas
+        .filter((a) => a.drone_id === drone.droneId && a.status === 'PENDING')
+        .sort((a, b) => b.id - a.id),
+    [alertas, drone.droneId],
+  );
+  const alertaEnCurso = pendientes[0] ?? null;
+
+  // El aviso de "orden en curso" se va solo cuando el dron confirma: en el aire
+  // para el despegue, en el suelo para el aterrizaje. También si se suelta el
+  // control, porque la orden deja de ser de este operador.
+  useEffect(() => {
+    if (ordenEnCurso === 'despegar' && enElAire) setOrdenEnCurso(null);
+    if (ordenEnCurso === 'aterrizar' && enElSuelo) setOrdenEnCurso(null);
+  }, [ordenEnCurso, enElAire, enElSuelo]);
+  useEffect(() => {
+    if (!soyControlador) setOrdenEnCurso(null);
+  }, [soyControlador]);
 
   /**
    * El estado que el dron reportó DESPUÉS de que se tomó el control, o `null`
@@ -149,6 +234,13 @@ export default function DroneDetail({
    * lock por eso: la app se puede ir sola a volver a base por batería con el
    * control tomado, así que el único que puede avisar es la consola.
    *
+   * El suelo es el último motivo y no espera confirmación: `flying` es un dato
+   * físico, no del estado, así que vale también en el status de antes de tomar
+   * el control. En el suelo la app descarta las palancas EN SILENCIO (el
+   * Virtual Stick no despega, y subir el acelerador a fondo tampoco), y antes la
+   * consola dejaba mover las perillas sin que el dron hiciera nada. Para eso
+   * está el botón "Despegar".
+   *
    * Lo que NO es impedimento es la espera de esa confirmación: ahí el mando
    * emite (los ejes que lleguen antes de tiempo la app los descarta sola, que es
    * mucho más barato que tragarse el gesto del operador) y se avisa aparte.
@@ -159,21 +251,41 @@ export default function DroneDetail({
       ? 'Sin conexión con el Comando Central: el mando no responde.'
       : estadoConfirmado !== null && estadoConfirmado !== 'MANUAL'
         ? `El dron no está en vuelo manual (${stateLabel(estadoConfirmado)}): el mando no responde.`
-        : null;
+        : enElSuelo
+          ? 'El dron está en el suelo: despegalo para usar el mando.'
+          : null;
 
   /** Control tomado y el dron todavía sin decir en qué estado quedó. */
   const esperandoConfirmacion = impedimentoDelMando === null && estadoConfirmado === null;
 
-  async function llamar(path: string, options: RequestInit = {}) {
+  /**
+   * Por qué las flechas no pueden mover el dron, o `null` si pueden. El salto
+   * de 25 m se calcula desde la posición del dron, así que sin GPS no hay
+   * destino (y con el 0,0 que entrega el SDK sin fix, el destino quedaba en
+   * Null Island y el dron volaba hacia allá). La app lo rechaza igual; acá se
+   * dice antes, en vez de un click que no hace nada.
+   */
+  const impedimentoDelPad = !drone.online
+    ? 'El dron está desconectado: las flechas no responden.'
+    : enElSuelo
+      ? 'El dron está en el suelo: despegalo para usar las flechas.'
+      : sinGps
+        ? 'Sin GPS: el salto de 25 m se calcula desde la posición del dron, y el dron no la sabe. El vuelo continuo sí funciona.'
+        : null;
+
+  /** Devuelve si el backend aceptó el pedido; si no, deja el motivo a la vista. */
+  async function llamar(path: string, options: RequestInit = {}): Promise<boolean> {
     setError('');
     try {
       await api(path, options);
+      return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      return false;
     }
   }
 
-  // "Retomar ruta": vuelve al patrullaje desde el último nodo recorrido
+  // "Retomar ruta": vuelve al patrullaje hacia el próximo nodo de la ruta
   const retomar = () => llamar(`/drones/${drone.droneId}/resume`, { method: 'POST', body: '{}' });
   const continuarDesde = (index: number) =>
     llamar(`/drones/${drone.droneId}/resume`, { method: 'POST', body: JSON.stringify({ fromIndex: index }) });
@@ -188,11 +300,26 @@ export default function DroneDetail({
   const interrumpirRuta = () => llamar(`/drones/${drone.droneId}/route/stop`, { method: 'POST' });
 
   const tomarControl = () => llamar(`/drones/${drone.droneId}/control`, { method: 'POST' });
-  const soltarControl = () =>
-    llamar(`/drones/${drone.droneId}/control`, { method: 'DELETE', body: JSON.stringify({ resume: 'last' }) });
-  const quitarControl = soltarControl; // supervisor: mismo endpoint, el backend registra que fue forzado
+  /**
+   * Soltar el control. Con un objetivo cargado, `'none'` hace que el dron
+   * vuelva a él (§2 `control_released`); `'last'` además lo manda a patrullar,
+   * que es dejar el objetivo. Antes se mandaba siempre `'last'`, y soltar el
+   * control con una alerta validada sacaba al dron de encima del objetivo.
+   */
+  const soltarControl = (resume: 'none' | 'last') =>
+    llamar(`/drones/${drone.droneId}/control`, { method: 'DELETE', body: JSON.stringify({ resume }) });
+  // Supervisor: mismo endpoint, el backend registra que fue forzado. Con
+  // objetivo, el dron vuelve a él: quitarle el control a alguien no es decidir
+  // que el objetivo deja de importar.
+  const quitarControl = () => soltarControl(objetivo ? 'none' : 'last');
   const mover = (bearing: number) => () =>
     llamar(`/drones/${drone.droneId}/manual_move`, { method: 'POST', body: JSON.stringify({ bearing, distanceM: 25 }) });
+
+  async function confirmarOrden(orden: OrdenDeVuelo) {
+    setAConfirmar(null);
+    const ruta = orden === 'despegar' ? 'takeoff' : 'land';
+    if (await llamar(`/drones/${drone.droneId}/${ruta}`, { method: 'POST' })) setOrdenEnCurso(orden);
+  }
 
   // La ruta que se dibuja: la activa, o la elegida en el selector si no hay
   // vuelo. En ese segundo caso es una PREVISUALIZACIÓN: todavía no se ordenó
@@ -215,6 +342,8 @@ export default function DroneDetail({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rutaMapa, rutaActiva, status?.waypointIndex, puedeControlar, interrumpido, drone.online, controlador, soyControlador, esSupervisor]);
 
+  const confirmacion = aConfirmar ? CONFIRMACION[aConfirmar] : null;
+
   return (
     <main className="detail-main">
       <div className="detail-head">
@@ -227,8 +356,11 @@ export default function DroneDetail({
         <h2>
           <EditableName name={drone.displayName} onRename={onRename} />
         </h2>
+        {/* Conectado no es lo mismo que volando: con el dron apoyado esto
+            decía "En vuelo", y el operador agarraba un mando que no podía
+            mover nada. */}
         <span className={`estado ${drone.online ? 'ok' : 'muted'}`}>
-          {drone.online ? 'En vuelo' : 'Desconectado'}
+          {!drone.online ? 'Desconectado' : enElSuelo ? 'En tierra' : 'En vuelo'}
         </span>
         {controlador && <span className="badge oro">Control manual: {controlador}</span>}
       </div>
@@ -241,19 +373,33 @@ export default function DroneDetail({
       {/* El estado es lo primero que se mira y no compite con nada: cruza todo
           el ancho arriba. Debajo, el video manda sobre el mapa —es donde pasa
           lo que hay que decidir— y el resto queda en la columna angosta. */}
-      <DroneStatusCard status={status} base={drone.base} onResumePatrol={retomar} />
+      <DroneStatusCard status={status} base={drone.base} controlTomado={!!controlador} onResumePatrol={retomar} />
 
       {/* Video y ubicación cruzan toda la pantalla: son las dos ventanas de lo
-          que está pasando y se miran juntas. Los controles quedan debajo. */}
-      <div className="par-video-mapa">
+          que está pasando y se miran juntas. Con una alerta pendiente se mete
+          la captura ENTRE las dos, pegada al video: decidir es comparar lo que
+          vio la detección con lo que el dron está viendo ahora. */}
+      <div className={alertaEnCurso ? 'par-video-mapa con-alerta' : 'par-video-mapa'}>
         <LiveVideo frame={frame} />
+        {alertaEnCurso && (
+          <AlertaEnCurso
+            alerta={alertaEnCurso}
+            otrasPendientes={pendientes.length - 1}
+            siguiendo={objetivo?.alertId === alertaEnCurso.id}
+            onDecidir={onDecidir}
+          />
+        )}
         <div className="card">
           <div className="mapa-head">
             <h2>Ubicación</h2>
             <button
               onClick={retomar}
               disabled={!drone.online || !interrumpido}
-              title="Vuelve al patrullaje desde el último nodo recorrido"
+              title={
+                objetivo
+                  ? 'Deja el objetivo y vuelve al patrullaje, hacia el próximo nodo de la ruta'
+                  : 'Vuelve al patrullaje, hacia el próximo nodo de la ruta'
+              }
             >
               Retomar ruta
             </button>
@@ -265,11 +411,25 @@ export default function DroneDetail({
             <span className="estado bad">Nodo pendiente</span>
             <span className="estado ok">Nodo recorrido</span>
             {previsualizando && <span className="estado info">Ruta a comenzar</span>}
+            {objetivo && (
+              <span className={`estado ${objetivo.decision === 'VALIDATED' ? 'accent' : 'bad'}`}>
+                Objetivo y su rastro
+              </span>
+            )}
           </div>
+          {/* El mapa no dibuja un dron sin posición: sin esta línea, el
+              operador vería la base sola y pensaría que el dron se fue. */}
+          {sinGps && (
+            <p className="muted" data-testid="mapa-sin-gps">
+              El dron no informa posición (sin GPS): no se lo dibuja en el mapa.
+            </p>
+          )}
         </div>
       </div>
 
       <div className="grid-operacion">
+        {objetivo && <PanelObjetivo objetivo={objetivo} />}
+
         <div className="card">
           <h2>Patrullaje</h2>
           <div className="hueco">
@@ -323,27 +483,57 @@ export default function DroneDetail({
             )}
             {soyControlador && (
               <div className="control-panel">
+                {/* Despegar y aterrizar van primero: con el dron en el suelo es
+                    lo único que se puede hacer, y es lo que habilita el resto. */}
+                {(enElSuelo || enElAire) && (
+                  <>
+                    <h3>{enElSuelo ? 'En el suelo' : 'En el aire'}</h3>
+                    {enElSuelo ? (
+                      <button className="primario" onClick={() => setAConfirmar('despegar')} disabled={!drone.online}>
+                        Despegar
+                      </button>
+                    ) : (
+                      <button className="dismiss" onClick={() => setAConfirmar('aterrizar')} disabled={!drone.online}>
+                        Aterrizar
+                      </button>
+                    )}
+                    {ordenEnCurso && (
+                      <p className="aviso" role="status" data-testid="orden-en-curso">
+                        {ordenEnCurso === 'despegar'
+                          ? 'Despegue ordenado: el mando se habilita apenas el dron informe que está en el aire. Si no despega, el motivo queda en el registro de eventos.'
+                          : 'Aterrizaje ordenado: el dron baja donde está. El control sigue tomado.'}
+                      </p>
+                    )}
+                    <hr className="regla" />
+                  </>
+                )}
+
                 <h3>Desplazamiento puntual</h3>
                 {/* Plato hundido: el pad es la pieza más táctil de la consola
                     y tiene que leerse como un instrumento grabado en la piedra */}
                 <div className="pad-plato">
                   <div className="pad">
-                    <button title="Norte" aria-label="Mover al norte" onClick={mover(0)}>
+                    <button title="Norte" aria-label="Mover al norte" onClick={mover(0)} disabled={!!impedimentoDelPad}>
                       <Flecha rumbo={0} />
                     </button>
                     <div>
-                      <button title="Oeste" aria-label="Mover al oeste" onClick={mover(270)}>
+                      <button title="Oeste" aria-label="Mover al oeste" onClick={mover(270)} disabled={!!impedimentoDelPad}>
                         <Flecha rumbo={270} />
                       </button>
-                      <button title="Este" aria-label="Mover al este" onClick={mover(90)}>
+                      <button title="Este" aria-label="Mover al este" onClick={mover(90)} disabled={!!impedimentoDelPad}>
                         <Flecha rumbo={90} />
                       </button>
                     </div>
-                    <button title="Sur" aria-label="Mover al sur" onClick={mover(180)}>
+                    <button title="Sur" aria-label="Mover al sur" onClick={mover(180)} disabled={!!impedimentoDelPad}>
                       <Flecha rumbo={180} />
                     </button>
                   </div>
                 </div>
+                {impedimentoDelPad && (
+                  <p className="aviso" role="status" data-testid="pad-impedimento">
+                    {impedimentoDelPad}
+                  </p>
+                )}
                 <p className="muted">
                   Cada toque desplaza el dron 25 m en esa dirección: es un salto puntual, el dron lo
                   recorre y se queda ahí.
@@ -368,9 +558,24 @@ export default function DroneDetail({
                 )}
                 <MandoVirtual onMando={onMando} impedimento={impedimentoDelMando} />
 
-                <button className="resume" onClick={soltarControl}>
-                  Devolver al patrullaje
-                </button>
+                {/* Con un objetivo cargado hay dos formas de soltar, y la que
+                    va primero es la que no pierde nada: el dron vuelve a
+                    orbitarlo o a seguirlo. Mandarlo a patrullar es dejar el
+                    objetivo, y eso tiene que ser una decisión explícita. */}
+                {objetivo ? (
+                  <>
+                    <button className="resume" onClick={() => soltarControl('none')}>
+                      Soltar control (el dron vuelve al objetivo)
+                    </button>
+                    <button className="ghost soltar-y-patrullar" onClick={() => soltarControl('last')}>
+                      Soltar y reanudar patrullaje
+                    </button>
+                  </>
+                ) : (
+                  <button className="resume" onClick={() => soltarControl('last')}>
+                    Devolver al patrullaje
+                  </button>
+                )}
               </div>
             )}
             {controlador && !soyControlador && (
@@ -387,9 +592,35 @@ export default function DroneDetail({
         )}
       </div>
 
-      {/* Las alertas de este dron se atienden desde la campana del encabezado,
-          que las muestra apenas llegan sin importar en qué vista esté uno. */}
+      {/* La alerta de este dron se decide arriba, al lado del video; la
+          campana del encabezado sigue avisando desde cualquier vista. */}
       <EventLog events={events} />
+
+      {aConfirmar && confirmacion && (
+        <Modal etiquetadoPor={idTitulo} descritoPor={idTexto} onCerrar={() => setAConfirmar(null)}>
+          <header className="modal-cabecera">
+            <h2 className="modal-titulo" id={idTitulo}>
+              {confirmacion.titulo} {drone.displayName}
+            </h2>
+          </header>
+          <div className="modal-cuerpo">
+            <p id={idTexto}>{confirmacion.texto}</p>
+            <p className="muted">{confirmacion.aviso}</p>
+          </div>
+          <footer className="modal-pie">
+            <button type="button" className="ghost" onClick={() => setAConfirmar(null)}>
+              Cancelar
+            </button>
+            <button
+              type="button"
+              className={aConfirmar === 'despegar' ? 'primario' : 'dismiss'}
+              onClick={() => confirmarOrden(aConfirmar)}
+            >
+              {confirmacion.boton}
+            </button>
+          </footer>
+        </Modal>
+      )}
     </main>
   );
 }

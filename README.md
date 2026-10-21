@@ -11,25 +11,26 @@ valida o descarta la alerta.
    DJI Mini 4 Pro
         │ enlace RC (video + telemetría + comandos)
         ▼
-   RC-N2 ── USB ── Celular Android (android-app/)
-                     │  lógica de patrullaje: rutas, pérdida de señal,
-                     │  batería baja, órbita ante detección
+   RC-N3 ── USB ── Celular Android (android-app/, DJI MSDK v5)
+                     │  lógica de patrullaje: despegue, rutas, pérdida de
+                     │  señal, batería baja, órbita ante detección
                      │
         ┌────────────┼──────────────────┐
-        │ frames JPEG (WS)              │ eventos / alertas / status / video (WS+REST, JWT)
+        │ cuadros 1280 px (Wi-Fi, WS)   │ eventos / alertas / status / video (WS+REST, JWT)
         ▼                               ▼
-   Laptop junto al control         Comando Central (backend/)
+   Notebook de campo               Comando Central (backend/)
    Software de detección           Express + SQLite + WebSocket
-   (detection-mock/ *)                  │
+   (detection/, YOLO11m *)              │
         │ detección persona/vehículo    ▼
         └────────► celular         Consola del operador (frontend/)
                                    React + Vite: video en vivo, alertas
                                    (validar / falso positivo), logs, JWT
 ```
 
-\* `detection-mock/` es un **placeholder** del software de análisis de imágenes
-(próxima etapa). Implementa el contrato definitivo de mensajes
-(`docs/PROTOCOLS.md`), así el módulo real de visión lo reemplaza sin tocar la app.
+\* `detection/` es el software real de visión: el modelo YOLO11 entrenado sobre
+VisDrone en `ml/`, servido por WebSocket con el contrato de `docs/PROTOCOLS.md`
+y anunciado por UDP para que la app lo encuentre sola en la red. `detection-mock/`
+queda como placeholder sin GPU para demos.
 
 ## Componentes
 
@@ -37,9 +38,12 @@ valida o descarta la alerta.
 |---|---|---|
 | `backend/` | Comando Central: API REST + WebSocket, auth JWT, log de eventos y alertas en SQLite | Node 20+, Express, TypeScript |
 | `frontend/` | Consola del operador: login, video en vivo, alertas con decisión, registro de eventos | React + Vite + TypeScript |
-| `detection-mock/` | Visor que recibe el video del celular y simula detecciones con botones | Node, ws |
-| `android-app/` | App de control que corre en el celular del RC-N2 | Kotlin, coroutines, OkHttp |
+| `detection/` | Software de detección real: recibe el video del celular, corre YOLO11m (GPU) y contesta las detecciones; visor web y anuncio UDP | Python, ultralytics, aiohttp |
+| `detection-mock/` | Placeholder sin GPU: visor que recibe el video y simula detecciones con botones | Node, ws |
+| `ml/` | Entrenamiento y evaluación del modelo sobre VisDrone | Python, ultralytics |
+| `android-app/` | App de control que corre en el celular enganchado al RC-N3 (flavor `mock` simulado, flavor `dji` con el MSDK v5) | Kotlin, coroutines, OkHttp, DJI MSDK 5.18 |
 | `docs/PROTOCOLS.md` | Contratos de mensajes entre los cuatro procesos | — |
+| `docs/DJI.md` | Cómo volar el Mini 4 Pro de verdad: App Key, checklist de campo, cómo vuela | — |
 | `docs/MODELO-DE-DATOS.md` | Diagramas del modelo de datos, de clases y de componentes | — |
 
 ## Cómo levantar todo
@@ -100,17 +104,28 @@ correr. La app arranca con la URL del Comando Central ya cargada
 cambiarla por la IP de LAN que imprime `start.sh` al arrancar.
 
 El flujo es: **iniciar sesión como operador de campo** → **escanear el QR del
-dron** (el hash que imprime el seed) → elegir modo de operación.
+dron** (el hash que imprime el seed) → **conectar el dron físico** (la pantalla
+verifica SDK, control, aeronave y GPS, y solo deja desplegar con el enlace
+hecho) → **Desplegar y patrullar**. La sesión del operador de campo sigue viva
+durante la operación: al terminarla se vuelve al menú de campo.
 
-Para el enlace con el software de detección, el modo por defecto es **cable
-USB**: en la computadora que corre la detección hay que ejecutar una vez
+Para volar el **Mini 4 Pro real** hace falta la App Key de DJI en
+`android-app/local.properties` y un teléfono ARM64 enganchado al RC-N3: el
+paso a paso está en [docs/DJI.md](docs/DJI.md).
+
+### Software de detección
 
 ```bash
-adb reverse tcp:8765 tcp:8765
+detection/correr.bat
 ```
 
-y tener la depuración USB activada en el teléfono. El detalle, y el modo de red
-como respaldo, están en `android-app/README.md` y en `docs/PROTOCOLS.md`.
+Carga el modelo YOLO11m entrenado (`detection/modelos/*.pt`, se copia desde
+`ml/results`), escucha en `ws://<esta-pc>:8765/phone`, muestra el visor en
+`http://localhost:8765` y **se anuncia por UDP** para que la app lo encuentre
+sola en la red Wi-Fi: el celular va enganchado al control por su único puerto
+USB, así que el enlace con la notebook es inalámbrico sí o sí. Desde el
+emulador, en la app se elige *Dirección manual* → `ws://10.0.2.2:8765`. El
+detalle está en `detection/README.md` y en `docs/PROTOCOLS.md` §4.
 
 ### Levantar los servicios a mano
 
@@ -121,11 +136,13 @@ npm run dev` en `backend/`, `npm install && npm run dev` en `frontend/`, y
 ## Guion de demo (mapea cada requisito)
 
 1. **Login del operador** en `http://localhost:5173` (JWT).
-2. En la app: **Conectar** → elegir **ruta** → **Comenzar patrullaje**.
-   La consola muestra estado, batería, señal y el video en vivo; el log
-   registra `PATROL_STARTED`.
-3. **Detección**: en `http://localhost:8765` apretar *Detectar PERSONA*.
-   El dron pasa a **órbita**, llega la alerta con snapshot a la consola.
+2. En la app: elegir **ruta** → **Despegar y patrullar** → confirmar. El dron
+   despega, sube a la altura del primer waypoint y arranca; la consola muestra
+   estado, batería, señal y el video en vivo; el log registra `TAKEOFF` y
+   `PATROL_STARTED`.
+3. **Detección**: con `detection/correr.bat` el modelo detecta solo; sin GPU,
+   en `http://localhost:8765` apretar *Detectar PERSONA*. El dron pasa a
+   **órbita**, llega la alerta con snapshot a la consola.
 4. **Falso positivo**: *Falso positivo* en la consola → el dron **reanuda el
    patrullaje** desde el waypoint donde quedó; queda logueado quién decidió.
 5. **Alerta válida**: repetir detección → *Validar alerta* → queda registrada

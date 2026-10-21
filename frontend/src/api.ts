@@ -83,6 +83,21 @@ export async function login(username: string, password: string): Promise<void> {
   if (typeof body.user?.role === 'string') localStorage.setItem(ROLE_KEY, body.user.role);
 }
 
+/**
+ * Un pedido que el backend rechazó, con su código HTTP. El texto sigue siendo
+ * el que manda el backend; el código está para que quien llama distinga un
+ * rechazo de otro sin comparar mensajes, que el backend puede reescribir.
+ */
+export class ErrorDeApi extends Error {
+  readonly status: number;
+
+  constructor(mensaje: string, status: number) {
+    super(mensaje);
+    this.name = 'ErrorDeApi';
+    this.status = status;
+  }
+}
+
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(`/api${path}`, {
     ...options,
@@ -95,11 +110,31 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   if (res.status === 401) {
     clearSession();
     window.location.reload();
-    throw new Error('Sesión expirada');
+    throw new ErrorDeApi('Sesión expirada', 401);
   }
   const body = await res.json();
-  if (!res.ok) throw new Error(body.error ?? `Error ${res.status}`);
+  if (!res.ok) throw new ErrorDeApi(body.error ?? `Error ${res.status}`, res.status);
   return body as T;
+}
+
+/**
+ * Por qué no se pudo decidir una alerta, dicho para el operador. Antes estos
+ * rechazos iban a `console.error` y el operador apretaba "Validar" sin que
+ * pasara nada: creía que había decidido y el dron seguía esperando.
+ *
+ * El 409 es el caso que más va a ver: dos operadores miran la misma alerta y
+ * el segundo llega tarde. No es un error suyo, y lo que le sirve saber es que
+ * la alerta ya está resuelta, no el texto genérico del backend.
+ */
+export function motivoDelRechazoDeDecision(e: unknown): string {
+  if (e instanceof ErrorDeApi) {
+    if (e.status === 409) return 'Esta alerta ya la decidió otro operador: la lista se actualiza sola.';
+    if (e.status === 404) return 'La alerta ya no existe.';
+    if (e.status === 401) return 'La sesión venció: volvé a iniciar sesión para decidir la alerta.';
+    if (e.status === 403) return 'Tu usuario no puede decidir alertas.';
+  }
+  const detalle = e instanceof Error ? e.message : String(e);
+  return `No se pudo registrar la decisión: ${detalle}`;
 }
 
 // ---- Query strings ----

@@ -59,6 +59,12 @@
   margin-top: var(--e-4);
   width: 100%;
 }
+/* La segunda forma de soltar el control (dejando el objetivo): debajo de la
+   principal y del mismo ancho, pero sin su peso. */
+.soltar-y-patrullar {
+  margin-top: var(--e-2);
+  width: 100%;
+}
 
 /* --- Video ---------------------------------------------------------------- */
 .video {
@@ -118,6 +124,18 @@
   font-size: var(--txt-sm);
 }
 .alert.decided:last-child { border-bottom: none; }
+
+/* Alerta en curso, al lado del video en la vista del dron. Lleva el mismo filo
+   óxido que la alerta pendiente de la campana: es la misma alerta. */
+.alerta-en-curso {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-3);
+  border-color: rgba(156, 59, 48, .5);
+}
+.alerta-en-curso h2 { margin: 0; }
+.alerta-en-curso .alert-head time { margin-left: auto; }
+.alerta-consecuencias { font-size: var(--txt-xs); }
 
 /* Franja de alertas pendientes, visible desde cualquier vista */
 .alert-strip {
@@ -317,6 +335,8 @@ details.meta pre {
 }
 .esquina-verde { color: var(--ok); }
 .esquina-gris { color: var(--tinta-media); }
+/* Sobre un objetivo: el mismo oro que el estado resaltado de la ficha. */
+.esquina-oro { color: var(--oro-oscuro); border-color: var(--oro); }
 
 /* --- Mapa ------------------------------------------------------------------ */
 /* Leyenda: los cuatro símbolos en versalitas, cada uno del color de su marca */
@@ -370,10 +390,15 @@ details.meta pre {
    div-icon un recuadro blanco con borde gris: hay que sacárselo o el medallón
    dorado aparece dentro de una cajita de fábrica. */
 .drone-pin-icon,
-.base-icon {
+.base-icon,
+.objetivo-icon {
   background: none;
   border: 0;
 }
+/* Globo del objetivo: lo lee el que le dicta la posición al equipo de tierra,
+   así que las coordenadas no se parten en dos renglones. */
+.obj-popup { min-width: 230px; }
+.obj-popup .hash { white-space: nowrap; }
 /* La etiqueta de distancia la viste DronesMap con los tokens, igual que el
    resto de las etiquetas; acá va sólo lo que el JS no puede: sacarle la
    flechita, y un mármol de respaldo por si el vestido no llega. */

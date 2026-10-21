@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Una fila de la lista de verificación del dron: un punto de estado, el
+     nombre del paso y qué pasa con él. Se incluye cuatro veces en la pantalla
+     de conexión; los textos los pone la Activity. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingTop="@dimen/espacio_chico"
+    android:paddingBottom="@dimen/espacio_chico">
+
+    <View
+        android:id="@+id/punto"
+        android:layout_width="@dimen/punto_estado"
+        android:layout_height="@dimen/punto_estado"
+        android:background="@drawable/punto_estado" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="@dimen/espacio_medio"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/titulo"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textAppearance="@style/TextAppearance.DronePatrol.Versalita" />
+
+        <TextView
+            android:id="@+id/detalle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textAppearance="@style/TextAppearance.DronePatrol.Cuerpo" />
+    </LinearLayout>
+</LinearLayout>

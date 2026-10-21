@@ -1,6 +1,19 @@
 import L from 'leaflet';
 import { useEffect, useRef, useState } from 'react';
-import { formatDistance, initials, waypointLabel } from '../format';
+import {
+  coordenadas,
+  decisionDelObjetivo,
+  formatDistance,
+  haceCuanto,
+  initials,
+  posicionDelDron,
+  posicionValida,
+  rumbo,
+  situacionDelObjetivo,
+  tipoDeObjetivo,
+  velocidad,
+  waypointLabel,
+} from '../format';
 import {
   CENTRO_POR_DEFECTO,
   aplicarFondo,
@@ -10,15 +23,23 @@ import {
   vestir,
   type Fondo,
 } from '../mapa';
-import type { Base, DroneStatus, PatrolRoute } from '../types';
+import type { Base, DroneStatus, ObjetivoEnSeguimiento, PatrolRoute } from '../types';
 import ConmutadorDeFondo from './ConmutadorDeFondo';
 
 export interface MapItem {
   droneId: string;
   displayName: string;
   base: Base | null;
-  /** null si el dron no está reportando posición (offline) */
+  /**
+   * null si el dron no está reportando (offline). Un status sin posición (sin
+   * GPS) tampoco dibuja el dron: ver `posicionDelDron`.
+   */
   status: DroneStatus | null;
+  /**
+   * Por dónde anduvo el objetivo que el dron está siguiendo, de la posición más
+   * vieja a la más nueva. Lo arma la consola con cada status (rastro.ts).
+   */
+  rastroObjetivo?: [number, number][];
 }
 
 /**
@@ -71,6 +92,13 @@ interface Layers {
   line?: L.Polyline;
   cone?: L.Polygon;
   iconName?: string;
+  /** El objetivo que el dron orbita o sigue, su hilo al dron y su rastro. */
+  objetivo?: L.Marker;
+  objetivoIcono?: string;
+  lineaObjetivo?: L.Polyline;
+  rastro?: L.Polyline;
+  /** Lo que copia el botón del globo: se lee al clickear, no al abrir. */
+  coordenadasObjetivo?: string;
 }
 
 // Cono semitransparente que muestra hacia dónde mira la cámara del dron
@@ -111,6 +139,56 @@ const LINE_STYLE: L.PolylineOptions = {
   dashArray: '2 7',
   interactive: false,
 };
+
+/* --- Objetivo ---------------------------------------------------------------
+   El color dice qué se decidió y el trazo si se lo está viendo: rojo óxido
+   mientras la alerta espera, oro una vez validada (el mismo oro del dron:
+   "esto es nuestro"), y apagado y punteado si la detección lo perdió, porque
+   lo que se ve en el mapa es la última posición conocida y no una presencia. */
+
+interface AspectoObjetivo {
+  color: string;
+  perdido: boolean;
+  /** Identifica el ícono: sólo se rehace cuando cambia. */
+  clave: string;
+}
+
+function aspectoDelObjetivo(o: ObjetivoEnSeguimiento): AspectoObjetivo {
+  const color = o.decision === 'VALIDATED' ? PALETA.oro : PALETA.oxido;
+  return { color, perdido: o.lost, clave: `${o.decision}-${o.lost}` };
+}
+
+function estiloLineaObjetivo(a: AspectoObjetivo): L.PolylineOptions {
+  return { color: a.color, weight: 1.5, opacity: a.perdido ? 0.45 : 0.85, dashArray: '4 6', interactive: false };
+}
+
+function estiloRastro(a: AspectoObjetivo): L.PolylineOptions {
+  return {
+    color: a.color,
+    weight: 2.5,
+    opacity: a.perdido ? 0.35 : 0.6,
+    dashArray: a.perdido ? '2 6' : undefined,
+    lineCap: 'round',
+    lineJoin: 'round',
+    interactive: false,
+  };
+}
+
+/** Una mira: se distingue del medallón del dron y del rombo de la base. */
+function iconoObjetivo(a: AspectoObjetivo): L.DivIcon {
+  const trazo = a.perdido ? 'stroke-dasharray="3 3"' : '';
+  return L.divIcon({
+    className: 'objetivo-icon',
+    html: `<svg width="28" height="28" viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg" opacity="${a.perdido ? 0.55 : 1}">
+      <circle cx="14" cy="14" r="10" fill="${PALETA.marfil}" fill-opacity=".85" stroke="${a.color}" stroke-width="2.6" ${trazo}/>
+      <path d="M14 1.5v6M14 20.5v6M1.5 14h6M20.5 14h6" stroke="${a.color}" stroke-width="2.2" stroke-linecap="round"/>
+      <circle cx="14" cy="14" r="3.2" fill="${a.color}"/>
+    </svg>`,
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+    popupAnchor: [0, -14],
+  });
+}
 
 function esc(text: string): string {
   return text.replace(/[<>&"]/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -184,6 +262,56 @@ function basePopup(item: MapItem): string {
       ['Nodo', s ? waypointLabel(s) : sinDatos],
     ])
   );
+}
+
+/** Los campos del globo del objetivo que cambian con cada status. */
+function camposDelObjetivo(o: ObjetivoEnSeguimiento): Record<string, string> {
+  return {
+    situacion: situacionDelObjetivo(o),
+    velocidad: velocidad(o.speedMs),
+    // Un objetivo quieto no tiene rumbo: el número es ruido del filtro.
+    rumbo: o.moving ? rumbo(o.courseDeg) : '—',
+    visto: haceCuanto(o.lastSeenMs),
+    decision: decisionDelObjetivo(o),
+    coordenadas: coordenadas(o.lat, o.lon),
+  };
+}
+
+const ROTULOS_OBJETIVO: [string, string][] = [
+  ['situacion', 'Situación'],
+  ['velocidad', 'Velocidad'],
+  ['rumbo', 'Rumbo'],
+  ['visto', 'Visto'],
+  ['decision', 'Decisión'],
+];
+
+/**
+ * El globo del objetivo es la ficha para el equipo de tierra: qué es, para
+ * dónde va y DÓNDE está, con las coordenadas a un click del portapapeles. Cada
+ * dato lleva `data-campo` para poder refrescarlo con el globo abierto sin
+ * rehacer el HTML (rehacerlo perdería el botón de copiar en pleno uso).
+ */
+function objetivoPopup(o: ObjetivoEnSeguimiento): string {
+  const campos = camposDelObjetivo(o);
+  const filas = ROTULOS_OBJETIVO.map(
+    ([clave, rotulo]) => `<dt>${rotulo}</dt><dd data-campo="${clave}">${esc(campos[clave])}</dd>`,
+  ).join('');
+  return `<div class="obj-popup">
+      ${titulo('Objetivo', tipoDeObjetivo(o.type))}
+      <hr class="regla" style="margin:var(--e-3) 0"><dl class="datos">${filas}
+        <dt>Posición</dt><dd><span class="hash"><span data-campo="coordenadas">${esc(campos.coordenadas)}</span><button class="obj-copiar" type="button" aria-label="Copiar las coordenadas del objetivo">Copiar</button></span></dd>
+      </dl>
+    </div>`;
+}
+
+/** Con el globo abierto se tocan sólo los textos: el botón y su manejador quedan. */
+function refrescarPopupObjetivo(marker: L.Marker, o: ObjetivoEnSeguimiento) {
+  const el = marker.getPopup()?.getElement();
+  if (!el) return;
+  for (const [clave, valor] of Object.entries(camposDelObjetivo(o))) {
+    const nodo = el.querySelector<HTMLElement>(`[data-campo="${clave}"]`);
+    if (nodo) nodo.textContent = valor;
+  }
 }
 
 /** Lo que se ve al pasar el mouse por encima del nodo. */
@@ -445,76 +573,36 @@ export default function DronesMap({
         setPopup(l.base, basePopup(item));
       }
 
-      if (!item.status) {
-        l.drone?.remove();
-        l.line?.remove();
-        l.cone?.remove();
-        l.drone = undefined;
-        l.line = undefined;
-        l.cone = undefined;
-        continue;
-      }
+      // Sin status o sin GPS el dron no se dibuja: un 0,0 o un null no son una
+      // posición, y creerles lo ponía en el golfo de Guinea (ver format.ts).
+      const dronePos = posicionDelDron(item.status);
+      if (item.status && dronePos) dibujarDron(map, l, item, item.status, dronePos);
+      else sacarDron(l);
 
-      const dronePos: L.LatLngTuple = [item.status.lat, item.status.lon];
-
-      // Cono de visión de la cámara
-      const heading = item.status.heading;
-      if (typeof heading === 'number' && !EN_TIERRA.includes(item.status.state)) {
-        const pts = coneLatLngs(item.status.lat, item.status.lon, heading);
-        if (!l.cone) l.cone = L.polygon(pts, CONE_STYLE).addTo(map);
-        else l.cone.setLatLngs(pts);
-      } else if (l.cone) {
-        l.cone.remove();
-        l.cone = undefined;
-      }
-      if (!l.drone) {
-        l.drone = L.marker(dronePos, { icon: droneIcon(item.displayName) }).addTo(map);
-        l.iconName = item.displayName;
-        trackPopup(l.drone, item.droneId);
-      } else {
-        l.drone.setLatLng(dronePos);
-        if (l.iconName !== item.displayName) {
-          l.drone.setIcon(droneIcon(item.displayName));
-          l.iconName = item.displayName;
-        }
-      }
-      setPopup(l.drone, dronePopup(item));
-
-      if (!item.base) continue;
-      const points: L.LatLngTuple[] = [dronePos, [item.base.lat, item.base.lon]];
-      if (!l.line) l.line = L.polyline(points, LINE_STYLE);
-      else l.line.setLatLngs(points);
-
-      if (alwaysShowLine) {
-        const text = formatDistance(map.distance(points[0], points[1]));
-        const tooltip = l.line.getTooltip();
-        if (!tooltip) {
-          l.line.bindTooltip(text, { permanent: true, direction: 'center', className: 'distance-tooltip' });
-        } else {
-          // La etiqueta no sigue sola a la línea: hay que recolocarla en el medio.
-          tooltip.setContent(text);
-          tooltip.setLatLng([(points[0][0] + points[1][0]) / 2, (points[0][1] + points[1][1]) / 2]);
-        }
-      }
+      dibujarObjetivo(map, l, item, dronePos);
     }
 
     for (const [id, l] of layers) {
       if (items.some((i) => i.droneId === id)) continue;
       l.base?.remove();
-      l.drone?.remove();
-      l.line?.remove();
-      l.cone?.remove();
+      sacarDron(l);
+      sacarObjetivo(l);
       layers.delete(id);
     }
 
     applyLines();
 
     // Encuadre inicial una sola vez, para no pelear con el zoom del operador.
+    // Entra lo que tiene posición de verdad: un dron sin GPS no se encuadra,
+    // porque encuadrar el 0,0 junto con la base es alejar el mapa al planeta.
     if (!fittedRef.current) {
       const points: L.LatLngTuple[] = [];
       for (const item of items) {
         if (item.base) points.push([item.base.lat, item.base.lon]);
-        if (item.status) points.push([item.status.lat, item.status.lon]);
+        const pos = posicionDelDron(item.status);
+        if (pos) points.push(pos);
+        const objetivo = item.status?.target;
+        if (objetivo && posicionValida(objetivo.lat, objetivo.lon)) points.push([objetivo.lat, objetivo.lon]);
       }
       if (points.length > 0) {
         map.fitBounds(L.latLngBounds(points).pad(0.3), { maxZoom: 16 });
@@ -522,6 +610,147 @@ export default function DronesMap({
       }
     }
   }, [items, alwaysShowLine]);
+
+  function sacarDron(l: Layers) {
+    l.drone?.remove();
+    l.line?.remove();
+    l.cone?.remove();
+    l.drone = undefined;
+    l.line = undefined;
+    l.cone = undefined;
+  }
+
+  function sacarObjetivo(l: Layers) {
+    l.objetivo?.remove();
+    l.lineaObjetivo?.remove();
+    l.rastro?.remove();
+    l.objetivo = undefined;
+    l.objetivoIcono = undefined;
+    l.lineaObjetivo = undefined;
+    l.rastro = undefined;
+    l.coordenadasObjetivo = undefined;
+  }
+
+  function dibujarDron(map: L.Map, l: Layers, item: MapItem, status: DroneStatus, dronePos: L.LatLngTuple) {
+    // Cono de visión de la cámara
+    const heading = status.heading;
+    if (typeof heading === 'number' && !EN_TIERRA.includes(status.state)) {
+      const pts = coneLatLngs(dronePos[0], dronePos[1], heading);
+      if (!l.cone) l.cone = L.polygon(pts, CONE_STYLE).addTo(map);
+      else l.cone.setLatLngs(pts);
+    } else if (l.cone) {
+      l.cone.remove();
+      l.cone = undefined;
+    }
+    if (!l.drone) {
+      l.drone = L.marker(dronePos, { icon: droneIcon(item.displayName) }).addTo(map);
+      l.iconName = item.displayName;
+      trackPopup(l.drone, item.droneId);
+    } else {
+      l.drone.setLatLng(dronePos);
+      if (l.iconName !== item.displayName) {
+        l.drone.setIcon(droneIcon(item.displayName));
+        l.iconName = item.displayName;
+      }
+    }
+    setPopup(l.drone, dronePopup(item));
+
+    if (!item.base) return;
+    const points: L.LatLngTuple[] = [dronePos, [item.base.lat, item.base.lon]];
+    if (!l.line) l.line = L.polyline(points, LINE_STYLE);
+    else l.line.setLatLngs(points);
+
+    if (alwaysShowLine) {
+      const text = formatDistance(map.distance(points[0], points[1]));
+      const tooltip = l.line.getTooltip();
+      if (!tooltip) {
+        l.line.bindTooltip(text, { permanent: true, direction: 'center', className: 'distance-tooltip' });
+      } else {
+        // La etiqueta no sigue sola a la línea: hay que recolocarla en el medio.
+        tooltip.setContent(text);
+        tooltip.setLatLng([(points[0][0] + points[1][0]) / 2, (points[0][1] + points[1][1]) / 2]);
+      }
+    }
+  }
+
+  /**
+   * El objetivo del dron: la mira, el hilo que la une al dron y el rastro. Se
+   * dibuja aunque el dron no tenga GPS —la última posición estimada del
+   * objetivo sigue siendo un dato—, pero el hilo necesita las dos puntas.
+   */
+  function dibujarObjetivo(map: L.Map, l: Layers, item: MapItem, dronePos: L.LatLngTuple | null) {
+    const objetivo = item.status?.target ?? null;
+    if (!objetivo || !posicionValida(objetivo.lat, objetivo.lon)) {
+      sacarObjetivo(l);
+      return;
+    }
+    const pos: L.LatLngTuple = [objetivo.lat, objetivo.lon];
+    const aspecto = aspectoDelObjetivo(objetivo);
+    l.coordenadasObjetivo = coordenadas(objetivo.lat, objetivo.lon);
+
+    if (!l.objetivo) {
+      const marcador = L.marker(pos, { icon: iconoObjetivo(aspecto) }).addTo(map);
+      const capas = l;
+      marcador.on('popupopen', () => cablearCopia(marcador, capas));
+      l.objetivo = marcador;
+      l.objetivoIcono = aspecto.clave;
+    } else {
+      l.objetivo.setLatLng(pos);
+      if (l.objetivoIcono !== aspecto.clave) {
+        l.objetivo.setIcon(iconoObjetivo(aspecto));
+        l.objetivoIcono = aspecto.clave;
+      }
+    }
+    if (l.objetivo.isPopupOpen()) refrescarPopupObjetivo(l.objetivo, objetivo);
+    else setPopup(l.objetivo, objetivoPopup(objetivo));
+
+    // El hilo dice qué dron está sobre qué objetivo: con dos drones sobre dos
+    // objetivos en el mapa de la flota, sin él no se sabe cuál es de cuál.
+    if (dronePos) {
+      const puntas: L.LatLngTuple[] = [dronePos, pos];
+      if (!l.lineaObjetivo) l.lineaObjetivo = L.polyline(puntas, estiloLineaObjetivo(aspecto)).addTo(map);
+      else l.lineaObjetivo.setLatLngs(puntas).setStyle(estiloLineaObjetivo(aspecto));
+    } else if (l.lineaObjetivo) {
+      l.lineaObjetivo.remove();
+      l.lineaObjetivo = undefined;
+    }
+
+    const rastro = item.rastroObjetivo ?? [];
+    if (rastro.length >= 2) {
+      if (!l.rastro) l.rastro = L.polyline(rastro, estiloRastro(aspecto)).addTo(map);
+      else l.rastro.setLatLngs(rastro).setStyle(estiloRastro(aspecto));
+    } else if (l.rastro) {
+      l.rastro.remove();
+      l.rastro = undefined;
+    }
+  }
+
+  /**
+   * El botón "Copiar" del globo del objetivo. Las coordenadas se leen al
+   * clickear: el globo puede llevar un minuto abierto y el objetivo, moviéndose.
+   */
+  function cablearCopia(marker: L.Marker, capas: Layers) {
+    const boton = marker.getPopup()?.getElement()?.querySelector<HTMLButtonElement>('.obj-copiar');
+    if (!boton) return;
+    boton.onclick = () => {
+      const texto = capas.coordenadasObjetivo;
+      if (!texto) return;
+      const avisar = (rotulo: string) => {
+        boton.textContent = rotulo;
+        setTimeout(() => {
+          boton.textContent = 'Copiar';
+        }, 2000);
+      };
+      // Fuera de un contexto seguro no hay portapapeles: el TypeError cae en
+      // el mismo rechazo y el botón no miente.
+      Promise.resolve()
+        .then(() => navigator.clipboard.writeText(texto))
+        .then(
+          () => avisar('Copiado'),
+          () => avisar('No se pudo copiar'),
+        );
+    };
+  }
 
   // Nodos de la ruta (solo la vista de detalle los pasa)
   useEffect(() => {

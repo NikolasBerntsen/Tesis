@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api, getRole, getUsername } from '../api';
+import { api, getRole, getUsername, motivoDelRechazoDeDecision } from '../api';
+import { sumarAlRastro, type RastroObjetivo } from '../rastro';
 import type { Alert, Drone, DroneStatus, EventRow, Me, NovedadDron, PatrolRoute, RolConsola } from '../types';
 import { useWebSocket } from '../useWebSocket';
 import BasesView from './BasesView';
@@ -59,6 +60,12 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
   // Los status de cada dron llegan a destiempo: se acumulan acá y se vuelcan
   // al estado en un único tick, así todos los marcadores se mueven a la vez.
   const statusBuffer = useRef<Record<string, DroneStatus>>({});
+  // El rastro del objetivo de cada dron se arma acá, con la posición que trae
+  // cada status: la app manda sólo la estimación del momento (ver rastro.ts).
+  // Se acumula al ritmo de los mensajes y se vuelca en el mismo tick que los
+  // status, para que la línea y el marcador del objetivo avancen juntos.
+  const rastrosBuffer = useRef<Record<string, RastroObjetivo>>({});
+  const [rastros, setRastros] = useState<Record<string, RastroObjetivo>>({});
 
   // El rol de la sesión sirve para pintar la barra sin esperar a /me; el que
   // manda es el que informa el backend, y si difieren la sección se corrige sola.
@@ -69,7 +76,10 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
 
   useEffect(() => {
     if (deCampo) return;
-    const id = setInterval(() => setStatuses({ ...statusBuffer.current }), TICK_MS);
+    const id = setInterval(() => {
+      setStatuses({ ...statusBuffer.current });
+      setRastros({ ...rastrosBuffer.current });
+    }, TICK_MS);
     return () => clearInterval(id);
   }, [deCampo]);
 
@@ -77,6 +87,7 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
     switch (msg.type) {
       case 'status':
         statusBuffer.current[msg.droneId] = msg;
+        acumularRastro(msg.droneId, msg.target);
         break;
       case 'video_frame':
         setFrames((prev) => ({ ...prev, [msg.droneId]: msg.jpegBase64 }));
@@ -157,6 +168,9 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
         const buffer: Record<string, DroneStatus> = {};
         for (const d of list) if (d.lastStatus) buffer[d.droneId] = d.lastStatus;
         statusBuffer.current = buffer;
+        // El rastro que se haya juntado no se tira al reconectar: el objetivo
+        // es el mismo y la trayectoria sigue siendo la que el operador miraba.
+        for (const d of list) acumularRastro(d.droneId, d.lastStatus?.target);
       })
       .catch(console.error);
     api<Alert[]>('/alerts').then(setAlerts).catch(console.error);
@@ -185,9 +199,16 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
     );
   }
 
+  function acumularRastro(droneId: string, objetivo: DroneStatus['target']) {
+    const rastro = sumarAlRastro(rastrosBuffer.current[droneId], objetivo);
+    if (rastro) rastrosBuffer.current[droneId] = rastro;
+    else delete rastrosBuffer.current[droneId];
+  }
+
   /** Un dron que se fue no tiene nada que seguir dibujando en el tablero. */
   function olvidarTelemetria(droneId: string) {
     delete statusBuffer.current[droneId];
+    delete rastrosBuffer.current[droneId];
     setFrames((prev) => {
       const next = { ...prev };
       delete next[droneId];
@@ -195,11 +216,17 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
     });
   }
 
-  async function decidirAlerta(id: number, decision: 'VALIDATED' | 'DISMISSED') {
+  /**
+   * Decide una alerta. Si el backend la rechaza, el error SUBE con el motivo ya
+   * dicho para el operador: lo muestra el que tiene el botón (la campana o la
+   * tarjeta de la vista del dron), que es donde el operador está mirando.
+   * Tragárselo acá era dejar al operador creyendo que había decidido.
+   */
+  async function decidirAlerta(id: number, decision: 'VALIDATED' | 'DISMISSED'): Promise<void> {
     try {
       await api(`/alerts/${id}/decision`, { method: 'POST', body: JSON.stringify({ decision }) });
     } catch (err) {
-      console.error(err);
+      throw new Error(motivoDelRechazoDeDecision(err));
     }
   }
 
@@ -288,6 +315,9 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
           conectado={conectado}
           liveEvents={liveEvents}
           routes={routes}
+          alertas={alerts}
+          rastro={rastros[selected.droneId] ?? null}
+          onDecidir={decidirAlerta}
           onBack={() => setSelectedId(null)}
           onRename={(name) => rename(selected.droneId, name)}
           onWaypointLabel={setWaypointLabel}
@@ -300,6 +330,7 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
           frames={frames}
           alerts={alerts}
           pendingAlerts={pendingAlerts}
+          rastros={rastros}
           onOpenDrone={setSelectedId}
           onRename={rename}
         />

@@ -60,4 +60,16 @@ class GeoTest {
 
         assertEquals(-135.0, Geo.rumboHacia(LAT, LON, destinoLat, destinoLon), 0.01)
     }
+
+    /** 0,0 es lo que el SDK de DJI entrega sin fix: no es una posición. */
+    @Test
+    fun ceroCeroNaNYFueraDeRangoNoSonPosiciones() {
+        assertTrue(Geo.esPosicionValida(-34.6037, -58.3816))
+        org.junit.Assert.assertFalse(Geo.esPosicionValida(0.0, 0.0))
+        org.junit.Assert.assertFalse(Geo.esPosicionValida(Double.NaN, -58.3))
+        org.junit.Assert.assertFalse(Geo.esPosicionValida(-34.6, Double.POSITIVE_INFINITY))
+        org.junit.Assert.assertFalse(Geo.esPosicionValida(91.0, 10.0))
+        // El ecuador o Greenwich solos sí son posiciones
+        assertTrue(Geo.esPosicionValida(0.0, 10.0))
+    }
 }

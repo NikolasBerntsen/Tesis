@@ -4,7 +4,8 @@
   "private": true,
   "description": "Placeholder del software de detección de imágenes. Implementa el mismo contrato WebSocket que tendrá el módulo real (docs/PROTOCOLS.md) para poder demostrar el circuito completo.",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test"
   },
   "dependencies": {
     "express": "^4.19.2",

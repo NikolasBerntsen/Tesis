@@ -10,7 +10,12 @@ import { fileURLToPath } from 'node:url';
  * Estas aserciones fijan la regla contra el z-index real de Leaflet.
  */
 function leer(rel: string): string {
-  return readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
+  // Los finales de línea se normalizan: en un clon de Windows con
+  // `core.autocrlf` las hojas llegan con CRLF, y los selectores de varias
+  // líneas que buscan los tests de abajo (`.modal,` y `.modal-fondo {` en dos
+  // renglones) no aparecían nunca. La regla que se fija es la del CSS, no la
+  // del checkout.
+  return readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8').replace(/\r\n/g, '\n');
 }
 
 function zIndexDe(css: string, selector: string): number {
