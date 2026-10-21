@@ -210,6 +210,13 @@ class LanzadorDeLinuxYMac(unittest.TestCase):
             obtenido = self.correr(f'MODELOS="{Path(carpeta).as_posix()}"; fuente_del_modelo')
         self.assertEqual(obtenido, ["/media/usb/Niko's/yolo11m-2clases.pt"])
 
+    def test_sin_nada_configurado_la_fuente_es_el_release_del_repo(self):
+        with tempfile.TemporaryDirectory() as carpeta:
+            obtenido = self.correr(f'MODELOS="{Path(carpeta).as_posix()}"; fuente_del_modelo')
+        self.assertEqual(len(obtenido), 1)
+        self.assertTrue(obtenido[0].startswith("https://github.com/NikolasBerntsen/Tesis/releases/download/"))
+        self.assertTrue(obtenido[0].endswith("/yolo11m-2clases.pt"))
+
     def test_la_variable_de_entorno_le_gana_a_fuente_txt(self):
         with tempfile.TemporaryDirectory() as carpeta:
             (Path(carpeta) / "fuente.txt").write_text("https://ejemplo.invalid/viejo.pt\n", encoding="utf-8")

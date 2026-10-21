@@ -35,6 +35,9 @@ $MODELOS = Join-Path $AQUI 'modelos'
 $MODELO = 'yolo11m-2clases.pt'
 $MODELO_BYTES = 40579500
 $MODELO_SHA256 = 'd7d4599023e8e9be4ae5548261eb1df379a217ec9ebbfe82967fc282d386e881'
+# De dónde se baja si no está en la máquina ni hay otra fuente configurada: el
+# asset del release del repo (público, sin token). La huella de arriba lo verifica.
+$MODELO_URL_POR_DEFECTO = 'https://github.com/NikolasBerntsen/Tesis/releases/download/modelo-yolo11m-2clases-v2/yolo11m-2clases.pt'
 $PYTHON_VERSION = '3.12'
 $INDICE_CUDA = 'https://download.pytorch.org/whl/cu128'
 $INDICE_CPU = 'https://download.pytorch.org/whl/cpu'
@@ -392,7 +395,8 @@ function Fuente-DelModelo {
             Select-Object -First 1
         if ($linea) { return $linea.Trim() }
     }
-    return $null
+    # Si no se configuró nada, el release del repo.
+    return $MODELO_URL_POR_DEFECTO
 }
 
 function Bajar-Modelo([string]$fuente, [string]$destino) {

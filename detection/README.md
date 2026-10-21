@@ -72,10 +72,12 @@ huella** (40 579 500 bytes, SHA-256 `d7d4599023e8e9be4ae5548261eb1df379a217ec9eb
    con sus subcarpetas `entrenamiento/*/weights`, `runs/*/weights`,
    `modelos/v2-*`) y en `ml/results` y `ml/runs` del repo. Ahí todos se llaman
    `best.pt`: por eso se lo reconoce por la huella y no por el nombre.
-2. Si no, lo baja de una **URL configurable**: la variable de entorno
-   `DRONEPATROL_MODELO_URL` o la primera línea de `modelos/fuente.txt` (las que
-   empiezan con `#` se ignoran). También vale una ruta: un pendrive, una carpeta
-   compartida.
+2. Si no, lo **baja del release del repo**
+   ([`modelo-yolo11m-2clases-v2`](https://github.com/NikolasBerntsen/Tesis/releases/tag/modelo-yolo11m-2clases-v2),
+   público, sin token) y lo verifica con su SHA-256. Otra fuente se configura
+   con la variable de entorno `DRONEPATROL_MODELO_URL` o la primera línea de
+   `modelos/fuente.txt` (las que empiezan con `#` se ignoran); también vale una
+   ruta: un pendrive, una carpeta compartida.
 3. Si nada de eso anda, avisa y sigue con el **modelo de respaldo**: el YOLO11m
    genérico de COCO (`yolo11m.pt`, ~40 MB que ultralytics baja la primera vez a
    `modelos/respaldo/`, o el de `ml/` si está). Se mapea **person → PERSON** y

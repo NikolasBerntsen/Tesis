@@ -35,6 +35,9 @@ MODELOS="$AQUI/modelos"
 MODELO="yolo11m-2clases.pt"
 MODELO_BYTES=40579500
 MODELO_SHA256="d7d4599023e8e9be4ae5548261eb1df379a217ec9ebbfe82967fc282d386e881"
+# De dónde se baja si no está en la máquina ni hay otra fuente configurada: el
+# asset del release del repo (público, sin token). La huella de arriba lo verifica.
+MODELO_URL_POR_DEFECTO="https://github.com/NikolasBerntsen/Tesis/releases/download/modelo-yolo11m-2clases-v2/yolo11m-2clases.pt"
 PYTHON_VERSION="3.12"
 INDICE_CUDA="https://download.pytorch.org/whl/cu128"
 INDICE_CPU="https://download.pytorch.org/whl/cpu"
@@ -378,7 +381,8 @@ buscar_modelo_local() {
 fuente_del_modelo() {
     # Una URL (o una ruta: pendrive, carpeta compartida) de donde bajarlo, si se configuró.
     if [ -n "${DRONEPATROL_MODELO_URL:-}" ]; then echo "$DRONEPATROL_MODELO_URL"; return 0; fi
-    [ -f "$MODELOS/fuente.txt" ] || return 1
+    # Si no se configuró nada, el release del repo.
+    [ -f "$MODELOS/fuente.txt" ] || { echo "$MODELO_URL_POR_DEFECTO"; return 0; }
     local linea
     # Sin el BOM que deja el Bloc de notas de Windows: si no, queda pegado a la URL.
     # Los espacios de los bordes se sacan con sed y no con xargs, que se traba
@@ -386,7 +390,7 @@ fuente_del_modelo() {
     linea="$(LC_ALL=C sed $'1s/^\xef\xbb\xbf//' "$MODELOS/fuente.txt" | tr -d '\r' | grep -v '^[[:space:]]*#' |
              grep -v '^[[:space:]]*$' | head -n 1 | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
     [ -n "$linea" ] && { echo "$linea"; return 0; }
-    return 1
+    echo "$MODELO_URL_POR_DEFECTO"
 }
 
 bajar_modelo() {
