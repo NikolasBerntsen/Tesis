@@ -14,7 +14,10 @@ import com.tesis.dronepatrol.model.EstadoDelDron
 import com.tesis.dronepatrol.model.FlightEvent
 import com.tesis.dronepatrol.model.PatrolRoute
 import com.tesis.dronepatrol.model.Telemetry
+import com.tesis.dronepatrol.model.Vinculacion
 import dji.sdk.keyvalue.key.AirLinkKey
+import dji.sdk.keyvalue.key.RemoteControllerKey
+import dji.sdk.keyvalue.value.remotecontroller.PairingState
 import dji.sdk.keyvalue.key.BatteryKey
 import dji.sdk.keyvalue.key.DJIActionKeyInfo
 import dji.sdk.keyvalue.key.DJIKeyInfo
@@ -22,6 +25,7 @@ import dji.sdk.keyvalue.key.FlightControllerKey
 import dji.sdk.keyvalue.key.GimbalKey
 import dji.sdk.keyvalue.key.KeyTools
 import dji.sdk.keyvalue.key.ProductKey
+import com.tesis.dronepatrol.drone.Persecucion
 import dji.sdk.keyvalue.value.common.ComponentIndexType
 import dji.sdk.keyvalue.value.common.EmptyMsg
 import dji.sdk.keyvalue.value.gimbal.GimbalAngleRotation
@@ -43,8 +47,7 @@ import dji.v5.manager.interfaces.ICameraStreamManager
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
-import kotlin.math.cos
-import kotlin.math.sin
+import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -107,8 +110,15 @@ class DjiDroneController : DroneController {
     /** Lazo de comandos en curso. Se lee y se escribe SIEMPRE con [relevoDeLazo] tomado. */
     private var navigationJob: Job? = null
 
-    /** true mientras el lazo de [navigationJob] sea el del mando manual. Mismo lock. */
-    private var mandoActivo = false
+    /** Qué lazo es [navigationJob]. Mismo lock. */
+    private var lazoActual = Lazo.NINGUNO
+
+    /**
+     * Los lazos de comando. Saber cuál corre sirve para no relanzar el que ya
+     * está andando: el mando manual llega diez veces por segundo, y la órbita y
+     * el seguimiento se actualizan con cada detección sin cortar el movimiento.
+     */
+    private enum class Lazo { NINGUNO, RUTA, ESTACIONARIO, GOTO, ORBITA, SEGUIMIENTO, MANDO, DESPEGUE }
 
     /** Corrutina que convierte los cuadros del SDK, una por vez (ver [convertirCuadros]). */
     private var conversionJob: Job? = null
@@ -119,13 +129,53 @@ class DjiDroneController : DroneController {
     // Lo que sigue lo escriben los listeners del SDK, cada uno en su hilo, y lo
     // leen los lazos de navegación y el que arma la telemetría, que corren en
     // otros: volátil para que no quede pegado. Sin esto un lazo podía quedarse
-    // con lastLat en NaN y hacer `continue` para siempre —el dron reportando
-    // posición y la ruta sin comandar una sola velocidad— sin que nada lo avise.
+    // sin ver la posición para siempre —el dron reportándola y la ruta sin
+    // comandar una sola velocidad— sin que nada lo avise.
+    /**
+     * La posición tal como la entrega KeyAircraftLocation3D, latitud y
+     * longitud JUNTAS (un par y no dos campos sueltos: leídas por separado, un
+     * lazo podía tomar la latitud de una lectura y la longitud de otra). La que
+     * usa el resto del controlador es [posicion], que la valida.
+     */
     @Volatile
-    private var lastLat = Double.NaN
+    private var posicionCruda: Pair<Double, Double>? = null
+
+    /**
+     * Si el GPS tiene fix según el propio controlador de vuelo (KeyGPSIsValid);
+     * null mientras no lo informe. Sin fix el SDK no entrega posición o entrega
+     * 0,0, y volar hacia una coordenada con eso es mandar al dron a cualquier
+     * lado (comprobado en el Mini 4 Pro: frente a una ventana el fix va y viene).
+     */
+    @Volatile
+    private var gpsValido: Boolean? = null
+
+    /** Rumbo absoluto del gimbal según el SDK (KeyGimbalAttitude.yaw), en -180..180. */
+    @Volatile
+    private var lastGimbalYaw = Double.NaN
+
+    /** Modo de vuelo que informa la aeronave (P-GPS, ATTI, APAS, …). */
+    @Volatile
+    private var modoDeVuelo = ""
+
+    /** Punto de retorno según KeyIsHomeLocationSet; null si el SDK no lo informa. */
+    @Volatile
+    private var baseFijadaSegunSdk: Boolean? = null
+
+    /** El punto de retorno que informa KeyHomeLocation es distinto de 0,0. */
+    @Volatile
+    private var baseDistintaDeCero = false
+
+    /** Centro y radio de la órbita en curso: el lazo los relee en cada vuelta (ver [startOrbit]). */
+    private class Orbita(val lat: Double, val lon: Double, val radioM: Double)
 
     @Volatile
-    private var lastLon = Double.NaN
+    private var orbita: Orbita? = null
+
+    /** Objetivo que se sigue y desde cuándo vale esa estimación (ver [seguirObjetivo]). */
+    private class Seguido(val lat: Double, val lon: Double, val vNorteMs: Double, val vEsteMs: Double, val desdeMs: Long)
+
+    @Volatile
+    private var seguido: Seguido? = null
 
     /** Altura sobre el punto de despegue (barómetro), en metros. */
     @Volatile
@@ -162,6 +212,13 @@ class DjiDroneController : DroneController {
 
     @Volatile
     private var serie = ""
+
+    /** Vínculo por radio control↔aeronave según el control (KeyPairingStatus). */
+    @Volatile
+    private var vinculacion = Vinculacion.DESCONOCIDA
+
+    @Volatile
+    private var serieControl = ""
 
     /** true entre [connect] y [disconnect]: conectar dos veces registraría dos veces cada oyente. */
     @Volatile
@@ -324,21 +381,37 @@ class DjiDroneController : DroneController {
         sdkJob?.cancel()
         sdkJob = scope.launch { DjiSdk.estado.collect { publicarEstado() } }
         VirtualStickManager.getInstance().setVirtualStickStateListener(oyenteDeVirtualStick)
+        // El modo avanzado es una marca local del SDK (no habla con la aeronave):
+        // sin ella sendVirtualStickAdvancedParam vuelve sin hacer nada. Se pone
+        // acá, de entrada, además de reponerla al habilitar.
+        VirtualStickManager.getInstance().setVirtualStickAdvancedModeEnabled(true)
+        // La telemetría sale a ritmo fijo y no cuando cambia un valor: el SDK
+        // avisa por cambio, y un dron quieto —o sin GPS— dejaba de emitir, la
+        // web se quedaba sin estado y el watchdog de PatrolManager tomaba el
+        // silencio por una pérdida de señal. Lo único que la corta es el enlace.
+        scope.launch {
+            while (true) {
+                delay(INTERVALO_TELEMETRIA_MS)
+                emitTelemetry()
+            }
+        }
 
-        // Posición del dron → telemetría
+        // Posición del dron (la valida [posicion] al usarla)
         escuchar(FlightControllerKey.KeyAircraftLocation3D) { location ->
-            lastLat = location.latitude
-            lastLon = location.longitude
-            emitTelemetry()
+            posicionCruda = location.latitude to location.longitude
+        }
+        escuchar(FlightControllerKey.KeyGPSIsValid) { valido ->
+            gpsValido = valido
+            publicarEstado()
+        }
+        escuchar(FlightControllerKey.KeyFlightModeString) { modo ->
+            modoDeVuelo = modo
+            publicarEstado()
         }
         // Altura barométrica sobre el punto de despegue, que es la que entienden
         // las rutas (sus alturas son relativas a la base).
         escuchar(FlightControllerKey.KeyAltitude) { alt -> lastAlt = alt }
-        // Nivel de batería → telemetría
-        escuchar(BatteryKey.KeyChargeRemainingInPercent) { pct ->
-            lastBattery = pct.toDouble()
-            emitTelemetry()
-        }
+        escuchar(BatteryKey.KeyChargeRemainingInPercent) { pct -> lastBattery = pct.toDouble() }
         // Rumbo real de la brújula. El MSDK lo da en -180..180 y el resto del
         // sistema lo usa en 0..360 (norte = 0, este = 90).
         escuchar(FlightControllerKey.KeyCompassHeading) { rumbo -> lastHeading = (rumbo + 360.0) % 360.0 }
@@ -348,8 +421,9 @@ class DjiDroneController : DroneController {
         // Enlace con el dron. Cuando se cae hay que DEJAR de emitir telemetría:
         // el watchdog de PatrolManager detecta la pérdida por el silencio —igual
         // que con el dron simulado— y no por un campo del mensaje. Cuando el
-        // enlace vuelve, el primer valor de posición reanuda la emisión sola.
+        // enlace vuelve, el ticker reanuda la emisión solo.
         escuchar(FlightControllerKey.KeyConnection) { conectado ->
+            Log.i(TAG, "Enlace con la aeronave: $conectado")
             enlaceVivo = conectado
             publicarEstado()
         }
@@ -370,22 +444,52 @@ class DjiDroneController : DroneController {
         // automático sin punto de retorno es un dron perdido: por eso es parte de
         // listoParaDespegar.
         escuchar(FlightControllerKey.KeyHomeLocation) { casa ->
-            baseFijada = casa.latitude != 0.0 || casa.longitude != 0.0
+            baseDistintaDeCero = casa.latitude != 0.0 || casa.longitude != 0.0
+            publicarEstado()
+        }
+        // Lo que dice el controlador de vuelo manda sobre la cuenta de arriba:
+        // KeyHomeLocation puede traer un punto viejo con el retorno sin fijar.
+        escuchar(FlightControllerKey.KeyIsHomeLocationSet) { fijada ->
+            baseFijadaSegunSdk = fijada
             publicarEstado()
         }
         escuchar(ProductKey.KeyProductType) { tipo ->
+            Log.i(TAG, "Modelo según el SDK: $tipo")
             modelo = tipo.name.replace('_', ' ').replace("DJI ", "")
             publicarEstado()
         }
         // El número de serie de la aeronave: es lo que dice CUÁL dron está
         // enlazado, que es lo que la pantalla de conexión tiene que mostrar.
         escuchar(FlightControllerKey.KeySerialNumber) { numero ->
+            Log.i(TAG, "Serie de la aeronave: $numero")
             serie = numero
+            publicarEstado()
+        }
+        // El vínculo por radio entre el control y la aeronave. Con el control sin
+        // aeronave vinculada el USB está perfecto y aun así no va a haber enlace
+        // nunca. Ojo: el RC-N3 informa UNPAIRED también con el enlace andando, así
+        // que solo se lo tiene en cuenta cuando no hay enlace (publicarEstado).
+        escuchar(RemoteControllerKey.KeyPairingStatus) { estadoVinculo ->
+            Log.i(TAG, "Vinculación del control: $estadoVinculo")
+            vinculacion = when (estadoVinculo) {
+                PairingState.UNPAIRED -> Vinculacion.SIN_VINCULAR
+                PairingState.PAIRING -> Vinculacion.VINCULANDO
+                PairingState.PAIRED -> Vinculacion.VINCULADA
+                PairingState.UNKNOWN -> Vinculacion.DESCONOCIDA
+                else -> Vinculacion.FALLIDA
+            }
+            publicarEstado()
+        }
+        escuchar(RemoteControllerKey.KeySerialNumber) { numero ->
+            serieControl = numero
             publicarEstado()
         }
         // Inclinación del gimbal: va en la telemetría porque PatrolManager la
         // necesita para proyectar al terreno la caja de una detección.
-        escuchar(GimbalKey.KeyGimbalAttitude) { actitud -> lastGimbalPitch = actitud.pitch }
+        escuchar(GimbalKey.KeyGimbalAttitude) { actitud ->
+            lastGimbalPitch = actitud.pitch
+            lastGimbalYaw = actitud.yaw
+        }
         // El Mini pide confirmar el aterrizaje cerca del suelo (por si abajo hay
         // agua o algo que no es suelo). Si la app lo ordenó, la app lo confirma.
         escuchar(FlightControllerKey.KeyIsLandingConfirmationNeeded) { hace ->
@@ -401,6 +505,8 @@ class DjiDroneController : DroneController {
             ICameraStreamManager.FrameFormat.NV21,
             oyenteDeCuadros,
         )
+        // Traza de campo: qué ve el SDK del control y de la aeronave (logcat)
+        DiagnosticoDeEnlace.registrar(this)
         publicarEstado()
     }
 
@@ -421,12 +527,19 @@ class DjiDroneController : DroneController {
     private fun publicarEstado() {
         val sdk = DjiSdk.estado.value
         val conectado = sdk.productoConectado && enlaceVivo
+        baseFijada = baseFijadaSegunSdk ?: baseDistintaDeCero
         val detalle = when {
             sdk.ultimoError.isNotBlank() && !sdk.registrado -> sdk.ultimoError
             !sdk.registrado -> "Registrando la app ante DJI… (hace falta internet la primera vez)"
             !sdk.productoConectado -> "Conectá el control al teléfono por USB y encendé el dron"
-            !enlaceVivo -> "Control conectado, sin enlace con la aeronave: encendela y esperá el emparejamiento"
-            !baseFijada -> "Esperando que el dron fije el punto de retorno (GPS)"
+            // La vinculación solo dice algo SIN enlace: con enlace, el RC-N3
+            // informa UNPAIRED igual (ver Vinculacion.SIN_VINCULAR).
+            !enlaceVivo && vinculacion == Vinculacion.VINCULANDO ->
+                "Vinculando: mantené apretado el botón de encendido del dron unos 4 segundos, hasta que pite"
+            !enlaceVivo && vinculacion == Vinculacion.FALLIDA ->
+                "La vinculación no se completó: volvé a intentarla con el dron encendido y cerca del control"
+            !enlaceVivo -> "Control conectado, sin enlace con la aeronave: encendela y esperá (puede tardar medio minuto)"
+            !baseFijada -> "Esperando que el dron fije el punto de retorno (GPS: $satelites satélites)"
             satelites < EstadoDelDron.SATELITES_MINIMOS -> "GPS insuficiente: $satelites satélites (hacen falta ${EstadoDelDron.SATELITES_MINIMOS})"
             enVuelo -> "En vuelo"
             else -> "En el suelo, listo para despegar (control en modo N)"
@@ -441,11 +554,22 @@ class DjiDroneController : DroneController {
             detalle = detalle,
             controlConectado = sdk.productoConectado,
             serie = serie,
+            vinculacion = vinculacion,
+            serieControl = serieControl,
+            modoDeVuelo = modoDeVuelo,
         )
     }
 
+    override fun vincularControl() {
+        scope.launch { accion(RemoteControllerKey.KeyRequestPairing, "iniciar la vinculación con la aeronave") }
+    }
+
+    override fun cancelarVinculacion() {
+        scope.launch { accion(RemoteControllerKey.KeyStopPairing, "cancelar la vinculación") }
+    }
+
     override fun startRoute(route: PatrolRoute, fromWaypoint: Int) {
-        relevarLazo(esMando = false) {
+        relevarLazo(Lazo.RUTA) {
             var target = fromWaypoint.coerceIn(0, route.waypoints.size - 1)
             val alturaDeTrabajo = alturaDeVuelo(route.waypoints[target].alt)
             if (!enVuelo) {
@@ -462,9 +586,14 @@ class DjiDroneController : DroneController {
             apuntarCamara(Telemetry.GIMBAL_PATRULLA)
             while (true) {
                 delay(INTERVALO_MANDO_MS) // Virtual Stick requiere comandos a ~10 Hz
-                if (lastLat.isNaN()) continue
+                // Sin posición válida (se perdió el fix) no se vuela hacia
+                // ninguna coordenada: estacionario hasta que vuelva.
+                val (lat, lon) = posicion() ?: run {
+                    enviarVelocidadCuerpo(MandoVirtual.NEUTRO)
+                    null
+                } ?: continue
                 val wp = route.waypoints[target]
-                val paso = Navegacion.hacia(lastLat, lastLon, wp.lat, wp.lon)
+                val paso = Navegacion.hacia(lat, lon, wp.lat, wp.lon)
                 if (paso.llego) {
                     flightEvents.tryEmit(FlightEvent.WaypointReached(target))
                     target = (target + 1) % route.waypoints.size
@@ -482,7 +611,7 @@ class DjiDroneController : DroneController {
 
     override fun hold() {
         if (!enVuelo) return // en el suelo ya está quieto
-        relevarLazo(esMando = false) {
+        relevarLazo(Lazo.ESTACIONARIO) {
             asegurarVirtualStick()
             // Vuelo estacionario = velocidad cero SOSTENIDA. Si simplemente se
             // dejara de comandar, el dron saldría del Virtual Stick y volvería a
@@ -496,13 +625,16 @@ class DjiDroneController : DroneController {
 
     override fun gotoPoint(lat: Double, lon: Double) {
         if (rechazarEnElSuelo("ir a un punto")) return
-        relevarLazo(esMando = false) {
+        relevarLazo(Lazo.GOTO) {
             asegurarVirtualStick()
             val altura = lastAlt
             while (true) {
                 delay(INTERVALO_MANDO_MS)
-                if (lastLat.isNaN()) continue
-                val paso = Navegacion.hacia(lastLat, lastLon, lat, lon)
+                val (aquiLat, aquiLon) = posicion() ?: run {
+                    enviarVelocidadCuerpo(MandoVirtual.NEUTRO)
+                    null
+                } ?: continue
+                val paso = Navegacion.hacia(aquiLat, aquiLon, lat, lon)
                 if (paso.llego) {
                     flightEvents.tryEmit(FlightEvent.GotoArrived)
                     break
@@ -520,26 +652,86 @@ class DjiDroneController : DroneController {
 
     override fun startOrbit(centerLat: Double, centerLon: Double, radiusM: Double) {
         if (rechazarEnElSuelo("orbitar")) return
-        relevarLazo(esMando = false) {
-            asegurarVirtualStick()
-            val altura = lastAlt
-            // La cámara apunta al centro del círculo: con la nariz hacia el
-            // centro (abajo) y el gimbal a esta inclinación, el objetivo queda
-            // en el medio del cuadro durante toda la órbita.
-            apuntarCamara(Georreferencia.inclinacionParaOrbitar(altura, radiusM))
-            var angle = 0.0
-            while (true) {
-                delay(INTERVALO_MANDO_MS)
-                if (lastLat.isNaN()) continue
-                // Órbita: velocidad tangencial sobre el círculo y nariz apuntando al centro
-                angle += (Navegacion.VELOCIDAD_ORBITA_MS / radiusM) * (INTERVALO_MANDO_MS / 1_000.0)
-                val tLat = centerLat + (radiusM * cos(angle)) / Geo.METROS_POR_GRADO_LAT
-                val tLon = centerLon + (radiusM * sin(angle)) / Geo.metrosPorGradoLon(centerLat)
-                val paso = Navegacion.hacia(lastLat, lastLon, tLat, tLon, Navegacion.VELOCIDAD_ORBITA_MS)
-                // La nariz —y con ella la cámara— apunta al objetivo que se orbita
-                val rumboAlCentro = (Geo.rumboHacia(lastLat, lastLon, centerLat, centerLon) + 360.0) % 360.0
-                enviarVelocidadTerreno(paso.vNorteMs, paso.vEsteMs, rumboAlCentro, Navegacion.vertical(lastAlt, altura))
+        // El lazo relee el centro en cada vuelta: si ya está orbitando, correr
+        // el centro es solo esto, sin cortar el giro (el objetivo estimado se
+        // corrige con cada detección y la órbita lo acompaña sin saltos).
+        orbita = Orbita(centerLat, centerLon, radiusM)
+        synchronized(relevoDeLazo) {
+            if (lazoActual == Lazo.ORBITA && navigationJob?.isActive == true) return
+            relevarLazo(Lazo.ORBITA) {
+                asegurarVirtualStick()
+                // Ni a ras del suelo: orbitar a 30 m de radio a 5 m de altura es
+                // meterse entre los árboles (pasa al soltar el control manual).
+                val altura = maxOf(lastAlt, ALTURA_MINIMA_SEGUIMIENTO_M)
+                val gimbal = GimbalQueAcompania()
+                while (true) {
+                    delay(INTERVALO_MANDO_MS)
+                    val o = orbita ?: continue
+                    val (lat, lon) = posicion() ?: run {
+                        enviarVelocidadCuerpo(MandoVirtual.NEUTRO)
+                        null
+                    } ?: continue
+                    // Tangencial sobre el círculo con corrección radial, desde
+                    // donde esté el dron (sin ir a un punto fijo del círculo) y
+                    // con la nariz —y la cámara— apuntadas al centro.
+                    val paso = Navegacion.orbitar(lat, lon, o.lat, o.lon, o.radioM)
+                    enviarVelocidadTerreno(paso.vNorteMs, paso.vEsteMs, paso.rumboGrados, Navegacion.vertical(lastAlt, altura))
+                    // El gimbal baja lo justo para tener al objetivo en el medio del cuadro.
+                    gimbal.apuntar(Georreferencia.inclinacionParaOrbitar(lastAlt, paso.distanciaM))
+                }
             }
+        }
+    }
+
+    override fun seguirObjetivo(lat: Double, lon: Double, vNorteMs: Double, vEsteMs: Double) {
+        if (rechazarEnElSuelo("seguir al objetivo")) return
+        // Igual que la órbita: el lazo relee la estimación en cada vuelta, así
+        // que actualizarla no corta el seguimiento.
+        seguido = Seguido(lat, lon, vNorteMs, vEsteMs, System.currentTimeMillis())
+        synchronized(relevoDeLazo) {
+            if (lazoActual == Lazo.SEGUIMIENTO && navigationJob?.isActive == true) return
+            relevarLazo(Lazo.SEGUIMIENTO) {
+                asegurarVirtualStick()
+                val altura = maxOf(lastAlt, ALTURA_MINIMA_SEGUIMIENTO_M)
+                val gimbal = GimbalQueAcompania()
+                while (true) {
+                    delay(INTERVALO_MANDO_MS)
+                    val o = seguido ?: continue
+                    val (aquiLat, aquiLon) = posicion() ?: run {
+                        enviarVelocidadCuerpo(MandoVirtual.NEUTRO)
+                        null
+                    } ?: continue
+                    // Entre una estimación y la siguiente (llegan a ~2 Hz) el
+                    // objetivo se adelanta con su velocidad, hasta un tope: más
+                    // allá la velocidad vieja ya no dice nada.
+                    val edadS = (System.currentTimeMillis() - o.desdeMs).coerceIn(0L, EXTRAPOLACION_MAXIMA_MS) / 1_000.0
+                    val oLat = o.lat + o.vNorteMs * edadS / Geo.METROS_POR_GRADO_LAT
+                    val oLon = o.lon + o.vEsteMs * edadS / Geo.metrosPorGradoLon(o.lat)
+                    val orden = Persecucion.calcular(aquiLat, aquiLon, lastAlt, oLat, oLon, o.vNorteMs, o.vEsteMs)
+                    enviarVelocidadTerreno(orden.vNorteMs, orden.vEsteMs, orden.rumboGrados, Navegacion.vertical(lastAlt, altura))
+                    gimbal.apuntar(orden.gimbalPitch)
+                }
+            }
+        }
+    }
+
+    /**
+     * Inclina el gimbal hacia donde se le pide, pero solo si el cambio es de más
+     * de [UMBRAL_GIMBAL_GRADOS] y como mucho una vez por segundo: cada orden al
+     * gimbal es una acción del SDK con su ida y vuelta, y pedirla diez veces por
+     * segundo (el ritmo del lazo) sería pelearse con él.
+     */
+    private inner class GimbalQueAcompania {
+        private var ultimo = Double.NaN
+        private var ultimoMs = 0L
+
+        fun apuntar(pitch: Double) {
+            val ahora = System.currentTimeMillis()
+            if (!ultimo.isNaN() && abs(pitch - ultimo) < UMBRAL_GIMBAL_GRADOS) return
+            if (ahora - ultimoMs < INTERVALO_GIMBAL_MS) return
+            ultimo = pitch
+            ultimoMs = ahora
+            apuntarCamara(pitch)
         }
     }
 
@@ -551,8 +743,8 @@ class DjiDroneController : DroneController {
             // Mirar y relanzar van juntos, adentro del mismo lock: entre "el
             // lazo del mando ya está corriendo" y relanzarlo no puede meterse
             // otro hilo, que es como quedaban dos lazos vivos a la vez.
-            if (mandoActivo && navigationJob?.isActive == true) return
-            relevarLazo(esMando = true) {
+            if (lazoActual == Lazo.MANDO && navigationJob?.isActive == true) return
+            relevarLazo(Lazo.MANDO) {
                 asegurarVirtualStick()
                 // El lazo sigue a 10 Hz aunque los ejes estén en cero, por lo
                 // mismo que hold(): el Virtual Stick se sostiene comandando.
@@ -583,6 +775,26 @@ class DjiDroneController : DroneController {
         aterrizajeEsperado = Aterrizaje.AQUI
         scope.launch {
             if (!accion(FlightControllerKey.KeyStartAutoLanding, "aterrizar")) aterrizajeEsperado = Aterrizaje.NINGUNO
+        }
+    }
+
+    override fun despegarEnElLugar() {
+        if (enVuelo) return
+        relevarLazo(Lazo.DESPEGUE) {
+            // Sin GPS se puede (en interior el Mini se sostiene con los sensores
+            // de visión); sin enlace con la aeronave, no.
+            val listo = _estado.value
+            if (!listo.conectado) {
+                avisar("no se puede despegar: ${listo.detalle}")
+                return@relevarLazo
+            }
+            flightEvents.tryEmit(FlightEvent.Despegando)
+            if (!accion(FlightControllerKey.KeyStartTakeoff, "despegar")) return@relevarLazo
+            if (!esperarDespegue()) return@relevarLazo
+            flightEvents.tryEmit(FlightEvent.EnElAire)
+            // Y nada más: el propio dron se sostiene suspendido donde quedó, y
+            // el palito físico del RC-N3 sigue mandando hasta que llegue el
+            // primer mando de la consola (que habilita el Virtual Stick).
         }
     }
 
@@ -642,14 +854,40 @@ class DjiDroneController : DroneController {
 
     private fun emitTelemetry() {
         // Sin enlace no se emite nada: ese silencio es lo que le avisa al
-        // watchdog de PatrolManager que se perdió el dron.
-        if (!enlaceVivo || lastLat.isNaN()) return
+        // watchdog de PatrolManager que se perdió el dron. Sin GPS SÍ se emite,
+        // con la posición en NaN: batería, altura y rumbo valen igual.
+        if (!enlaceVivo) return
+        val p = posicion()
         telemetry.tryEmit(
             Telemetry(
-                lastLat, lastLon, lastAlt, lastBattery, lastSignal, lastHeading,
-                System.currentTimeMillis(), lastGimbalPitch,
+                p?.first ?: Double.NaN, p?.second ?: Double.NaN, lastAlt, lastBattery, lastSignal, lastHeading,
+                System.currentTimeMillis(), lastGimbalPitch, rumboDeLaCamara(),
             ),
         )
+    }
+
+    /**
+     * La posición del dron si es una posición GPS de verdad; null si no hay fix.
+     * Lat y lon salen de la MISMA lectura.
+     */
+    private fun posicion(): Pair<Double, Double>? {
+        if (gpsValido == false) return null
+        val p = posicionCruda ?: return null
+        return p.takeIf { Geo.esPosicionValida(it.first, it.second) }
+    }
+
+    /**
+     * Hacia dónde mira la cámara, para georreferenciar lo que ve. El yaw del
+     * gimbal que informa el SDK es absoluto (NED) según la documentación; por
+     * las dudas solo se le cree si está cerca del rumbo de la nariz —en el Mini
+     * el gimbal sigue a la nariz—, y si no se usa la brújula.
+     */
+    private fun rumboDeLaCamara(): Double {
+        val yaw = lastGimbalYaw
+        if (yaw.isNaN()) return lastHeading
+        val rumbo = (yaw + 360.0) % 360.0
+        val diferencia = abs(((rumbo - lastHeading + 540.0) % 360.0) - 180.0)
+        return if (diferencia <= MAXIMA_DIFERENCIA_GIMBAL_GRADOS) rumbo else lastHeading
     }
 
     /**
@@ -708,6 +946,11 @@ class DjiDroneController : DroneController {
             return false
         }
         if (!accion(FlightControllerKey.KeyStartTakeoff, "despegar")) return false
+        return esperarDespegue()
+    }
+
+    /** Espera a que el despegue automático deje al dron en el aire, con tope. */
+    private suspend fun esperarDespegue(): Boolean {
         val limite = System.currentTimeMillis() + ESPERA_DESPEGUE_MS
         while (!enVuelo || lastAlt < ALTURA_DESPEGUE_SDK_M) {
             if (System.currentTimeMillis() > limite) {
@@ -762,16 +1005,16 @@ class DjiDroneController : DroneController {
      * estacionario y mando manual— porque el par cortar+asignar es justamente lo
      * que no puede entrelazarse entre hilos.
      */
-    private fun relevarLazo(esMando: Boolean, cuerpo: suspend CoroutineScope.() -> Unit) =
+    private fun relevarLazo(tipo: Lazo, cuerpo: suspend CoroutineScope.() -> Unit) =
         synchronized(relevoDeLazo) {
             navigationJob?.cancel()
-            mandoActivo = esMando
+            lazoActual = tipo
             navigationJob = scope.launch(block = cuerpo)
         }
 
     private fun cortarLazo() {
         synchronized(relevoDeLazo) {
-            mandoActivo = false
+            lazoActual = Lazo.NINGUNO
             navigationJob?.cancel()
             navigationJob = null
         }
@@ -943,6 +1186,26 @@ class DjiDroneController : DroneController {
     private companion object {
         /** El Virtual Stick se sostiene con comandos a 10 Hz. */
         const val INTERVALO_MANDO_MS = 100L
+
+        /**
+         * Ritmo de la telemetría: 5 por segundo. Más que los 2 que necesita la
+         * web, porque PatrolManager guarda las últimas muestras para buscar la
+         * pose del instante de cada cuadro analizado.
+         */
+        const val INTERVALO_TELEMETRIA_MS = 200L
+
+        /** Órbita y seguimiento no bajan de esta altura (ver startOrbit). */
+        const val ALTURA_MINIMA_SEGUIMIENTO_M = 15.0
+
+        /** Hasta cuánto se extrapola la estimación del objetivo que se sigue. */
+        const val EXTRAPOLACION_MAXIMA_MS = 3_000L
+
+        /** El gimbal se reapunta solo si cambia más que esto, y como mucho una vez por segundo. */
+        const val UMBRAL_GIMBAL_GRADOS = 3.0
+        const val INTERVALO_GIMBAL_MS = 1_000L
+
+        /** Si el yaw del gimbal se aleja más que esto de la nariz, no se le cree (ver rumboDeLaCamara). */
+        const val MAXIMA_DIFERENCIA_GIMBAL_GRADOS = 30.0
 
         /** Por debajo de esto no se trabaja: es menos que la altura del despegue automático. */
         const val ALTURA_MINIMA_M = 3.0

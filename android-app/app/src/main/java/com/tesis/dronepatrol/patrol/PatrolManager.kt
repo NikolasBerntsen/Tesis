@@ -5,18 +5,25 @@ import com.tesis.dronepatrol.comms.CommandCenterClient
 import com.tesis.dronepatrol.comms.DetectionClient
 import com.tesis.dronepatrol.drone.AnotadorDeCuadros
 import com.tesis.dronepatrol.drone.DroneController
+import com.tesis.dronepatrol.drone.Geo
 import com.tesis.dronepatrol.drone.Georreferencia
 import com.tesis.dronepatrol.drone.LimitadorDeRitmo
 import com.tesis.dronepatrol.drone.MandoVirtual
+import com.tesis.dronepatrol.drone.RastreadorDeObjetivo
+import com.tesis.dronepatrol.drone.ZonasDescartadas
 import com.tesis.dronepatrol.model.Caja
 import com.tesis.dronepatrol.model.Deteccion
 import com.tesis.dronepatrol.model.FlightEvent
+import com.tesis.dronepatrol.model.ObjetivoReportado
 import com.tesis.dronepatrol.model.PatrolRoute
 import com.tesis.dronepatrol.model.PatrolState
 import com.tesis.dronepatrol.model.Telemetry
+import java.util.UUID
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -24,13 +31,19 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Máquina de estados del patrullaje. Toda la lógica de la entrega vive acá:
  *
- *   IDLE → PATROLLING → (detección) → ORBITING → (decisión/reanudar) → PATROLLING
+ *   IDLE → PATROLLING → (detección) → ORBITING ⇄ FOLLOWING → (decisión/reanudar) → PATROLLING
  *                     → (señal perdida) → RETURNING_HOME_SIGNAL → (señal vuelve) → PATROLLING
  *                     → (batería baja)  → RETURNING_HOME_BATTERY → LANDED
+ *
+ * El seguimiento de un objetivo (docs/PROTOCOLS.md §4, "Qué hace la app con
+ * una detección") vive entre ORBITING —el objetivo está quieto y el dron lo
+ * orbita— y FOLLOWING —se mueve y el dron lo sigue—; el operador puede tomar el
+ * control en el medio (MANUAL) y al soltarlo el dron vuelve al objetivo.
  */
 class PatrolManager(
     private val controller: DroneController,
@@ -39,6 +52,12 @@ class PatrolManager(
     private val scope: CoroutineScope,
     /** Modo elegido tras iniciar sesión: "TEST" o "DEPLOY" (viaja en cada status). */
     private val mode: String,
+    /**
+     * Reloj del seguimiento del objetivo. Es un parámetro para que el banco de
+     * pruebas pueda adelantarlo: "se perdió hace 10 s" o "se detuvo hace 6 s"
+     * no se prueban durmiendo el test.
+     */
+    private val reloj: () -> Long = System::currentTimeMillis,
 ) {
     // internal y no private: el banco de pruebas necesita los límites exactos
     // —el del watchdog del mando, el del reparto de cuadros y el de la repetición
@@ -85,11 +104,66 @@ class PatrolManager(
          */
         const val MAX_PROBLEMAS_POR_VENTANA = 5
 
+        /**
+         * Confirmación antes de alertar: una segunda detección de la misma clase
+         * dentro de esta ventana y a menos de esta distancia de la primera. Un
+         * solo cuadro no alerta: el detector se equivoca de a un cuadro (una
+         * sombra, un reflejo) mucho más que de a dos seguidos.
+         */
+        const val CONFIRMACION_VENTANA_MS = 2_500L
+        const val CONFIRMACION_DISTANCIA_M = 25.0
+
+        /** Después de retomar la ruta por un descarte, este tiempo sin alertar. */
+        const val SILENCIO_TRAS_DESCARTE_MS = 10_000L
+
+        /**
+         * Por debajo de esta altura no se orbita ni se sigue al objetivo: la
+         * proyección al terreno no sirve y una órbita de 30 m a ras del suelo es
+         * meterse entre los árboles. Se alerta igual, sin seguimiento.
+         */
+        const val ALTURA_MINIMA_PARA_ALERTAR_M = 8.0
+
+        /**
+         * Entre dos alertas SIN seguimiento (dron en el suelo, a baja altura o
+         * sin GPS), al menos esto: sin seguimiento no hay "objetivo en curso"
+         * que impida volver a alertar por lo mismo, y con el dron quieto el
+         * detector ve lo mismo dos veces por segundo.
+         */
+        const val ENTRE_ALERTAS_SIN_SEGUIMIENTO_MS = 60_000L
+
+        /**
+         * Estados desde los que una detección arranca el seguimiento del
+         * objetivo (con el dron en el aire, a la altura de trabajo y con GPS). En
+         * MANUAL el seguimiento arranca pero el dron no se mueve solo: sigue
+         * siendo del operador, y al soltarlo va al objetivo.
+         */
+        val ESTADOS_QUE_SIGUEN = setOf(PatrolState.PATROLLING, PatrolState.PAUSED, PatrolState.FORCED, PatrolState.MANUAL)
+
+        /**
+         * Volviendo a base (por batería, señal u orden) no se alerta: el dron no
+         * puede quedarse, y la alerta pediría algo que no va a hacer.
+         */
+        val ESTADOS_SIN_ALERTAS = setOf(
+            PatrolState.RETURNING_HOME,
+            PatrolState.RETURNING_HOME_BATTERY,
+            PatrolState.RETURNING_HOME_SIGNAL,
+        )
+
+        /** Si la estimación del objetivo quieto se corre más que esto, la órbita la acompaña. */
+        const val DERIVA_DE_ORBITA_M = 6.0
+
+        /** Cuánta telemetría se guarda para buscar la pose del instante de cada cuadro. */
+        const val HISTORIA_DE_POSES_MS = 3_000L
+
+        /** Cada cuánto se reevalúa el seguimiento aunque no lleguen detecciones (para notar que se perdió). */
+        const val INTERVALO_SEGUIMIENTO_MS = 500L
+
         // PAUSED/MANUAL/FORCED también son vuelo: batería baja y pérdida de
         // señal disparan el RTH igual que patrullando
         val ESTADOS_EN_VUELO = setOf(
             PatrolState.PATROLLING,
             PatrolState.ORBITING,
+            PatrolState.FOLLOWING,
             PatrolState.PAUSED,
             PatrolState.MANUAL,
             PatrolState.FORCED,
@@ -97,11 +171,15 @@ class PatrolManager(
         // Estados desde los que un resume_patrol retoma la ruta activa
         val ESTADOS_REANUDABLES = setOf(
             PatrolState.ORBITING,
+            PatrolState.FOLLOWING,
             PatrolState.RETURNING_HOME_SIGNAL,
             PatrolState.PAUSED,
             PatrolState.MANUAL,
             PatrolState.FORCED,
         )
+
+        /** Los dos estados en los que el dron está ocupándose del objetivo por su cuenta. */
+        val ESTADOS_DE_SEGUIMIENTO = setOf(PatrolState.ORBITING, PatrolState.FOLLOWING)
 
         /**
          * Decide si el watchdog del mando tiene que mandar ceros. Es una función
@@ -195,12 +273,75 @@ class PatrolManager(
     /** Hay una ruta cargada a la que volver con "Reanudar". */
     val tieneRuta: Boolean get() = route != null
     private var lastReachedWaypoint = 0
+
+    /**
+     * El nodo HACIA el que vuela la ruta: el próximo, no el último alcanzado.
+     * Es al que se vuelve al retomar después de una alerta descartada, de un
+     * control manual o de una pérdida de señal: retomar desde el último
+     * ALCANZADO hacía que el dron diera la vuelta y repitiera el tramo entero.
+     */
+    private var proximoWaypoint = 0
     private var resumeWaypoint = 0
     /** Nodo del desvío forzado en curso (solo para el mensaje de llegada). */
     private var forcedIndex = 0
     private var lastTelemetry: Telemetry? = null
     private var lastTelemetryAt = 0L
     private var lastFrame: ByteArray? = null
+
+    /**
+     * Los últimos segundos de telemetría, para georreferenciar cada detección
+     * con la pose del dron en el instante de SU cuadro (`frameTs`): la
+     * respuesta llega de 0,3 a 1 s después, con el dron ya movido y girado.
+     */
+    private val poses = ArrayDeque<Telemetry>()
+
+    /**
+     * El objetivo en seguimiento: existe desde la detección que disparó la
+     * alerta hasta que el seguimiento termina (ver [terminarSeguimiento]).
+     */
+    private class Seguimiento(
+        val rastreador: RastreadorDeObjetivo,
+        /** El `ref` del alert_request: con él se reconoce el alert_ack de ESTA alerta. */
+        val ref: String,
+        /** Dónde se lo detectó primero: también se marca como zona descartada si es un falso positivo. */
+        val origenLat: Double,
+        val origenLon: Double,
+    ) {
+        /** Id de la alerta, cuando llega el alert_ack. */
+        var alertId: Long? = null
+        var decision = "PENDING"
+        /** Ya se avisó TARGET_LOST y no se volvió a ver. */
+        var perdidoAvisado = false
+        /** Centro de la órbita que se le pidió al dron por última vez. */
+        var centroLat = origenLat
+        var centroLon = origenLon
+    }
+
+    private var seguimiento: Seguimiento? = null
+
+    /** El objetivo en seguimiento tal como va en el status; null si no hay. */
+    val objetivo: ObjetivoReportado? get() = seguimiento?.let(::reportarObjetivo)
+
+    /** Primera detección de un objetivo posible, a la espera de su confirmación. */
+    private class Candidato(val clase: String, val lat: Double, val lon: Double, val ms: Long)
+
+    private var candidato: Candidato? = null
+
+    private val zonasDescartadas = ZonasDescartadas()
+
+    /** Hasta cuándo no se alerta, después de retomar la ruta por un descarte. */
+    private var silencioHastaMs = 0L
+
+    /** Cuándo salió la última alerta sin seguimiento (ver [ENTRE_ALERTAS_SIN_SEGUIMIENTO_MS]). */
+    private var ultimaAlertaSinSeguimientoMs = Long.MIN_VALUE / 2
+
+    /**
+     * false desde que empieza un despegue hasta que el dron llega a la altura de
+     * trabajo: en ese lapso el detector ve al equipo de tierra al lado del dron
+     * y una alerta haría orbitarlos a pocos metros de altura.
+     */
+    @Volatile
+    private var enAlturaDeTrabajo = true
 
     /**
      * Momento del último `manual_stick`; 0 = ninguno desde que se tomó el
@@ -292,9 +433,12 @@ class PatrolManager(
             )
         }
         detection.onDetection = { deteccion -> scope.launch { onDetection(deteccion) } }
-        commandCenter.onAlertDecision = { decision, decidedBy ->
-            scope.launch { onAlertDecision(decision, decidedBy) }
+        commandCenter.onAlertDecision = { alertId, decision, decidedBy, reenvio ->
+            scope.launch { onAlertDecision(alertId, decision, decidedBy, reenvio) }
         }
+        commandCenter.onAlertAck = { ref, alertId -> scope.launch { onAlertAck(ref, alertId) } }
+        commandCenter.onTakeoff = { by -> scope.launch { onTakeoff(by) } }
+        commandCenter.onLand = { by -> scope.launch { onLand(by) } }
         commandCenter.onResumePatrol = { fromIndex ->
             scope.launch { resumePatrol("orden del operador", fromIndex) }
         }
@@ -319,6 +463,7 @@ class PatrolManager(
         scope.launch { signalWatchdog() }
         scope.launch { mandoWatchdog() }
         scope.launch { statusTicker() }
+        scope.launch { seguimientoTicker() }
     }
 
     /**
@@ -356,14 +501,23 @@ class PatrolManager(
                 // Mientras el detector ve algo, la consola lo ve marcado: es la
                 // anotación en vivo de lo que disparó (o va a disparar) la alerta.
                 val cajas = cajasVigentes(ahoraMs())
-                val cuadro = if (cajas.isEmpty()) frame else AnotadorDeCuadros.anotar(frame, cajas)
-                alComandoCentral(Base64.encodeToString(cuadro, Base64.NO_WRAP))
+                // Decodificar, dibujar, recomprimir y pasar a base64 cinco veces
+                // por segundo no va en el hilo principal: por ahí entran los
+                // avisos del SDK de DJI (posición, rumbo) y atrasarlos es
+                // georreferenciar con una pose vieja.
+                val base64 = withContext(Dispatchers.Default) {
+                    val cuadro = if (cajas.isEmpty()) frame else AnotadorDeCuadros.anotar(frame, cajas)
+                    Base64.encodeToString(cuadro, Base64.NO_WRAP)
+                }
+                alComandoCentral(base64)
             }
         }
         launch {
             val techoDeLaDeteccion = LimitadorDeRitmo(INTERVALO_DETECCION_MS)
             controller.cuadrosParaDeteccion.collect { frame ->
-                if (techoDeLaDeteccion.aceptar(ahoraMs())) aLaDeteccion(Base64.encodeToString(frame, Base64.NO_WRAP))
+                if (techoDeLaDeteccion.aceptar(ahoraMs())) {
+                    aLaDeteccion(withContext(Dispatchers.Default) { Base64.encodeToString(frame, Base64.NO_WRAP) })
+                }
             }
         }
     }
@@ -377,8 +531,10 @@ class PatrolManager(
             report("DRONE_PROBLEM", "No se puede despegar: ${dron.detalle.ifBlank { "el dron no está listo" }}")
             return
         }
+        terminarSeguimiento("empezó otro patrullaje")
         this.route = route
         lastReachedWaypoint = 0
+        proximoWaypoint = 0
         resumeWaypoint = 0
         // Primero el estado y después la orden, como manda pasarA(): si no, un
         // mando que viene en camino se cuela entre las dos, pasa la puerta de
@@ -410,8 +566,9 @@ class PatrolManager(
             log("El dron está en el suelo: no hay a dónde volver")
             return
         }
-        if (_state.value == PatrolState.PATROLLING) resumeWaypoint = lastReachedWaypoint
+        if (_state.value == PatrolState.PATROLLING) resumeWaypoint = proximoWaypoint
         controlTomado = false
+        terminarSeguimiento("el operador de campo ordenó volver a la base")
         // Sin frenar: el regreso a base es la orden que manda (ver checkLowBattery()).
         pasarA(PatrolState.RETURNING_HOME)
         controller.returnHome()
@@ -424,8 +581,9 @@ class PatrolManager(
             log("El dron ya está en el suelo")
             return
         }
-        if (_state.value == PatrolState.PATROLLING) resumeWaypoint = lastReachedWaypoint
+        if (_state.value == PatrolState.PATROLLING) resumeWaypoint = proximoWaypoint
         controlTomado = false
+        terminarSeguimiento("el operador de campo ordenó aterrizar")
         pasarA(PatrolState.PAUSED)
         controller.land()
         report("LANDING", "El operador de campo ordenó aterrizar: el dron desciende donde está")
@@ -446,8 +604,10 @@ class PatrolManager(
             return
         }
         val desde = fromIndex.coerceIn(0, r.waypoints.size - 1)
+        terminarSeguimiento("se ordenó patrullar otra ruta")
         route = r
         lastReachedWaypoint = desde
+        proximoWaypoint = desde
         resumeWaypoint = desde
         // El estado antes que la orden (ver pasarA()): esta transición es
         // alcanzable desde MANUAL —el operador puede pedir otra ruta sin soltar
@@ -459,7 +619,8 @@ class PatrolManager(
 
     private fun onStopPatrol(orderedBy: String) {
         if (_state.value !in ESTADOS_EN_VUELO || _state.value == PatrolState.PAUSED) return
-        if (_state.value == PatrolState.PATROLLING) resumeWaypoint = lastReachedWaypoint
+        if (_state.value == PatrolState.PATROLLING) resumeWaypoint = proximoWaypoint
+        terminarSeguimiento("se interrumpió el patrullaje (orden de $orderedBy)")
         // Primero el estado y después la orden, como en pasarA(): si no, un
         // mando que viene en camino se cuela entre las dos y lo vuelve a mover.
         pasarA(PatrolState.PAUSED)
@@ -473,7 +634,8 @@ class PatrolManager(
             return
         }
         // Ojo: no se pisa resumeWaypoint, así un resume posterior retoma el
-        // patrullaje normal desde el último nodo recorrido
+        // patrullaje normal hacia el nodo que tenía por delante
+        terminarSeguimiento("desvío forzado a un nodo (orden de $orderedBy)")
         forcedIndex = index
         // El estado antes que la orden (ver pasarA()): también se llega acá desde
         // MANUAL, y un mando colado en el medio abandona el desvío recién pedido.
@@ -483,7 +645,7 @@ class PatrolManager(
     }
 
     private fun onControlTaken(by: String) {
-        if (_state.value == PatrolState.PATROLLING) resumeWaypoint = lastReachedWaypoint
+        if (_state.value == PatrolState.PATROLLING) resumeWaypoint = proximoWaypoint
         // Acá el orden es el inverso del resto de las transiciones a propósito: esta
         // ABRE la puerta del mando en vez de cerrarla, así que el vuelo estacionario
         // tiene que quedar ordenado ANTES, o el primer mando del operador se lo come.
@@ -515,6 +677,11 @@ class PatrolManager(
      */
     private fun onManualMove(bearing: Double, distanceM: Double, by: String) {
         val t = lastTelemetry ?: return
+        // El salto es hacia una coordenada: sin GPS no hay desde dónde medirlo.
+        if (!t.tienePosicion) {
+            log("Movimiento manual de $by ignorado: el dron no tiene posición GPS")
+            return
+        }
         val rad = Math.toRadians(bearing)
         val dLat = distanceM * cos(rad) / METERS_PER_DEG_LAT
         val dLon = distanceM * sin(rad) / (METERS_PER_DEG_LAT * cos(Math.toRadians(t.lat)))
@@ -546,6 +713,11 @@ class PatrolManager(
     private fun onManualStick(pitch: Double, roll: Double, yaw: Double, throttle: Double) {
         synchronized(cerrojoDelMando) {
             if (_state.value != PatrolState.MANUAL) return@synchronized
+            // En el suelo el mando no hace nada (el Virtual Stick no despega:
+            // para eso está la orden `takeoff`). Se descarta acá, en silencio,
+            // y no en el controlador, que lo avisaría como un rechazo: la
+            // consola ya muestra "despegalo primero" mirando `flying`.
+            if (!controller.estado.value.enVuelo) return@synchronized
             // Se mira el mando ya traducido: una palanca apenas movida cae en la
             // zona muerta y es vuelo estacionario, no una velocidad que cortar.
             val v = MandoVirtual.velocidades(pitch, roll, yaw, throttle)
@@ -673,11 +845,69 @@ class PatrolManager(
         // sería pisarle la orden a otro (una patrulla, un regreso a base).
         if (!controlTomado) return
         controlTomado = false
+        log("$by liberó el control manual del dron")
         // Si el dron ya salió de MANUAL (pérdida de señal, batería baja) el mando
         // ya quedó soltado ahí y hay otra orden en curso que no se pisa.
+        if (_state.value != PatrolState.MANUAL) return
+        // En el suelo (aterrizó con el control tomado) no hay órbita posible.
+        if (!controller.estado.value.enVuelo) {
+            terminarSeguimiento("el dron está en el suelo")
+            pasarA(PatrolState.IDLE)
+            return
+        }
+        val s = seguimiento
+        // Con un objetivo en seguimiento, el dron vuelve a él: es lo que el
+        // operador espera al soltar el control después de mirar de cerca.
+        if (s != null) {
+            volverAlObjetivo(s, "$by soltó el control: el dron vuelve al objetivo")
+            return
+        }
         // Si a continuación llega un resume_patrol, ese handler lo pone a patrullar.
-        if (_state.value == PatrolState.MANUAL) pasarA(PatrolState.PAUSED, frenar = true)
-        log("$by liberó el control manual del dron")
+        pasarA(PatrolState.PAUSED, frenar = true)
+    }
+
+    /**
+     * Despegue en el lugar pedido desde la consola. Solo con el control tomado
+     * (el hub ya lo exige; acá se vuelve a mirar porque es la app la que
+     * enciende los motores) y con el dron en el suelo. No exige GPS: es la
+     * prueba de mandos en interior, despegar, girar y aterrizar.
+     */
+    private fun onTakeoff(by: String) {
+        if (!controlTomado || _state.value != PatrolState.MANUAL) {
+            log("$by pidió despegar sin el control manual tomado: se ignora")
+            return
+        }
+        val dron = controller.estado.value
+        if (dron.enVuelo) {
+            log("$by pidió despegar pero el dron ya está en el aire")
+            return
+        }
+        if (!dron.conectado) {
+            report("DRONE_PROBLEM", "No se puede despegar: ${dron.detalle.ifBlank { "sin enlace con la aeronave" }}")
+            return
+        }
+        val sinGps = lastTelemetry?.tienePosicion != true
+        controller.despegarEnElLugar()
+        report(
+            "TAKEOFF",
+            "Despegue en el lugar ordenado por $by desde el Comando Central: el dron queda suspendido a ~1 m" +
+                if (sinGps) " (sin GPS: se sostiene con los sensores de visión)" else "",
+        )
+    }
+
+    /** Aterrizaje pedido desde la consola por el titular del control. */
+    private fun onLand(by: String) {
+        if (!controlTomado || _state.value != PatrolState.MANUAL) {
+            log("$by pidió aterrizar sin el control manual tomado: se ignora")
+            return
+        }
+        if (!controller.estado.value.enVuelo) {
+            log("$by pidió aterrizar pero el dron ya está en el suelo")
+            return
+        }
+        terminarSeguimiento("$by ordenó aterrizar")
+        controller.land()
+        report("LANDING", "Aterrizaje ordenado por $by desde el Comando Central: el dron desciende donde está")
     }
 
     // ---- Detección de pérdida de señal ----
@@ -693,7 +923,8 @@ class PatrolManager(
             if (flying && silent) {
                 _signalOk.value = false
                 _signalPct.value = 0
-                resumeWaypoint = lastReachedWaypoint
+                if (_state.value == PatrolState.PATROLLING) resumeWaypoint = proximoWaypoint
+                terminarSeguimiento("se perdió la señal con el dron")
                 // Frena: acá nadie más le habla al dron. Sin esto quedaba con la
                 // última velocidad del operador (hasta 5 m/s) y el lazo de
                 // Virtual Stick repitiéndosela a 10 Hz, así que apenas el enlace
@@ -709,6 +940,8 @@ class PatrolManager(
         val recovering = _state.value == PatrolState.RETURNING_HOME_SIGNAL
         lastTelemetry = t
         lastTelemetryAt = System.currentTimeMillis()
+        poses.addLast(t)
+        while (poses.isNotEmpty() && t.ts - poses.first().ts > HISTORIA_DE_POSES_MS) poses.removeFirst()
         _signalOk.value = true
         _signalPct.value = t.signalPct
 
@@ -755,6 +988,7 @@ class PatrolManager(
     private suspend fun checkLowBattery(t: Telemetry) {
         val flying = _state.value in ESTADOS_EN_VUELO
         if (flying && t.batteryPct <= LOW_BATTERY_PCT) {
+            terminarSeguimiento("batería al ${t.batteryPct.toInt()}%: el dron vuelve a la base")
             // Sin frenar: el regreso a base de abajo ya es la orden que manda y
             // un vuelo estacionario acá se la comería. Lo que importa es soltar
             // el mando, para que el watchdog no le corte el RTH a los 1,5 s.
@@ -775,7 +1009,10 @@ class PatrolManager(
 
     private suspend fun onFlightEvent(e: FlightEvent) {
         when (e) {
-            is FlightEvent.WaypointReached -> lastReachedWaypoint = e.index
+            is FlightEvent.WaypointReached -> {
+                lastReachedWaypoint = e.index
+                proximoWaypoint = (e.index + 1) % (route?.waypoints?.size ?: 1).coerceAtLeast(1)
+            }
             is FlightEvent.ArrivedHome -> when (_state.value) {
                 PatrolState.RETURNING_HOME_BATTERY -> {
                     pasarA(PatrolState.LANDED)
@@ -787,11 +1024,35 @@ class PatrolManager(
                 }
                 else -> Unit
             }
-            is FlightEvent.Despegando -> report("TAKEOFF", "Despegue automático: el dron sube a la altura de trabajo")
-            is FlightEvent.EnElAire -> log("Despegue completado: el dron está a la altura de trabajo")
+            is FlightEvent.Despegando -> {
+                enAlturaDeTrabajo = false
+                // El despegue pedido desde la consola ya quedó registrado en onTakeoff().
+                if (controlTomado) {
+                    log("Despegando en el lugar")
+                } else {
+                    report("TAKEOFF", "Despegue automático: el dron sube a la altura de trabajo")
+                }
+            }
+            is FlightEvent.EnElAire -> {
+                enAlturaDeTrabajo = true
+                log(
+                    if (controlTomado) {
+                        "El dron está en el aire, suspendido: listo para el mando"
+                    } else {
+                        "Despegue completado: el dron está a la altura de trabajo"
+                    },
+                )
+            }
             is FlightEvent.Aterrizado -> {
-                pasarA(PatrolState.IDLE)
-                report("LANDED", "Dron aterrizado por orden del operador de campo")
+                terminarSeguimiento("el dron aterrizó")
+                // Con el control tomado sigue siendo del operador, en el suelo:
+                // puede volver a despegar sin soltarlo y retomarlo.
+                if (controlTomado) {
+                    report("LANDED", "Dron aterrizado: el control manual sigue tomado")
+                } else {
+                    pasarA(PatrolState.IDLE)
+                    report("LANDED", "Dron aterrizado por orden del operador de campo")
+                }
             }
             is FlightEvent.GotoArrived -> {
                 // El salto puntual terminó: desde acá el mando vuelve a mandar
@@ -832,70 +1093,338 @@ class PatrolManager(
     }
 
     /**
-     * Una detección. Las cajas se guardan para dibujarlas sobre el video venga
-     * en el estado que venga —el operador quiere ver marcado lo que el detector
-     * ve también mientras orbita—, pero solo se ALERTA y se orbita patrullando:
-     * en órbita, volviendo a base o en manual re-alertar sería ruido.
+     * Una detección (docs/PROTOCOLS.md §4, "Qué hace la app con una
+     * detección"). Las cajas se guardan para dibujarlas sobre el video venga en
+     * el estado que venga —el operador quiere ver marcado lo que el detector ve
+     * también mientras orbita—. Después:
+     *  - con un objetivo en seguimiento, la detección lo actualiza (si es él);
+     *  - si no, una detección CONFIRMADA (dos seguidas) siempre avisa al
+     *    Comando Central, salvo despegando o volviendo a base:
+     *    - en el aire, a la altura de trabajo y con GPS, arranca el seguimiento
+     *      del objetivo (órbita; en MANUAL solo la estimación);
+     *    - en el suelo, a baja altura o sin GPS, alerta sin seguimiento, con un
+     *      techo de una por minuto.
      */
     private suspend fun onDetection(d: Deteccion) {
         _cajasRecientes.value = d.cajas
-        cajasHastaMs = System.currentTimeMillis() + VIGENCIA_CAJAS_MS
-        if (_state.value != PatrolState.PATROLLING) return
-        val t = lastTelemetry ?: return
-        val alertType = d.tipoDeAlerta
-
-        resumeWaypoint = lastReachedWaypoint
-        // El objetivo en el terreno: el centro de la caja más segura, proyectado
-        // con la altura, el rumbo y la inclinación del gimbal. Si no se puede
-        // (sin cajas, rayo al horizonte), se orbita la posición del dron, que es
-        // lo que había: el objetivo está dentro del campo visual.
-        val objetivo = d.principal?.let {
-            Georreferencia.proyectar(t.lat, t.lon, t.altM, t.heading, t.gimbalPitch, it.x, it.y)
+        val ahora = reloj()
+        cajasHastaMs = ahora + VIGENCIA_CAJAS_MS
+        // La pose del instante del cuadro, si el detector la devuelve; si no,
+        // la última (con el error de la latencia, como antes).
+        val pose = d.frameTs?.let(::poseEn) ?: lastTelemetry ?: return
+        val s = seguimiento
+        if (s != null) {
+            actualizarSeguimiento(s, d, pose, ahora)
+            return
         }
-        val centroLat = objetivo?.lat ?: t.lat
-        val centroLon = objetivo?.lon ?: t.lon
-        // El estado antes que la orden, como en el resto de las transiciones (ver
-        // pasarA()). Acá no hay carrera —solo se orbita viniendo de PATROLLING, y
-        // en PATROLLING el mando ya está descartado—, pero la disciplina es una y
-        // la próxima transición que se agregue se copia de las que hay.
-        pasarA(PatrolState.ORBITING)
-        controller.startOrbit(centroLat, centroLon, ORBIT_RADIUS_M)
-        val donde = objetivo?.let { " a ${it.distanciaM.toInt()} m con rumbo ${it.rumboGrados.toInt()}°" } ?: " (sin posición del objetivo: se orbita la del dron)"
-        report(
-            "ORBIT_STARTED",
-            "Detección de $alertType (confianza ${"%.2f".format(d.confianza)})$donde: el dron pasa a modo órbita",
-        )
+        val estado = _state.value
+        if (estado in ESTADOS_SIN_ALERTAS) return
+        // Despegando, lo que se ve es el equipo de tierra al lado del dron.
+        if (!enAlturaDeTrabajo) return
+        if (ahora < silencioHastaMs) return
+        val mejor = puntosEnElTerreno(d, pose)
+            .filter { it.sinPosicion || !zonasDescartadas.contiene(it.lat, it.lon, ahora) }
+            .maxByOrNull { it.confianza } ?: return
+        // Confirmación: la primera detección queda como candidata y alerta la
+        // segunda, si es de la misma clase, llega a tiempo y cae cerca (sin
+        // GPS no hay distancia que comparar: basta la clase y el tiempo).
+        val c = candidato
+        val confirma = c != null && c.clase == mejor.clase && ahora - c.ms <= CONFIRMACION_VENTANA_MS &&
+            (c.lat.isNaN() || mejor.sinPosicion || Geo.distanciaM(c.lat, c.lon, mejor.lat, mejor.lon) <= CONFIRMACION_DISTANCIA_M)
+        if (!confirma) {
+            candidato = Candidato(mejor.clase, mejor.lat, mejor.lon, ahora)
+            return
+        }
+        candidato = null
+        val dron = controller.estado.value
+        val conSeguimiento = dron.enVuelo && !mejor.sinPosicion && pose.altM >= ALTURA_MINIMA_PARA_ALERTAR_M &&
+            estado in ESTADOS_QUE_SIGUEN
+        if (conSeguimiento) {
+            iniciarSeguimiento(mejor, d, pose, ahora)
+        } else {
+            alertarSinSeguimiento(mejor, d, pose, ahora, dron.enVuelo)
+        }
+    }
 
+    /**
+     * Una detección confirmada con la que no se puede (o no corresponde) seguir
+     * al objetivo: el dron en el suelo, a baja altura o sin GPS. El Comando
+     * Central igual se entera —alerta con la captura y evento en el registro—,
+     * que es lo que el operador necesita para decidir; el dron no se mueve.
+     */
+    private fun alertarSinSeguimiento(p: Punto, d: Deteccion, pose: Telemetry, ahora: Long, enVuelo: Boolean) {
+        if (ahora - ultimaAlertaSinSeguimientoMs < ENTRE_ALERTAS_SIN_SEGUIMIENTO_MS) return
+        ultimaAlertaSinSeguimientoMs = ahora
+        val donde = when {
+            !enVuelo -> "con el dron en el suelo"
+            p.sinPosicion -> "sin GPS"
+            else -> "a baja altura (${pose.altM.toInt()} m)"
+        }
+        report(
+            "DETECTION",
+            "Detección de ${p.clase} (confianza ${"%.2f".format(p.confianza)}) $donde: se avisa al Comando Central, " +
+                "sin seguimiento del objetivo",
+            lat = p.lat.takeUnless { it.isNaN() },
+            lon = p.lon.takeUnless { it.isNaN() },
+        )
+        val snapshot = d.snapshotBase64 ?: lastFrame?.let { Base64.encodeToString(it, Base64.NO_WRAP) }
+        commandCenter.sendAlertRequest(
+            p.clase, p.lat, p.lon, snapshot, p.confianza, d.clases,
+            ref = UUID.randomUUID().toString(), droneLat = pose.lat, droneLon = pose.lon, droneAlt = pose.altM,
+        )
+    }
+
+    /** Un objetivo posible ya ubicado en el terreno; posición en NaN si el dron no tiene GPS. */
+    private class Punto(val clase: String, val confianza: Double, val lat: Double, val lon: Double) {
+        val sinPosicion: Boolean get() = lat.isNaN() || lon.isNaN()
+    }
+
+    /**
+     * Cada caja proyectada al terreno con la pose del cuadro. Si una caja no se
+     * puede proyectar (rayo casi al horizonte) se toma la posición del dron: el
+     * objetivo está dentro del campo visual. Sin cajas (el detector de
+     * respaldo no las manda) la detección entera cuenta como un punto en la
+     * posición del dron. Sin GPS los puntos van sin posición (NaN): no se pueden
+     * ubicar, pero la detección existe igual.
+     */
+    private fun puntosEnElTerreno(d: Deteccion, pose: Telemetry): List<Punto> {
+        if (!pose.tienePosicion) {
+            if (d.cajas.isEmpty()) return listOf(Punto(d.tipoDeAlerta, d.confianza, Double.NaN, Double.NaN))
+            return d.cajas.map { Punto(it.clase, it.confianza, Double.NaN, Double.NaN) }
+        }
+        if (d.cajas.isEmpty()) return listOf(Punto(d.tipoDeAlerta, d.confianza, pose.lat, pose.lon))
+        return d.cajas.map { caja ->
+            val o = Georreferencia.proyectar(pose.lat, pose.lon, pose.altM, pose.rumboCamara, pose.gimbalPitch, caja.x, caja.y)
+            Punto(caja.clase, caja.confianza, o?.lat ?: pose.lat, o?.lon ?: pose.lon)
+        }
+    }
+
+    /** La telemetría más cercana en el tiempo a [ms] (ver [poses]). */
+    private fun poseEn(ms: Long): Telemetry? = poses.minByOrNull { abs(it.ts - ms) }
+
+    /**
+     * Arranca el seguimiento del objetivo [p]: orbitarlo, alertar al Comando
+     * Central con la captura anotada y quedar a la espera del alert_ack y de
+     * la decisión.
+     */
+    private fun iniciarSeguimiento(p: Punto, d: Deteccion, pose: Telemetry, ahora: Long) {
+        val nuevo = Seguimiento(RastreadorDeObjetivo(p.clase, p.lat, p.lon, ahora), UUID.randomUUID().toString(), p.lat, p.lon)
+        seguimiento = nuevo
+        val distancia = Geo.distanciaM(pose.lat, pose.lon, p.lat, p.lon)
+        val detectado = "Detección de ${p.clase} (confianza ${"%.2f".format(p.confianza)}) a ${distancia.toInt()} m"
+        if (_state.value == PatrolState.MANUAL) {
+            // El dron es del operador: no se le saca. La app sigue estimando
+            // dónde está el objetivo y, al soltar el control, el dron va a él.
+            report(
+                "TARGET_DETECTED",
+                "$detectado durante el control manual: se sigue su posición y al soltar el control el dron va al objetivo",
+                lat = p.lat,
+                lon = p.lon,
+            )
+        } else {
+            if (_state.value == PatrolState.PATROLLING) resumeWaypoint = proximoWaypoint
+            // El estado antes que la orden, como en el resto de las transiciones
+            // (ver pasarA()): desde PAUSED o FORCED también se llega acá.
+            pasarA(PatrolState.ORBITING)
+            controller.startOrbit(p.lat, p.lon, ORBIT_RADIUS_M)
+            report("ORBIT_STARTED", "$detectado: el dron pasa a modo órbita sobre el objetivo", lat = p.lat, lon = p.lon)
+        }
         // La captura es el cuadro anotado que disparó la detección; si el
         // detector no lo manda (el mock), el último cuadro que vio la consola.
         val snapshot = d.snapshotBase64 ?: lastFrame?.let { Base64.encodeToString(it, Base64.NO_WRAP) }
-        commandCenter.sendAlertRequest(alertType, centroLat, centroLon, snapshot, d.confianza, d.clases)
+        commandCenter.sendAlertRequest(
+            p.clase, p.lat, p.lon, snapshot, p.confianza, d.clases,
+            ref = nuevo.ref, droneLat = pose.lat, droneLon = pose.lon, droneAlt = pose.altM,
+        )
     }
 
-    private suspend fun onAlertDecision(decision: String, decidedBy: String) {
-        if (_state.value != PatrolState.ORBITING) return
-        if (decision == "DISMISSED") {
-            // Falso positivo: el dron retoma su ruta donde la dejó
-            resumePatrol("alerta descartada por $decidedBy")
+    /**
+     * Una detección con un objetivo en seguimiento: si una de sus cajas es él
+     * (misma clase, cerca de donde se lo espera), corrige la estimación. Sigue
+     * también en MANUAL: el operador vuela y la app no pierde al objetivo.
+     */
+    private fun actualizarSeguimiento(s: Seguimiento, d: Deteccion, pose: Telemetry, ahora: Long) {
+        val candidatos = puntosEnElTerreno(d, pose).filter { it.clase == s.rastreador.clase && !it.sinPosicion }
+        val i = s.rastreador.indiceMasCercano(candidatos.map { it.lat to it.lon }, ahora) ?: return
+        s.rastreador.actualizar(candidatos[i].lat, candidatos[i].lon, ahora)
+        if (s.perdidoAvisado) {
+            s.perdidoAvisado = false
+            val e = s.rastreador.estimar(ahora)
+            report("TARGET_REACQUIRED", "Se volvió a ver al objetivo", s.alertId, e.lat, e.lon)
+        }
+        evaluarSeguimiento(ahora)
+    }
+
+    /**
+     * Decide qué hace el dron con el objetivo: seguir orbitándolo, pasar a
+     * seguirlo porque se mueve, volver a orbitarlo porque se detuvo, o
+     * buscarlo donde se lo vio por última vez. Corre con cada detección y,
+     * por si dejan de llegar, cada [INTERVALO_SEGUIMIENTO_MS]. En MANUAL no
+     * comanda nada: el dron es del operador.
+     */
+    private fun evaluarSeguimiento(ahora: Long) {
+        val s = seguimiento ?: return
+        val estado = _state.value
+        if (estado !in ESTADOS_DE_SEGUIMIENTO) return
+        val e = s.rastreador.estimar(ahora)
+        when {
+            e.perdido -> if (!s.perdidoAvisado) {
+                s.perdidoAvisado = true
+                if (estado == PatrolState.FOLLOWING) pasarA(PatrolState.ORBITING)
+                orbitar(s, e.lat, e.lon)
+                report(
+                    "TARGET_LOST",
+                    "Se perdió de vista al objetivo (${s.rastreador.clase}): el dron orbita su última posición " +
+                        "conocida, ${coordenadas(e.lat, e.lon)}",
+                    s.alertId, e.lat, e.lon,
+                )
+            }
+            estado == PatrolState.ORBITING && e.enMovimiento -> {
+                pasarA(PatrolState.FOLLOWING)
+                controller.seguirObjetivo(e.lat, e.lon, e.vNorteMs, e.vEsteMs)
+                report(
+                    "TARGET_MOVING",
+                    "El objetivo se mueve (${"%.1f".format(e.velocidadMs)} m/s, rumbo ${e.rumboGrados.toInt()}°): " +
+                        "el dron deja la órbita y lo sigue",
+                    s.alertId, e.lat, e.lon,
+                )
+            }
+            estado == PatrolState.FOLLOWING && !e.enMovimiento -> {
+                pasarA(PatrolState.ORBITING)
+                orbitar(s, e.lat, e.lon)
+                report("TARGET_STOPPED", "El objetivo se detuvo: el dron vuelve a orbitarlo donde quedó", s.alertId, e.lat, e.lon)
+            }
+            estado == PatrolState.FOLLOWING -> controller.seguirObjetivo(e.lat, e.lon, e.vNorteMs, e.vEsteMs)
+            Geo.distanciaM(s.centroLat, s.centroLon, e.lat, e.lon) > DERIVA_DE_ORBITA_M -> orbitar(s, e.lat, e.lon)
+        }
+    }
+
+    /** Centra la órbita en (lat, lon); si ya orbitaba, el controlador solo corre el centro. */
+    private fun orbitar(s: Seguimiento, lat: Double, lon: Double) {
+        s.centroLat = lat
+        s.centroLon = lon
+        controller.startOrbit(lat, lon, ORBIT_RADIUS_M)
+    }
+
+    /** Vuelve al objetivo después de un control manual: orbitarlo o seguirlo, según se mueva. */
+    private fun volverAlObjetivo(s: Seguimiento, motivo: String) {
+        val e = s.rastreador.estimar(reloj())
+        if (e.enMovimiento && !e.perdido) {
+            pasarA(PatrolState.FOLLOWING)
+            controller.seguirObjetivo(e.lat, e.lon, e.vNorteMs, e.vEsteMs)
         } else {
-            // Alerta real: se mantiene la órbita sobre el objetivo hasta que el
+            pasarA(PatrolState.ORBITING)
+            orbitar(s, e.lat, e.lon)
+        }
+        report("TRACKING_RESUMED", motivo, s.alertId, e.lat, e.lon)
+    }
+
+    /**
+     * Termina el seguimiento, si había uno, y deja en el registro la última
+     * posición estimada del objetivo. No le da ninguna orden al dron: quien lo
+     * llama es el que sabe qué sigue (retomar la ruta, volver a base…).
+     */
+    private fun terminarSeguimiento(motivo: String) {
+        val s = seguimiento ?: return
+        seguimiento = null
+        candidato = null
+        val e = s.rastreador.estimar(reloj())
+        report(
+            "TRACKING_ENDED",
+            "Fin del seguimiento del objetivo: $motivo. Última posición estimada: ${coordenadas(e.lat, e.lon)}",
+            s.alertId, e.lat, e.lon,
+        )
+    }
+
+    private suspend fun seguimientoTicker() {
+        while (true) {
+            delay(INTERVALO_SEGUIMIENTO_MS)
+            evaluarSeguimiento(reloj())
+        }
+    }
+
+    private fun reportarObjetivo(s: Seguimiento): ObjetivoReportado {
+        val e = s.rastreador.estimar(reloj())
+        return ObjetivoReportado(
+            alertId = s.alertId,
+            tipo = s.rastreador.clase,
+            lat = e.lat,
+            lon = e.lon,
+            velocidadMs = e.velocidadMs,
+            rumboGrados = e.rumboGrados,
+            enMovimiento = e.enMovimiento,
+            perdido = e.perdido,
+            vistoHaceMs = e.vistoHaceMs,
+            decision = s.decision,
+        )
+    }
+
+    private fun coordenadas(lat: Double, lon: Double) = "%.6f, %.6f".format(lat, lon)
+
+    /** El hub registró la alerta: si es la del objetivo en curso, queda asociada. */
+    private fun onAlertAck(ref: String, alertId: Long) {
+        val s = seguimiento ?: return
+        if (s.ref != ref) return
+        s.alertId = alertId
+        log("La alerta del objetivo quedó registrada como #$alertId")
+    }
+
+    /**
+     * Decisión del operador. Se aplica solo a la alerta del objetivo en curso:
+     * descartar una alerta vieja no puede hacer que el dron abandone el
+     * objetivo nuevo. Si la app todavía no conoce el id de su alerta (el ack no
+     * llegó), se aplica igual: es la única que puede estar decidiéndose. Salvo
+     * que sea un REENVÍO del hub al reconectarse ([reenvio]): esas son
+     * decisiones de los últimos minutos, de alertas que pueden ser viejas, y
+     * solo se aplican si son exactamente la alerta del objetivo en curso.
+     */
+    private suspend fun onAlertDecision(alertId: Long?, decision: String, decidedBy: String, reenvio: Boolean = false) {
+        val s = seguimiento
+        if (s == null) {
+            log("Llegó la decisión de una alerta pero el dron no está siguiendo ningún objetivo: no cambia nada")
+            return
+        }
+        if (alertId != null && s.alertId != null && alertId != s.alertId) {
+            log("La decisión es sobre la alerta #$alertId, que no es la del objetivo en curso (#${s.alertId}): se ignora")
+            return
+        }
+        if (reenvio && (alertId == null || alertId != s.alertId)) {
+            log("Decisión reenviada de la alerta #$alertId, que no es la del objetivo en curso: se ignora")
+            return
+        }
+        if (decision == "DISMISSED") {
+            val ahora = reloj()
+            val e = s.rastreador.estimar(ahora)
+            // Falso positivo: ni el lugar donde se lo vio primero ni donde quedó
+            // la estimación vuelven a alertar por un rato (ver ZonasDescartadas).
+            zonasDescartadas.agregar(e.lat, e.lon, ahora)
+            zonasDescartadas.agregar(s.origenLat, s.origenLon, ahora)
+            silencioHastaMs = ahora + SILENCIO_TRAS_DESCARTE_MS
+            terminarSeguimiento("la alerta se descartó como falso positivo (por $decidedBy)")
+            // Con el control tomado el dron sigue siendo del operador; si no,
+            // retoma la ruta hacia el nodo que tenía por delante.
+            if (_state.value in ESTADOS_DE_SEGUIMIENTO) resumePatrol("alerta descartada por $decidedBy")
+        } else if (decision == "VALIDATED") {
+            // Alerta real: el dron sigue sobre el objetivo hasta que el
             // operador ordene reanudar desde la consola
-            log("Alerta VALIDADA por $decidedBy: se mantiene la órbita")
+            s.decision = "VALIDATED"
+            log("Alerta VALIDADA por $decidedBy: el dron sigue sobre el objetivo")
         }
     }
 
     private suspend fun resumePatrol(reason: String, fromIndex: Int? = null) {
         val r = route ?: return
         if (_state.value !in ESTADOS_REANUDABLES) return
+        terminarSeguimiento("se reanudó el patrullaje ($reason)")
         val desde = (fromIndex ?: resumeWaypoint).coerceIn(0, r.waypoints.size - 1)
         resumeWaypoint = desde
-        lastReachedWaypoint = desde
+        proximoWaypoint = desde
         // El estado antes que la orden (ver pasarA()): ESTADOS_REANUDABLES
         // incluye MANUAL y el operador puede apretar "Retomar ruta" sin soltar el
         // control, así que acá también hay un mando a 10 Hz golpeando la puerta.
         pasarA(PatrolState.PATROLLING)
         controller.startRoute(r, desde)
-        report("PATROL_RESUMED", "Patrullaje reanudado desde el nodo ${desde + 1} ($reason)")
+        report("PATROL_RESUMED", "Patrullaje reanudado hacia el nodo ${desde + 1} ($reason)")
     }
 
     private suspend fun statusTicker() {
@@ -918,14 +1447,20 @@ class PatrolManager(
                 altM = t.altM,
                 satellites = dron.satelites,
                 flying = dron.enVuelo,
+                flightMode = dron.modoDeVuelo,
+                target = objetivo,
             )
         }
     }
 
-    /** Registra en el log local y lo reporta como evento al Comando Central. */
-    private fun report(eventType: String, message: String) {
+    /**
+     * Registra en el log local y lo reporta como evento al Comando Central. Los
+     * de seguimiento llevan la alerta del objetivo y su posición, que quedan en
+     * el registro para el equipo de tierra.
+     */
+    private fun report(eventType: String, message: String, alertId: Long? = null, lat: Double? = null, lon: Double? = null) {
         log(message)
-        commandCenter.sendEvent(eventType, message)
+        commandCenter.sendEvent(eventType, message, alertId, lat, lon)
     }
 
     private fun log(message: String) {

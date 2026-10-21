@@ -146,11 +146,12 @@ describe('integración — hub WebSocket multi-dron', () => {
       // Se descarta validándolo, sin que el hub tenga que atrapar nada
       expect(anotados).not.toHaveBeenCalled();
 
-      // Y esto es lo que la validación no puede prever: una coordenada que no es
-      // un número revienta adentro de SQLite al guardar la alerta. Ahí sí entra
-      // la red de contención: el mensaje se descarta, queda anotado y el hub
-      // sigue en pie en vez de llevarse puesto a todo el mundo.
-      d1.ws.send(JSON.stringify({ type: 'alert_request', lat: {}, lon: {} }));
+      // Y esto es lo que la validación no prevé: las coordenadas ya se validan
+      // (ver el test de abajo), pero una captura que no es texto revienta
+      // adentro de SQLite al guardar la alerta. Ahí sí entra la red de
+      // contención: el mensaje se descarta, queda anotado y el hub sigue en pie
+      // en vez de llevarse puesto a todo el mundo.
+      d1.ws.send(JSON.stringify({ type: 'alert_request', lat: -34.85, lon: -56.2, snapshotBase64: {} }));
       await wait(150);
       expect(anotados).toHaveBeenCalled();
     } finally {
@@ -193,6 +194,23 @@ describe('integración — hub WebSocket multi-dron', () => {
     // y NO a Alfa
     await wait(150);
     expect(d1.got.slice(d1Before).some((m) => m.type === 'alert_decision')).toBe(false);
+  });
+
+  it('un alert_request con coordenadas basura crea la alerta igual, con la posición en null', async () => {
+    // Antes una coordenada que no era número llegaba hasta SQLite y la alerta
+    // se perdía entera; ahora se valida y la detección queda registrada con la
+    // captura, aunque sin posición. Un 0,0 es "sin fix", no una posición.
+    const opWs = await conn(op);
+    const d1 = await conn(alfaTok);
+    await wait(50);
+    for (const [lat, lon] of [[{}, {}], ['-34.85', -56.2], [0, 0], [-34.85, null], [95, -56.2]] as unknown[][]) {
+      opWs.got.length = 0;
+      d1.ws.send(JSON.stringify({ type: 'alert_request', alertType: 'VEHICLE', lat, lon, snapshotBase64: 'S' }));
+      const created = await opWs.waitFor((m) => m.type === 'alert_created');
+      expect(created.alert.lat, JSON.stringify([lat, lon])).toBeNull();
+      expect(created.alert.lon, JSON.stringify([lat, lon])).toBeNull();
+      expect(created.alert.snapshot).toBe('S');
+    }
   });
 
   it('un alert_request sin datos cae a PERSON con coordenadas y captura nulas', async () => {

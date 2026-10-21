@@ -20,13 +20,48 @@ export interface BaseAsset {
   deletedAt: string | null;
 }
 
+/**
+ * El objetivo que el dron está orbitando o siguiendo (`status.target`, §1 del
+ * contrato). Existe desde la detección que disparó la alerta hasta que el
+ * seguimiento termina, y la app lo vuelve a estimar con cada detección: es lo
+ * que el equipo de tierra necesita para llegar al lugar.
+ */
+export interface ObjetivoEnSeguimiento {
+  /** Id de la alerta del objetivo. `null` hasta que el hub le contestó a la app con `alert_ack`. */
+  alertId: number | null;
+  type: 'PERSON' | 'VEHICLE';
+  /** Posición ESTIMADA (filtrada, y extrapolada unos segundos si no se lo ve). */
+  lat: number;
+  lon: number;
+  /**
+   * Velocidad estimada, en m/s. `null` si la app no la pudo estimar: manda null
+   * en vez de NaN, que org.json no acepta (ver `velocidad` en format.ts).
+   */
+  speedMs: number | null;
+  /** Rumbo de su desplazamiento, 0..360°. `null` por lo mismo que la velocidad. */
+  courseDeg: number | null;
+  /** Se está desplazando: el dron lo sigue (`FOLLOWING`) en vez de orbitarlo. */
+  moving: boolean;
+  /** Hace más de 10 s que no se lo detecta: el dron orbita la última posición conocida. */
+  lost: boolean;
+  /** Hace cuánto se lo vio por última vez, en ms. */
+  lastSeenMs: number;
+  /** `PENDING` mientras nadie decidió la alerta; `VALIDATED` si un operador la confirmó. */
+  decision: 'PENDING' | 'VALIDATED';
+}
+
 export interface DroneStatus {
   droneId: string;
   displayName: string;
   state: string;
   battery: number;
-  lat: number;
-  lon: number;
+  /**
+   * Posición actual, o `null` sin fix GPS (interior, arranque en frío). El SDK
+   * de DJI entrega 0,0 sin fix, y eso no es una posición: la consola no dibuja
+   * el dron ni le cree a 0,0. Para leerla está `posicionDelDron` (format.ts).
+   */
+  lat: number | null;
+  lon: number | null;
   routeId: number | null;
   waypointIndex: number;
   waypointTotal: number;
@@ -37,6 +72,20 @@ export interface DroneStatus {
   heading?: number;
   /** Usuario que tiene el control manual, si alguien lo tomó */
   controlledBy?: string | null;
+  // Los que siguen son opcionales porque una app vieja no los manda, y el hub
+  // reenvía el status tal cual: la consola tiene que andar igual sin ellos.
+  /** `true` si `lat`/`lon` son una posición real. El status sale igual sin GPS. */
+  gpsFix?: boolean;
+  /** Altura sobre el punto de despegue, en metros (0 en el suelo). */
+  alt?: number;
+  /** Satélites GPS en uso. */
+  satellites?: number;
+  /** `true` con el dron en el aire. En el suelo la app rechaza el mando y las flechas. */
+  flying?: boolean;
+  /** Modo de vuelo que informa la aeronave (`GPS`, `ATTI`, …); `""` si no lo informa. */
+  flightMode?: string;
+  /** El objetivo que está orbitando o siguiendo; `null` si no hay ninguno. */
+  target?: ObjetivoEnSeguimiento | null;
 }
 
 /**

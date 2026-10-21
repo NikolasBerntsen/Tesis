@@ -72,7 +72,9 @@ Un dron puede estar controlado por **un solo usuario a la vez**. El backend
 mantiene el lock (`controlledBy`) y lo incluye en la ficha del dron y en cada
 `status`. Tomar un dron controlado por otro da `409`; un supervisor puede
 forzar la liberación. Si el usuario que controla cierra todas sus conexiones,
-el backend libera el lock y reanuda el patrullaje automáticamente.
+el backend libera el lock y reanuda el patrullaje automáticamente, **salvo que
+el dron esté sobre un objetivo (su último `status` trae `target`): en ese caso
+lo suelta sin reanudar y el dron vuelve al objetivo** (§2 `control_released`).
 
 Tener el lock es lo que habilita a pilotear: las dos órdenes de vuelo a mano
 (`manual_move` por REST y el mando con palancas `manual_stick` por WebSocket,
@@ -211,19 +213,22 @@ Conexión: `ws://<backend>:4000/ws?token=<JWT>` (el rol `drone` sale del token).
 
 | Mensaje | Campos | Efecto en el backend |
 |---|---|---|
-| `status` | ver tabla de abajo | Se guarda como último estado del dron y se reenvía a los operadores |
-| `event` | `eventType, message` | Se persiste en `events` y se reenvía a los operadores |
+| `status` | ver tabla de abajo | Se guarda como último estado del dron y se reenvía a los operadores **tal cual** (el hub no filtra campos) |
+| `event` | `eventType, message`, **`alertId?`, `lat?`, `lon?`** | Se persiste en `events` y se reenvía a los operadores. **Con `alertId` la fila queda encadenada a esa alerta** (columna `alert_id` y `meta.alerta`, si la alerta existe y es de ese dron). **Con `lat`/`lon` válidos** (números finitos, dentro de rango, no 0,0) se guardan en `meta.ubicacion` (`accuracyM: null`): es la posición del **objetivo** en los eventos de seguimiento, para que el equipo de tierra la tenga en el registro |
 | `video_frame` | `jpegBase64, ts` | Se reenvía a los operadores etiquetado con `droneId`. JPEG de 640 px de ancho, calidad 60; el ritmo es el del controlador (**5 por segundo con el dron real**; el simulado emite al suyo) |
-| `alert_request` | `alertType (PERSON\|VEHICLE), lat, lon, snapshotBase64, confidence, classes` | Crea fila en `alerts` (PENDING) + evento `ALERT_CREATED`, y notifica a los operadores. `lat`/`lon` son la **posición estimada del objetivo** (no la del dron) y `snapshotBase64` el cuadro **anotado** que disparó la detección; `confidence` y `classes` son informativos y el hub hoy no los persiste |
+| `alert_request` | `alertType (PERSON\|VEHICLE), lat, lon, snapshotBase64, confidence, classes`, **`ref`, `droneLat?`, `droneLon?`, `droneAlt?`** | Crea fila en `alerts` (PENDING) + evento `ALERT_CREATED`, y notifica a los operadores. `lat`/`lon` son la **posición estimada del objetivo** (no la del dron) y `snapshotBase64` el cuadro **anotado** que disparó la detección. **`confidence`, `classes` y la pose del dron (`droneLat/Lon/Alt`) quedan en `meta.detalle` del `ALERT_CREATED`** (`{confianza, clases, dronLat, dronLon, dronAlt}`). **`ref`** es un identificador que inventa la app (texto ≤ 64): el hub le contesta al dron con `alert_ack {ref, alertId}` (§2), y así la app sabe qué alerta es la del objetivo que está siguiendo |
 | `set_name` | `displayName` | Renombra el dron y avisa a los operadores con `drone_renamed` |
 
 ### Campos de `status`
 
 | Campo | Tipo | Notas |
 |---|---|---|
-| `state` | string | `IDLE`, `PATROLLING`, `ORBITING`, `RETURNING_HOME_SIGNAL`, `RETURNING_HOME_BATTERY`, `RETURNING_HOME` (regreso ordenado por el operador de campo desde la app), `LANDED`, `PAUSED` (patrulla interrumpida), `MANUAL` (control manual), `FORCED` (desvío forzado a un nodo) |
+| `state` | string | `IDLE`, `PATROLLING`, `ORBITING` (orbitando el objetivo detectado), **`FOLLOWING` (siguiendo al objetivo detectado porque se mueve)**, `RETURNING_HOME_SIGNAL`, `RETURNING_HOME_BATTERY`, `RETURNING_HOME` (regreso ordenado por el operador de campo desde la app), `LANDED`, `PAUSED` (patrulla interrumpida), `MANUAL` (control manual), `FORCED` (desvío forzado a un nodo) |
 | `battery` | number | Porcentaje 0..100 |
-| `lat`, `lon` | number | Posición actual |
+| `lat`, `lon` | number \| **null** | Posición actual. **`null` sin fix GPS** (interior, arranque en frío): el SDK de DJI entrega 0,0 sin fix y eso no es una posición. La consola no dibuja el dron en el mapa ni le cree a 0,0 |
+| **`gpsFix`** | boolean | **`true` si `lat`/`lon` son una posición real.** El status sale igual sin GPS: estado, batería, altura y si vuela llegan siempre que haya enlace con la aeronave |
+| **`flightMode`** | string | **Modo de vuelo que informa la aeronave** (`GPS`, `ATTI`, `VIRTUAL_STICK`, …; texto del SDK, solo informativo). `""` si no lo informa (simulador) |
+| **`target`** | objeto \| null | **El objetivo que el dron está orbitando o siguiendo** (ver abajo). `null` si no hay ninguno |
 | `routeId` | number \| null | Ruta que está patrullando |
 | `waypointIndex` | number | Índice 0-based del último waypoint alcanzado |
 | `waypointTotal` | number | Cantidad de waypoints de la ruta. La UI muestra `waypointIndex + 1` de `waypointTotal` |
@@ -235,16 +240,59 @@ Conexión: `ws://<backend>:4000/ws?token=<JWT>` (el rol `drone` sale del token).
 | `satellites` | number | Satélites GPS en uso (el dron real; el simulado informa 14) |
 | `flying` | boolean | `true` con el dron en el aire. En el suelo la app rechaza toda orden de vuelo salvo comenzar un patrullaje, que despega solo |
 
-Los tres últimos son nuevos y el hub los reenvía tal cual: una consola que no
-los conozca los ignora.
+Los campos nuevos el hub los reenvía tal cual: una consola que no los conozca
+los ignora.
+
+#### `target`: el objetivo en seguimiento
+
+Existe desde la detección que disparó la alerta hasta que el seguimiento
+termina (alerta descartada, reanudación del patrullaje, regreso a base,
+aterrizaje). Mientras existe, la app lo actualiza con cada detección asociada
+(ver §4, "Qué hace la app con una detección"), y el status de cada segundo lleva
+la estimación vigente:
+
+```json
+"target": {
+  "alertId": 12,
+  "type": "VEHICLE",
+  "lat": -34.60412, "lon": -58.38170,
+  "speedMs": 4.2, "courseDeg": 118,
+  "moving": true,
+  "lost": false,
+  "lastSeenMs": 600,
+  "decision": "PENDING"
+}
+```
+
+| Campo | Notas |
+|---|---|
+| `alertId` | Id de la alerta del objetivo (llega a la app con `alert_ack`); `null` hasta entonces |
+| `type` | `PERSON` \| `VEHICLE` |
+| `lat`, `lon` | Posición **estimada** del objetivo (filtrada; extrapolada con su velocidad hasta 4 s si no se lo ve) |
+| `speedMs`, `courseDeg` | Velocidad estimada (m/s) y rumbo de su desplazamiento (0..360) |
+| `moving` | `true` si se está desplazando: el dron lo **sigue** (`FOLLOWING`) en vez de orbitarlo |
+| `lost` | `true` si hace más de 10 s que no se lo detecta: el dron orbita la última posición conocida |
+| `lastSeenMs` | Hace cuánto se lo vio por última vez |
+| `decision` | `PENDING` mientras el operador no decidió; `VALIDATED` si la confirmó como real |
 
 `eventType` usados por la app: `PATROL_STARTED`, `PATROL_RESUMED`,
 `PATROL_STOPPED`, `SIGNAL_LOST`, `SIGNAL_RECOVERED`, `RTH_SIGNAL_LOSS`,
 `RTH_LOW_BATTERY`, `RTH_MANUAL` (regreso ordenado desde la app), `TAKEOFF`
-(despegue automático en curso), `LANDING` (aterrizaje ordenado desde la app),
+(despegue automático en curso, del patrullaje o pedido desde la consola),
+`LANDING` (aterrizaje ordenado desde la app o la consola),
 `ORBIT_STARTED`, `GOTO_ARRIVED`, `FORCED_GOTO`, `CONTROL_RESUMED`, `LANDED`,
 `BATTERY_RECHARGED`, `DRONE_PROBLEM` (el dron o su SDK rechazó una orden: el
 motivo va en `message`, con un techo de repetición para no inundar el registro).
+`DETECTION` (detección confirmada que se avisa sin seguimiento: dron en el suelo, a baja altura o sin GPS; con `lat`/`lon` si se pudo ubicar),
+`TARGET_DETECTED` (detección durante el control manual: arranca el seguimiento sin mover al dron).
+**Seguimiento** (todos con `alertId` si se conoce y con `lat`/`lon` del objetivo):
+`TARGET_MOVING` (el objetivo se mueve: el dron deja la órbita y lo sigue),
+`TARGET_STOPPED` (se detuvo: el dron vuelve a orbitarlo donde quedó),
+`TARGET_LOST` (hace 10 s que no se lo ve: el dron orbita la última posición
+conocida, que es la que va al equipo de tierra), `TARGET_REACQUIRED`,
+`TRACKING_RESUMED` (el operador soltó el control y el dron vuelve al objetivo),
+`TRACKING_ENDED` (el seguimiento terminó: alerta descartada, patrullaje
+reanudado, regreso a base o aterrizaje; el motivo va en `message`).
 
 ## 2. Comando Central → App de control
 
@@ -252,15 +300,18 @@ Los mensajes se dirigen **solo al dron correspondiente**, salvo que se indique.
 
 | Mensaje | Campos | Efecto en el celular |
 |---|---|---|
-| `alert_decision` | `alertId, decision (VALIDATED\|DISMISSED), decidedBy` | Si fue descartada, deja la órbita y reanuda el patrullaje desde el waypoint guardado |
-| `resume_patrol` | `orderedBy, fromIndex?` | Reanuda el patrullaje; con `fromIndex` continúa desde ese nodo, sin él desde el último alcanzado |
+| **`alert_ack`** | **`ref, alertId`** | **Respuesta del hub a un `alert_request`: el id que la alerta recibió. La app lo asocia al objetivo que está siguiendo y lo manda en `status.target.alertId` y en los eventos de seguimiento** |
+| `alert_decision` | `alertId, decision (VALIDATED\|DISMISSED), decidedBy`, **`resent?`** | **Se aplica solo si `alertId` es la alerta del objetivo en curso** (o si la app todavía no conoce el id de su alerta, salvo que sea un reenvío: `resent: true` solo vale para la alerta exacta); una decisión sobre una alerta vieja no toca el objetivo nuevo. `DISMISSED`: termina el seguimiento, marca la zona como descartada (§4) y reanuda el patrullaje **hacia el próximo waypoint** de la ruta. `VALIDATED`: el dron sigue sobre el objetivo (órbita o seguimiento) hasta un `resume_patrol`. **Al reconectarse un dron, el hub le reenvía las decisiones de sus alertas de los últimos 10 minutos** (con `resent: true`), por si se decidieron mientras estaba desconectado |
+| `resume_patrol` | `orderedBy, fromIndex?` | Reanuda el patrullaje; con `fromIndex` vuela hacia ese nodo, **sin él hacia el próximo nodo de la ruta (el que tenía por delante cuando se interrumpió)**. **Termina el seguimiento de un objetivo, si lo había** |
 | `start_route` | `routeId, fromIndex, orderedBy` | Comienza a patrullar esa ruta |
 | `stop_patrol` | `orderedBy` | Interrumpe el patrullaje: el dron queda en vuelo estacionario (`PAUSED`) |
 | `force_goto` | `routeId, index, orderedBy` | Vuela forzado hacia ese nodo y queda estacionario sobre él (`FORCED`) |
-| `control_taken` | `by` | Entra en control manual (`MANUAL`): vuelo estacionario a la espera de movimientos |
-| `manual_move` | `bearing, distanceM, by` | **Desplazamiento puntual** de esa distancia en ese rumbo (solo en `MANUAL`) |
-| `manual_stick` | `pitch, roll, yaw, throttle, by` | **Vuelo continuo con palancas** (solo en `MANUAL`): cada eje es un número en `[-1, 1]` y el dron lo sostiene hasta el mensaje siguiente. Ver §3.b |
-| `control_released` | `by` | Sale del control manual; si no llega un `resume_patrol` a continuación queda `PAUSED` |
+| `control_taken` | `by` | Entra en control manual (`MANUAL`): vuelo estacionario a la espera de movimientos. **Con un objetivo en seguimiento, la app lo sigue estimando con las detecciones mientras el operador vuela** |
+| **`takeoff`** | **`by`** | **Despegue automático en el lugar (~1,2 m, el del SDK) y queda suspendido a la espera del mando. Solo con el control manual tomado y el dron en el suelo. No exige GPS (la aeronave se sostiene con sus sensores de visión); sí exige enlace con la aeronave** |
+| **`land`** | **`by`** | **Aterriza donde está. Solo con el control manual tomado y el dron en el aire. Al tocar el suelo el control sigue tomado (`MANUAL` en el suelo)** |
+| `manual_move` | `bearing, distanceM, by` | **Desplazamiento puntual** de esa distancia en ese rumbo (solo en `MANUAL`, en el aire y con GPS) |
+| `manual_stick` | `pitch, roll, yaw, throttle, by` | **Vuelo continuo con palancas** (solo en `MANUAL` y **en el aire**: en el suelo se descarta en silencio, la consola muestra "despegá primero"): cada eje es un número en `[-1, 1]` y el dron lo sostiene hasta el mensaje siguiente. Ver §3.b |
+| `control_released` | `by` | Sale del control manual. **Con un objetivo en seguimiento, el dron vuelve a él (`ORBITING` o `FOLLOWING`, evento `TRACKING_RESUMED`)**; sin objetivo, si no llega un `resume_patrol` a continuación queda `PAUSED` |
 | `renamed` | `displayName` | El operador renombró al dron: la app actualiza el nombre que muestra |
 
 ### `manual_move` y `manual_stick` no son lo mismo
@@ -453,10 +504,32 @@ válido. Si llega un anuncio de otra dirección (la notebook cambió de IP), la
 app cierra el socket y se va a la nueva. Mientras no llegó ninguno, la pantalla
 dice que está buscando; no es un fallo.
 
-El servidor manda el anuncio a `255.255.255.255` y al broadcast dirigido de
-cada red local (`x.y.z.255`), porque Windows no siempre rutea el limitado por
-todas las interfaces. La app toma un `MulticastLock` de Wi-Fi para que el
-teléfono no filtre los broadcast en el chip.
+El servidor manda el anuncio **por cada interfaz de red real** (con un socket
+atado a la IP de esa interfaz): al broadcast dirigido calculado con la
+**máscara verdadera** de la interfaz (una red /22 como `192.168.68.0/22` tiene
+el broadcast en `192.168.71.255`, no en `.255` del tercer octeto) y a
+`255.255.255.255`. Las interfaces virtuales (VMware, Hyper-V/WSL, VPN TAP/TUN,
+loopback, APIPA `169.254/16`) se saltean. La app toma un `MulticastLock` de
+Wi-Fi para que el teléfono no filtre los broadcast en el chip.
+
+**El descubrimiento es de ida y vuelta.** Mientras busca, la app también se
+anuncia: cada 2 s manda por broadcast al puerto **8766**
+
+```json
+{ "service": "dronepatrol-app", "port": 8766, "name": "S23 Ultra" }
+```
+
+y el servidor, que escucha ese puerto, le contesta **por unicast** a la IP de
+origen con el mismo anuncio de siempre (`dronepatrol-detection`). Así el enlace
+se arma aunque el broadcast de la PC se pierda (Windows lo manda por una sola
+interfaz, una VPN con mejor métrica se lo lleva, el router no lo reenvía): el
+del teléfono casi siempre llega, y la respuesta unicast también.
+
+En el teléfono, los sockets de la detección (el UDP del descubrimiento y el
+WebSocket) se atan a la **red Wi-Fi** cuando hay una: con una Wi-Fi sin
+internet (el router del lugar, sin salida) Android pasa la red por defecto a
+los datos móviles y un socket sin red asignada nunca llegaría a la notebook.
+Con el teléfono como hotspot no hay red Wi-Fi cliente y se usa la de siempre.
 
 ### Modo `CABLE` (banco de pruebas)
 
@@ -477,8 +550,15 @@ con YOLO11) y que `detection-mock/` respeta como placeholder sin GPU.
 
 | Dirección | Mensaje | Campos |
 |---|---|---|
-| celular → notebook | `video_frame` | `jpegBase64, ts` (JPEG de **1280 px de ancho**, calidad 75, **hasta 2 por segundo**) |
-| notebook → celular | `detection` | `detected (bool), classes (["PERSON"\|"VEHICLE"]), confidence, boxes[], snapshotBase64?, ts` |
+| celular → notebook | `video_frame` | `jpegBase64, ts` (JPEG de **1280 px de ancho**, calidad 75, **hasta 2 por segundo**). **`ts` es la hora de captura del cuadro, con el reloj del teléfono** |
+| notebook → celular | `detection` | `detected (bool), classes (["PERSON"\|"VEHICLE"]), confidence, boxes[], snapshotBase64?, ts`, **`frameTs`** |
+
+**`frameTs` es el `ts` del `video_frame` que se analizó, devuelto tal cual.**
+Entre la captura y la respuesta pasan de 0,3 a 1 s (cola, Wi-Fi, inferencia), y
+en ese lapso el dron se movió y giró: la app georreferencia la caja con la pose
+del dron **en el instante del cuadro** (guarda los últimos segundos de
+telemetría y usa la muestra más cercana a `frameTs`), no con la de cuando llegó
+la respuesta. `ts` sigue siendo la hora del servidor.
 
 Cada elemento de `boxes` es `{cls, conf, x, y, w, h}` con **`x`, `y` el centro
 y `w`, `h` el tamaño, normalizados 0..1** sobre el cuadro (origen arriba a la
@@ -499,16 +579,52 @@ cuadro viejo y nunca acumula retraso.
 1. **Guarda las cajas** y las dibuja sobre el video que sube al Comando Central
    durante 1,5 s (`PatrolManager.VIGENCIA_CAJAS_MS`), en cualquier estado: el
    operador ve marcado lo que el detector ve, también mientras orbita.
-2. Solo en estado **`PATROLLING`** (evita re-alertar mientras orbita o vuelve a
-   base) **ubica al objetivo en el terreno**: proyecta el centro de la caja más
-   segura con la altura, el rumbo y la inclinación del gimbal
-   (`Georreferencia`), y **orbita alrededor de ese punto** a 30 m con la cámara
-   apuntada al centro, para no perderlo de vista.
-3. Manda `alert_request` al Comando Central con el tipo, la **captura anotada**
-   que disparó la detección, la posición del objetivo y la confianza; eso queda
-   en el registro (ver "Trazabilidad de las detecciones").
-4. Espera la decisión del operador: `alert_decision` con `DISMISSED` retoma la
-   ruta donde la dejó; `VALIDATED` mantiene la órbita hasta un `resume_patrol`.
+2. **Ubica cada caja en el terreno** con la pose del dron en el instante del
+   cuadro (`frameTs`): altura, rumbo de la cámara e inclinación del gimbal
+   (`Georreferencia`). Sin GPS o por debajo de 2 m de altura no hay proyección
+   posible.
+3. **Toda detección confirmada avisa al Comando Central**: dos detecciones de
+   la misma clase en menos de 2,5 s y a menos de 25 m una de otra (un solo
+   cuadro no alerta). No se alerta despegando (el detector ve al equipo de
+   tierra) ni volviendo a base. Las detecciones que caen en una **zona
+   descartada** (40 m alrededor de un falso positivo descartado en los últimos
+   5 minutos) no alertan, y en los 10 s siguientes a retomar la ruta por un
+   descarte tampoco.
+4. Cómo alerta depende de dónde está el dron:
+   - **En el aire, a 8 m o más y con GPS, patrullando, en pausa o en un
+     desvío**: **orbita el objetivo** a 30 m con la cámara apuntada al centro
+     y arranca el seguimiento (`ORBIT_STARTED`).
+   - **En control manual** (en el aire, con GPS): arranca el seguimiento SIN
+     mover al dron (`TARGET_DETECTED`); al soltar el control, el dron va al
+     objetivo.
+   - **En el suelo, a baja altura o sin GPS**: alerta sin seguimiento
+     (`DETECTION`), como mucho una por minuto.
+   En todos los casos manda `alert_request` (tipo, **captura anotada**,
+   posición del objetivo si se pudo ubicar, confianza, pose del dron y un
+   `ref`) y, con seguimiento, queda a la espera del `alert_ack`.
+5. **Seguimiento.** Mientras haya objetivo (órbita, seguimiento o control
+   manual del operador), cada detección de la misma clase que cae cerca de
+   donde se lo espera se asocia a él y alimenta un filtro de velocidad
+   constante (`RastreadorDeObjetivo`): posición suavizada y velocidad.
+   - Si **se mueve** (más de 1,2 m/s sostenido en 3 detecciones, o más de 15 m
+     desde donde se lo vio quieto): deja la órbita y **lo sigue** a 25 m, del
+     lado en que está, copiando su velocidad, con la nariz y el gimbal
+     apuntados a él (`FOLLOWING`, evento `TARGET_MOVING`).
+   - Si **se detiene** (menos de 0,6 m/s durante 6 s): vuelve a orbitarlo donde
+     quedó (`ORBITING`, `TARGET_STOPPED`). Orbitando, si la estimación se corre
+     más de 6 m, el centro de la órbita la acompaña sin cortar el giro.
+   - Si **se pierde** (10 s sin detecciones asociadas): orbita la última
+     posición estimada y avisa `TARGET_LOST` con esa posición, que es la que
+     necesita el equipo de tierra. Si vuelve a aparecer cerca (70 m), lo
+     retoma (`TARGET_REACQUIRED`).
+6. **Decisión del operador** (`alert_decision` de la alerta del objetivo):
+   `DISMISSED` termina el seguimiento, marca la zona como descartada y retoma
+   la ruta **hacia el próximo waypoint**; `VALIDATED` sigue sobre el objetivo
+   hasta un `resume_patrol`. El operador puede tomar el control manual en
+   cualquier momento; al soltarlo el dron vuelve al objetivo.
+7. El seguimiento termina con un `resume_patrol`, un regreso a base (batería
+   baja, señal perdida, orden del campo) o un aterrizaje, y deja
+   `TRACKING_ENDED` con la última posición conocida.
 
 ## 5. REST del Comando Central
 
@@ -542,10 +658,12 @@ Lo que cambió respecto de la versión anterior está marcado con **negrita**.
 | PATCH | `/api/routes/:routeId/waypoints/:index` | operador+ | `{label}`; apodo de un nodo (vacío lo borra). Emite `route_updated` |
 | POST | `/api/drones/:droneId/route/start` | operador+ | `{routeId, fromIndex?}` |
 | POST | `/api/drones/:droneId/route/stop` | operador+ | Interrumpe el patrullaje (el dron queda estacionario) |
-| POST | `/api/drones/:droneId/resume` | operador+ | `{fromIndex?}`: reanuda desde ese nodo o desde el último alcanzado. Libera el control manual |
+| POST | `/api/drones/:droneId/resume` | operador+ | `{fromIndex?}`: reanuda hacia ese nodo o **hacia el próximo de la ruta**. Libera el control manual y **termina el seguimiento de un objetivo** |
 | POST | `/api/drones/:droneId/goto` | con `canControl` | `{routeId, index}`: fuerza el vuelo hacia ese nodo |
 | POST | `/api/drones/:droneId/control` | con `canControl` | Toma el control manual (409 si otro lo tiene) |
-| DELETE | `/api/drones/:droneId/control` | titular o supervisor+ | `{resume: 'last'\|'none'\|número}` |
+| DELETE | `/api/drones/:droneId/control` | titular o supervisor+ | `{resume: 'last'\|'none'\|número}`. **Con un objetivo en seguimiento la consola manda `'none'`: el dron vuelve al objetivo.** Si el titular se desconecta, el hub suelta el control con `'none'` cuando el último status del dron trae `target`, y con `'last'` si no |
+| **POST** | **`/api/drones/:droneId/takeoff`** | **titular del control (con `canControl`)** | **Despegue en el lugar (§2 `takeoff`). 409 si no tenés el control. Registra `TAKEOFF_ORDERED`** |
+| **POST** | **`/api/drones/:droneId/land`** | **titular del control (con `canControl`)** | **Aterriza donde está (§2 `land`). 409 si no tenés el control. Registra `LANDING_ORDERED`** |
 | POST | `/api/drones/:droneId/manual_move` | titular del control | `{bearing, distanceM}`: desplazamiento puntual (la consola manda 25 m por click) |
 
 El **mando virtual con palancas no está en esta tabla y no va a estar**: viaja por
@@ -597,8 +715,10 @@ del protocolo.
   "online": true,
   "controlledBy": null,
   "lastStatus": { "state": "PATROLLING", "battery": 87, "lat": -34.855, "lon": -56.206,
-                  "routeId": 1, "waypointIndex": 2, "waypointTotal": 4,
-                  "signal": "OK", "signalPct": 78, "heading": 132, "mode": "TEST" }
+                  "gpsFix": true, "routeId": 1, "waypointIndex": 2, "waypointTotal": 4,
+                  "signal": "OK", "signalPct": 78, "heading": 132, "mode": "TEST",
+                  "alt": 40, "satellites": 14, "flying": true, "flightMode": "P-GPS",
+                  "target": null }
 }
 ```
 
@@ -623,9 +743,10 @@ Piezas que se repiten: `Dron = {hash, displayName, model}` ·
 | drone | `FORCED_GOTO` | `{drone, detalle: {ruta, rutaId, nodo}}` |
 | drone | `CONTROL_TAKEN` | `{drone, detalle: {por}}` |
 | drone | `CONTROL_RELEASED` | `{drone, detalle: {por, teniaElControl, forzado, motivo}}` |
-| drone | `ALERT_CREATED` | `{alerta: {id, tipo, lat, lon, ts}, drone}` |
+| drone | **`TAKEOFF_ORDERED` / `LANDING_ORDERED`** | **`{drone, detalle: {por}}`** |
+| drone | `ALERT_CREATED` | `{alerta: {id, tipo, lat, lon, ts}, drone, detalle: {confianza, clases, dronLat, dronLon, dronAlt}}` (**`detalle` es nuevo**; cada campo puede faltar) |
 | drone | `ALERT_VALIDATED` / `ALERT_DISMISSED` | `{alerta: {id, tipo}, decision, por, antes: {estado}, despues: {estado, decidedBy, decidedAt}, drone}` |
-| drone | Eventos que reporta la app (`PATROL_STARTED`, `SIGNAL_LOST`, `RTH_LOW_BATTERY`, …) | `{drone}` |
+| drone | Eventos que reporta la app (`PATROL_STARTED`, `SIGNAL_LOST`, `RTH_LOW_BATTERY`, `TARGET_MOVING`, …) | `{drone}` **+ `alerta: {id, tipo, lat, lon, ts}` si el evento trae un `alertId` de una alerta de ese dron, + `ubicacion: {lat, lon, accuracyM: null}` si trae `lat`/`lon` válidos** |
 | usuarios | `USER_CREATED` | `{despues: UserView}` |
 | usuarios | `USER_UPDATED` / `USER_DELETED` / `USER_RESTORED` | `{antes: UserView, despues: UserView}` |
 | sistema | `FIELD_SESSION_CLOSED` | `{detalle: {por, motivo}}` |

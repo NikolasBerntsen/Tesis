@@ -78,6 +78,62 @@ object Navegacion {
         return (falta / 4.0).coerceIn(-vMaxMs, vMaxMs)
     }
 
+    /** Ganancia de la corrección radial de la órbita (1/s): cuánto vuelve al círculo por metro de error. */
+    const val GANANCIA_RADIAL_ORBITA = 0.5
+
+    /** Más lejos que esto del círculo, primero se acerca derecho a él (a crucero). */
+    const val APROXIMACION_ORBITA_M = 10.0
+
+    /**
+     * Velocidades para orbitar ([centroLat], [centroLon]) a [radioM], en sentido
+     * horario visto desde arriba (norte → este → sur), desde ([lat], [lon]).
+     *
+     * Sobre el círculo: velocidad tangencial [vTangencialMs] más una corrección
+     * radial proporcional a lo que se aleja del radio. Antes se perseguía un
+     * punto que avanzaba sobre el círculo, y como [hacia] frena en proporción a
+     * la distancia, el dron quedaba unos 16 m atrás de ese punto cortando por
+     * adentro del círculo: más cerca del objetivo de lo pedido y con la cámara
+     * mal apuntada. Lejos del círculo (más de [APROXIMACION_ORBITA_M]) va derecho
+     * al punto del círculo más cercano a velocidad de crucero.
+     *
+     * El rumbo del [Paso] es hacia el CENTRO: en órbita la nariz —y la cámara—
+     * apunta al objetivo, no hacia donde se mueve el dron. La distancia es la
+     * distancia al centro.
+     */
+    fun orbitar(
+        lat: Double,
+        lon: Double,
+        centroLat: Double,
+        centroLon: Double,
+        radioM: Double,
+        vTangencialMs: Double = VELOCIDAD_ORBITA_MS,
+    ): Paso {
+        // Del centro al dron, en metros
+        val dNorte = (lat - centroLat) * Geo.METROS_POR_GRADO_LAT
+        val dEste = (lon - centroLon) * Geo.metrosPorGradoLon(centroLat)
+        val dist = hypot(dNorte, dEste)
+        val rumboAlCentro = (Math.toDegrees(atan2(-dEste, -dNorte)) + 360.0) % 360.0
+        // Encima del centro no hay "afuera": se sale hacia el norte.
+        val (uNorte, uEste) = if (dist > 0.5) dNorte / dist to dEste / dist else 1.0 to 0.0
+        val error = radioM - dist // > 0: demasiado cerca, hay que salir
+        if (abs(error) > APROXIMACION_ORBITA_M) {
+            val v = VELOCIDAD_CRUCERO_MS * (abs(error) / DISTANCIA_DE_FRENADO_M).coerceIn(0.0, 1.0)
+            val signo = if (error > 0) 1.0 else -1.0
+            return Paso(signo * v * uNorte, signo * v * uEste, rumboAlCentro, dist)
+        }
+        // Tangente del giro horario: el radial rotado 90° (norte → este)
+        val tNorte = -uEste
+        val tEste = uNorte
+        var vNorte = vTangencialMs * tNorte + GANANCIA_RADIAL_ORBITA * error * uNorte
+        var vEste = vTangencialMs * tEste + GANANCIA_RADIAL_ORBITA * error * uEste
+        val v = hypot(vNorte, vEste)
+        if (v > VELOCIDAD_CRUCERO_MS) {
+            vNorte *= VELOCIDAD_CRUCERO_MS / v
+            vEste *= VELOCIDAD_CRUCERO_MS / v
+        }
+        return Paso(vNorte, vEste, rumboAlCentro, dist)
+    }
+
     /** true cuando [altM] ya está a la altura [objetivoM], con la tolerancia del lazo. */
     fun aLaAltura(altM: Double, objetivoM: Double): Boolean = abs(objetivoM - altM) < UMBRAL_ALTURA_M
 }

@@ -78,6 +78,13 @@
     <string name="conexion_gps">GPS y punto de retorno</string>
     <string name="conexion_gps_ok">%1$d satélites · punto de retorno fijado</string>
     <string name="conexion_gps_esperando">%1$d satélites · esperando el punto de retorno</string>
+    <string name="conexion_gps_modo">%1$s · modo %2$s</string>
+    <string name="conexion_vincular">Vincular control con la aeronave</string>
+    <string name="conexion_vincular_cancelar">Cancelar la vinculación</string>
+    <string name="conexion_vincular_ayuda">Hace medio minuto que el control no enlaza con la aeronave. Antes de vincular: revisá que el dron esté encendido y probá apagar y encender el control y el dron. Si sigue sin enlazar, puede que el control no esté vinculado a este dron.</string>
+    <string name="conexion_vincular_confirmar_titulo">¿Vincular el control con este dron?</string>
+    <string name="conexion_vincular_confirmar_mensaje">Esto BORRA el vínculo que el control tenga ahora (por ejemplo, el que se hizo con DJI Fly). Hacelo solo si el dron no enlaza después de apagar y encender los dos. Al confirmar, mantené apretado el botón de encendido del dron unos 4 segundos, hasta que pite; después apagá y encendé el control y el dron.</string>
+    <string name="conexion_vinculando">Vinculando: mantené apretado el botón de encendido del dron hasta que pite…</string>
     <string name="conexion_distancia">Distancia al dron</string>
     <string name="conexion_distancia_m">%1$.0f m</string>
     <string name="conexion_distancia_sin_dato">—</string>
@@ -135,6 +142,7 @@
     <string name="main_rumbo_grados">%1$03.0f°</string>
     <string name="main_posicion">Posición</string>
     <string name="main_posicion_valor">%1$.5f, %2$.5f</string>
+    <string name="main_posicion_sin_gps">Sin GPS (%1$d satélites)</string>
     <string name="main_sin_dato">—</string>
 
     <string name="main_enlaces">Enlaces</string>
@@ -194,6 +202,7 @@
     <string name="estado_idle">En base</string>
     <string name="estado_patrullando">Patrullando</string>
     <string name="estado_orbitando">Orbitando objetivo</string>
+    <string name="estado_siguiendo">Siguiendo objetivo</string>
     <string name="estado_rth_senal">Volviendo a base (pérdida de señal)</string>
     <string name="estado_rth_bateria">Volviendo a base (batería baja)</string>
     <string name="estado_rth_manual">Volviendo a base (orden de campo)</string>

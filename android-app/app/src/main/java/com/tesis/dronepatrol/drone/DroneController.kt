@@ -4,6 +4,7 @@ import com.tesis.dronepatrol.model.EstadoDelDron
 import com.tesis.dronepatrol.model.FlightEvent
 import com.tesis.dronepatrol.model.PatrolRoute
 import com.tesis.dronepatrol.model.Telemetry
+import com.tesis.dronepatrol.model.Vinculacion
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -52,8 +53,27 @@ interface DroneController {
      */
     fun startRoute(route: PatrolRoute, fromWaypoint: Int)
 
-    /** Orbita alrededor del punto dado (modo seguimiento de objetivo). */
+    /**
+     * Orbita alrededor del punto dado con la nariz y la cámara apuntadas al
+     * centro: es como el dron mantiene a la vista un objetivo quieto.
+     *
+     * Si YA está orbitando, solo corre el centro (y el radio) sin cortar el
+     * giro: el objetivo estimado se va corrigiendo con cada detección y la
+     * órbita lo acompaña sin dar saltos. Arranca desde el punto del círculo más
+     * cercano a donde está el dron, no desde uno fijo. Con el dron en el suelo
+     * se rechaza ([FlightEvent.Problema]).
+     */
     fun startOrbit(centerLat: Double, centerLon: Double, radiusM: Double)
+
+    /**
+     * Sigue a un objetivo que se mueve: se mantiene a una distancia fija de él
+     * (ver [Persecucion]), copiando su velocidad, con la nariz y el gimbal
+     * apuntados a él. Se llama en cada estimación nueva del objetivo (a ~2 Hz);
+     * si ya está siguiendo, solo actualiza el objetivo —entre una llamada y la
+     * siguiente el controlador extrapola con la velocidad dada—. Con el dron en
+     * el suelo se rechaza.
+     */
+    fun seguirObjetivo(lat: Double, lon: Double, vNorteMs: Double, vEsteMs: Double)
 
     /** Queda en vuelo estacionario donde está. */
     fun hold()
@@ -84,6 +104,28 @@ interface DroneController {
 
     /** Aterriza donde está; al tocar el suelo emite [FlightEvent.Aterrizado]. */
     fun land()
+
+    /**
+     * Despegue automático EN EL LUGAR, para el control manual: el dron sube a la
+     * altura del despegue del SDK (~1,2 m) y queda suspendido a la espera del
+     * mando, sin ruta ni altura de trabajo. Emite [FlightEvent.Despegando] y,
+     * ya en el aire, [FlightEvent.EnElAire]. No exige GPS (en interior el Mini
+     * se sostiene con los sensores de visión); sí exige enlace con la aeronave.
+     * En el aire no hace nada.
+     */
+    fun despegarEnElLugar()
+
+    /**
+     * Vincula por radio el control con la aeronave (el *linking* de DJI), para
+     * cuando [EstadoDelDron.vinculacion] es [Vinculacion.SIN_VINCULAR]: el
+     * control queda esperando y hay que mantener apretado el botón de encendido
+     * de la aeronave hasta que pite. El avance se sigue en [estado]. Con el
+     * simulado no hace nada: no tiene control físico.
+     */
+    fun vincularControl()
+
+    /** Cancela una vinculación en curso. */
+    fun cancelarVinculacion()
 
     fun disconnect()
 }

@@ -74,6 +74,8 @@ describe('integración — sesión efímera del operador de campo', () => {
       ['POST', `/api/drones/${DRON.alfa}/resume`],
       ['POST', `/api/drones/${DRON.alfa}/goto`, JSON.stringify({ routeId: 1, index: 0 })],
       ['POST', `/api/drones/${DRON.alfa}/manual_move`, JSON.stringify({ bearing: 0, distanceM: 10 })],
+      ['POST', `/api/drones/${DRON.alfa}/takeoff`],
+      ['POST', `/api/drones/${DRON.alfa}/land`],
       ['DELETE', `/api/drones/${DRON.alfa}`],
       ['GET', '/api/alerts'],
       ['GET', '/api/events'],

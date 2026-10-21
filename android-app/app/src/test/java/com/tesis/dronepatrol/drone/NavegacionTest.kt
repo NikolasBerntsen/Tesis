@@ -81,4 +81,52 @@ class NavegacionTest {
         assertTrue(Navegacion.aLaAltura(40.9, 40.0))
         assertFalse(Navegacion.aLaAltura(42.0, 40.0))
     }
+
+    // ---- Órbita ----
+
+    private val centroLat = -34.6037
+    private val centroLon = -58.3816
+
+    private fun alNorteDelCentro(metros: Double) = centroLat + metros / Geo.METROS_POR_GRADO_LAT
+
+    /** Sobre el círculo, al norte del centro: se mueve hacia el este (horario) y mira al sur, al centro. */
+    @Test
+    fun sobreElCirculoVaTangenteYMiraAlCentro() {
+        val paso = Navegacion.orbitar(alNorteDelCentro(30.0), centroLon, centroLat, centroLon, 30.0)
+        assertEquals(0.0, paso.vNorteMs, 1e-6)
+        assertEquals(Navegacion.VELOCIDAD_ORBITA_MS, paso.vEsteMs, 1e-6)
+        assertEquals(180.0, paso.rumboGrados, 1e-6)
+        assertEquals(30.0, paso.distanciaM, 0.01)
+    }
+
+    /** Un poco adentro del círculo, la corrección lo empuja hacia afuera; un poco afuera, hacia adentro. */
+    @Test
+    fun cercaDelCirculoCorrigeElRadio() {
+        val adentro = Navegacion.orbitar(alNorteDelCentro(25.0), centroLon, centroLat, centroLon, 30.0)
+        org.junit.Assert.assertTrue("adentro tiene que salir (al norte)", adentro.vNorteMs > 0)
+        val afuera = Navegacion.orbitar(alNorteDelCentro(35.0), centroLon, centroLat, centroLon, 30.0)
+        org.junit.Assert.assertTrue("afuera tiene que entrar (al sur)", afuera.vNorteMs < 0)
+    }
+
+    /** Lejos del círculo va derecho hacia él, sin girar todavía. */
+    @Test
+    fun lejosDelCirculoSeAcercaDerecho() {
+        val paso = Navegacion.orbitar(alNorteDelCentro(120.0), centroLon, centroLat, centroLon, 30.0)
+        org.junit.Assert.assertTrue(paso.vNorteMs < 0)
+        assertEquals(0.0, paso.vEsteMs, 1e-6)
+        assertEquals(Navegacion.VELOCIDAD_CRUCERO_MS, -paso.vNorteMs, 1e-6)
+    }
+
+    /** Recorriendo el círculo con estas velocidades, el radio se mantiene. */
+    @Test
+    fun integrandoLaOrbitaElRadioSeMantiene() {
+        var lat = alNorteDelCentro(30.0)
+        var lon = centroLon
+        repeat(400) { // 40 s a 10 Hz: más de una vuelta
+            val paso = Navegacion.orbitar(lat, lon, centroLat, centroLon, 30.0)
+            lat += paso.vNorteMs * 0.1 / Geo.METROS_POR_GRADO_LAT
+            lon += paso.vEsteMs * 0.1 / Geo.metrosPorGradoLon(centroLat)
+            assertEquals(30.0, Geo.distanciaM(centroLat, centroLon, lat, lon), 1.5)
+        }
+    }
 }

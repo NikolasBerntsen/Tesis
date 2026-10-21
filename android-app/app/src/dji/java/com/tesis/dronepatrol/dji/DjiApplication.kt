@@ -104,7 +104,12 @@ class DjiApplication : Application() {
                 DjiSdk.actualizar { it.copy(productoConectado = false, productId = 0) }
             }
 
+            // Con un control RC-N (sin pantalla), onProductConnect llega con
+            // productId=0 apenas se enchufa el control; el id real aparece acá
+            // cuando la aeronave se enlaza. Se registra porque es la huella de
+            // que el enlace control↔aeronave existe.
             override fun onProductChanged(productId: Int) {
+                Log.i(TAG, "Producto cambió (productId=$productId)")
                 DjiSdk.actualizar { it.copy(productId = productId) }
             }
 

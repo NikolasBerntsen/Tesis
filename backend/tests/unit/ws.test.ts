@@ -3,7 +3,7 @@ import { limpiarBase } from '../helpers';
 import { createDrone, softDeleteDrone } from '../../src/store';
 import {
   applyRename, broadcastDroneUpdated, bytesDelFrame, droneCard, getController, getLastStatus,
-  isOnline, kickDrone, listDroneCards, metaDron, releaseControl, sendToDrone, textoDelFrame,
+  isOnline, kickDrone, listDroneCards, metaDron, posicionValida, releaseControl, sendToDrone, textoDelFrame,
 } from '../../src/ws';
 
 // El hub sin sockets abiertos: las consultas sobre drones que no existen (o que
@@ -86,5 +86,47 @@ describe('ws — textoDelFrame', () => {
     // a texto.
     const buf = Buffer.from('añil', 'utf8');
     expect(textoDelFrame([buf.subarray(0, 2), buf.subarray(2)])).toBe('añil');
+  });
+});
+
+// Toda posición que llega del celular pasa por acá: el status, la posición del
+// objetivo de una alerta, la pose del dron que la disparó y la del objetivo en
+// los eventos de seguimiento. El caso que importa es el 0,0: es lo que entrega
+// el SDK de DJI sin fix de GPS, y creerle dibuja al dron (o manda al equipo de
+// tierra) al golfo de Guinea.
+describe('ws — posicionValida', () => {
+  it('acepta una posición real y la devuelve tal cual', () => {
+    expect(posicionValida(-34.8565, -56.2075)).toEqual({ lat: -34.8565, lon: -56.2075 });
+    // los bordes del rango son posiciones válidas
+    expect(posicionValida(90, 180)).toEqual({ lat: 90, lon: 180 });
+    expect(posicionValida(-90, -180)).toEqual({ lat: -90, lon: -180 });
+  });
+
+  it('descarta el 0,0 y lo que queda a menos de 1e-6 de él', () => {
+    expect(posicionValida(0, 0)).toBeNull();
+    expect(posicionValida(-0, 0)).toBeNull();
+    expect(posicionValida(5e-7, -5e-7)).toBeNull();
+  });
+
+  it('una sola coordenada en cero sigue siendo una posición: el ecuador y Greenwich existen', () => {
+    expect(posicionValida(0, -56.2)).toEqual({ lat: 0, lon: -56.2 });
+    expect(posicionValida(-34.85, 0)).toEqual({ lat: -34.85, lon: 0 });
+    // y apenas por encima del umbral ya no es "sin fix"
+    expect(posicionValida(2e-6, 0)).toEqual({ lat: 2e-6, lon: 0 });
+  });
+
+  it('descarta lo que está fuera de rango', () => {
+    expect(posicionValida(90.0001, -56.2)).toBeNull();
+    expect(posicionValida(-34.85, 180.5)).toBeNull();
+    expect(posicionValida(-91, -181)).toBeNull();
+  });
+
+  it('descarta lo que no es un número finito, sin convertir', () => {
+    // Number(null) y Number('') son 0, Number('-34.8') es un número: con una
+    // conversión cualquiera de estos pasaría por coordenada.
+    for (const malo of [null, undefined, '', '-34.8', {}, [], true, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(posicionValida(malo, -56.2), String(malo)).toBeNull();
+      expect(posicionValida(-34.85, malo), String(malo)).toBeNull();
+    }
   });
 });

@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs';
-import { Router } from 'express';
+import { Router, type Response } from 'express';
 import { ROLE_RANK, requireAuth, requireRoles, signDroneToken, type AuthedRequest } from '../auth';
 import {
   asignarRutas, contarDronesEnBase, createBase, createDrone, createLog, createRoute, createUser, generarContrasenia, getBase, restoreRoute, rutasDeBase, softDeleteRoute, updateRoute, listBases, restoreBase, softDeleteBase, updateBase, decideAlert, getAlert, getDrone, getDroneIdentity, getRoute, getRoutes,
@@ -506,8 +506,10 @@ apiRouter.post('/drones/:droneId/route/stop', requireAuth('operator'), (req: Aut
   res.json({ ok: true, delivered });
 });
 
-// Reanudar el patrullaje: desde el último nodo alcanzado o desde uno elegido.
-// Si el dron estaba bajo control manual, esto lo libera.
+// Reanudar el patrullaje: hacia el próximo nodo de la ruta (el que el dron tenía
+// por delante cuando se interrumpió) o hacia uno elegido. Si el dron estaba bajo
+// control manual, esto lo libera; y si seguía un objetivo, el resume_patrol es lo
+// que termina el seguimiento (lo hace la app al recibirlo, §2).
 apiRouter.post('/drones/:droneId/resume', requireAuth('operator'), (req: AuthedRequest, res) => {
   const { droneId } = req.params;
   if (!getDroneIdentity(droneId)) return res.status(404).json({ error: 'Dron inexistente' });
@@ -522,7 +524,9 @@ apiRouter.post('/drones/:droneId/resume', requireAuth('operator'), (req: AuthedR
     if (typeof fromIndex === 'number') msg.fromIndex = fromIndex;
     sendToDrone(droneId, msg);
   }
-  const detalle = typeof fromIndex === 'number' ? `desde el nodo ${fromIndex + 1}` : 'desde el último nodo recorrido';
+  // "Hacia" y no "desde": sin nodo elegido el dron NO vuelve al último que pasó
+  // (sería retroceder un tramo entero), sigue hacia el que tenía por delante.
+  const detalle = typeof fromIndex === 'number' ? `hacia el nodo ${fromIndex + 1}` : 'hacia el próximo nodo de la ruta';
   const ev = createLog(
     'drone',
     'PATROL_RESUME_ORDERED',
@@ -606,6 +610,55 @@ apiRouter.post('/drones/:droneId/manual_move', requireAuth('operator'), (req: Au
   const delivered = sendToDrone(droneId, { type: 'manual_move', bearing, distanceM, by: req.user!.sub });
   res.json({ ok: true, delivered });
 });
+
+/** Las dos órdenes de vuelo en el lugar (§2): qué evento dejan y cómo se cuentan. */
+const ORDENES_EN_EL_LUGAR = {
+  takeoff: { evento: 'TAKEOFF_ORDERED', accion: 'el despegue' },
+  land: { evento: 'LANDING_ORDERED', accion: 'el aterrizaje' },
+} as const;
+
+/**
+ * Despegar y aterrizar donde está el dron. Sin el despegue, un dron apoyado
+ * solo se levantaba arrancando una ruta, que exige GPS: en interior, o antes de
+ * fijar satélites, la consola no tenía forma de ponerlo en el aire para
+ * pilotearlo con el mando.
+ *
+ * Piden lo mismo que pilotear y un poco más, porque son las órdenes que pasan
+ * al dron del suelo al aire y del aire al suelo:
+ * - `canControl`, leído de la base en cada request (requireAuth lo relee): el
+ *   que no está autorizado a controlar drones no los despega.
+ * - el lock: solo el TITULAR del control manual. A diferencia de route/start,
+ *   acá un supervisor tampoco pasa por encima: que un dron despegue o aterrice
+ *   lo decide el que lo está piloteando, no alguien que mira el tablero; el
+ *   supervisor que quiera hacerlo primero le quita el control a ese usuario.
+ *
+ * Que el dron esté en el suelo (o en el aire) lo comprueba la app, que es la
+ * única que lo sabe en el momento: el hub no se fía del último status, que
+ * puede tener un segundo de viejo.
+ */
+function ordenEnElLugar(tipo: keyof typeof ORDENES_EN_EL_LUGAR) {
+  const { evento, accion } = ORDENES_EN_EL_LUGAR[tipo];
+  return (req: AuthedRequest, res: Response) => {
+    if (!req.user!.canControl) return res.status(403).json({ error: 'No estás autorizado a controlar drones' });
+    const { droneId } = req.params;
+    const identidad = getDroneIdentity(droneId);
+    if (!identidad) return res.status(404).json({ error: 'Dron inexistente' });
+    if (getController(droneId) !== req.user!.sub) {
+      return res.status(409).json({ error: 'No tenés el control manual de este dron' });
+    }
+
+    const delivered = sendToDrone(droneId, { type: tipo, by: req.user!.sub });
+    const ev = createLog('drone', evento, req.user!.sub, `${req.user!.sub} ordenó ${accion} del dron "${identidad.displayName}"`, {
+      droneId,
+      meta: { drone: metaDron(droneId), detalle: { por: req.user!.sub } },
+    });
+    broadcastOperators({ type: 'event', event: ev });
+    res.json({ ok: true, delivered });
+  };
+}
+
+apiRouter.post('/drones/:droneId/takeoff', requireAuth('operator'), ordenEnElLugar('takeoff'));
+apiRouter.post('/drones/:droneId/land', requireAuth('operator'), ordenEnElLugar('land'));
 
 // ---- Bases ----
 
@@ -740,10 +793,13 @@ apiRouter.post('/alerts/:id/decision', requireAuth('operator'), (req: AuthedRequ
     return res.status(getAlert(id) ? 409 : 404).json({ error: 'Alerta inexistente o ya decidida' });
   }
 
+  // Los textos dicen lo que hace el dron según el contrato (§2): validada, sigue
+  // sobre el objetivo —orbitándolo o siguiéndolo si se mueve— hasta que alguien
+  // ordene reanudar; descartada, retoma la ruta hacia el próximo nodo.
   const message =
     decision === 'VALIDATED'
-      ? `Alerta #${id} confirmada como REAL por ${req.user!.sub}; el dron mantiene la órbita`
-      : `Alerta #${id} descartada como falso positivo por ${req.user!.sub}; el dron reanuda el patrullaje`;
+      ? `Alerta #${id} confirmada como REAL por ${req.user!.sub}; el dron sigue sobre el objetivo`
+      : `Alerta #${id} descartada como falso positivo por ${req.user!.sub}; el dron reanuda el patrullaje hacia el próximo nodo`;
   const ev = createLog('drone', decision === 'VALIDATED' ? 'ALERT_VALIDATED' : 'ALERT_DISMISSED', req.user!.sub, message, {
     droneId: alert.drone_id,
     alertId: id,

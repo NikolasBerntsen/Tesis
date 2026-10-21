@@ -131,4 +131,48 @@ class ConexionDronActivityTest {
         assertEquals(null, shadowOf(RuntimeEnvironment.getApplication()).nextStartedActivity)
         assertTrue(SesionDeCampo.vigente)
     }
+
+    /**
+     * "Vincular" no se ofrece mientras el enlace todavía se está armando: en el
+     * campo, tocarlo en esos segundos borró el vínculo bueno que el control ya
+     * tenía. Aparece recién con medio minuto sin enlace, y pide confirmación.
+     */
+    @Test
+    fun vincularSeOfreceRecienConMedioMinutoSinEnlaceYPideConfirmacion() {
+        val actividad = abrir()
+        dron.estado.value = EstadoDelDron(
+            sdkListo = true, conectado = false, modelo = "MINI 4 PRO", enVuelo = false,
+            satelites = 0, baseFijada = false, controlConectado = true,
+        )
+        shadowOf(getMainLooper()).idle()
+        val boton = actividad.findViewById<Button>(R.id.btnVincular)
+        assertEquals(android.view.View.GONE, boton.visibility)
+
+        shadowOf(getMainLooper()).idleFor(java.time.Duration.ofSeconds(10))
+        assertEquals(android.view.View.GONE, boton.visibility)
+
+        shadowOf(getMainLooper()).idleFor(java.time.Duration.ofSeconds(25))
+        assertEquals(android.view.View.VISIBLE, boton.visibility)
+
+        // Tocarlo no vincula: primero pregunta
+        boton.performClick()
+        shadowOf(getMainLooper()).idle()
+        assertFalse(dron.ordenes.contains("vincularControl"))
+        val dialogo = org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
+        dialogo.getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick()
+        shadowOf(getMainLooper()).idle()
+        assertTrue(dron.ordenes.contains("vincularControl"))
+    }
+
+    /** Con el enlace andando, el botón no aparece nunca. */
+    @Test
+    fun conEnlaceVincularNoAparece() {
+        val actividad = abrir()
+        dron.estado.value = EstadoDelDron(
+            sdkListo = true, conectado = true, modelo = "MINI 4 PRO", enVuelo = false,
+            satelites = 12, baseFijada = true, controlConectado = true,
+        )
+        shadowOf(getMainLooper()).idleFor(java.time.Duration.ofSeconds(40))
+        assertEquals(android.view.View.GONE, actividad.findViewById<Button>(R.id.btnVincular).visibility)
+    }
 }

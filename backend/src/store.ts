@@ -763,6 +763,36 @@ export function listAlerts(status?: string): Alert[] {
   return db.prepare('SELECT * FROM alerts ORDER BY id DESC LIMIT 100').all() as Alert[];
 }
 
+/** Lo mínimo de una alerta decidida para volver a avisarle al dron. */
+export type DecisionDeAlerta = Pick<Alert, 'id' | 'status' | 'decided_by' | 'decided_at'>;
+
+/**
+ * Decisiones sobre las alertas de un dron tomadas desde `desde` (ISO), en el
+ * orden en que se tomaron. Las usa el hub para reenviárselas al dron cuando se
+ * reconecta: `sendToDrone` no encola nada, así que una decisión tomada con el
+ * dron caído se perdía y el dron seguía orbitando un falso positivo descartado
+ * hasta que lo sacara la batería baja.
+ *
+ * La comparación de `decided_at` es de TEXTO y es correcta solo porque
+ * `decideAlert` lo escribe con `toISOString()`: ancho fijo y siempre en UTC
+ * (`2026-10-20T12:34:56.789Z`), así que el orden alfabético es el cronológico.
+ * Por eso `desde` tiene que venir en ese mismo formato y no armarse con el
+ * `datetime('now')` de SQLite, que da `2026-10-20 12:34:56`: el espacio ordena
+ * antes que la `T` y la comparación de un mismo día saldría al revés.
+ *
+ * No trae la captura a propósito: pesa decenas de KB por alerta y para avisar
+ * la decisión alcanza con el id, el estado y quién decidió.
+ */
+export function listDecisionsSince(droneId: string, desde: string): DecisionDeAlerta[] {
+  return db
+    .prepare(
+      `SELECT id, status, decided_by, decided_at FROM alerts
+        WHERE drone_id = ? AND status != 'PENDING' AND decided_at >= ?
+        ORDER BY decided_at, id`,
+    )
+    .all(droneId, desde) as DecisionDeAlerta[];
+}
+
 /** Aplica la decisión del operador solo si la alerta sigue pendiente. */
 export function decideAlert(
   id: number,

@@ -86,6 +86,16 @@ o copiar el APK y abrirlo desde el teléfono.
 
 ## 3. Antes de despegar (checklist de campo)
 
+0. **El control tiene que estar vinculado a ESTE dron** (una sola vez por par
+   control–aeronave). Un RC-N3 nuevo, o usado con otro dron, se enchufa bien al
+   teléfono —la app lo ve, con su número de serie— pero nunca enlaza con la
+   aeronave por más que esté encendida al lado: en la pantalla de conexión la
+   fila **Aeronave** queda en ámbar. Para vincular: en esa pantalla, **Vincular
+   control con la aeronave**, y en el dron mantener apretado el botón de
+   encendido unos 4 s hasta que pite (también se puede desde DJI Fly: Perfil →
+   Ajustes → Control → Vincular a la aeronave). Ojo: el RC-N3 informa
+   `UNPAIRED` aunque esté vinculado y andando, así que la app no usa ese dato
+   para decidir: lo que manda es que haya enlace.
 1. **Control en modo N (Normal).** En S o C la aeronave no le cede el mando al
    SDK: la app avisa *"el dron no aceptó el mando virtual"* y no se mueve.
 2. **Dron encendido, control encendido, teléfono enganchado por el cable
@@ -110,6 +120,24 @@ o copiar el APK y abrirlo desde el teléfono.
 6. Desde la app, **Volver a base** y **Aterrizar acá** piden confirmación y
    pisan cualquier otra orden, incluido el control manual de la consola. La
    batería al 25 % ordena el regreso a base sola.
+
+### Prueba de mandos en interior (sin GPS y sin espacio)
+
+Para probar que la consola web maneja el dron sin salir: despegue en el
+lugar, giro sobre su eje y aterrizaje. El dron se sostiene con los sensores de
+visión (modo de vuelo `ATTI`/`OPTI`), así que hace falta **buena luz y un piso
+con textura** (no un piso liso y brillante).
+
+1. App en la pantalla de operación (Desplegar, aunque no haya GPS).
+2. En la consola web, en el detalle del dron: **Tomar control manual**.
+3. **Despegar** (confirma): el dron sube a ~1,2 m y queda suspendido.
+4. Con la palanca de **giro** del mando virtual (solo esa): gira sobre su eje.
+5. **Aterrizar** (confirma): baja donde está. El control sigue tomado: se puede
+   repetir sin soltarlo.
+
+Sin GPS la consola muestra *"Sin GPS (N satélites)"* en vez de coordenadas y
+deshabilita las flechas de desplazamiento (son hacia una coordenada); el estado,
+la batería, la altura y si está en el aire llegan igual.
 
 ## 4. Cómo vuela
 
@@ -148,5 +176,11 @@ lazo a 10 Hz que manda velocidades.
 | La app se cierra al abrir en el emulador | El flavor `dji` no corre en x86: usar `mockDebug` |
 | *"Conectá el control al teléfono…"* y no cambia | El cable del control va en el puerto **superior** del RC-N3; probar otro cable (tiene que ser de datos) |
 | *"el dron no aceptó el mando virtual"* | Control en modo S o C, o un regreso a base en curso |
+| *"la aeronave le sacó la autoridad de vuelo a la app (RC_PAUSE_STOP)"* | Alguien apretó el botón de pausa del RC-N3; `RC_NOT_P_MODE`: el selector no está en N |
 | *"GPS insuficiente"* | Esperar al aire libre; el Mini necesita unos segundos para fijar el punto de retorno |
+| **0 satélites, o pocos que suben y bajan** | Interior o detrás de una ventana: el GPS necesita cielo abierto, y el primer fix del día (o después de trasladar el dron lejos) tarda de 1 a 3 minutos AL AIRE LIBRE. Los satélites los cuenta la aeronave: mover el control o el teléfono no cambia nada. Para descartar a la app: cerrarla, abrir DJI Fly y mirar su contador |
+| Fila **Aeronave** en ámbar con el control "Conectado al teléfono" y el dron encendido | El control no está vinculado a ese dron: **Vincular control con la aeronave** (ver §3, paso 0) |
+| La web no muestra coordenadas | Sin fix GPS el SDK no entrega posición: la app manda el estado igual, con la posición en null, y la consola dice "Sin GPS". Al aire libre aparece sola |
+| El mando de la web "se mueve" pero el dron no | El dron está en el suelo: el mando virtual no despega. **Despegar** desde el panel de control (§3, prueba en interior) |
+| La ficha del Comando Central dice otro modelo | Es un aviso: la ficha del activo (sección Drones) tiene cargado otro modelo que la aeronave enlazada. Corregir el modelo en la ficha |
 | La detección no engancha | Celular y notebook en redes distintas, o el firewall de Windows bloqueando Python (ver `detection/README.md`) |

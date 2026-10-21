@@ -1,4 +1,4 @@
-import { batteryClass, signalClass, stateLabel } from '../format';
+import { batteryClass, signalClass, sobreObjetivo, stateLabel } from '../format';
 import type { Drone, DroneStatus } from '../types';
 import EditableName from './EditableName';
 
@@ -15,10 +15,21 @@ function overlayAlterado(status: DroneStatus | null): string | null {
   return null;
 }
 
-/** Texto chico de la esquina: en qué modo está el dron. */
+/**
+ * Texto chico de la esquina: en qué modo está el dron. Orbitar y seguir van en
+ * oro, como el estado de la ficha: antes caían en "PATRULLANDO" y el mosaico de
+ * un dron encima de un objetivo se veía igual que el de uno haciendo la ronda.
+ * Cada uno con su rótulo, eso sí: "SIGUIENDO" avisa que el objetivo se mueve.
+ */
 function textoEsquina(status: DroneStatus | null): { texto: string; clase: string } {
   if (status?.state === 'MANUAL') return { texto: 'CONTROL MANUAL', clase: 'esquina-verde' };
-  if (!status || EN_TIERRA.includes(status.state)) return { texto: 'EN TIERRA', clase: 'esquina-gris' };
+  if (status?.state === 'ORBITING') return { texto: 'ORBITANDO', clase: 'esquina-oro' };
+  if (status?.state === 'FOLLOWING') return { texto: 'SIGUIENDO', clase: 'esquina-oro' };
+  // `flying` manda sobre el estado: un IDLE en el aire no existe, pero un
+  // PAUSED apoyado sí (la patrulla se cortó con el dron en el suelo).
+  if (!status || EN_TIERRA.includes(status.state) || status.flying === false) {
+    return { texto: 'EN TIERRA', clase: 'esquina-gris' };
+  }
   return { texto: 'PATRULLANDO', clase: 'esquina-gris' };
 }
 
@@ -77,7 +88,7 @@ export default function CameraTile({
       <div className="tile-info">
         <div className="tile-row">
           <EditableName name={drone.displayName} onRename={onRename} />
-          <span className={`estado ${status?.state === 'ORBITING' ? 'accent' : 'muted'}`}>
+          <span className={`estado ${sobreObjetivo(status?.state) ? 'accent' : 'muted'}`}>
             {status ? stateLabel(status.state) : 'Sin estado'}
           </span>
         </div>

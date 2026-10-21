@@ -1,4 +1,12 @@
-import { batteryClass, signalClass, stateLabel, waypointLabel } from '../format';
+import {
+  batteryClass,
+  posicionDelDron,
+  signalClass,
+  sobreObjetivo,
+  stateLabel,
+  textoSinGps,
+  waypointLabel,
+} from '../format';
 import type { Base, DroneStatus } from '../types';
 
 /**
@@ -15,14 +23,34 @@ function Medidor({ pct }: { pct: number }) {
   );
 }
 
+/**
+ * En el aire o en el suelo, y a qué altura. Es lo primero que hay que saber
+ * antes de agarrar el mando: en el suelo la app rechaza las palancas y las
+ * flechas, y antes la consola decía "En vuelo" con el dron apoyado.
+ */
+function textoDeVuelo(status: DroneStatus): string | null {
+  const altura = typeof status.alt === 'number' && Number.isFinite(status.alt) ? status.alt : null;
+  if (status.flying === false) return 'En el suelo';
+  if (status.flying === true) return altura !== null ? `En el aire, a ${altura.toFixed(0)} m` : 'En el aire';
+  // Una app vieja no manda `flying`: sin ese dato no se afirma nada.
+  return null;
+}
+
 export default function DroneStatusCard({
   status,
   base,
+  controlTomado = false,
   onResumePatrol,
 }: {
   status: DroneStatus | null;
   /** Base de retorno del dron: de ella salen las rutas que puede patrullar. */
   base?: Base | null;
+  /**
+   * Si alguien tiene el control manual. Con el control tomado, sacar al dron
+   * del objetivo pasa por soltar el control, que es otra decisión (y otro
+   * botón): acá no se ofrece reanudar.
+   */
+  controlTomado?: boolean;
   onResumePatrol: () => void;
 }) {
   if (!status) {
@@ -35,6 +63,13 @@ export default function DroneStatusCard({
   }
 
   const sinSenal = status.signal !== 'OK';
+  const enObjetivo = sobreObjetivo(status.state);
+  const posicion = posicionDelDron(status);
+  const vuelo = textoDeVuelo(status);
+  // Al lado del estado, en la línea que se mira, va también la falta de GPS:
+  // es lo que explica que el dron no aparezca en el mapa y que las flechas no
+  // anden. Las coordenadas en sí quedan en el segundo nivel.
+  const detalleDeVuelo = [vuelo, posicion ? null : 'sin GPS'].filter(Boolean).join(' · ');
   const recorrido = status.waypointTotal
     ? ((status.waypointIndex + 1) / status.waypointTotal) * 100
     : 0;
@@ -68,9 +103,12 @@ export default function DroneStatusCard({
         </div>
         <div>
           <span>Estado</span>
-          <strong className={`estado-actual ${status.state === 'ORBITING' ? 'accent' : ''}`}>
-            {stateLabel(status.state)}
-          </strong>
+          <strong className={`estado-actual ${enObjetivo ? 'accent' : ''}`}>{stateLabel(status.state)}</strong>
+          {detalleDeVuelo && (
+            <span className="muted" data-testid="detalle-de-vuelo">
+              {detalleDeVuelo}
+            </span>
+          )}
         </div>
         <div>
           <span>Nodo</span>
@@ -113,16 +151,43 @@ export default function DroneStatusCard({
           </div>
           <div>
             <span>Posición</span>
-            <strong className="mono">
-              {status.lat.toFixed(5)}, {status.lon.toFixed(5)}
-            </strong>
+            {posicion ? (
+              <strong className="mono">
+                {posicion[0].toFixed(5)}, {posicion[1].toFixed(5)}
+              </strong>
+            ) : (
+              <strong className="bad">{textoSinGps(status.satellites)}</strong>
+            )}
           </div>
+          {typeof status.alt === 'number' && Number.isFinite(status.alt) && (
+            <div>
+              <span>Altura</span>
+              <strong>{status.alt.toFixed(1)} m</strong>
+            </div>
+          )}
+          {typeof status.satellites === 'number' && (
+            <div>
+              <span>Satélites</span>
+              <strong>{status.satellites}</strong>
+            </div>
+          )}
+          {/* Texto del SDK, tal cual: ATTI quiere decir que el dron no se
+              sostiene solo en el lugar, y el que pilotea tiene que saberlo. */}
+          {status.flightMode && (
+            <div>
+              <span>Modo de vuelo</span>
+              <strong className="mono">{status.flightMode}</strong>
+            </div>
+          )}
         </div>
       </details>
 
-      {status.state === 'ORBITING' && (
+      {/* Con un objetivo cargado, "reanudar" no es neutro: el dron deja de
+          vigilar lo que detectó. El rótulo lo dice para que nadie lo apriete
+          creyendo que el dron va a seguir encima del objetivo. */}
+      {enObjetivo && !controlTomado && (
         <button className="resume" onClick={onResumePatrol}>
-          Reanudar patrullaje
+          {status.target ? 'Dejar el objetivo y reanudar patrullaje' : 'Reanudar patrullaje'}
         </button>
       )}
     </div>

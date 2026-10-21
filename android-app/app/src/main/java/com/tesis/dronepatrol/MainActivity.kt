@@ -19,6 +19,7 @@ import androidx.lifecycle.lifecycleScope
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.tesis.dronepatrol.comms.CommandCenterClient
 import com.tesis.dronepatrol.comms.DetectionClient
+import com.tesis.dronepatrol.comms.RedWifi
 import com.tesis.dronepatrol.comms.ModoEnlace
 import com.tesis.dronepatrol.databinding.ActivityMainBinding
 import androidx.activity.OnBackPressedCallback
@@ -69,6 +70,7 @@ class MainActivity : AppCompatActivity() {
             PatrolState.IDLE to R.string.estado_idle,
             PatrolState.PATROLLING to R.string.estado_patrullando,
             PatrolState.ORBITING to R.string.estado_orbitando,
+            PatrolState.FOLLOWING to R.string.estado_siguiendo,
             PatrolState.RETURNING_HOME_SIGNAL to R.string.estado_rth_senal,
             PatrolState.RETURNING_HOME_BATTERY to R.string.estado_rth_bateria,
             PatrolState.RETURNING_HOME to R.string.estado_rth_manual,
@@ -82,12 +84,13 @@ class MainActivity : AppCompatActivity() {
         private val ESTADOS_DETENIBLES = setOf(
             PatrolState.PATROLLING,
             PatrolState.ORBITING,
+            PatrolState.FOLLOWING,
             PatrolState.FORCED,
             PatrolState.MANUAL,
         )
 
         /** Estados desde los que "Reanudar" retoma la ruta. */
-        private val ESTADOS_REANUDABLES = setOf(PatrolState.PAUSED, PatrolState.ORBITING, PatrolState.MANUAL)
+        private val ESTADOS_REANUDABLES = setOf(PatrolState.PAUSED, PatrolState.ORBITING, PatrolState.FOLLOWING, PatrolState.MANUAL)
     }
 
     private lateinit var binding: ActivityMainBinding
@@ -132,7 +135,9 @@ class MainActivity : AppCompatActivity() {
         displayName = intent.getStringExtra(EXTRA_DISPLAY_NAME) ?: hashAbreviado(droneHash)
 
         commandCenter = CommandCenterClient(lifecycleScope)
-        detection = DetectionClient(lifecycleScope)
+        // Los sockets de la detección se atan a la Wi-Fi: con la red del lugar
+        // sin internet, Android manda lo demás por los datos móviles (RedLocal).
+        detection = DetectionClient(lifecycleScope, RedWifi(this))
         manager = PatrolManager(controller, commandCenter, detection, lifecycleScope, modo)
         commandCenter.onRenamed = { nombre -> lifecycleScope.launch { aplicarNombre(nombre) } }
 
@@ -442,7 +447,12 @@ class MainActivity : AppCompatActivity() {
                 binding.progressBattery.setIndicatorColor(colorDeBateria(pct))
                 binding.txtAltitude.text = getString(R.string.main_altura_m, t.altM)
                 binding.txtHeading.text = getString(R.string.main_rumbo_grados, t.heading)
-                binding.txtPosition.text = getString(R.string.main_posicion_valor, t.lat, t.lon)
+                // Sin fix GPS la posición viaja en NaN: se dice, no se imprime "NaN".
+                binding.txtPosition.text = if (t.tienePosicion) {
+                    getString(R.string.main_posicion_valor, t.lat, t.lon)
+                } else {
+                    getString(R.string.main_posicion_sin_gps, controller.estado.value.satelites)
+                }
             }
         }
         lifecycleScope.launch {

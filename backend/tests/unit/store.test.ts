@@ -32,6 +32,7 @@ import {
   getAlert,
   listAlerts,
   decideAlert,
+  listDecisionsSince,
   type DroneAsset,
   type UserRow,
 } from '../../src/store';
@@ -483,6 +484,48 @@ describe('store — alertas', () => {
     expect(decideAlert(a.id, 'VALIDATED', 'otro')).toBeUndefined();
     // alerta inexistente
     expect(decideAlert(9999, 'VALIDATED', 'op')).toBeUndefined();
+  });
+});
+
+// Lo que el hub le reenvía a un dron que se reconecta: las decisiones sobre SUS
+// alertas tomadas desde un instante, en el orden en que se tomaron.
+describe('store — decisiones recientes de un dron (listDecisionsSince)', () => {
+  /** Alerta del dron ya decidida en el instante pedido (decided_at a mano, como lo escribe decideAlert). */
+  function decididaEn(droneId: string, decision: 'VALIDATED' | 'DISMISSED', cuando: string) {
+    const a = createAlert('PERSON', droneId, null, null, 'CAPTURA-PESADA');
+    decideAlert(a.id, decision, 'op');
+    db.prepare('UPDATE alerts SET decided_at = ? WHERE id = ?').run(cuando, a.id);
+    return a.id;
+  }
+
+  it('trae solo las decididas de ese dron desde el instante, en orden cronológico y sin la captura', () => {
+    const tarde = decididaEn('d1', 'DISMISSED', '2026-10-20T12:09:00.000Z');
+    const temprano = decididaEn('d1', 'VALIDATED', '2026-10-20T12:05:00.000Z');
+    decididaEn('d1', 'DISMISSED', '2026-10-20T11:59:59.999Z'); // antes del corte
+    decididaEn('d2', 'DISMISSED', '2026-10-20T12:06:00.000Z'); // de otro dron
+    createAlert('PERSON', 'd1', null, null, null); // pendiente: no hay nada que avisar
+
+    const r = listDecisionsSince('d1', '2026-10-20T12:00:00.000Z');
+    expect(r).toEqual([
+      { id: temprano, status: 'VALIDATED', decided_by: 'op', decided_at: '2026-10-20T12:05:00.000Z' },
+      { id: tarde, status: 'DISMISSED', decided_by: 'op', decided_at: '2026-10-20T12:09:00.000Z' },
+    ]);
+    // la captura pesa decenas de KB y para avisar la decisión no hace falta
+    expect(r[0]).not.toHaveProperty('snapshot');
+  });
+
+  it('el corte es inclusivo: una decisión tomada justo en el instante entra', () => {
+    const justo = decididaEn('d1', 'VALIDATED', '2026-10-20T12:00:00.000Z');
+    expect(listDecisionsSince('d1', '2026-10-20T12:00:00.000Z').map((d) => d.id)).toEqual([justo]);
+  });
+
+  it('una decisión real (decided_at de decideAlert) entra en una ventana que la cubre', () => {
+    const a = createAlert('VEHICLE', 'd1', null, null, null);
+    decideAlert(a.id, 'DISMISSED', 'op');
+    const haceUnMinuto = new Date(Date.now() - 60_000).toISOString();
+    expect(listDecisionsSince('d1', haceUnMinuto).map((d) => d.id)).toEqual([a.id]);
+    // y un corte en el futuro la deja afuera
+    expect(listDecisionsSince('d1', new Date(Date.now() + 60_000).toISOString())).toEqual([]);
   });
 });
 

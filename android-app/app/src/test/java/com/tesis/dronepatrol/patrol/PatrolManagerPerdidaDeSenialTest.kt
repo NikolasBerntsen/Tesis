@@ -91,6 +91,9 @@ class PatrolManagerPerdidaDeSenialTest {
         arrancarConTelemetria()
         patrulla.startPatrol(ruta)
         withTimeout(5_000) { patrulla.state.first { it == PatrolState.PATROLLING } }
+        // Dos detecciones: la segunda confirma la primera (un solo cuadro no alerta)
+        deteccion.onDetection?.invoke(Deteccion(listOf("PERSON"), 0.9, emptyList(), null, 0L))
+        delay(80)
         deteccion.onDetection?.invoke(Deteccion(listOf("PERSON"), 0.9, emptyList(), null, 0L))
         withTimeout(5_000) { patrulla.state.first { it == PatrolState.ORBITING } }
 

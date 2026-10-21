@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { time } from '../format';
 import type { Alert, Drone } from '../types';
+import { useDecisionDeAlerta, type DecidirAlerta } from '../useDecisionDeAlerta';
 
 const TIPO = { PERSON: 'PERSONA', VEHICLE: 'VEHÍCULO' } as const;
 
@@ -9,7 +10,9 @@ const TIPO = { PERSON: 'PERSONA', VEHICLE: 'VEHÍCULO' } as const;
  * mirar: llegan solas y hay que decidirlas. Por eso viven en una campana del
  * encabezado y no en una tarjeta al pie de una vista —ahí sólo las veía quien
  * ya estaba mirando ese dron—, y desde el desplegable se validan o se descartan
- * sin salir de donde uno esté.
+ * sin salir de donde uno esté. La vista del dron las repite al lado del video
+ * (AlertaEnCurso), y las dos deciden con el mismo hook: un rechazo del backend
+ * se ve igual en las dos, al lado de los botones.
  */
 export default function CampanaDeAlertas({
   alerts,
@@ -19,11 +22,12 @@ export default function CampanaDeAlertas({
 }: {
   alerts: Alert[];
   drones: Drone[];
-  onDecidir: (id: number, decision: 'VALIDATED' | 'DISMISSED') => void;
+  onDecidir: DecidirAlerta;
   onVerDron: (droneId: string) => void;
 }) {
   const [abierta, setAbierta] = useState(false);
   const caja = useRef<HTMLDivElement>(null);
+  const { decidir, errorDe, decidiendo } = useDecisionDeAlerta(onDecidir);
 
   const pendientes = alerts.filter((a) => a.status === 'PENDING');
   const decididas = alerts.filter((a) => a.status !== 'PENDING').slice(0, 5);
@@ -92,13 +96,20 @@ export default function CampanaDeAlertas({
               </div>
               {a.snapshot && <img className="snapshot" src={`data:image/jpeg;base64,${a.snapshot}`} alt="Detección" />}
               <div className="alert-actions">
-                <button className="validate" onClick={() => onDecidir(a.id, 'VALIDATED')}>
+                <button className="validate" disabled={decidiendo(a.id)} onClick={() => decidir(a.id, 'VALIDATED')}>
                   Validar
                 </button>
-                <button className="dismiss" onClick={() => onDecidir(a.id, 'DISMISSED')}>
+                <button className="dismiss" disabled={decidiendo(a.id)} onClick={() => decidir(a.id, 'DISMISSED')}>
                   Descartar
                 </button>
               </div>
+              {/* Pegado a los botones de ESA alerta: con tres pendientes en la
+                  lista, un aviso suelto arriba no diría cuál falló. */}
+              {errorDe(a.id) && (
+                <p className="aviso malo" role="alert">
+                  {errorDe(a.id)}
+                </p>
+              )}
             </div>
           ))}
 

@@ -20,7 +20,8 @@ import org.junit.Test
 class DetectionClientTest {
 
     private val alcance = CoroutineScope(SupervisorJob())
-    private val cliente = DetectionClient(alcance)
+    // Sin "hola": la prueba corre en la PC de desarrollo y el broadcast saldría a la LAN de verdad
+    private val cliente = DetectionClient(alcance, descubridor = DescubridorDeDeteccion(anunciarse = false))
 
     @After
     fun cortar() {

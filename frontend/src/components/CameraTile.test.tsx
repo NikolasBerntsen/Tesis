@@ -79,6 +79,44 @@ describe('CameraTile', () => {
       renderTile({ status: makeStatus({ state: 'PATROLLING' }) });
       expect(screen.getByText('PATRULLANDO')).toHaveClass('esquina-gris');
     });
+
+    // Antes un dron encima de un objetivo decía PATRULLANDO, igual que uno
+    // haciendo la ronda: en una grilla de cámaras no se distinguía cuál mirar.
+    it('ORBITANDO en oro con el dron sobre el objetivo', () => {
+      renderTile({ status: makeStatus({ state: 'ORBITING' }) });
+      expect(screen.getByText('ORBITANDO')).toHaveClass('esquina-oro');
+    });
+
+    it('SIGUIENDO en oro, con su propio rótulo, cuando el objetivo se mueve', () => {
+      renderTile({ status: makeStatus({ state: 'FOLLOWING' }) });
+      expect(screen.getByText('SIGUIENDO')).toHaveClass('esquina-oro');
+      expect(screen.queryByText('PATRULLANDO')).not.toBeInTheDocument();
+    });
+
+    it('EN TIERRA si el dron informa que está en el suelo, aunque el estado sea de vuelo', () => {
+      renderTile({ status: makeStatus({ state: 'PAUSED', flying: false }) });
+      expect(screen.getByText('EN TIERRA')).toBeInTheDocument();
+    });
+
+    it('el control manual se lee aunque el dron esté apoyado', () => {
+      renderTile({ status: makeStatus({ state: 'MANUAL', flying: false }) });
+      expect(screen.getByText('CONTROL MANUAL')).toBeInTheDocument();
+    });
+  });
+
+  describe('estado del mosaico', () => {
+    it.each([
+      ['ORBITING', 'Orbitando objetivo'],
+      ['FOLLOWING', 'Siguiendo objetivo'],
+    ])('%s va resaltado en oro', (state, etiqueta) => {
+      renderTile({ status: makeStatus({ state }) });
+      expect(screen.getByText(etiqueta)).toHaveClass('accent');
+    });
+
+    it('patrullando no se resalta', () => {
+      renderTile({ status: makeStatus({ state: 'PATROLLING' }) });
+      expect(screen.getByText('Patrullando')).toHaveClass('muted');
+    });
   });
 
   describe('video y datos', () => {

@@ -74,6 +74,10 @@ class PatrolManagerVideoTest {
         override fun manualStick(pitch: Double, roll: Double, yaw: Double, throttle: Double) = Unit
         override fun returnHome() = Unit
         override fun land() = Unit
+        override fun seguirObjetivo(lat: Double, lon: Double, vNorteMs: Double, vEsteMs: Double) = Unit
+        override fun despegarEnElLugar() = Unit
+        override fun vincularControl() = Unit
+        override fun cancelarVinculacion() = Unit
         override fun disconnect() = Unit
     }
 
@@ -93,7 +97,7 @@ class PatrolManagerVideoTest {
     private class DeteccionQueAnota(alcance: CoroutineScope) : DetectionClient(alcance) {
         private val recibidos = mutableListOf<String>()
         val cuadros: List<String> get() = synchronized(recibidos) { recibidos.toList() }
-        override fun sendFrame(jpegBase64: String) {
+        override fun sendFrame(jpegBase64: String, capturaMs: Long) {
             synchronized(recibidos) { recibidos += jpegBase64 }
         }
     }

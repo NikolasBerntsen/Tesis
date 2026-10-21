@@ -9,13 +9,19 @@ data class PatrolRoute(
 )
 
 data class Telemetry(
+    /**
+     * Posición del dron. **NaN sin fix GPS**: el MSDK no entrega posición sin
+     * satélites (o entrega 0,0), y en interior la telemetría igual tiene que
+     * salir —batería, altura, si vuela—, así que la falta de posición viaja como
+     * NaN y no frena nada. Todo lo que use la posición mira [tienePosicion].
+     */
     val lat: Double,
     val lon: Double,
     val altM: Double,
     val batteryPct: Double,
     /** Intensidad del enlace RC 0..100 (baja con la distancia a la base). */
     val signalPct: Int,
-    /** Rumbo 0..360° hacia donde mira la cámara. */
+    /** Rumbo 0..360° de la nariz del dron. */
     val heading: Double,
     val ts: Long,
     /**
@@ -23,7 +29,16 @@ data class Telemetry(
      * al suelo. Hace falta para ubicar en el terreno lo que la cámara ve.
      */
     val gimbalPitch: Double = GIMBAL_PATRULLA,
+    /**
+     * Rumbo 0..360° hacia donde mira la CÁMARA. Es el de la nariz salvo que el
+     * gimbal informe su propio rumbo absoluto (ver DjiDroneController): para
+     * ubicar en el terreno lo que se ve, manda la cámara, no el fuselaje.
+     */
+    val rumboCamara: Double = heading,
 ) {
+    /** Hay una posición GPS real (no NaN). */
+    val tienePosicion: Boolean get() = !lat.isNaN() && !lon.isNaN()
+
     companion object {
         /**
          * Inclinación de la cámara mientras patrulla: oblicua y hacia abajo, que
@@ -48,6 +63,13 @@ data class Deteccion(
     /** JPEG en base64 del cuadro anotado con las cajas; null si el detector no lo manda (el mock). */
     val snapshotBase64: String?,
     val ts: Long,
+    /**
+     * Hora de captura del cuadro analizado, con el reloj del teléfono (el `ts`
+     * del `video_frame` que el detector devuelve tal cual). Con ella se busca la
+     * pose del dron de ESE instante para georreferenciar; null si el detector no
+     * la manda (versiones viejas, el mock).
+     */
+    val frameTs: Long? = null,
 ) {
     /** La caja más segura: es la que define el objetivo a orbitar. */
     val principal: Caja? get() = cajas.maxByOrNull { it.confianza }
@@ -70,6 +92,32 @@ data class Caja(
     val ancho: Double,
     val alto: Double,
 )
+
+/**
+ * Vínculo por radio entre el control y la aeronave (lo que DJI llama *linking*).
+ * Es independiente del cable USB: un control puede estar perfectamente
+ * enchufado al teléfono —el SDK le lee hasta el número de serie— y no tener
+ * ninguna aeronave vinculada; entonces no va a haber enlace nunca, por más que
+ * el dron esté encendido al lado. Pasa con un control nuevo o que se usó con
+ * otro dron, y la pantalla de conexión lo tiene que distinguir de "el dron está
+ * apagado" para que el operador sepa qué hacer.
+ */
+enum class Vinculacion {
+    /** El SDK todavía no lo informó, o el dron es simulado y no aplica. */
+    DESCONOCIDA,
+    /**
+     * El control no está vinculando (`UNPAIRED` del SDK). Ojo: el RC-N3 lo
+     * informa así AUNQUE tenga una aeronave vinculada y el enlace funcione
+     * (comprobado con el Mini 4 Pro), así que por sí solo no dice que falte
+     * vincular: solo cuenta si además no hay enlace con la aeronave.
+     */
+    SIN_VINCULAR,
+    /** Vinculación en curso: el control espera que la aeronave responda. */
+    VINCULANDO,
+    VINCULADA,
+    /** La vinculación se cortó o falló (modelos incompatibles, tiempo agotado). */
+    FALLIDA,
+}
 
 /**
  * Lo que la app sabe del aparato más allá de la telemetría de vuelo: si hay
@@ -96,6 +144,12 @@ data class EstadoDelDron(
     val controlConectado: Boolean = conectado,
     /** Número de serie de la aeronave, para identificar cuál es la que está enlazada. */
     val serie: String = "",
+    /** Vínculo por radio entre el control y la aeronave (ver [Vinculacion]). */
+    val vinculacion: Vinculacion = Vinculacion.DESCONOCIDA,
+    /** Número de serie del control enchufado; si llega, el canal de datos con el control funciona. */
+    val serieControl: String = "",
+    /** Modo de vuelo que informa la aeronave (`P-GPS`, `ATTI`, …); vacío si no lo informa. */
+    val modoDeVuelo: String = "",
 ) {
     /** Todo lo que hace falta para que la app ordene un despegue. */
     val listoParaDespegar: Boolean
@@ -117,6 +171,27 @@ data class EstadoDelDron(
         )
     }
 }
+
+/**
+ * El objetivo que el dron está orbitando o siguiendo, tal como viaja en el
+ * `status` al Comando Central (docs/PROTOCOLS.md §1, `target`): es lo que la
+ * consola pinta en el mapa y lo que el equipo de tierra necesita saber.
+ */
+data class ObjetivoReportado(
+    /** Id de la alerta del objetivo; null hasta que llega el `alert_ack`. */
+    val alertId: Long?,
+    /** `PERSON` o `VEHICLE`. */
+    val tipo: String,
+    val lat: Double,
+    val lon: Double,
+    val velocidadMs: Double,
+    val rumboGrados: Double,
+    val enMovimiento: Boolean,
+    val perdido: Boolean,
+    val vistoHaceMs: Long,
+    /** `PENDING` o `VALIDATED`. */
+    val decision: String,
+)
 
 data class DroneBase(val name: String, val lat: Double, val lon: Double)
 
@@ -151,7 +226,10 @@ data class Emparejamiento(
 enum class PatrolState {
     IDLE,
     PATROLLING,
+    /** Orbitando el objetivo detectado, con la cámara apuntada al centro. */
     ORBITING,
+    /** Siguiendo al objetivo detectado porque se está moviendo. */
+    FOLLOWING,
     RETURNING_HOME_SIGNAL,
     RETURNING_HOME_BATTERY,
     LANDED,

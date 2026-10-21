@@ -41,6 +41,16 @@ object Geo {
     }
 
     /**
+     * Si (lat, lon) es una posición GPS creíble: números finitos, dentro de
+     * rango y NO 0,0. El 0,0 importa: es lo que el SDK de DJI entrega sin fix
+     * (el valor por defecto de LocationCoordinate3D) y no es una posición, es
+     * el golfo de Guinea.
+     */
+    fun esPosicionValida(lat: Double, lon: Double): Boolean =
+        lat.isFinite() && lon.isFinite() && lat in -90.0..90.0 && lon in -180.0..180.0 &&
+            !(kotlin.math.abs(lat) < 1e-6 && kotlin.math.abs(lon) < 1e-6)
+
+    /**
      * Distancia en metros entre dos puntos. Plano a esta escala: a cientos de
      * metros la curvatura de la Tierra no mueve ni un decímetro.
      */

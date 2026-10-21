@@ -1,0 +1,5 @@
+# Los .bat van siempre con CRLF: cmd.exe lee mal un .bat con saltos LF y los
+# "goto :etiqueta" fallan al azar segun donde caiga la etiqueta. Con
+# core.autocrlf=false un clon en Windows los dejaria en LF.
+*.bat text eol=crlf
+# iniciar.sh ya lo cubre el .gitattributes de la raiz (*.sh con LF).

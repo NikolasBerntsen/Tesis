@@ -75,6 +75,23 @@ describe('integración — alertas', () => {
     expect(meta.drone).toEqual({ hash: DRON.alfa, displayName: 'Alfa', model: 'DJI Mini 3' });
   });
 
+  // El texto es lo que lee el operador en el registro: tiene que decir lo que el
+  // dron hace de verdad según el contrato (§2), no lo que hacía antes.
+  it('el registro cuenta qué hace el dron con cada decisión', async () => {
+    const validada = createAlert('PERSON', DRON.alfa, -34.8, -56.2, null);
+    const descartada = createAlert('VEHICLE', DRON.alfa, -34.8, -56.2, null);
+    await api(srv.base, `/api/alerts/${validada.id}/decision`, op, { method: 'POST', body: JSON.stringify({ decision: 'VALIDATED' }) });
+    await api(srv.base, `/api/alerts/${descartada.id}/decision`, op, { method: 'POST', body: JSON.stringify({ decision: 'DISMISSED' }) });
+
+    const evs = (await api(srv.base, '/api/events?limit=100', op)).body;
+    const ok = evs.find((e: any) => e.type === 'ALERT_VALIDATED' && e.alert_id === validada.id);
+    const no = evs.find((e: any) => e.type === 'ALERT_DISMISSED' && e.alert_id === descartada.id);
+    expect(ok.message).toBe(`Alerta #${validada.id} confirmada como REAL por operador; el dron sigue sobre el objetivo`);
+    expect(no.message).toBe(
+      `Alerta #${descartada.id} descartada como falso positivo por operador; el dron reanuda el patrullaje hacia el próximo nodo`,
+    );
+  });
+
   it('decidir dos veces la misma alerta da 409', async () => {
     const a = createAlert('PERSON', DRON.alfa, -34.8, -56.2, null);
     await api(srv.base, `/api/alerts/${a.id}/decision`, op, { method: 'POST', body: JSON.stringify({ decision: 'DISMISSED' }) });

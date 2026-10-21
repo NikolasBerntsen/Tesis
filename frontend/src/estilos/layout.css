@@ -313,3 +313,16 @@ td.barra-acciones > * + * { margin-left: var(--e-2); }
   .par-video-mapa .map { height: 340px; min-height: 340px; }
 }
 .detail-main > .card + .par-video-mapa { margin-top: var(--e-4); }
+
+/* Con una alerta pendiente, la captura se mete entre el video y el mapa: la
+   decisión es comparar la captura con lo que el dron ve ahora, y las dos
+   imágenes tienen que quedar a un golpe de vista. En una pantalla mediana el
+   mapa baja a su propia fila, a todo el ancho; en una angosta, todo apila. */
+.par-video-mapa.con-alerta { grid-template-columns: 1fr minmax(260px, .7fr) 1fr; }
+@media (max-width: 1280px) {
+  .par-video-mapa.con-alerta { grid-template-columns: 1fr 1fr; }
+  .par-video-mapa.con-alerta > :last-child { grid-column: 1 / -1; }
+}
+@media (max-width: 900px) {
+  .par-video-mapa.con-alerta { grid-template-columns: 1fr; }
+}

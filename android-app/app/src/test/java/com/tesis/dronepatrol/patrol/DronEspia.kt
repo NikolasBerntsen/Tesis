@@ -93,5 +93,17 @@ internal class DronEspia : DroneController {
         anotar("stick($pitch, $roll, $yaw, $throttle)")
     override fun returnHome() = anotar("returnHome")
     override fun land() = anotar("land")
+    override fun seguirObjetivo(lat: Double, lon: Double, vNorteMs: Double, vEsteMs: Double) {
+        ultimoSeguimiento = lat to lon
+        anotar("seguirObjetivo")
+    }
+
+    /** Última estimación del objetivo que se le pidió seguir. */
+    @Volatile
+    var ultimoSeguimiento: Pair<Double, Double>? = null
+
+    override fun despegarEnElLugar() = anotar("despegarEnElLugar")
+    override fun vincularControl() = anotar("vincularControl")
+    override fun cancelarVinculacion() = anotar("cancelarVinculacion")
     override fun disconnect() = anotar("disconnect")
 }

@@ -1,12 +1,23 @@
-# PyTorch con CUDA: el paquete de PyPI en Windows viene solo con CPU, por eso el
-# índice extra. cu128 anda en las RTX 40xx, tanto de escritorio como de notebook.
-# Si ya tenés el entorno del proyecto de entrenamiento (tests ia tesis/.venv),
-# correr.bat lo usa y acá solo falta aiohttp.
---extra-index-url https://download.pytorch.org/whl/cu128
-
-torch==2.11.0+cu128
-torchvision
+# Todo lo del servidor de detección MENOS torch y torchvision.
+#
+# torch va aparte porque el paquete correcto depende de la máquina y un
+# requirements no lo puede elegir: con una NVIDIA, el de CUDA del índice de
+# PyTorch (cu128 anda en las RTX 40xx de escritorio y de notebook); sin NVIDIA,
+# el de CPU; en una Mac, el de PyPI (trae la GPU de Apple, mps). Lo instala
+# iniciar.ps1 / iniciar.sh antes que esto. A mano, por ejemplo con NVIDIA:
+#
+#     pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+#     pip install -r requirements.txt
+#
+# Si torch no está instalado de antes, ultralytics baja el de PyPI, que en
+# Windows es SOLO CPU: por eso el orden importa.
 ultralytics==8.4.118
-opencv-python
+# Sin ventanas: el servidor no muestra nada con OpenCV (el visor es web), y la
+# versión común pide las librerías gráficas del sistema (libGL), que en un
+# Linux mínimo no están. ultralytics igual arrastra opencv-python: el lanzador
+# deja solo esta para que no se pisen (ver iniciar.ps1 / iniciar.sh).
+opencv-python-headless
 numpy
 aiohttp>=3.9
+# Las interfaces de red con su máscara verdadera, para el anuncio UDP.
+psutil>=5.9

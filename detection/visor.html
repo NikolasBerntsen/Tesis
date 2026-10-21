@@ -11,21 +11,30 @@
     header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; }
     h1 { font-size: 18px; margin: 0; letter-spacing: .02em; }
     .pill { font-size: 12px; text-transform: uppercase; letter-spacing: .1em; padding: 4px 10px; border-radius: 999px; background: #243140; color: var(--medio); }
-    .pill.ok { color: var(--ok); } .pill.bad { color: var(--peligro); }
+    .pill.ok { color: var(--ok); } .pill.bad { color: var(--peligro); } .pill.warn { color: var(--acento); }
+    .oculto { display: none; }
     main { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 16px; }
-    @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+    @media (max-width: 900px) { main { grid-template-columns: 1fr; } body { padding: 16px; } }
     .card { background: var(--superficie); border: 1px solid var(--borde); border-radius: 12px; padding: 14px; }
+    aside .card + .card { margin-top: 16px; }
     .card h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--medio); margin: 0 0 10px; }
     #feed { width: 100%; background: #000; border-radius: 8px; display: block; aspect-ratio: 16/9; object-fit: contain; }
     .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     .stat span { display: block; font-size: 11px; color: var(--medio); text-transform: uppercase; letter-spacing: .08em; }
     .stat strong { font-family: ui-monospace, Consolas, monospace; font-size: 20px; }
+    .stat.mal strong { color: var(--peligro); }
     button { font: inherit; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--borde); background: #1c2733; color: var(--texto); cursor: pointer; }
     button:hover { border-color: var(--acento); }
     .fila { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
     #log { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--medio); max-height: 320px; overflow: auto; margin: 0; white-space: pre-wrap; }
     .deteccion { color: var(--ok); font-weight: 700; }
+    .error { color: var(--peligro); }
     .nota { color: var(--medio); font-size: 13px; margin: 6px 0 0; }
+    .mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; overflow-wrap: anywhere; }
+    dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; margin: 0; font-size: 13px; }
+    dt { color: var(--medio); }
+    dd { margin: 0; overflow-wrap: anywhere; white-space: pre-line; }
+    #ultimoError { color: var(--peligro); font-size: 12px; margin: 8px 0 0; overflow-wrap: anywhere; }
   </style>
 </head>
 <body>
@@ -33,32 +42,47 @@
     <h1>Software de detección</h1>
     <span id="status" class="pill bad">celular desconectado</span>
     <span id="modelo" class="pill">sin modelo</span>
+    <span id="respaldo" class="pill warn oculto">modelo de respaldo (COCO)</span>
   </header>
   <main>
     <section class="card">
       <h2>Video del dron, anotado</h2>
       <img id="feed" alt="Video del dron" />
-      <p class="nota">Llega a 1280 px de ancho, hasta 2 cuadros por segundo. Cada cuadro procesado se contesta a la app con un mensaje <code>detection</code>.</p>
+      <p class="nota">Llega a 1280 px de ancho, hasta 2 cuadros por segundo. Cada cuadro procesado se contesta a la app con un mensaje <code>detection</code>. Si el modelo falla, se ve el cuadro crudo con el error escrito arriba.</p>
     </section>
     <aside>
       <section class="card">
         <h2>Modelo</h2>
         <div class="stats">
           <div class="stat"><span>Inferencia</span><strong id="ms">—</strong></div>
-          <div class="stat"><span>Procesados</span><strong id="procesados">0</strong></div>
           <div class="stat"><span>Recibidos</span><strong id="recibidos">0</strong></div>
+          <div class="stat"><span>Procesados</span><strong id="procesados">0</strong></div>
+          <div class="stat" id="statErrores"><span>Errores</span><strong id="errores">0</strong></div>
           <div class="stat"><span>Descartados</span><strong id="descartados">0</strong></div>
+          <div class="stat"><span>Último cuadro</span><strong id="ultimoCuadro">—</strong></div>
         </div>
+        <p id="ultimoError" class="oculto"></p>
+        <p class="nota" id="esquema"></p>
       </section>
-      <section class="card" style="margin-top:16px">
+      <section class="card">
+        <h2>Enlace con la app</h2>
+        <dl>
+          <dt>Celular</dt><dd id="telefonoIp">—</dd>
+          <dt>Último “hola”</dt><dd id="hola">ninguno todavía</dd>
+          <dt>Anuncio por</dt><dd id="interfaces" class="mono">—</dd>
+          <dt>Modo manual</dt><dd id="urls" class="mono">—</dd>
+        </dl>
+        <p class="nota">Con la app en <strong>Automático</strong> no hay que tipear nada. Si no aparece, poné la app en <em>Dirección manual</em> con una de estas URL.</p>
+      </section>
+      <section class="card">
         <h2>Simular una detección</h2>
-        <p class="nota">Para la demo sin dron: manda a la app el mismo mensaje que generaría el modelo.</p>
+        <p class="nota">Para la demo sin dron: manda a la app el mismo mensaje que generaría el modelo, atado al último cuadro recibido.</p>
         <div class="fila">
           <button onclick="simular('PERSON')">Detectar PERSONA</button>
           <button onclick="simular('VEHICLE')">Detectar VEHÍCULO</button>
         </div>
       </section>
-      <section class="card" style="margin-top:16px">
+      <section class="card">
         <h2>Detecciones</h2>
         <pre id="log">—</pre>
       </section>
@@ -68,10 +92,47 @@
     const $ = (id) => document.getElementById(id);
     const lineas = [];
     let ultima = '';
+    // Lo que llega del servidor (mensajes de error, nombres de placas) se
+    // escapa: un "<" en un error no puede romper ni inyectar nada en la página.
+    const escapar = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     function anotar(texto, clase) {
-      lineas.unshift(`<span class="${clase || ''}">${new Date().toLocaleTimeString()}  ${texto}</span>`);
+      lineas.unshift(`<span class="${clase || ''}">${new Date().toLocaleTimeString()}  ${escapar(texto)}</span>`);
       if (lineas.length > 60) lineas.pop();
       $('log').innerHTML = lineas.join('\n');
+    }
+    function pintarTelefono(conectado, ip) {
+      $('status').textContent = conectado ? `celular conectado${ip ? ' · ' + ip : ''}` : 'celular desconectado';
+      $('status').className = 'pill ' + (conectado ? 'ok' : 'bad');
+      $('telefonoIp').textContent = conectado ? (ip || 'conectado') : 'desconectado';
+    }
+    function pintarStats(msg) {
+      $('modelo').textContent = msg.modelo
+        ? `${msg.modelo} · imgsz ${msg.imgsz}${msg.dispositivo ? ' · ' + msg.dispositivo : ''}`
+        : 'sin modelo';
+      $('respaldo').classList.toggle('oculto', !msg.respaldo);
+      $('esquema').textContent = msg.esquema ? `Clases: ${msg.esquema}` : '';
+      $('ms').textContent = msg.ms != null ? `${msg.ms} ms` : '—';
+      $('procesados').textContent = msg.procesados;
+      $('recibidos').textContent = msg.recibidos;
+      $('descartados').textContent = msg.descartados;
+      $('errores').textContent = msg.errores ?? 0;
+      $('statErrores').classList.toggle('mal', (msg.errores ?? 0) > 0);
+      $('ultimoCuadro').textContent = msg.ultimoCuadroHaceS != null ? `hace ${Math.round(msg.ultimoCuadroHaceS)} s` : '—';
+      $('ultimoError').classList.toggle('oculto', !msg.ultimoError);
+      $('ultimoError').textContent = msg.ultimoError ? `Último error: ${msg.ultimoError}` : '';
+      pintarTelefono(msg.telefono, msg.telefonoIp);
+      if (Array.isArray(msg.interfaces)) {
+        $('interfaces').textContent = msg.interfaces.length
+          ? msg.interfaces.map((i) => `${i.nombre} ${i.ip}/${i.prefijo} -> ${i.broadcast || '—'}`).join('\n')
+          : 'ninguna interfaz real (¿Wi-Fi apagado?)';
+      } else {
+        $('interfaces').textContent = 'anuncio apagado (--sin-anuncio)';
+      }
+      if (Array.isArray(msg.urls)) $('urls').textContent = msg.urls.join('\n') || '—';
+      const vistos = msg.telefonosVistos || [];
+      $('hola').textContent = vistos.length
+        ? vistos.map((t) => `${t.name || 'sin nombre'} (${t.ip}), hace ${t.haceS} s`).join('\n')
+        : (msg.escuchaHola === false ? 'no se está escuchando (puerto UDP ocupado)' : 'ninguno todavía');
     }
     function conectar() {
       const ws = new WebSocket(`ws://${location.host}/viewer`);
@@ -79,21 +140,22 @@
         const msg = JSON.parse(ev.data);
         if (msg.type === 'video_frame') {
           if (msg.jpegBase64) $('feed').src = 'data:image/jpeg;base64,' + msg.jpegBase64;
+          if (msg.error) {
+            if (ultima !== 'error') anotar(`error de inferencia: ${msg.error}`, 'error');
+            ultima = 'error';
+            return;
+          }
           const d = msg.detection;
+          if (!d) return;
           const clave = d.detected ? d.classes.join('+') : '';
           if (clave !== ultima) {
             ultima = clave;
             anotar(d.detected ? `DETECCIÓN ${d.classes.join(', ')} (${d.confidence})` : 'sin detección', d.detected ? 'deteccion' : '');
           }
         } else if (msg.type === 'phone_status') {
-          $('status').textContent = msg.connected ? 'celular conectado' : 'celular desconectado';
-          $('status').className = 'pill ' + (msg.connected ? 'ok' : 'bad');
+          pintarTelefono(msg.connected, msg.ip);
         } else if (msg.type === 'stats') {
-          $('modelo').textContent = msg.modelo ? `${msg.modelo} · imgsz ${msg.imgsz}` : 'sin modelo';
-          $('ms').textContent = msg.ms != null ? `${msg.ms} ms` : '—';
-          $('procesados').textContent = msg.procesados;
-          $('recibidos').textContent = msg.recibidos;
-          $('descartados').textContent = msg.descartados;
+          pintarStats(msg);
         }
       };
       ws.onclose = () => setTimeout(conectar, 2000);

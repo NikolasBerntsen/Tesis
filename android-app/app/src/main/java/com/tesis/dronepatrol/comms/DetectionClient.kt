@@ -45,7 +45,9 @@ enum class ModoEnlace {
  */
 open class DetectionClient(
     private val scope: CoroutineScope,
-    private val descubridor: DescubridorDeDeteccion = DescubridorDeDeteccion(),
+    /** Por qué red sale el WebSocket (ver [RedLocal]); la misma que usa el descubridor. */
+    private val red: RedLocal = RedPorDefecto,
+    private val descubridor: DescubridorDeDeteccion = DescubridorDeDeteccion(red = red),
 ) {
 
     /** Solo las detecciones positivas: qué vio, dónde y la captura anotada (ver [interpretarDeteccion]). */
@@ -133,25 +135,44 @@ open class DetectionClient(
                 "La dirección '$url' no es válida: escribila como ${Config.PLANTILLA_URL_DETECCION_RED}."
             return
         }
-        ws = http.newWebSocket(
+        // El cliente se arma con la red de este momento (la Wi-Fi puede haber
+        // cambiado desde el intento anterior); newBuilder comparte el pool.
+        val cliente = red.fabricaDeSockets()?.let { http.newBuilder().socketFactory(it).build() } ?: http
+        ws = cliente.newWebSocket(
             pedido,
             object : WebSocketListener() {
+                // Los avisos de un socket que ya no es el vigente se ignoran:
+                // al cambiar de URL se cierra el viejo, y su onClosed tardío
+                // marcaba "desconectado" y agendaba un reintento que abría un
+                // TERCER socket encima del nuevo, en ciclo.
+                private fun esElVigente(webSocket: WebSocket) = webSocket === ws
+
                 override fun onOpen(webSocket: WebSocket, response: Response) {
+                    if (!esElVigente(webSocket)) return
                     connected.value = true
                     ultimoFallo.value = null
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
+                    if (!esElVigente(webSocket)) return
                     interpretarDeteccion(text)?.let { onDetection?.invoke(it) }
                 }
 
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    // Completar el cierre que pidió el servidor; si no, OkHttp
+                    // deja el socket colgado hasta que vence.
+                    webSocket.close(1000, null)
+                }
+
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    if (!esElVigente(webSocket)) return
                     connected.value = false
                     ultimoFallo.value = motivo(t, response)
                     reconnect()
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    if (!esElVigente(webSocket)) return
                     connected.value = false
                     if (wantConnected) {
                         ultimoFallo.value =
@@ -199,19 +220,26 @@ open class DetectionClient(
 
     private fun reconnect() {
         if (!wantConnected) return
+        val intento = ws
         scope.launch {
             delay(3_000)
-            if (wantConnected && url.isNotEmpty()) open()
+            // Si en el medio ya se abrió otro (cambio de URL), este reintento sobra.
+            if (wantConnected && url.isNotEmpty() && ws === intento) open()
         }
     }
 
-    /** `open` para poder verificar el cableado del reparto de video (ver la clase). */
-    open fun sendFrame(jpegBase64: String) {
+    /**
+     * `open` para poder verificar el cableado del reparto de video (ver la clase).
+     * [capturaMs] es la hora del cuadro con el reloj del teléfono: el detector
+     * la devuelve como `frameTs` y con ella se busca la pose del dron de ese
+     * instante (docs/PROTOCOLS.md §4).
+     */
+    open fun sendFrame(jpegBase64: String, capturaMs: Long = System.currentTimeMillis()) {
         ws?.send(
             JSONObject()
                 .put("type", "video_frame")
                 .put("jpegBase64", jpegBase64)
-                .put("ts", System.currentTimeMillis())
+                .put("ts", capturaMs)
                 .toString(),
         )
     }
@@ -258,6 +286,7 @@ open class DetectionClient(
                 cajas = cajas,
                 snapshotBase64 = msg.optString("snapshotBase64").takeIf { it.isNotBlank() },
                 ts = msg.optLong("ts", 0L),
+                frameTs = msg.optLong("frameTs", 0L).takeIf { it > 0L },
             )
         }
     }

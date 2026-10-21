@@ -8,6 +8,7 @@ import com.tesis.dronepatrol.model.EstadoDelDron
 import com.tesis.dronepatrol.model.FlightEvent
 import com.tesis.dronepatrol.model.PatrolRoute
 import com.tesis.dronepatrol.model.Telemetry
+import com.tesis.dronepatrol.model.Vinculacion
 import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -70,6 +71,13 @@ class SimulatedDroneController(private val arrancaEnElAire: Boolean = false) : D
         const val SATELITES_SIMULADOS = 14
         const val MODELO = "Simulado"
         const val SERIE = "SIM-0001"
+        // Altura a la que deja al dron el despegue en el lugar: la del despegue
+        // automático del SDK de DJI.
+        const val ALTURA_DESPEGUE_EN_EL_LUGAR_M = 1.2
+        // Velocidad tangencial de la órbita: la misma que el dron real.
+        const val VELOCIDAD_ORBITA_MS = Navegacion.VELOCIDAD_ORBITA_MS
+        // Más allá de esto la estimación del objetivo ya no se extrapola.
+        const val EXTRAPOLACION_MAXIMA_MS = 3_000L
     }
 
     /**
@@ -78,7 +86,7 @@ class SimulatedDroneController(private val arrancaEnElAire: Boolean = false) : D
      * vuelo estacionario sin orden (como queda el dron real después de despegar
      * a mano).
      */
-    private enum class Mode { IDLE, TAKING_OFF, FLY_ROUTE, ORBIT, RTH, HOLD, GOTO, STICK, LANDING }
+    private enum class Mode { IDLE, TAKING_OFF, FLY_ROUTE, ORBIT, FOLLOW, RTH, HOLD, GOTO, STICK, LANDING }
 
     override val estado: StateFlow<EstadoDelDron>
         get() = _estado
@@ -91,6 +99,7 @@ class SimulatedDroneController(private val arrancaEnElAire: Boolean = false) : D
             satelites = SATELITES_SIMULADOS,
             baseFijada = true,
             detalle = "Simulador sin conectar",
+            vinculacion = Vinculacion.VINCULADA,
         ),
     )
     override val telemetry = MutableSharedFlow<Telemetry>(replay = 1, extraBufferCapacity = 8)
@@ -126,6 +135,19 @@ class SimulatedDroneController(private val arrancaEnElAire: Boolean = false) : D
     private var orbitAngle = 0.0
     private var gotoLat = 0.0
     private var gotoLon = 0.0
+
+    // Objetivo que se sigue en FOLLOW: la última estimación que mandó la
+    // patrulla y cuándo, para extrapolarla con su velocidad entre una y otra.
+    // Se guarda el objeto entero para que el lazo nunca vea media estimación.
+    private class ObjetivoSeguido(val lat: Double, val lon: Double, val vNorteMs: Double, val vEsteMs: Double, val desdeMs: Long)
+
+    @Volatile
+    private var objetivoSeguido: ObjetivoSeguido? = null
+
+    // El despegue en curso es el del mando manual (queda suspendido a ~1 m y
+    // obedece al mando) y no el de una ruta.
+    @Volatile
+    private var despegueEnElLugar = false
     // Rumbo hacia el objetivo mientras se mueve; estacionario conserva el último
     private var heading = 0.0
 
@@ -195,6 +217,7 @@ class SimulatedDroneController(private val arrancaEnElAire: Boolean = false) : D
     }
 
     override fun startRoute(route: PatrolRoute, fromWaypoint: Int) {
+        despegueEnElLugar = false
         this.route = route
         targetWaypoint = fromWaypoint.coerceIn(0, route.waypoints.size - 1)
         gimbalPitch = Telemetry.GIMBAL_PATRULLA
@@ -215,10 +238,29 @@ class SimulatedDroneController(private val arrancaEnElAire: Boolean = false) : D
         orbitCenterLat = centerLat
         orbitCenterLon = centerLon
         orbitRadiusM = radiusM
-        orbitAngle = 0.0
+        // Arranca (o sigue, si ya orbitaba y solo se corrió el centro) desde el
+        // punto del círculo que tiene más cerca: con el ángulo fijo en cero el
+        // dron cruzaba por encima del objetivo para ir al punto norte.
+        orbitAngle = anguloDesdeElCentro(centerLat, centerLon)
         alturaObjetivo = ALTURA_CRUCERO_M
         gimbalPitch = Georreferencia.inclinacionParaOrbitar(altM, radiusM)
         mode = Mode.ORBIT
+    }
+
+    override fun seguirObjetivo(lat: Double, lon: Double, vNorteMs: Double, vEsteMs: Double) {
+        if (rechazarEnElSuelo("seguir al objetivo")) return
+        objetivoSeguido = ObjetivoSeguido(lat, lon, vNorteMs, vEsteMs, System.currentTimeMillis())
+        if (mode != Mode.FOLLOW) alturaObjetivo = ALTURA_CRUCERO_M
+        mode = Mode.FOLLOW
+    }
+
+    override fun despegarEnElLugar() {
+        if (!enElSuelo) return
+        alturaObjetivo = ALTURA_DESPEGUE_EN_EL_LUGAR_M
+        despegueEnElLugar = true
+        mode = Mode.TAKING_OFF
+        emitEvent(FlightEvent.Despegando)
+        publicarEstado()
     }
 
     override fun hold() {
@@ -253,6 +295,11 @@ class SimulatedDroneController(private val arrancaEnElAire: Boolean = false) : D
         if (enElSuelo) return
         mode = Mode.LANDING
     }
+
+    /** El simulador no tiene control físico: nace vinculado y no hay nada que hacer. */
+    override fun vincularControl() = Unit
+
+    override fun cancelarVinculacion() = Unit
 
     override fun disconnect() {
         scope.coroutineContext.cancelChildren()
@@ -312,7 +359,16 @@ class SimulatedDroneController(private val arrancaEnElAire: Boolean = false) : D
                     // trabajo; después la ruta arranca sola.
                     acercarAltura(alturaObjetivo, dt, VELOCIDAD_VERTICAL_AUTO_MS)
                     if (Navegacion.aLaAltura(altM, alturaObjetivo)) {
-                        mode = Mode.FLY_ROUTE
+                        // El despegue del mando manual deja al dron suspendido
+                        // obedeciendo al mando (en cero = quieto); el de una ruta
+                        // arranca la ruta.
+                        if (despegueEnElLugar) {
+                            despegueEnElLugar = false
+                            ejesMando = MandoVirtual.NEUTRO
+                            mode = Mode.STICK
+                        } else {
+                            mode = Mode.FLY_ROUTE
+                        }
                         ultimoRechazo = null
                         emitEvent(FlightEvent.EnElAire)
                     }
@@ -328,12 +384,35 @@ class SimulatedDroneController(private val arrancaEnElAire: Boolean = false) : D
                     drainBattery()
                 }
                 Mode.ORBIT -> {
-                    // Círculo alrededor del objetivo a velocidad constante
-                    orbitAngle += (SPEED_MS / orbitRadiusM) * dt * 0.5
-                    lat = orbitCenterLat + (orbitRadiusM * cos(orbitAngle)) / METERS_PER_DEG_LAT
-                    lon = orbitCenterLon + (orbitRadiusM * sin(orbitAngle)) / metersPerDegLon()
+                    // Círculo alrededor del objetivo a velocidad constante. El
+                    // dron va hacia el punto que sigue en el círculo (no salta a
+                    // él): si arranca lejos, primero se acerca.
+                    orbitAngle += (VELOCIDAD_ORBITA_MS / orbitRadiusM) * dt
+                    val tLat = orbitCenterLat + (orbitRadiusM * cos(orbitAngle)) / METERS_PER_DEG_LAT
+                    val tLon = orbitCenterLon + (orbitRadiusM * sin(orbitAngle)) / Geo.metrosPorGradoLon(orbitCenterLat)
+                    moveToward(tLat, tLon, dt)
                     // En órbita la cámara mira al objetivo
                     heading = bearingTo(orbitCenterLat, orbitCenterLon)
+                    gimbalPitch = Georreferencia.inclinacionParaOrbitar(
+                        altM,
+                        Geo.distanciaM(lat, lon, orbitCenterLat, orbitCenterLon),
+                    )
+                    drainBattery()
+                }
+                Mode.FOLLOW -> {
+                    val o = objetivoSeguido
+                    if (o != null) {
+                        // La estimación se extrapola con su velocidad hasta la
+                        // próxima, como hace el dron real.
+                        val edadS = (System.currentTimeMillis() - o.desdeMs).coerceIn(0L, EXTRAPOLACION_MAXIMA_MS) / 1_000.0
+                        val oLat = o.lat + o.vNorteMs * edadS / METERS_PER_DEG_LAT
+                        val oLon = o.lon + o.vEsteMs * edadS / Geo.metrosPorGradoLon(o.lat)
+                        val orden = Persecucion.calcular(lat, lon, altM, oLat, oLon, o.vNorteMs, o.vEsteMs)
+                        lat += orden.vNorteMs * dt / METERS_PER_DEG_LAT
+                        lon += orden.vEsteMs * dt / metersPerDegLon()
+                        heading = orden.rumboGrados
+                        gimbalPitch = orden.gimbalPitch
+                    }
                     drainBattery()
                 }
                 Mode.GOTO -> {
@@ -381,7 +460,7 @@ class SimulatedDroneController(private val arrancaEnElAire: Boolean = false) : D
             // El mando manual es el único que elige la altura; en cuanto el dron
             // vuelve a volar solo (ruta, órbita, goto o estacionario) sube o baja
             // a la de la orden, así el operador no lo deja a ras del suelo.
-            if (mode == Mode.FLY_ROUTE || mode == Mode.ORBIT || mode == Mode.GOTO || mode == Mode.HOLD ||
+            if (mode == Mode.FLY_ROUTE || mode == Mode.ORBIT || mode == Mode.FOLLOW || mode == Mode.GOTO || mode == Mode.HOLD ||
                 (mode == Mode.RTH && !llegoABase())
             ) {
                 acercarAltura(alturaObjetivo, dt, MandoVirtual.MAX_VERTICAL_MS)
@@ -423,6 +502,16 @@ class SimulatedDroneController(private val arrancaEnElAire: Boolean = false) : D
             altM > objetivoM -> (altM - paso).coerceAtLeast(objetivoM)
             else -> altM
         }
+    }
+
+    /**
+     * Ángulo de la posición actual vista desde el centro, en la convención de
+     * la órbita (lat = centro + r·cos, lon = centro + r·sin).
+     */
+    private fun anguloDesdeElCentro(centroLat: Double, centroLon: Double): Double {
+        val norte = (lat - centroLat) * METERS_PER_DEG_LAT
+        val este = (lon - centroLon) * Geo.metrosPorGradoLon(centroLat)
+        return kotlin.math.atan2(este, norte)
     }
 
     /** Rumbo 0..360° desde la posición actual hacia el punto dado (norte = 0, este = 90). */

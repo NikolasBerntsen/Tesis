@@ -8,6 +8,7 @@ import android.content.res.ColorStateList
 import android.location.Location
 import android.os.Bundle
 import android.os.Looper
+import android.os.SystemClock
 import android.view.View
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
@@ -19,12 +20,15 @@ import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.tesis.dronepatrol.databinding.ActivityConexionDronBinding
 import com.tesis.dronepatrol.drone.DronEnCurso
 import com.tesis.dronepatrol.drone.Geo
 import com.tesis.dronepatrol.drone.SimulatedDroneController
 import com.tesis.dronepatrol.model.EstadoDelDron
 import com.tesis.dronepatrol.model.Telemetry
+import com.tesis.dronepatrol.model.Vinculacion
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -47,6 +51,15 @@ class ConexionDronActivity : AppCompatActivity() {
 
         /** Más lejos que esto, el dron de al lado no es el que está enlazado: se avisa. */
         private const val DISTANCIA_SOSPECHOSA_M = 100.0
+
+        /**
+         * Cuánto tiene que pasar con el control enchufado y sin enlace con la
+         * aeronave antes de ofrecer "Vincular". El enlace tarda en armarse unos
+         * segundos al encender, y vincular en ese lapso BORRA el vínculo que el
+         * control ya tenía: pasó en el campo, con el dron bien vinculado desde
+         * DJI Fly, y lo dejó sin enlace.
+         */
+        internal const val ESPERA_PARA_OFRECER_VINCULAR_MS = 30_000L
     }
 
     private lateinit var binding: ActivityConexionDronBinding
@@ -54,6 +67,9 @@ class ConexionDronActivity : AppCompatActivity() {
     private var ubicacionTelefono: Location? = null
     private var ultimaTelemetria: Telemetry? = null
     private var ultimoEstado = EstadoDelDron.DESCONOCIDO
+
+    /** Desde cuándo (reloj de SystemClock) el control está enchufado sin enlace con la aeronave; 0 si no lo está. */
+    private var sinEnlaceDesdeMs = 0L
     private var localizacion: FusedLocationProviderClient? = null
     private val alCambiarUbicacion = object : LocationCallback() {
         override fun onLocationResult(resultado: LocationResult) {
@@ -88,6 +104,9 @@ class ConexionDronActivity : AppCompatActivity() {
         binding.btnDesplegar.setOnClickListener { desplegar("DEPLOY") }
         binding.btnModoPrueba.setOnClickListener { desplegar("TEST") }
         binding.btnVolver.setOnClickListener { abandonar() }
+        binding.btnVincular.setOnClickListener {
+            if (ultimoEstado.vinculacion == Vinculacion.VINCULANDO) controller.cancelarVinculacion() else confirmarVinculacion()
+        }
         onBackPressedDispatcher.addCallback(
             this,
             object : OnBackPressedCallback(true) {
@@ -106,6 +125,14 @@ class ConexionDronActivity : AppCompatActivity() {
     }
 
     private fun observar() {
+        // El botón de vincular depende del tiempo que lleva sin enlace, no solo
+        // del estado: se repinta cada segundo aunque nada cambie.
+        lifecycleScope.launch {
+            while (true) {
+                delay(1_000)
+                pintarVinculacion(ultimoEstado)
+            }
+        }
         lifecycleScope.launch {
             controller.estado.collect { estado ->
                 ultimoEstado = estado
@@ -140,10 +167,16 @@ class ConexionDronActivity : AppCompatActivity() {
             pintarPunto(binding.filaAeronave.punto, if (estado.controlConectado) R.color.estado_alerta else R.color.estado_apagado)
         }
         val gpsListo = estado.baseFijada && estado.satelites >= EstadoDelDron.SATELITES_MINIMOS
-        binding.filaGps.detalle.text = getString(
+        val gps = getString(
             if (gpsListo) R.string.conexion_gps_ok else R.string.conexion_gps_esperando,
             estado.satelites,
         )
+        // El modo de vuelo (P-GPS, ATTI…) dice si la aeronave se está ubicando
+        // por GPS o solo por los sensores de visión: en interior, ATTI.
+        binding.filaGps.detalle.text =
+            if (estado.modoDeVuelo.isBlank()) gps else getString(R.string.conexion_gps_modo, gps, estado.modoDeVuelo)
+
+        pintarVinculacion(estado)
         pintarPunto(binding.filaGps.punto, if (gpsListo) R.color.estado_ok else if (estado.conectado) R.color.estado_alerta else R.color.estado_apagado)
 
         // La ficha del Comando Central dice un modelo; la aeronave enlazada dice
@@ -164,6 +197,38 @@ class ConexionDronActivity : AppCompatActivity() {
         pintarDistancia()
     }
 
+    /**
+     * Vincular: solo con el control enchufado y sin enlace con la aeronave
+     * desde hace [ESPERA_PARA_OFRECER_VINCULAR_MS] (el simulador nace vinculado:
+     * nunca lo muestra), o mientras una vinculación está en curso, para poder
+     * cancelarla.
+     */
+    private fun pintarVinculacion(estado: EstadoDelDron) {
+        val sinEnlace = estado.controlConectado && !estado.conectado && controller !is SimulatedDroneController
+        val ahora = SystemClock.uptimeMillis()
+        if (!sinEnlace) {
+            sinEnlaceDesdeMs = 0L
+        } else if (sinEnlaceDesdeMs == 0L) {
+            sinEnlaceDesdeMs = ahora
+        }
+        val vinculando = estado.vinculacion == Vinculacion.VINCULANDO
+        val ofrecer = sinEnlace && ahora - sinEnlaceDesdeMs >= ESPERA_PARA_OFRECER_VINCULAR_MS
+        binding.btnVincular.visibility = if (ofrecer || vinculando) View.VISIBLE else View.GONE
+        binding.txtVincularAyuda.visibility = binding.btnVincular.visibility
+        binding.btnVincular.setText(if (vinculando) R.string.conexion_vincular_cancelar else R.string.conexion_vincular)
+        binding.txtVincularAyuda.setText(if (vinculando) R.string.conexion_vinculando else R.string.conexion_vincular_ayuda)
+    }
+
+    /** Vincular reemplaza el vínculo que el control ya tenga: se confirma antes. */
+    private fun confirmarVinculacion() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.conexion_vincular_confirmar_titulo)
+            .setMessage(R.string.conexion_vincular_confirmar_mensaje)
+            .setPositiveButton(R.string.conexion_vincular) { _, _ -> controller.vincularControl() }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
     private fun fila(punto: View, texto: android.widget.TextView, ok: Boolean, siOk: Int, siNo: Int) {
         texto.setText(if (ok) siOk else siNo)
         pintarPunto(punto, if (ok) R.color.estado_ok else R.color.estado_apagado)
@@ -177,7 +242,8 @@ class ConexionDronActivity : AppCompatActivity() {
     private fun pintarDistancia() {
         val telefono = ubicacionTelefono
         val dron = ultimaTelemetria
-        if (!ultimoEstado.conectado || telefono == null || dron == null) {
+        // Sin GPS en el dron (interior) no hay distancia que medir.
+        if (!ultimoEstado.conectado || telefono == null || dron == null || !dron.tienePosicion) {
             binding.txtDistancia.setText(R.string.conexion_distancia_sin_dato)
             binding.txtDistancia.setTextColor(ContextCompat.getColor(this, R.color.texto_medio))
             return

@@ -120,6 +120,29 @@
                     android:id="@+id/filaAeronave"
                     layout="@layout/fila_verificacion" />
 
+                <!-- Solo con el control enchufado y sin enlace con la aeronave: un
+                     control nuevo, o usado con otro dron, no enlaza nunca por más
+                     que el dron esté encendido al lado. -->
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnVincular"
+                    style="@style/Widget.DronePatrol.Boton.Secundario"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/espacio_chico"
+                    android:text="@string/conexion_vincular"
+                    android:visibility="gone"
+                    tools:visibility="visible" />
+
+                <TextView
+                    android:id="@+id/txtVincularAyuda"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="@string/conexion_vincular_ayuda"
+                    android:textAppearance="@style/TextAppearance.DronePatrol.Apagado"
+                    android:visibility="gone"
+                    tools:visibility="visible" />
+
                 <include
                     android:id="@+id/filaGps"
                     layout="@layout/fila_verificacion" />

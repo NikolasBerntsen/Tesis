@@ -2,10 +2,20 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import DroneDetail from './DroneDetail';
+import type { MapItem } from './DronesMap';
 import { api, rutasDeBase } from '../api';
-import { makeDrone, makeEvent, makeMe, makeRoute, makeStatus } from '../test/fixtures';
+import { makeAlert, makeDrone, makeEvent, makeMe, makeRoute, makeStatus } from '../test/fixtures';
+import type { Alert, ObjetivoEnSeguimiento } from '../types';
 
-vi.mock('./DronesMap', () => ({ default: () => <div data-testid="mapa-mock" /> }));
+// El mapa anota los items que recibe: es la forma de ver que el rastro del
+// objetivo baja hasta él sin correr Leaflet.
+const { mapa } = vi.hoisted(() => ({ mapa: { items: [] as MapItem[] } }));
+vi.mock('./DronesMap', () => ({
+  default: ({ items }: { items: MapItem[] }) => {
+    mapa.items = items;
+    return <div data-testid="mapa-mock" />;
+  },
+}));
 vi.mock('../api', () => ({ api: vi.fn(), rutasDeBase: vi.fn() }));
 const apiMock = vi.mocked(api);
 const rutasDeBaseMock = vi.mocked(rutasDeBase);
@@ -19,6 +29,8 @@ function renderDetail(props: Partial<Parameters<typeof DroneDetail>[0]> = {}) {
     conectado: true,
     liveEvents: [],
     routes: [makeRoute({ id: 1, name: 'Ruta Perimetral' })],
+    alertas: [] as Alert[],
+    onDecidir: vi.fn(),
     onBack: vi.fn(),
     onRename: vi.fn(),
     onWaypointLabel: vi.fn(),
@@ -35,6 +47,13 @@ function renderDetail(props: Partial<Parameters<typeof DroneDetail>[0]> = {}) {
     rerender(<DroneDetail {...merged} {...cambios} />);
   return { ...merged, volverARenderizar };
 }
+
+/**
+ * Espera a que el detalle termine de cargar lo que pide al montar (historial y
+ * rutas de la base). Sin esto, las respuestas caen después del test y React
+ * avisa que hubo una actualización fuera de `act`.
+ */
+const esperarCarga = () => screen.findByRole('option', { name: /Ruta Perimetral/ });
 
 beforeEach(() => {
   apiMock.mockReset();
@@ -159,10 +178,11 @@ describe('DroneDetail', () => {
     await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', expect.objectContaining({ method: 'DELETE' })));
   });
 
-  it('no repite el panel de alertas: se atienden en la campana del encabezado', () => {
-    renderDetail();
-    expect(screen.queryByRole('button', { name: 'Validar alerta' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: /^Alertas/ })).not.toBeInTheDocument();
+  it('sin alertas pendientes no hay tarjeta de alerta', async () => {
+    renderDetail({ alertas: [makeAlert({ id: 1, status: 'VALIDATED' })] });
+    await esperarCarga();
+    expect(screen.queryByRole('heading', { name: 'Alerta en curso' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Validar' })).not.toBeInTheDocument();
   });
 
   it('retoma la ruta cuando el patrullaje está interrumpido', async () => {
@@ -437,5 +457,317 @@ describe('DroneDetail — distribución y previsualización de la ruta', () => {
     expect(await screen.findByText(/no tiene base asignada, así que no hay rutas/i)).toBeInTheDocument();
     expect(rutasDeBaseMock).not.toHaveBeenCalled();
     expect(screen.getByText('Sin base asignada')).toBeInTheDocument();
+  });
+});
+
+const OBJETIVO: ObjetivoEnSeguimiento = {
+  alertId: 12,
+  type: 'VEHICLE',
+  lat: -34.60412,
+  lon: -58.3817,
+  speedMs: 4.2,
+  courseDeg: 118,
+  moving: true,
+  lost: false,
+  lastSeenMs: 600,
+  decision: 'PENDING',
+};
+
+describe('DroneDetail — alerta en curso', () => {
+  it('muestra la pendiente más nueva de ESTE dron al lado del video', async () => {
+    renderDetail({
+      alertas: [
+        makeAlert({ id: 3, drone_id: 'd1', status: 'PENDING', type: 'PERSON' }),
+        makeAlert({ id: 9, drone_id: 'd1', status: 'PENDING', type: 'VEHICLE', snapshot: 'QUFB' }),
+        makeAlert({ id: 20, drone_id: 'otro', status: 'PENDING' }),
+        makeAlert({ id: 15, drone_id: 'd1', status: 'DISMISSED' }),
+      ],
+    });
+    const tarjeta = await screen.findByRole('region', { name: 'Alerta en curso' });
+    // La de id 9: la más nueva de las pendientes de d1, aunque llegue segunda.
+    expect(within(tarjeta).getByText('VEHÍCULO')).toBeInTheDocument();
+    expect(within(tarjeta).getByAltText('Captura que disparó la detección')).toHaveAttribute(
+      'src',
+      'data:image/jpeg;base64,QUFB',
+    );
+    // La otra pendiente del mismo dron no se pierde: se avisa que está en la campana.
+    expect(within(tarjeta).getByText(/otra alerta sin decidir/)).toBeInTheDocument();
+
+    // Va en el par del video y el mapa, entre los dos.
+    const par = document.body.querySelector('.par-video-mapa') as HTMLElement;
+    expect(par).toHaveClass('con-alerta');
+    expect(par.contains(tarjeta)).toBe(true);
+  });
+
+  it('valida y descarta desde la tarjeta con el id de la alerta', async () => {
+    const props = renderDetail({ alertas: [makeAlert({ id: 9, drone_id: 'd1' })] });
+    const tarjeta = await screen.findByRole('region', { name: 'Alerta en curso' });
+    await userEvent.click(within(tarjeta).getByRole('button', { name: 'Validar' }));
+    expect(props.onDecidir).toHaveBeenCalledWith(9, 'VALIDATED');
+    await userEvent.click(within(tarjeta).getByRole('button', { name: 'Descartar' }));
+    expect(props.onDecidir).toHaveBeenCalledWith(9, 'DISMISSED');
+  });
+
+  it('el rechazo de la decisión se muestra en la tarjeta', async () => {
+    renderDetail({
+      alertas: [makeAlert({ id: 9, drone_id: 'd1' })],
+      onDecidir: vi.fn().mockRejectedValue(new Error('Esta alerta ya la decidió otro operador.')),
+    });
+    const tarjeta = await screen.findByRole('region', { name: 'Alerta en curso' });
+    await userEvent.click(within(tarjeta).getByRole('button', { name: 'Validar' }));
+    expect(await within(tarjeta).findByRole('alert')).toHaveTextContent('ya la decidió otro operador');
+  });
+
+  it('si el dron está sobre el objetivo de esa alerta, lo dice', async () => {
+    renderDetail({
+      alertas: [makeAlert({ id: 12, drone_id: 'd1' })],
+      status: makeStatus({ state: 'ORBITING', target: OBJETIVO }),
+    });
+    const tarjeta = await screen.findByRole('region', { name: 'Alerta en curso' });
+    expect(within(tarjeta).getByText(/El dron está sobre este objetivo/)).toBeInTheDocument();
+  });
+});
+
+describe('DroneDetail — objetivo', () => {
+  it('con objetivo muestra su panel, lo marca en la leyenda y le pasa el rastro al mapa', async () => {
+    renderDetail({
+      status: makeStatus({ state: 'FOLLOWING', target: OBJETIVO }),
+      rastro: { alertId: 12, puntos: [[-34.6, -58.38], [-34.6041, -58.3817]] },
+    });
+    expect(await screen.findByRole('heading', { name: 'Objetivo' })).toBeInTheDocument();
+    expect(screen.getByTestId('coordenadas-objetivo')).toHaveTextContent('-34.604120, -58.381700');
+    expect(within(screen.getByTestId('leyenda-mapa')).getByText('Objetivo y su rastro')).toHaveClass('bad');
+    expect(mapa.items[0].rastroObjetivo).toEqual([[-34.6, -58.38], [-34.6041, -58.3817]]);
+  });
+
+  it('un objetivo validado va en oro en la leyenda', async () => {
+    renderDetail({ status: makeStatus({ state: 'ORBITING', target: { ...OBJETIVO, decision: 'VALIDATED' } }) });
+    expect(await screen.findByText('Objetivo y su rastro')).toHaveClass('accent');
+  });
+
+  it('sin objetivo no hay panel ni leyenda del objetivo', async () => {
+    renderDetail({ status: makeStatus({ state: 'PATROLLING', target: null }) });
+    await esperarCarga();
+    expect(screen.queryByRole('heading', { name: 'Objetivo' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Objetivo y su rastro')).not.toBeInTheDocument();
+    expect(mapa.items[0].rastroObjetivo).toBeUndefined();
+  });
+
+  it('sin control tomado, reanudar dice que se deja el objetivo', async () => {
+    renderDetail({ status: makeStatus({ state: 'ORBITING', target: OBJETIVO }), drone: makeDrone({ controlledBy: null }) });
+    await userEvent.click(screen.getByRole('button', { name: 'Dejar el objetivo y reanudar patrullaje' }));
+    await waitFor(() =>
+      expect(apiMock).toHaveBeenCalledWith('/drones/d1/resume', { method: 'POST', body: '{}' }),
+    );
+  });
+
+  it('con el objetivo cargado, soltar el control por defecto lo devuelve al objetivo', async () => {
+    renderDetail({
+      me: makeMe({ username: 'admin1', canControl: true }),
+      drone: makeDrone({ controlledBy: 'admin1' }),
+      status: makeStatus({ state: 'MANUAL', controlledBy: 'admin1', flying: true, target: OBJETIVO }),
+    });
+    expect(screen.queryByRole('button', { name: 'Devolver al patrullaje' })).not.toBeInTheDocument();
+    // El de reanudar de la tarjeta de estado no aparece: con el control tomado,
+    // dejar el objetivo es una de las dos formas de soltar.
+    expect(screen.queryByRole('button', { name: 'Dejar el objetivo y reanudar patrullaje' })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Soltar control (el dron vuelve al objetivo)' }));
+    await waitFor(() =>
+      expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', {
+        method: 'DELETE',
+        body: JSON.stringify({ resume: 'none' }),
+      }),
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Soltar y reanudar patrullaje' }));
+    await waitFor(() =>
+      expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', {
+        method: 'DELETE',
+        body: JSON.stringify({ resume: 'last' }),
+      }),
+    );
+  });
+
+  it('un supervisor que quita el control con objetivo lo devuelve al objetivo', async () => {
+    renderDetail({
+      me: makeMe({ username: 'super1', role: 'supervisor', canControl: true }),
+      drone: makeDrone({ controlledBy: 'oper9' }),
+      status: makeStatus({ state: 'MANUAL', controlledBy: 'oper9', target: OBJETIVO }),
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'Quitar control' }));
+    await waitFor(() =>
+      expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', {
+        method: 'DELETE',
+        body: JSON.stringify({ resume: 'none' }),
+      }),
+    );
+  });
+
+  it('"Retomar ruta" avisa en su ayuda que deja el objetivo', async () => {
+    renderDetail({ status: makeStatus({ state: 'MANUAL', target: OBJETIVO }) });
+    await esperarCarga();
+    expect(screen.getByRole('button', { name: 'Retomar ruta' })).toHaveAttribute(
+      'title',
+      'Deja el objetivo y vuelve al patrullaje, hacia el próximo nodo de la ruta',
+    );
+  });
+});
+
+describe('DroneDetail — en el suelo, despegar y aterrizar', () => {
+  const conControl = (status: Parameters<typeof makeStatus>[0]) => ({
+    me: makeMe({ username: 'admin1', canControl: true }),
+    drone: makeDrone({ controlledBy: 'admin1', online: true }),
+    status: makeStatus({ controlledBy: 'admin1', ...status }),
+  });
+  const mando = () => screen.findByRole('group', { name: 'Mando virtual de vuelo continuo' });
+
+  it('con el dron apoyado el encabezado dice "En tierra", no "En vuelo"', async () => {
+    renderDetail({ status: makeStatus({ state: 'LANDED', flying: false }) });
+    await esperarCarga();
+    expect(screen.getByText('En tierra')).toBeInTheDocument();
+    expect(screen.queryByText('En vuelo')).not.toBeInTheDocument();
+  });
+
+  it('en el suelo el mando queda inerte con la leyenda, y se ofrece despegar', async () => {
+    const usados = renderDetail(conControl({ state: 'MANUAL', flying: false }));
+    const bloque = await mando();
+    expect(screen.getByTestId('mando-impedimento')).toHaveTextContent(
+      'El dron está en el suelo: despegalo para usar el mando',
+    );
+    expect(bloque).toHaveAttribute('aria-disabled', 'true');
+    // El suelo no es una espera: no hay nada que el dron vaya a confirmar solo.
+    expect(screen.queryByTestId('mando-esperando')).not.toBeInTheDocument();
+    fireEvent.keyDown(bloque, { key: 'w' });
+    expect(usados.onMando).not.toHaveBeenCalled();
+
+    expect(screen.getByRole('button', { name: 'Despegar' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Aterrizar' })).not.toBeInTheDocument();
+  });
+
+  it('el suelo vale aunque el status sea de antes de tomar el control', async () => {
+    // `flying` es un dato físico: no necesita la confirmación del vuelo manual.
+    renderDetail({
+      me: makeMe({ username: 'admin1', canControl: true }),
+      drone: makeDrone({ controlledBy: 'admin1', online: true }),
+      status: makeStatus({ state: 'LANDED', controlledBy: null, flying: false }),
+    });
+    await mando();
+    expect(screen.getByTestId('mando-impedimento')).toHaveTextContent('El dron está en el suelo');
+  });
+
+  it('despegar pide confirmación y recién ahí ordena el despegue', async () => {
+    renderDetail(conControl({ state: 'MANUAL', flying: false }));
+    await userEvent.click(screen.getByRole('button', { name: 'Despegar' }));
+
+    const dialogo = await screen.findByRole('dialog');
+    expect(dialogo).toHaveTextContent('El dron despega en el lugar y queda suspendido a ~1,2 m; funciona sin GPS');
+    expect(apiMock).not.toHaveBeenCalledWith('/drones/d1/takeoff', expect.anything());
+
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Despegar' }));
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/drones/d1/takeoff', { method: 'POST' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(await screen.findByTestId('orden-en-curso')).toHaveTextContent(/Despegue ordenado/);
+  });
+
+  it('cancelar el diálogo no ordena nada', async () => {
+    renderDetail(conControl({ state: 'MANUAL', flying: false }));
+    await userEvent.click(screen.getByRole('button', { name: 'Despegar' }));
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Cancelar' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(apiMock).not.toHaveBeenCalledWith('/drones/d1/takeoff', expect.anything());
+  });
+
+  it('cuando el dron informa que está en el aire, el aviso se va y se ofrece aterrizar', async () => {
+    const usados = renderDetail(conControl({ state: 'MANUAL', flying: false }));
+    await userEvent.click(screen.getByRole('button', { name: 'Despegar' }));
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Despegar' }));
+    expect(await screen.findByTestId('orden-en-curso')).toBeInTheDocument();
+
+    usados.volverARenderizar({ status: makeStatus({ state: 'MANUAL', controlledBy: 'admin1', flying: true, alt: 1.2 }) });
+    await waitFor(() => expect(screen.queryByTestId('orden-en-curso')).not.toBeInTheDocument());
+    expect(screen.queryByTestId('mando-impedimento')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Aterrizar' })).toBeEnabled();
+  });
+
+  it('aterrizar también pide confirmación y ordena el aterrizaje', async () => {
+    renderDetail(conControl({ state: 'MANUAL', flying: true }));
+    await userEvent.click(screen.getByRole('button', { name: 'Aterrizar' }));
+    const dialogo = await screen.findByRole('dialog');
+    expect(dialogo).toHaveTextContent(/aterriza donde está/);
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Aterrizar' }));
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/drones/d1/land', { method: 'POST' }));
+    expect(await screen.findByTestId('orden-en-curso')).toHaveTextContent(/Aterrizaje ordenado/);
+  });
+
+  it('si el backend rechaza el despegue, se ve el motivo y no se anuncia nada', async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path.startsWith('/events')) return Promise.resolve([]);
+      if (path.endsWith('/takeoff')) return Promise.reject(new Error('No tenés el control manual de este dron'));
+      return Promise.resolve({});
+    });
+    renderDetail(conControl({ state: 'MANUAL', flying: false }));
+    await userEvent.click(screen.getByRole('button', { name: 'Despegar' }));
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Despegar' }));
+    expect(await screen.findByText('No tenés el control manual de este dron')).toHaveAttribute('role', 'alert');
+    expect(screen.queryByTestId('orden-en-curso')).not.toBeInTheDocument();
+  });
+
+  it('una app vieja que no informa si vuela no ofrece ni despegar ni aterrizar', async () => {
+    renderDetail(conControl({ state: 'MANUAL' }));
+    await mando();
+    expect(screen.queryByRole('button', { name: 'Despegar' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Aterrizar' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('mando-impedimento')).not.toBeInTheDocument();
+  });
+
+  it('en el suelo las flechas también quedan deshabilitadas', async () => {
+    renderDetail(conControl({ state: 'MANUAL', flying: false }));
+    await mando();
+    expect(screen.getByRole('button', { name: 'Mover al norte' })).toBeDisabled();
+    expect(screen.getByTestId('pad-impedimento')).toHaveTextContent('El dron está en el suelo');
+  });
+});
+
+describe('DroneDetail — sin GPS', () => {
+  it('las flechas se deshabilitan y explican por qué; el vuelo continuo sigue', async () => {
+    const usados = renderDetail({
+      me: makeMe({ username: 'admin1', canControl: true }),
+      drone: makeDrone({ controlledBy: 'admin1', online: true }),
+      status: makeStatus({
+        state: 'MANUAL',
+        controlledBy: 'admin1',
+        flying: true,
+        gpsFix: false,
+        lat: null,
+        lon: null,
+        satellites: 2,
+      }),
+    });
+    const bloque = await screen.findByRole('group', { name: 'Mando virtual de vuelo continuo' });
+    for (const rumbo of ['norte', 'sur', 'este', 'oeste']) {
+      expect(screen.getByRole('button', { name: `Mover al ${rumbo}` })).toBeDisabled();
+    }
+    expect(screen.getByTestId('pad-impedimento')).toHaveTextContent(/Sin GPS/);
+    await userEvent.click(screen.getByTitle('Norte'));
+    expect(apiMock).not.toHaveBeenCalledWith('/drones/d1/manual_move', expect.anything());
+
+    // Las palancas no dependen de la posición: mandan velocidades.
+    expect(bloque).toHaveAttribute('aria-disabled', 'false');
+    fireEvent.keyDown(bloque, { key: 'w' });
+    expect(usados.onMando).toHaveBeenCalledWith({ pitch: 0, roll: 0, yaw: 0, throttle: 1 });
+    fireEvent.keyUp(bloque, { key: 'w' });
+  });
+
+  it('el mapa avisa que el dron no se dibuja por falta de GPS', async () => {
+    renderDetail({ status: makeStatus({ lat: 0, lon: 0 }) });
+    await esperarCarga();
+    expect(screen.getByTestId('mapa-sin-gps')).toHaveTextContent(/sin GPS/);
+  });
+
+  it('con GPS no hay ningún aviso de posición', async () => {
+    renderDetail({ status: makeStatus({ gpsFix: true }) });
+    await esperarCarga();
+    expect(screen.queryByTestId('mapa-sin-gps')).not.toBeInTheDocument();
   });
 });
