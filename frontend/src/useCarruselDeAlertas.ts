@@ -1,5 +1,17 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Alert } from './types';
+
+/**
+ * Cuánto queda sin poder decidirse la alerta que entra en lugar de otra.
+ *
+ * Al irse la alerta que se miraba, la vecina aparece en el mismo lugar, con su
+ * Validar y su Descartar justo debajo del puntero. La decisión va al backend y
+ * vuelve por el WebSocket en decenas de milisegundos, y Windows acepta un doble
+ * click de hasta 500 ms: el segundo click de un doble click caía en la vecina,
+ * que el operador nunca vio y que en el tablero puede ser de otro dron. 600 ms
+ * cubren ese doble click con margen y no llegan a sentirse como una espera.
+ */
+export const ESPERA_DEL_RELEVO_MS = 600;
 
 /**
  * Lo que el carrusel de alertas recuerda de una lista a la siguiente.
@@ -19,10 +31,16 @@ export interface EstadoCarrusel {
   sinVer: readonly number[];
   /** Cuántas tandas de alertas nuevas llegaron: cada una vuelve a encender el pulso. */
   llegadas: number;
+  /**
+   * La alerta que acaba de quedar en pantalla porque se fue la que se miraba,
+   * sin que el operador la eligiera; `null` cuando ya se asentó o la eligió él.
+   * Mientras dura el relevo no se la deja decidir (ver `ESPERA_DEL_RELEVO_MS`).
+   */
+  relevo: number | null;
 }
 
 export function estadoInicial(ids: readonly number[]): EstadoCarrusel {
-  return { ids, seleccionada: ids[0] ?? null, sinVer: [], llegadas: 0 };
+  return { ids, seleccionada: ids[0] ?? null, sinVer: [], llegadas: 0, relevo: null };
 }
 
 /**
@@ -51,22 +69,35 @@ export function actualizarLista(estado: EstadoCarrusel, ids: readonly number[]):
   // Una lista que estaba vacía no "recibe" alertas: es la primera carga, y no
   // hay ninguna otra que el operador estuviera mirando para avisarle.
   const nuevas = estado.ids.length === 0 ? [] : ids.filter((id) => !previas.has(id));
-  const seleccionada =
-    estado.seleccionada !== null && quedan.has(estado.seleccionada)
-      ? estado.seleccionada
-      : vecina(estado.ids, ids, estado.seleccionada);
+  const sigue = estado.seleccionada !== null && quedan.has(estado.seleccionada);
+  const seleccionada = sigue ? estado.seleccionada : vecina(estado.ids, ids, estado.seleccionada);
+  // Si la que se miraba sigue, el relevo que hubiera sigue corriendo. Si se fue,
+  // la que ocupa su lugar entra de relevo: el operador no la eligió, y un click
+  // que iba para la anterior no puede decidirla. En la primera carga no se fue
+  // ninguna, así que no hay a quién relevar.
+  let relevo = estado.relevo;
+  if (!sigue) relevo = estado.seleccionada === null ? null : seleccionada;
   return {
     ids,
     seleccionada,
     sinVer: [...estado.sinVer.filter((id) => quedan.has(id)), ...nuevas].filter((id) => id !== seleccionada),
     llegadas: estado.llegadas + (nuevas.length > 0 ? 1 : 0),
+    relevo,
   };
 }
 
-/** El operador eligió una alerta: queda en pantalla y deja de contar como sin ver. */
+/**
+ * El operador eligió una alerta: queda en pantalla, deja de contar como sin ver
+ * y se la puede decidir enseguida, porque llegó a ella él y no por un relevo.
+ */
 export function mirar(estado: EstadoCarrusel, id: number): EstadoCarrusel {
   if (!estado.ids.includes(id)) return estado;
-  return { ...estado, seleccionada: id, sinVer: estado.sinVer.filter((otra) => otra !== id) };
+  return { ...estado, seleccionada: id, sinVer: estado.sinVer.filter((otra) => otra !== id), relevo: null };
+}
+
+/** Pasó la espera del relevo: la alerta en pantalla ya se puede decidir. */
+export function asentar(estado: EstadoCarrusel): EstadoCarrusel {
+  return estado.relevo === null ? estado : { ...estado, relevo: null };
 }
 
 /**
@@ -100,11 +131,22 @@ export function useCarruselDeAlertas(alertas: readonly Alert[]) {
   // Se ajusta DURANTE el render y no en un efecto: con un efecto, el render en
   // que desaparece la alerta mirada se pintaba con otra antes de saltar a la
   // vecina, y ese parpadeo es lo que hace dudar de cuál se está decidiendo.
+  // Por lo mismo, el relevo ya está puesto en el primer cuadro de la vecina:
+  // no hay un instante en que sus botones se vean habilitados.
   let estado = guardado;
   if (!mismaLista(guardado.ids, ids)) {
     estado = actualizarLista(guardado, ids);
     setGuardado(estado);
   }
+
+  // Cada relevo cuenta su espera desde cero: si en medio se fue también la
+  // vecina, la que entra después tiene sus propios 600 ms.
+  const relevo = estado.relevo;
+  useEffect(() => {
+    if (relevo === null) return;
+    const espera = setTimeout(() => setGuardado(asentar), ESPERA_DEL_RELEVO_MS);
+    return () => clearTimeout(espera);
+  }, [relevo]);
 
   const indice = estado.seleccionada === null ? -1 : estado.ids.indexOf(estado.seleccionada);
   const masNuevaSinVer = estado.ids.find((id) => estado.sinVer.includes(id));
@@ -123,6 +165,8 @@ export function useCarruselDeAlertas(alertas: readonly Alert[]) {
     sinVer: estado.sinVer.length,
     /** Sube con cada tanda de alertas nuevas: sirve de `key` para repetir el pulso. */
     llegadas: estado.llegadas,
+    /** La de la pantalla acaba de entrar en lugar de otra que se fue: todavía no se la deja decidir. */
+    enRelevo: relevo !== null,
     anterior: () => setGuardado((e) => moverse(e, -1)),
     siguiente: () => setGuardado((e) => moverse(e, 1)),
     /** Lleva a la más nueva de las que llegaron sin que se las mirara. */

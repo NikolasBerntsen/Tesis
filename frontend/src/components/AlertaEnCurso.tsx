@@ -64,14 +64,18 @@ export default function AlertaEnCurso({
   const focoAdentro = useRef(false);
   const alerta = carrusel.actual;
   const varias = carrusel.total > 1;
-  const ocupado = alerta !== null && decidiendo(alerta.id);
+  // Tampoco se decide la que recién entró en lugar de la que se fue: queda en
+  // el mismo lugar que la otra, y el segundo click de un doble click en Validar
+  // la validaba sin que nadie la hubiera visto (ver ESPERA_DEL_RELEVO_MS).
+  const ocupado = alerta !== null && (decidiendo(alerta.id) || carrusel.enRelevo);
 
   // La alerta en pantalla se dibuja con `key` por id: al irse la que se decidió,
   // los botones de Validar y Descartar se rehacen en vez de pasar a ser los de
   // la vecina. Si no, el foco seguía en "Validar" y un segundo Enter validaba
-  // otra alerta sin que el operador la hubiera mirado. El costo es que el foco
-  // se cae: al quitarse esos botones, y antes, al deshabilitarse mientras viaja
-  // la decisión. Se lo devuelve al carrusel, para que las flechas del teclado
+  // otra alerta sin que el operador la hubiera mirado (el mismo riesgo con el
+  // puntero lo cubre el relevo, arriba). El costo es que el foco se cae: al
+  // quitarse esos botones, y antes, al deshabilitarse mientras viaja la
+  // decisión. Se lo devuelve al carrusel, para que las flechas del teclado
   // sigan andando y el operador no vuelva al principio de la página. Sólo si
   // estaba adentro y no quedó en ningún lado: nunca se lo roba a otra pieza.
   useEffect(() => {
@@ -125,11 +129,19 @@ export default function AlertaEnCurso({
         <h2 id={idTitulo} aria-live="polite">
           {titulo}
         </h2>
-        {varias && (
-          <div className="carrusel-pasos" role="group" aria-label="Recorrer las alertas pendientes">
-            {/* `aria-disabled` y no `disabled`: un botón deshabilitado suelta el
-                foco, y el operador que llegaba a la punta con el teclado se
-                quedaba sin flechas. Así sigue enfocado y el paso no hace nada. */}
+        {/* Los pasos están siempre, vacíos con una sola alerta: adentro va la
+            región que anuncia la cuenta, y una región viva que aparece ya con
+            su texto no se anuncia. Si naciera con la segunda alerta, en la
+            vista del dron —cuyo título no cambia— esa llegada pasaba callada. */}
+        <div
+          className="carrusel-pasos"
+          role={varias ? 'group' : undefined}
+          aria-label={varias ? 'Recorrer las alertas pendientes' : undefined}
+        >
+          {/* `aria-disabled` y no `disabled`: un botón deshabilitado suelta el
+              foco, y el operador que llegaba a la punta con el teclado se
+              quedaba sin flechas. Así sigue enfocado y el paso no hace nada. */}
+          {varias && (
             <button
               type="button"
               className="icono-boton carrusel-paso"
@@ -139,18 +151,31 @@ export default function AlertaEnCurso({
             >
               <Chevron hacia="atras" />
             </button>
-            {/* El contenedor del aviso queda fijo y la pastilla se rehace con
-                cada tanda nueva (`key`): así el pulso se repite y el lector de
-                pantalla anuncia el número nuevo. */}
-            <span className="carrusel-indicador" aria-live="polite" aria-atomic="true">
-              <span
-                key={carrusel.llegadas}
-                className={carrusel.llegadas > 0 ? 'badge carrusel-cuenta llego' : 'badge carrusel-cuenta'}
-                data-testid="carrusel-cuenta"
-              >
-                {carrusel.posicion} de {carrusel.total}
+          )}
+          {/* El contenedor del aviso queda fijo y la pastilla se rehace con
+              cada tanda nueva (`key`): así el pulso se repite y el lector de
+              pantalla anuncia el número nuevo. Las nuevas sin ver se dicen acá
+              y no en el botón de abrirlas, que aparece sin anunciarse. */}
+          <span className="carrusel-indicador" role="status" aria-live="polite" aria-atomic="true">
+            {varias && (
+              <>
+                <span className="carrusel-solo-lector">Alerta </span>
+                <span
+                  key={carrusel.llegadas}
+                  className={carrusel.llegadas > 0 ? 'badge carrusel-cuenta llego' : 'badge carrusel-cuenta'}
+                  data-testid="carrusel-cuenta"
+                >
+                  {carrusel.posicion} de {carrusel.total}
+                </span>
+              </>
+            )}
+            {carrusel.sinVer > 0 && (
+              <span className="carrusel-solo-lector">
+                {carrusel.sinVer === 1 ? ', una alerta nueva sin ver' : `, ${carrusel.sinVer} alertas nuevas sin ver`}
               </span>
-            </span>
+            )}
+          </span>
+          {varias && (
             <button
               type="button"
               className="icono-boton carrusel-paso"
@@ -160,8 +185,8 @@ export default function AlertaEnCurso({
             >
               <Chevron hacia="adelante" />
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* El pulso de la cuenta es movimiento, y con movimiento reducido no se
