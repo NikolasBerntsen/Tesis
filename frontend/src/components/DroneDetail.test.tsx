@@ -17,8 +17,28 @@ vi.mock('./DronesMap', () => ({
   },
 }));
 vi.mock('../api', () => ({ api: vi.fn(), rutasDeBase: vi.fn() }));
+// El minimapa de la vista de pilotaje sí usa Leaflet: va el doble compartido.
+vi.mock('leaflet', async () => (await import('../test/dobleLeaflet')).dobleLeaflet());
 const apiMock = vi.mocked(api);
 const rutasDeBaseMock = vi.mocked(rutasDeBase);
+
+/** La vista de pilotaje abierta, o `null`. */
+const vistaDePilotaje = () => screen.queryByRole('dialog', { name: 'Pilotaje de Alfa' });
+
+/**
+ * Abre la vista de pilotaje desde la tarjeta, que es como se vuelve a ella con
+ * el control ya tomado. Espera la carga del detalle antes: sin eso las
+ * respuestas del historial caen fuera del test.
+ */
+async function abrirPilotaje(): Promise<HTMLElement> {
+  await esperarCarga();
+  fireEvent.click(screen.getByRole('button', { name: 'Volver a la vista de pilotaje' }));
+  return screen.getByRole('dialog', { name: 'Pilotaje de Alfa' });
+}
+
+/** Una tecla de vuelo: la vista escucha la ventana, no un elemento enfocado. */
+const apretar = (code: string) => fireEvent.keyDown(window, { code });
+const soltar = (code: string) => fireEvent.keyUp(window, { code });
 
 function renderDetail(props: Partial<Parameters<typeof DroneDetail>[0]> = {}) {
   const base = {
@@ -37,6 +57,7 @@ function renderDetail(props: Partial<Parameters<typeof DroneDetail>[0]> = {}) {
     // Devuelve true: el mensaje salió por el socket. Que devuelva false es el
     // caso del enlace cortado, y tiene su propio test.
     onMando: vi.fn(() => true),
+    onCamara: vi.fn(() => true),
   };
   const merged = { ...base, ...props } as Parameters<typeof DroneDetail>[0];
   const { rerender } = render(<DroneDetail {...merged} />);
@@ -216,25 +237,50 @@ describe('DroneDetail', () => {
   });
 });
 
-describe('DroneDetail — mando virtual', () => {
+describe('DroneDetail — vuelo continuo y vista de pilotaje', () => {
   const mando = () => screen.queryByRole('group', { name: 'Mando virtual de vuelo continuo' });
+  const volver = () => screen.queryByRole('button', { name: 'Volver a la vista de pilotaje' });
 
-  it('el mando no se muestra si no tengo el control tomado', async () => {
+  it('sin el control tomado no hay vuelo continuo ni vista de pilotaje', async () => {
     renderDetail({ drone: makeDrone({ controlledBy: null }) });
     expect(await screen.findByRole('button', { name: 'Tomar control manual' })).toBeInTheDocument();
+    expect(screen.getByText(/Se abre la vista de pilotaje/)).toBeInTheDocument();
     expect(mando()).not.toBeInTheDocument();
+    expect(volver()).not.toBeInTheDocument();
   });
 
-  it('el mando tampoco se muestra si el control lo tiene otro', async () => {
+  it('tampoco si el control lo tiene otro', async () => {
     renderDetail({
       me: makeMe({ username: 'super1', role: 'supervisor', canControl: true }),
       drone: makeDrone({ controlledBy: 'oper9' }),
     });
     expect(await screen.findByText(/Controlado por/)).toBeInTheDocument();
     expect(mando()).not.toBeInTheDocument();
+    expect(volver()).not.toBeInTheDocument();
   });
 
-  it('con el control tomado convive con el pad y los ejes suben por la prop', async () => {
+  it('tomar el control abre la vista de pilotaje', async () => {
+    renderDetail({ drone: makeDrone({ controlledBy: null }) });
+    await esperarCarga();
+    fireEvent.click(screen.getByRole('button', { name: 'Tomar control manual' }));
+    expect(await screen.findByRole('dialog', { name: 'Pilotaje de Alfa' })).toBeInTheDocument();
+    // El lock todavía no llegó (el `control_changed` viene después del POST):
+    // la vista espera, no se cierra.
+    expect(screen.getByTestId('pilotaje-esperando-control')).toBeInTheDocument();
+  });
+
+  it('si el backend no da el control, la vista no se abre', async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path.startsWith('/events')) return Promise.resolve([]);
+      return Promise.reject(new Error('Otro operador ya tiene el control'));
+    });
+    renderDetail({ drone: makeDrone({ controlledBy: null }) });
+    await userEvent.click(screen.getByRole('button', { name: 'Tomar control manual' }));
+    expect(await screen.findByText('Otro operador ya tiene el control')).toBeInTheDocument();
+    expect(vistaDePilotaje()).not.toBeInTheDocument();
+  });
+
+  it('con el control tomado la tarjeta conserva el pad y ofrece volver a la vista, donde vuela el teclado', async () => {
     const props = renderDetail({
       me: makeMe({ username: 'admin1', canControl: true }),
       drone: makeDrone({ controlledBy: 'admin1' }),
@@ -243,33 +289,33 @@ describe('DroneDetail — mando virtual', () => {
       status: makeStatus({ state: 'MANUAL', controlledBy: 'admin1' }),
     });
 
-    // Las dos formas de comandar conviven: el pad de 25 m sigue estando.
+    // El pad de 25 m sigue en la tarjeta; el mando de palancas ya no.
     expect(screen.getByRole('button', { name: 'Mover al norte' })).toBeInTheDocument();
-    const bloque = mando() as HTMLElement;
-    expect(bloque).toBeInTheDocument();
-
-    // Y se aclara que no hacen lo mismo: salto puntual contra vuelo continuo.
     expect(screen.getByRole('heading', { name: 'Desplazamiento puntual' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Vuelo continuo' })).toBeInTheDocument();
     expect(screen.getByText(/es un salto puntual/)).toBeInTheDocument();
+    expect(mando()).not.toBeInTheDocument();
+    // Sin la vista abierta, el teclado no vuela.
+    apretar('KeyW');
+    expect(props.onMando).not.toHaveBeenCalled();
+    soltar('KeyW');
+
+    const vista = await abrirPilotaje();
     // El dron ya confirmó el vuelo manual: no hay nada que esperar ni que avisar.
-    expect(screen.queryByTestId('mando-esperando')).not.toBeInTheDocument();
+    expect(within(vista).queryByTestId('pilotaje-esperando')).not.toBeInTheDocument();
+    expect(within(vista).queryByTestId('pilotaje-impedimento')).not.toBeInTheDocument();
 
-    fireEvent.keyDown(bloque, { key: 'w' });
-    expect(props.onMando).toHaveBeenCalledWith({ pitch: 0, roll: 0, yaw: 0, throttle: 1 });
-
-    fireEvent.keyUp(bloque, { key: 'w' });
+    apretar('KeyW');
+    expect(props.onMando).toHaveBeenCalledWith({ pitch: 0.5, roll: 0, yaw: 0, throttle: 0 });
+    soltar('KeyW');
     expect(props.onMando).toHaveBeenLastCalledWith({ pitch: 0, roll: 0, yaw: 0, throttle: 0 });
-    // Con todo en orden no hay ningún motivo escrito en el mando.
-    expect(screen.queryByTestId('mando-impedimento')).not.toBeInTheDocument();
   });
 
   /**
    * Tener el lock no alcanza para que el dron obedezca: el backend no lo suelta
    * cuando la app se va sola a volver a base, y el socket de la consola se cae
-   * y reconecta cada 3 s. En todos esos casos el mando se muestra igual —que
-   * desaparezca parece que le sacaron el control— pero inerte y con el motivo,
-   * como los botones de arriba, que ya están `disabled` por lo mismo.
+   * y reconecta cada 3 s. En todos esos casos la vista dice el motivo y el
+   * teclado no comanda.
    */
   const IMPEDIMENTOS = [
     {
@@ -301,18 +347,17 @@ describe('DroneDetail — mando virtual', () => {
     },
   ] as const;
 
-  it.each(IMPEDIMENTOS)('$caso: el mando queda inerte y dice por qué', async ({ props, motivo }) => {
+  it.each(IMPEDIMENTOS)('$caso: la vista dice por qué y el teclado no comanda', async ({ props, motivo }) => {
     const usados = renderDetail({ me: makeMe({ username: 'admin1', canControl: true }), ...props });
-    // Se espera el bloque en vez de buscarlo en seco: el detalle pide el
-    // historial y las rutas de la base al montar, y sin esperarlos las
-    // respuestas caen fuera del test.
-    const bloque = await screen.findByRole('group', { name: 'Mando virtual de vuelo continuo' });
-    expect(screen.getByTestId('mando-impedimento')).toHaveTextContent(motivo);
-    expect(bloque).toHaveAttribute('aria-disabled', 'true');
-    expect(screen.queryByTestId('mando-esperando')).not.toBeInTheDocument();
+    const vista = await abrirPilotaje();
+    expect(within(vista).getByTestId('pilotaje-impedimento')).toHaveTextContent(motivo);
+    expect(within(vista).queryByTestId('pilotaje-esperando')).not.toBeInTheDocument();
 
-    fireEvent.keyDown(bloque, { key: 'w' });
+    apretar('KeyW');
     expect(usados.onMando).not.toHaveBeenCalled();
+    // Los sticks virtuales de la vista heredan el mismo motivo.
+    fireEvent.click(within(vista).getByRole('button', { name: 'Mostrar sticks virtuales' }));
+    expect(within(vista).getByTestId('mando-impedimento')).toHaveTextContent(motivo);
   });
 
   /**
@@ -339,21 +384,20 @@ describe('DroneDetail — mando virtual', () => {
     },
   ] as const;
 
-  it.each(ESPERANDO)('$caso: el mando emite igual y avisa que falta la confirmación', async ({ status }) => {
+  it.each(ESPERANDO)('$caso: el teclado emite igual y la vista avisa que falta la confirmación', async ({ status }) => {
     const usados = renderDetail({
       me: makeMe({ username: 'admin1', canControl: true }),
       drone: makeDrone({ controlledBy: 'admin1', online: true }),
       status,
     });
-    const bloque = await screen.findByRole('group', { name: 'Mando virtual de vuelo continuo' });
-    expect(bloque).toHaveAttribute('aria-disabled', 'false');
-    expect(screen.queryByTestId('mando-impedimento')).not.toBeInTheDocument();
-    expect(screen.getByTestId('mando-esperando')).toHaveTextContent(/todavía no confirmó el vuelo manual/);
+    const vista = await abrirPilotaje();
+    expect(within(vista).queryByTestId('pilotaje-impedimento')).not.toBeInTheDocument();
+    expect(within(vista).getByTestId('pilotaje-esperando')).toHaveTextContent(/todavía no confirmó el vuelo manual/);
 
     // Y lo que importa: el gesto no se traga, el eje sale.
-    fireEvent.keyDown(bloque, { key: 'w' });
-    expect(usados.onMando).toHaveBeenCalledWith({ pitch: 0, roll: 0, yaw: 0, throttle: 1 });
-    fireEvent.keyUp(bloque, { key: 'w' });
+    apretar('Space');
+    expect(usados.onMando).toHaveBeenCalledWith({ pitch: 0, roll: 0, yaw: 0, throttle: 0.5 });
+    soltar('Space');
   });
 
   it('llegado el status con el vuelo manual, el aviso de espera se va solo', async () => {
@@ -362,15 +406,16 @@ describe('DroneDetail — mando virtual', () => {
       drone: makeDrone({ controlledBy: 'admin1', online: true }),
       status: makeStatus({ state: 'PATROLLING', controlledBy: null }),
     });
-    expect(await screen.findByTestId('mando-esperando')).toBeInTheDocument();
+    await abrirPilotaje();
+    expect(screen.getByTestId('pilotaje-esperando')).toBeInTheDocument();
 
     // Un segundo después llega el status de la app con el control ya aplicado.
     usados.volverARenderizar({ status: makeStatus({ state: 'MANUAL', controlledBy: 'admin1' }) });
-    expect(screen.queryByTestId('mando-esperando')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('mando-impedimento')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pilotaje-esperando')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pilotaje-impedimento')).not.toBeInTheDocument();
   });
 
-  it('si el enlace se corta en pleno vuelo manual, el mando dice el motivo Y que el comando no salió', async () => {
+  it('si el enlace se corta en pleno vuelo manual, la vista dice el motivo Y que el comando no salió', async () => {
     const onMando = vi.fn(() => true);
     const usados = renderDetail({
       me: makeMe({ username: 'admin1', canControl: true }),
@@ -378,21 +423,187 @@ describe('DroneDetail — mando virtual', () => {
       status: makeStatus({ state: 'MANUAL', controlledBy: 'admin1' }),
       onMando,
     });
-    const bloque = await screen.findByRole('group', { name: 'Mando virtual de vuelo continuo' });
-    fireEvent.keyDown(bloque, { key: 'ArrowUp' });
-    expect(onMando).toHaveBeenCalledWith({ pitch: 1, roll: 0, yaw: 0, throttle: 0 });
+    await abrirPilotaje();
+    apretar('KeyW');
+    expect(onMando).toHaveBeenCalledWith({ pitch: 0.5, roll: 0, yaw: 0, throttle: 0 });
 
     // Se cae el socket de la consola: `conectado` pasa a false y el `enviar` del
-    // canal empieza a devolver false, las dos cosas por el mismo motivo. Esta es
-    // la única combinación con la que se ve el aviso de "no salió", y la consola
-    // sí la produce: el padre pone el impedimento y el hijo se queda sin salida.
+    // canal empieza a devolver false, las dos cosas por el mismo motivo. El
+    // cero de cierre ya no sale, y eso es lo que hay que decir.
     onMando.mockReturnValue(false);
     usados.volverARenderizar({ conectado: false, onMando });
 
-    expect(screen.getByTestId('mando-impedimento')).toHaveTextContent(
+    expect(screen.getByTestId('pilotaje-impedimento')).toHaveTextContent(
       'Sin conexión con el Comando Central: el mando no responde.',
     );
-    expect(screen.getByTestId('mando-no-salio')).toHaveTextContent(/El último comando no salió/);
+    expect(screen.getByTestId('pilotaje-no-salio')).toHaveTextContent(/El último comando no salió/);
+  });
+
+  it('la rueda inclina la cámara por la prop, también con el dron en el suelo', async () => {
+    const usados = renderDetail({
+      me: makeMe({ username: 'admin1', canControl: true }),
+      drone: makeDrone({ controlledBy: 'admin1', online: true }),
+      status: makeStatus({ state: 'MANUAL', controlledBy: 'admin1', flying: false }),
+    });
+    await abrirPilotaje();
+    // En el suelo el mando no responde, pero inclinar la cámara no le hace
+    // nada a nadie y sirve para mirar antes de despegar.
+    expect(screen.getByTestId('pilotaje-impedimento')).toHaveTextContent('El dron está en el suelo');
+    fireEvent.wheel(screen.getByTestId('pilotaje-video'), { deltaY: -100, deltaMode: 0 });
+    expect(usados.onCamara).toHaveBeenCalledWith(-25);
+  });
+
+  it('sin enlace con el Comando Central la rueda no manda la cámara', async () => {
+    const usados = renderDetail({
+      me: makeMe({ username: 'admin1', canControl: true }),
+      drone: makeDrone({ controlledBy: 'admin1', online: true }),
+      status: makeStatus({ state: 'MANUAL', controlledBy: 'admin1' }),
+      conectado: false,
+    });
+    await abrirPilotaje();
+    fireEvent.wheel(screen.getByTestId('pilotaje-video'), { deltaY: -100, deltaMode: 0 });
+    expect(usados.onCamara).not.toHaveBeenCalled();
+  });
+});
+
+describe('DroneDetail — salir de la vista de pilotaje', () => {
+  const conControl = (status: Parameters<typeof makeStatus>[0] = {}) => ({
+    me: makeMe({ username: 'admin1', canControl: true }),
+    drone: makeDrone({ controlledBy: 'admin1', online: true }),
+    status: makeStatus({ state: 'MANUAL', controlledBy: 'admin1', flying: true, ...status }),
+  });
+
+  async function confirmarSalida(vista: HTMLElement) {
+    fireEvent.click(within(vista).getByRole('button', { name: 'Salir del control manual' }));
+    const dialogo = screen.getByRole('dialog', { name: '¿Salir del control manual?' });
+    fireEvent.click(within(dialogo).getByRole('button', { name: 'Salir del control manual' }));
+  }
+
+  it('sin objetivo, salir suelta el control y el dron vuelve a patrullar', async () => {
+    renderDetail(conControl());
+    await confirmarSalida(await abrirPilotaje());
+    expect(vistaDePilotaje()).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', {
+        method: 'DELETE',
+        body: JSON.stringify({ resume: 'last' }),
+      }),
+    );
+    // Lo cerró el operador: no hay nada que explicarle.
+    expect(screen.queryByTestId('aviso-pilotaje')).not.toBeInTheDocument();
+  });
+
+  it('con objetivo, salir lo devuelve al objetivo', async () => {
+    renderDetail(conControl({ target: OBJETIVO }));
+    await confirmarSalida(await abrirPilotaje());
+    await waitFor(() =>
+      expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', {
+        method: 'DELETE',
+        body: JSON.stringify({ resume: 'none' }),
+      }),
+    );
+  });
+
+  it('cerrar la vista sin soltar deja el control y la tarjeta ofrece volver', async () => {
+    renderDetail(conControl());
+    const vista = await abrirPilotaje();
+    fireEvent.click(within(vista).getByRole('button', { name: 'Salir del control manual' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cerrar la vista sin soltar' }));
+    expect(vistaDePilotaje()).not.toBeInTheDocument();
+    expect(apiMock).not.toHaveBeenCalledWith('/drones/d1/control', expect.objectContaining({ method: 'DELETE' }));
+    expect(screen.getByRole('button', { name: 'Volver a la vista de pilotaje' })).toBeInTheDocument();
+  });
+
+  it('si un supervisor se lleva el control, la vista se cierra y dice quién', async () => {
+    const usados = renderDetail(conControl());
+    await abrirPilotaje();
+    usados.volverARenderizar({ drone: makeDrone({ controlledBy: 'super1', online: true }) });
+    expect(vistaDePilotaje()).not.toBeInTheDocument();
+    expect(screen.getByTestId('aviso-pilotaje')).toHaveTextContent(
+      'super1 tomó el control del dron: se cerró la vista de pilotaje.',
+    );
+  });
+
+  it('si el control se suelta desde otra sesión, la vista se cierra y lo dice', async () => {
+    const usados = renderDetail(conControl());
+    await abrirPilotaje();
+    usados.volverARenderizar({
+      drone: makeDrone({ controlledBy: null, online: true }),
+      status: makeStatus({ state: 'PATROLLING', controlledBy: null }),
+    });
+    expect(vistaDePilotaje()).not.toBeInTheDocument();
+    expect(screen.getByTestId('aviso-pilotaje')).toHaveTextContent('El control manual se soltó desde otra sesión');
+
+    // Al volver a tomarlo, el aviso viejo se va.
+    fireEvent.click(screen.getByRole('button', { name: 'Tomar control manual' }));
+    expect(screen.queryByTestId('aviso-pilotaje')).not.toBeInTheDocument();
+    expect(await screen.findByRole('dialog', { name: 'Pilotaje de Alfa' })).toBeInTheDocument();
+  });
+
+  it('recién tomado, la vista espera el lock y cuando llega el teclado vuela', async () => {
+    const usados = renderDetail({ drone: makeDrone({ controlledBy: null, online: true }) });
+    await esperarCarga();
+    fireEvent.click(screen.getByRole('button', { name: 'Tomar control manual' }));
+    await screen.findByRole('dialog', { name: 'Pilotaje de Alfa' });
+    apretar('KeyD');
+    expect(usados.onMando).not.toHaveBeenCalled();
+    soltar('KeyD');
+
+    usados.volverARenderizar({ drone: makeDrone({ controlledBy: 'admin1', online: true }) });
+    expect(vistaDePilotaje()).toBeInTheDocument();
+    apretar('KeyD');
+    expect(usados.onMando).toHaveBeenCalledWith({ pitch: 0, roll: 0.5, yaw: 0, throttle: 0 });
+    soltar('KeyD');
+  });
+
+  it('al cambiar de dron, la vista se cierra', async () => {
+    const usados = renderDetail(conControl());
+    await abrirPilotaje();
+    usados.volverARenderizar({ drone: makeDrone({ droneId: 'd2', displayName: 'Beta', controlledBy: 'admin1' }) });
+    expect(vistaDePilotaje()).not.toBeInTheDocument();
+    await esperarCarga();
+  });
+
+  it('una alerta de este dron que llega mientras se vuela se avisa en el HUD', async () => {
+    const usados = renderDetail(conControl());
+    const vista = await abrirPilotaje();
+    usados.volverARenderizar({ alertas: [makeAlert({ id: 40, drone_id: 'd1', status: 'PENDING', type: 'VEHICLE' })] });
+    expect(within(vista).getByTestId('pilotaje-alerta-nueva')).toHaveTextContent('Nueva alerta sin decidir: Vehículo.');
+  });
+});
+
+describe('DroneDetail — despegar y aterrizar desde la vista de pilotaje', () => {
+  const conControl = (status: Parameters<typeof makeStatus>[0]) => ({
+    me: makeMe({ username: 'admin1', canControl: true }),
+    drone: makeDrone({ controlledBy: 'admin1', online: true }),
+    status: makeStatus({ state: 'MANUAL', controlledBy: 'admin1', ...status }),
+  });
+
+  it('en el suelo se despega desde la vista, con la misma confirmación, y el HUD avisa la orden', async () => {
+    const usados = renderDetail(conControl({ flying: false }));
+    const vista = await abrirPilotaje();
+    fireEvent.click(within(vista).getByRole('button', { name: 'Despegar' }));
+
+    const dialogo = screen.getByRole('dialog', { name: 'Despegar Alfa' });
+    expect(dialogo).toHaveTextContent('El dron despega en el lugar y queda suspendido a ~1,2 m; funciona sin GPS');
+    // Con el diálogo encima, el teclado no vuela: Espacio es del diálogo.
+    apretar('Space');
+    expect(usados.onMando).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialogo).getByRole('button', { name: 'Despegar' }));
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/drones/d1/takeoff', { method: 'POST' }));
+    expect(await within(vista).findByTestId('pilotaje-orden-en-curso')).toHaveTextContent(/Despegue ordenado/);
+    expect(vistaDePilotaje()).toBeInTheDocument();
+  });
+
+  it('en el aire se aterriza desde la vista', async () => {
+    renderDetail(conControl({ flying: true }));
+    const vista = await abrirPilotaje();
+    fireEvent.click(within(vista).getByRole('button', { name: 'Aterrizar' }));
+    const dialogo = screen.getByRole('dialog', { name: 'Aterrizar Alfa' });
+    fireEvent.click(within(dialogo).getByRole('button', { name: 'Aterrizar' }));
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/drones/d1/land', { method: 'POST' }));
+    expect(await within(vista).findByTestId('pilotaje-orden-en-curso')).toHaveTextContent(/Aterrizaje ordenado/);
   });
 });
 
@@ -620,7 +831,6 @@ describe('DroneDetail — en el suelo, despegar y aterrizar', () => {
     drone: makeDrone({ controlledBy: 'admin1', online: true }),
     status: makeStatus({ controlledBy: 'admin1', ...status }),
   });
-  const mando = () => screen.findByRole('group', { name: 'Mando virtual de vuelo continuo' });
 
   it('con el dron apoyado el encabezado dice "En tierra", no "En vuelo"', async () => {
     renderDetail({ status: makeStatus({ state: 'LANDED', flying: false }) });
@@ -631,18 +841,21 @@ describe('DroneDetail — en el suelo, despegar y aterrizar', () => {
 
   it('en el suelo el mando queda inerte con la leyenda, y se ofrece despegar', async () => {
     const usados = renderDetail(conControl({ state: 'MANUAL', flying: false }));
-    const bloque = await mando();
-    expect(screen.getByTestId('mando-impedimento')).toHaveTextContent(
-      'El dron está en el suelo: despegalo para usar el mando',
-    );
-    expect(bloque).toHaveAttribute('aria-disabled', 'true');
-    // El suelo no es una espera: no hay nada que el dron vaya a confirmar solo.
-    expect(screen.queryByTestId('mando-esperando')).not.toBeInTheDocument();
-    fireEvent.keyDown(bloque, { key: 'w' });
-    expect(usados.onMando).not.toHaveBeenCalled();
-
+    await esperarCarga();
+    // En la tarjeta: despegar, que es lo único que se puede hacer.
     expect(screen.getByRole('button', { name: 'Despegar' })).toBeEnabled();
     expect(screen.queryByRole('button', { name: 'Aterrizar' })).not.toBeInTheDocument();
+
+    const vista = await abrirPilotaje();
+    expect(within(vista).getByTestId('pilotaje-impedimento')).toHaveTextContent(
+      'El dron está en el suelo: despegalo para usar el mando',
+    );
+    // El suelo no es una espera: no hay nada que el dron vaya a confirmar solo.
+    expect(within(vista).queryByTestId('pilotaje-esperando')).not.toBeInTheDocument();
+    apretar('KeyW');
+    expect(usados.onMando).not.toHaveBeenCalled();
+    // Y la vista también ofrece despegar: sin eso no podría hacer nada.
+    expect(within(vista).getByRole('button', { name: 'Despegar' })).toBeEnabled();
   });
 
   it('el suelo vale aunque el status sea de antes de tomar el control', async () => {
@@ -652,8 +865,8 @@ describe('DroneDetail — en el suelo, despegar y aterrizar', () => {
       drone: makeDrone({ controlledBy: 'admin1', online: true }),
       status: makeStatus({ state: 'LANDED', controlledBy: null, flying: false }),
     });
-    await mando();
-    expect(screen.getByTestId('mando-impedimento')).toHaveTextContent('El dron está en el suelo');
+    await abrirPilotaje();
+    expect(screen.getByTestId('pilotaje-impedimento')).toHaveTextContent('El dron está en el suelo');
   });
 
   it('despegar pide confirmación y recién ahí ordena el despegue', async () => {
@@ -686,8 +899,9 @@ describe('DroneDetail — en el suelo, despegar y aterrizar', () => {
 
     usados.volverARenderizar({ status: makeStatus({ state: 'MANUAL', controlledBy: 'admin1', flying: true, alt: 1.2 }) });
     await waitFor(() => expect(screen.queryByTestId('orden-en-curso')).not.toBeInTheDocument());
-    expect(screen.queryByTestId('mando-impedimento')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Aterrizar' })).toBeEnabled();
+    await abrirPilotaje();
+    expect(screen.queryByTestId('pilotaje-impedimento')).not.toBeInTheDocument();
   });
 
   it('aterrizar también pide confirmación y ordena el aterrizaje', async () => {
@@ -715,15 +929,15 @@ describe('DroneDetail — en el suelo, despegar y aterrizar', () => {
 
   it('una app vieja que no informa si vuela no ofrece ni despegar ni aterrizar', async () => {
     renderDetail(conControl({ state: 'MANUAL' }));
-    await mando();
+    await abrirPilotaje();
     expect(screen.queryByRole('button', { name: 'Despegar' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Aterrizar' })).not.toBeInTheDocument();
-    expect(screen.queryByTestId('mando-impedimento')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pilotaje-impedimento')).not.toBeInTheDocument();
   });
 
   it('en el suelo las flechas también quedan deshabilitadas', async () => {
     renderDetail(conControl({ state: 'MANUAL', flying: false }));
-    await mando();
+    await esperarCarga();
     expect(screen.getByRole('button', { name: 'Mover al norte' })).toBeDisabled();
     expect(screen.getByTestId('pad-impedimento')).toHaveTextContent('El dron está en el suelo');
   });
@@ -744,7 +958,7 @@ describe('DroneDetail — sin GPS', () => {
         satellites: 2,
       }),
     });
-    const bloque = await screen.findByRole('group', { name: 'Mando virtual de vuelo continuo' });
+    await esperarCarga();
     for (const rumbo of ['norte', 'sur', 'este', 'oeste']) {
       expect(screen.getByRole('button', { name: `Mover al ${rumbo}` })).toBeDisabled();
     }
@@ -752,11 +966,14 @@ describe('DroneDetail — sin GPS', () => {
     await userEvent.click(screen.getByTitle('Norte'));
     expect(apiMock).not.toHaveBeenCalledWith('/drones/d1/manual_move', expect.anything());
 
-    // Las palancas no dependen de la posición: mandan velocidades.
-    expect(bloque).toHaveAttribute('aria-disabled', 'false');
-    fireEvent.keyDown(bloque, { key: 'w' });
-    expect(usados.onMando).toHaveBeenCalledWith({ pitch: 0, roll: 0, yaw: 0, throttle: 1 });
-    fireEvent.keyUp(bloque, { key: 'w' });
+    // El vuelo continuo no depende de la posición: manda velocidades. El
+    // minimapa de la vista dice que no sabe dónde está.
+    const vista = await abrirPilotaje();
+    expect(within(vista).queryByTestId('pilotaje-impedimento')).not.toBeInTheDocument();
+    expect(within(vista).getByTestId('minimapa-sin-gps')).toHaveTextContent('Sin GPS');
+    apretar('Space');
+    expect(usados.onMando).toHaveBeenCalledWith({ pitch: 0, roll: 0, yaw: 0, throttle: 0.5 });
+    soltar('Space');
   });
 
   it('el mapa avisa que el dron no se dibuja por falta de GPS', async () => {

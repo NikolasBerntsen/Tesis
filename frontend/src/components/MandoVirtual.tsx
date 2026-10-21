@@ -148,6 +148,7 @@ function textoDeEje(valor: number, mas: string, menos: string): string {
 export default function MandoVirtual({
   onMando,
   impedimento = null,
+  teclado = true,
 }: {
   /** Emite los ejes y devuelve si el mensaje llegó a salir de la consola. */
   onMando: (ejes: Ejes) => boolean;
@@ -158,6 +159,13 @@ export default function MandoVirtual({
    * sacaron el control, y dejarlo vivo le haría creer que el dron le obedece.
    */
   impedimento?: string | null;
+  /**
+   * Si el bloque atiende el teclado (W/A/S/D y las flechas, con el mando
+   * enfocado). La vista de pilotaje lo apaga porque ahí el teclado vuela con su
+   * propio esquema, el de un juego (W avanza), y con los dos prendidos la misma
+   * tecla mandaría el dron para dos lados a la vez.
+   */
+  teclado?: boolean;
 }) {
   // Arrastre en curso de cada palanca: `null` es "nadie la está tocando", y
   // entonces manda el teclado. No es lo mismo que "está en el centro".
@@ -424,7 +432,7 @@ export default function MandoVirtual({
             }}
           />
         </div>
-        <span className="muted mando-teclas">{teclas}</span>
+        {teclado && <span className="muted mando-teclas">{teclas}</span>}
       </div>
     );
   }
@@ -433,13 +441,15 @@ export default function MandoVirtual({
     <div
       className={`mando${inerte ? ' mando-impedido' : ''}`}
       role="group"
-      tabIndex={0}
+      // Sin teclado no hay nada que hacer con el foco: enfocable sería una
+      // parada más del tabulador que no responde a ninguna tecla.
+      tabIndex={teclado ? 0 : undefined}
       aria-label="Mando virtual de vuelo continuo"
       aria-describedby={idAyuda}
       aria-disabled={inerte}
-      onKeyDown={alApretarTecla}
-      onKeyUp={alSoltarTecla}
-      onBlur={alPerderFoco}
+      onKeyDown={teclado ? alApretarTecla : undefined}
+      onKeyUp={teclado ? alSoltarTecla : undefined}
+      onBlur={teclado ? alPerderFoco : undefined}
     >
       {/* El motivo va arriba de todo: es lo primero que hay que leer antes de
           empujar una palanca que no va a mover nada. */}
@@ -486,9 +496,10 @@ export default function MandoVirtual({
       </dl>
 
       <p className="muted mando-ayuda" id={idAyuda}>
-        Arrastrá las palancas con el mouse o el dedo, o manejalas con el teclado (W, A, S, D y las
-        flechas) después de enfocar el mando. Mientras sostengas, el dron se mueve; al soltar queda
-        en vuelo estacionario.
+        {teclado
+          ? 'Arrastrá las palancas con el mouse o el dedo, o manejalas con el teclado (W, A, S, D y las flechas) después de enfocar el mando.'
+          : 'Arrastrá las palancas con el mouse o el dedo.'}{' '}
+        Mientras sostengas, el dron se mueve; al soltar queda en vuelo estacionario.
       </p>
     </div>
   );
