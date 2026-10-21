@@ -379,25 +379,16 @@ class MainActivity : AppCompatActivity() {
     private fun actualizarBotones() {
         val estado = manager.state.value
         val dron = ultimoEstadoDron
-        binding.btnStartPatrol.isEnabled =
-            routes.isNotEmpty() && estado == PatrolState.IDLE && (dron.enVuelo || dron.listoParaDespegar)
+        binding.btnStartPatrol.isEnabled = BotonesDeVuelo.comenzarHabilitado(routes.isNotEmpty(), estado, dron)
         // El botón apagado no dice nada: se explica por qué. Lo típico es la
         // falta de GPS o de punto de retorno (en interior, siempre).
-        val porQueNoPatrulla = when {
-            routes.isEmpty() || binding.btnStartPatrol.isEnabled -> null
-            estado != PatrolState.IDLE -> null
-            !dron.enVuelo && !dron.listoParaDespegar -> getString(R.string.main_no_se_puede_patrullar, dron.detalle)
-            else -> null
-        }
-        binding.txtNoPatrulla.visibility = if (porQueNoPatrulla != null) View.VISIBLE else View.GONE
-        binding.txtNoPatrulla.text = porQueNoPatrulla.orEmpty()
+        val motivo = BotonesDeVuelo.porQueNoPatrulla(routes.isNotEmpty(), estado, dron)
+        binding.txtNoPatrulla.visibility = if (motivo != null) View.VISIBLE else View.GONE
+        binding.txtNoPatrulla.text = motivo?.let { getString(R.string.main_no_se_puede_patrullar, it) }.orEmpty()
         binding.btnStartPatrol.setText(
             if (dron.enVuelo) R.string.main_comenzar_patrullaje else R.string.main_despegar_y_patrullar,
         )
-        // En el lugar: con enlace y en el suelo, salvo con un regreso a base en curso
-        binding.btnDespegarAqui.isEnabled = !dron.enVuelo && dron.conectado &&
-            estado != PatrolState.RETURNING_HOME && estado != PatrolState.RETURNING_HOME_BATTERY &&
-            estado != PatrolState.RETURNING_HOME_SIGNAL
+        binding.btnDespegarAqui.isEnabled = BotonesDeVuelo.despegarAquiHabilitado(estado, dron)
         binding.btnStopPatrol.isEnabled = estado in ESTADOS_DETENIBLES
         binding.btnResumePatrol.isEnabled = manager.tieneRuta && estado in ESTADOS_REANUDABLES
         binding.btnReturnHome.isEnabled =

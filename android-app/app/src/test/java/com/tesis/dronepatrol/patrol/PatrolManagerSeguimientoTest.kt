@@ -430,6 +430,60 @@ class PatrolManagerSeguimientoTest {
         assertFalse(dron.ordenes.contains("despegarEnElLugar"))
     }
 
+    /** Comenzar la ruta desde el suelo también es despegar: con la batería baja, no. */
+    @Test
+    fun conLaBateriaBajaNoSeArrancaLaRutaDesdeElSuelo() = runBlocking {
+        dron.estado.value = dron.estado.value.copy(enVuelo = false)
+        patrulla.start()
+        telemetriaConBateria(22.0)
+        patrulla.startPatrol(ruta)
+        esperarA("el aviso") { comandoCentral.eventos("DRONE_PROBLEM").isNotEmpty() }
+        assertTrue(comandoCentral.eventos("DRONE_PROBLEM").single().getString("message").contains("22%"))
+        assertTrue(dron.ordenes.none { it.startsWith("startRoute") })
+        assertEquals(PatrolState.IDLE, patrulla.state.value)
+    }
+
+    /**
+     * Después de un despegue en el lugar, el próximo despegue (el de una ruta)
+     * vuelve a registrarse como automático: la marca del despegue en el lugar
+     * se gasta al llegar al aire.
+     */
+    @Test
+    fun laMarcaDelDespegueEnElLugarSeGastaAlLlegarAlAire() = runBlocking {
+        dron.estado.value = dron.estado.value.copy(enVuelo = false)
+        patrulla.start()
+        telemetria()
+        patrulla.despegarAqui()
+        esperarA("TAKEOFF") { comandoCentral.eventos("TAKEOFF").isNotEmpty() }
+        dron.flightEvents.emit(FlightEvent.Despegando)
+        dron.flightEvents.emit(FlightEvent.EnElAire)
+        delay(200)
+        assertEquals(1, comandoCentral.eventos("TAKEOFF").size)
+
+        dron.flightEvents.emit(FlightEvent.Despegando)
+        esperarA("el despegue automático") { comandoCentral.eventos("TAKEOFF").size == 2 }
+        assertTrue(comandoCentral.eventos("TAKEOFF").last().getString("message").contains("automático"))
+    }
+
+    /**
+     * Si aterriza en medio de la ruta sin que nadie lo haya ordenado (las
+     * palancas del control, o el propio dron), la patrulla vuelve a IDLE y no
+     * queda en un estado de vuelo con el dron en el suelo.
+     */
+    @Test
+    fun aterrizarEnMedioDeLaRutaDejaLaPatrullaEnReposo() = runBlocking {
+        patrulla.start()
+        telemetria()
+        patrulla.startPatrol(ruta)
+        withTimeout(5_000) { patrulla.state.first { it == PatrolState.PATROLLING } }
+
+        dron.estado.value = dron.estado.value.copy(enVuelo = false)
+        dron.flightEvents.emit(FlightEvent.Aterrizado)
+        withTimeout(5_000) { patrulla.state.first { it == PatrolState.IDLE } }
+        esperarA("LANDED") { comandoCentral.eventos("LANDED").isNotEmpty() }
+        assertEquals("Dron aterrizado", comandoCentral.eventos("LANDED").single().getString("message"))
+    }
+
     /** Un despegue que no corresponde (sin el control tomado) se avisa a la consola, no queda mudo. */
     @Test
     fun unDespegueSinElControlSeAvisaALaConsola() = runBlocking {
