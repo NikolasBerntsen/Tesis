@@ -10,9 +10,9 @@ const TIPO = { PERSON: 'PERSONA', VEHICLE: 'VEHÍCULO' } as const;
  * mirar: llegan solas y hay que decidirlas. Por eso viven en una campana del
  * encabezado y no en una tarjeta al pie de una vista —ahí sólo las veía quien
  * ya estaba mirando ese dron—, y desde el desplegable se validan o se descartan
- * sin salir de donde uno esté. La vista del dron las repite al lado del video
- * (AlertaEnCurso), y las dos deciden con el mismo hook: un rechazo del backend
- * se ve igual en las dos, al lado de los botones.
+ * sin salir de donde uno esté. El tablero y la vista del dron las repiten en un
+ * carrusel con la captura grande (AlertaEnCurso), y todos deciden con el mismo
+ * hook: un rechazo del backend se ve igual en cada uno, al lado de los botones.
  */
 export default function CampanaDeAlertas({
   alerts,

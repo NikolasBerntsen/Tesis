@@ -474,7 +474,7 @@ const OBJETIVO: ObjetivoEnSeguimiento = {
 };
 
 describe('DroneDetail — alerta en curso', () => {
-  it('muestra la pendiente más nueva de ESTE dron al lado del video', async () => {
+  it('muestra la pendiente más nueva de ESTE dron al lado del video, y deja recorrer las demás', async () => {
     renderDetail({
       alertas: [
         makeAlert({ id: 3, drone_id: 'd1', status: 'PENDING', type: 'PERSON' }),
@@ -490,13 +490,39 @@ describe('DroneDetail — alerta en curso', () => {
       'src',
       'data:image/jpeg;base64,QUFB',
     );
-    // La otra pendiente del mismo dron no se pierde: se avisa que está en la campana.
-    expect(within(tarjeta).getByText(/otra alerta sin decidir/)).toBeInTheDocument();
+    // La otra pendiente del mismo dron no se pierde: está a una flecha. Las de
+    // otros drones y las ya decididas no cuentan.
+    expect(within(tarjeta).getByTestId('carrusel-cuenta')).toHaveTextContent('1 de 2');
+    await userEvent.click(within(tarjeta).getByRole('button', { name: 'Alerta siguiente, más vieja' }));
+    expect(within(tarjeta).getByTestId('carrusel-cuenta')).toHaveTextContent('2 de 2');
+    expect(within(tarjeta).getByText('PERSONA')).toBeInTheDocument();
+    // En la vista del dron no se repite de qué dron es: es éste.
+    expect(within(tarjeta).queryByRole('button', { name: 'Alfa' })).not.toBeInTheDocument();
 
     // Va en el par del video y el mapa, entre los dos.
     const par = document.body.querySelector('.par-video-mapa') as HTMLElement;
     expect(par).toHaveClass('con-alerta');
     expect(par.contains(tarjeta)).toBe(true);
+  });
+
+  it('al pasar a otro dron, el carrusel arranca de cero con las alertas de ése', async () => {
+    const alertas = [
+      makeAlert({ id: 3, drone_id: 'd1', status: 'PENDING' }),
+      makeAlert({ id: 4, drone_id: 'd1', status: 'PENDING' }),
+      makeAlert({ id: 8, drone_id: 'd2', status: 'PENDING' }),
+      makeAlert({ id: 9, drone_id: 'd2', status: 'PENDING' }),
+    ];
+    const { volverARenderizar } = renderDetail({ alertas });
+    await esperarCarga();
+    await userEvent.click(screen.getByRole('button', { name: 'Alerta siguiente, más vieja' }));
+    expect(screen.getByTestId('carrusel-cuenta')).toHaveTextContent('2 de 2');
+
+    volverARenderizar({ drone: makeDrone({ droneId: 'd2', displayName: 'Bravo', online: true }) });
+    await esperarCarga();
+    // Las del otro dron no son "nuevas": no late la cuenta ni aparece el aviso.
+    expect(screen.getByTestId('carrusel-cuenta')).toHaveTextContent('1 de 2');
+    expect(screen.getByTestId('carrusel-cuenta')).not.toHaveClass('llego');
+    expect(screen.queryByRole('button', { name: /alerta nueva/ })).not.toBeInTheDocument();
   });
 
   it('valida y descarta desde la tarjeta con el id de la alerta', async () => {

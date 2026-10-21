@@ -331,6 +331,7 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
           alerts={alerts}
           pendingAlerts={pendingAlerts}
           rastros={rastros}
+          onDecidir={decidirAlerta}
           onOpenDrone={setSelectedId}
           onRename={rename}
         />

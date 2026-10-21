@@ -1,13 +1,10 @@
 import { useMemo, useState } from 'react';
-import { time } from '../format';
 import type { RastroObjetivo } from '../rastro';
 import type { Alert, Drone, DroneStatus } from '../types';
+import type { DecidirAlerta } from '../useDecisionDeAlerta';
+import AlertaEnCurso from './AlertaEnCurso';
 import CameraTile from './CameraTile';
 import DronesMap, { type MapItem } from './DronesMap';
-
-const TIPO_ALERTA = { PERSON: 'PERSONA', VEHICLE: 'VEHÍCULO' } as const;
-// Más de cuatro chips y la franja deja de leerse de un vistazo.
-const CHIPS_VISIBLES = 4;
 
 // Fijo y no `{}` en la firma: un objeto nuevo en cada render rehacía los
 // items del mapa en cada render, y el mapa los redibuja cuando cambian.
@@ -20,6 +17,7 @@ export default function Dashboard({
   alerts,
   pendingAlerts,
   rastros = SIN_RASTROS,
+  onDecidir,
   onOpenDrone,
   onRename,
 }: {
@@ -30,6 +28,8 @@ export default function Dashboard({
   pendingAlerts: Record<string, number>;
   /** Rastro del objetivo de cada dron que está sobre uno (ver rastro.ts). */
   rastros?: Record<string, RastroObjetivo>;
+  /** Validar o descartar desde el tablero, con el mismo camino que la campana. */
+  onDecidir: DecidirAlerta;
   onOpenDrone: (droneId: string) => void;
   onRename: (droneId: string, displayName: string) => void;
 }) {
@@ -55,27 +55,30 @@ export default function Dashboard({
     [drones, statuses, rastros],
   );
 
-  // Las alertas se atienden en la vista de detalle, pero el operador tiene que
-  // enterarse sin importar en qué vista del dashboard esté parado.
-  const pendientes = alerts.filter((a) => a.status === 'PENDING');
-  const sinMostrar = pendientes.length - CHIPS_VISIBLES;
-  const nombre = (droneId: string | null) =>
-    drones.find((d) => d.droneId === droneId)?.displayName ?? droneId ?? '—';
+  // Las pendientes de toda la flota, una por vez y con flechas para recorrerlas.
+  // Antes era una franja de chips que cortaba en cuatro ("+2 más") y no dejaba
+  // ver la captura de ninguna: para saber si valía la pena ir al dron había que
+  // ir. Ahora cada una muestra su captura, de qué dron es y el camino a su vista.
+  const pendientes = useMemo(() => alerts.filter((a) => a.status === 'PENDING'), [alerts]);
+  // Qué alertas tienen un dron encima de su objetivo: la tarjeta lo dice, como
+  // en la vista del dron, porque ahí la comparación con el video es inmediata.
+  const seguidas = useMemo(
+    () => Object.values(statuses).flatMap((s) => (s.target ? [s.target.alertId] : [])),
+    [statuses],
+  );
 
   return (
     <main className="dashboard-main">
       {pendientes.length > 0 && (
-        <div className="alert-strip" role="status">
-          <strong>
-            {pendientes.length} {pendientes.length === 1 ? 'alerta sin atender' : 'alertas sin atender'}
-          </strong>
-          {pendientes.slice(0, CHIPS_VISIBLES).map((a) => (
-            <button key={a.id} className="alert-chip" onClick={() => a.drone_id && onOpenDrone(a.drone_id)}>
-              {TIPO_ALERTA[a.type]} · {nombre(a.drone_id)} · {time(a.created_at)}
-            </button>
-          ))}
-          {sinMostrar > 0 && <span className="badge">+{sinMostrar} más</span>}
-        </div>
+        <AlertaEnCurso
+          alertas={pendientes}
+          titulo={`${pendientes.length} ${pendientes.length === 1 ? 'alerta sin atender' : 'alertas sin atender'}`}
+          apaisada
+          seguidas={seguidas}
+          drones={drones}
+          onVerDron={onOpenDrone}
+          onDecidir={onDecidir}
+        />
       )}
 
       <div className="barra-acciones">
