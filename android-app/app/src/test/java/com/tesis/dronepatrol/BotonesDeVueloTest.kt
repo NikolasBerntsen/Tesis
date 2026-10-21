@@ -7,11 +7,16 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
 
 /**
  * Qué botones de vuelo se prenden en la pantalla de operación. Lo que enseñó el
  * campo: en interior no hay GPS, "Comenzar ruta" queda apagado y el operador
- * tiene que saber por qué; "Despegar aquí" no pide GPS.
+ * tiene que saber por qué; "Despegar aquí" no pide GPS; y después de aterrizar
+ * por batería baja no se vuela hasta cambiarla.
  */
 class BotonesDeVueloTest {
 
@@ -35,21 +40,32 @@ class BotonesDeVueloTest {
         assertFalse(BotonesDeVuelo.comenzarHabilitado(false, PatrolState.IDLE, listo))
         assertFalse(BotonesDeVuelo.comenzarHabilitado(true, PatrolState.IDLE, sinGps))
         assertFalse(BotonesDeVuelo.comenzarHabilitado(true, PatrolState.PATROLLING, listo))
+        assertFalse("con la batería por cambiar", BotonesDeVuelo.comenzarHabilitado(true, PatrolState.LANDED, listo))
     }
 
-    // ---- Por qué no se puede patrullar ----
+    // ---- Por qué están apagados ----
 
     @Test
     fun sinGpsDiceElMotivoDelDron() {
-        assertEquals("sin GPS (0 satélites)", BotonesDeVuelo.porQueNoPatrulla(true, PatrolState.IDLE, sinGps))
+        assertEquals(
+            BotonesDeVuelo.Aviso.SinCondicionesParaLaRuta("sin GPS (0 satélites)"),
+            BotonesDeVuelo.aviso(true, PatrolState.IDLE, sinGps),
+        )
+    }
+
+    @Test
+    fun despuesDeAterrizarPorBateriaDiceQueHayQueCambiarla() {
+        assertEquals(BotonesDeVuelo.Aviso.CambiarLaBateria, BotonesDeVuelo.aviso(true, PatrolState.LANDED, listo))
+        assertEquals("también sin rutas", BotonesDeVuelo.Aviso.CambiarLaBateria, BotonesDeVuelo.aviso(false, PatrolState.LANDED, sinGps))
+        assertNull("si alguien lo despegó con las palancas ya no aplica", BotonesDeVuelo.aviso(true, PatrolState.LANDED, enElAire))
     }
 
     @Test
     fun noExplicaNadaSiSePuedeOSiNoCorresponde() {
-        assertNull("se puede", BotonesDeVuelo.porQueNoPatrulla(true, PatrolState.IDLE, listo))
-        assertNull("en el aire se puede", BotonesDeVuelo.porQueNoPatrulla(true, PatrolState.IDLE, enElAire))
-        assertNull("sin rutas no hay nada que patrullar", BotonesDeVuelo.porQueNoPatrulla(false, PatrolState.IDLE, sinGps))
-        assertNull("con otra cosa en curso", BotonesDeVuelo.porQueNoPatrulla(true, PatrolState.MANUAL, sinGps))
+        assertNull("se puede", BotonesDeVuelo.aviso(true, PatrolState.IDLE, listo))
+        assertNull("en el aire se puede", BotonesDeVuelo.aviso(true, PatrolState.IDLE, enElAire))
+        assertNull("sin rutas no hay nada que patrullar", BotonesDeVuelo.aviso(false, PatrolState.IDLE, sinGps))
+        assertNull("con otra cosa en curso", BotonesDeVuelo.aviso(true, PatrolState.MANUAL, sinGps))
     }
 
     // ---- Despegar aquí ----
@@ -58,13 +74,13 @@ class BotonesDeVueloTest {
     fun despegarAquiNoPideGps() {
         assertTrue(BotonesDeVuelo.despegarAquiHabilitado(PatrolState.IDLE, sinGps))
         assertTrue("con el control tomado en el suelo", BotonesDeVuelo.despegarAquiHabilitado(PatrolState.MANUAL, sinGps))
-        assertTrue("después de un aterrizaje por batería", BotonesDeVuelo.despegarAquiHabilitado(PatrolState.LANDED, listo))
     }
 
     @Test
-    fun despegarAquiNoEnElAireNiSinEnlaceNiVolviendoABase() {
+    fun despegarAquiNoEnElAireNiSinEnlaceNiVolviendoABaseNiConLaBateriaPorCambiar() {
         assertFalse(BotonesDeVuelo.despegarAquiHabilitado(PatrolState.IDLE, enElAire))
         assertFalse(BotonesDeVuelo.despegarAquiHabilitado(PatrolState.IDLE, sinEnlace))
+        assertFalse("aterrizó por batería baja", BotonesDeVuelo.despegarAquiHabilitado(PatrolState.LANDED, listo))
         for (regreso in listOf(
             PatrolState.RETURNING_HOME,
             PatrolState.RETURNING_HOME_BATTERY,
@@ -72,5 +88,28 @@ class BotonesDeVueloTest {
         )) {
             assertFalse(regreso.name, BotonesDeVuelo.despegarAquiHabilitado(regreso, listo))
         }
+    }
+}
+
+/** Los textos de los avisos salen de los recursos: hace falta un Context de verdad. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
+class BotonesDeVueloTextoTest {
+
+    private val contexto = RuntimeEnvironment.getApplication()
+
+    @Test
+    fun elAvisoSinGpsLlevaElMotivoDelDron() {
+        val texto = BotonesDeVuelo.texto(BotonesDeVuelo.Aviso.SinCondicionesParaLaRuta("sin GPS (0 satélites)"), contexto)
+        assertEquals(contexto.getString(R.string.main_no_se_puede_patrullar, "sin GPS (0 satélites)"), texto)
+        assertTrue(texto.contains("sin GPS (0 satélites)"))
+    }
+
+    @Test
+    fun elAvisoDeLaBateriaDiceQueHayQueCambiarla() {
+        assertEquals(
+            contexto.getString(R.string.main_cambiar_bateria),
+            BotonesDeVuelo.texto(BotonesDeVuelo.Aviso.CambiarLaBateria, contexto),
+        )
     }
 }

@@ -1,5 +1,6 @@
 package com.tesis.dronepatrol
 
+import android.content.Context
 import com.tesis.dronepatrol.model.EstadoDelDron
 import com.tesis.dronepatrol.model.PatrolState
 
@@ -26,16 +27,38 @@ internal object BotonesDeVuelo {
     fun comenzarHabilitado(hayRutas: Boolean, estado: PatrolState, dron: EstadoDelDron): Boolean =
         hayRutas && estado == PatrolState.IDLE && (dron.enVuelo || dron.listoParaDespegar)
 
-    /** "Despegar aquí": en el suelo, con enlace con la aeronave, y sin un regreso a base en curso. No exige GPS. */
+    /**
+     * "Despegar aquí": en el suelo, con enlace con la aeronave, sin un regreso a
+     * base en curso y sin la batería por cambiar (LANDED). No exige GPS.
+     */
     fun despegarAquiHabilitado(estado: PatrolState, dron: EstadoDelDron): Boolean =
-        !dron.enVuelo && dron.conectado && estado !in REGRESOS
+        !dron.enVuelo && dron.conectado && estado !in REGRESOS && estado != PatrolState.LANDED
+
+    /** Lo que se explica debajo de los botones de vuelo cuando están apagados. */
+    sealed interface Aviso {
+        /** Falta GPS o punto de retorno para volar una ruta; [detalle] es lo que dice el controlador. */
+        data class SinCondicionesParaLaRuta(val detalle: String) : Aviso
+
+        /** Aterrizó con la batería baja: hasta que la cambien no se vuela. */
+        object CambiarLaBateria : Aviso
+    }
 
     /**
-     * Por qué no se puede comenzar a patrullar, para decirlo debajo del botón
-     * apagado; null si se puede o si no hay nada que explicar (sin rutas, o con
-     * otra cosa en curso). Lo típico es la falta de GPS o de punto de retorno,
-     * y el motivo exacto es el `detalle` que arma el controlador.
+     * Por qué los botones de vuelo están apagados, para decirlo debajo; null si
+     * no hay nada que explicar (se puede, no hay rutas, u otra cosa en curso).
+     * Lo típico es la falta de GPS o de punto de retorno; después de un
+     * aterrizaje por batería baja, que hay que cambiarla.
      */
-    fun porQueNoPatrulla(hayRutas: Boolean, estado: PatrolState, dron: EstadoDelDron): String? =
-        if (hayRutas && estado == PatrolState.IDLE && !dron.enVuelo && !dron.listoParaDespegar) dron.detalle else null
+    fun aviso(hayRutas: Boolean, estado: PatrolState, dron: EstadoDelDron): Aviso? = when {
+        estado == PatrolState.LANDED && !dron.enVuelo -> Aviso.CambiarLaBateria
+        hayRutas && estado == PatrolState.IDLE && !dron.enVuelo && !dron.listoParaDespegar ->
+            Aviso.SinCondicionesParaLaRuta(dron.detalle)
+        else -> null
+    }
+
+    /** El texto de un [Aviso] para el operador. */
+    fun texto(aviso: Aviso, contexto: Context): String = when (aviso) {
+        is Aviso.SinCondicionesParaLaRuta -> contexto.getString(R.string.main_no_se_puede_patrullar, aviso.detalle)
+        Aviso.CambiarLaBateria -> contexto.getString(R.string.main_cambiar_bateria)
+    }
 }

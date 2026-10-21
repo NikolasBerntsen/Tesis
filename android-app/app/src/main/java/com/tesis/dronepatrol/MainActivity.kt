@@ -382,9 +382,9 @@ class MainActivity : AppCompatActivity() {
         binding.btnStartPatrol.isEnabled = BotonesDeVuelo.comenzarHabilitado(routes.isNotEmpty(), estado, dron)
         // El botón apagado no dice nada: se explica por qué. Lo típico es la
         // falta de GPS o de punto de retorno (en interior, siempre).
-        val motivo = BotonesDeVuelo.porQueNoPatrulla(routes.isNotEmpty(), estado, dron)
-        binding.txtNoPatrulla.visibility = if (motivo != null) View.VISIBLE else View.GONE
-        binding.txtNoPatrulla.text = motivo?.let { getString(R.string.main_no_se_puede_patrullar, it) }.orEmpty()
+        val aviso = BotonesDeVuelo.aviso(routes.isNotEmpty(), estado, dron)
+        binding.txtNoPatrulla.visibility = if (aviso != null) View.VISIBLE else View.GONE
+        binding.txtNoPatrulla.text = aviso?.let { BotonesDeVuelo.texto(it, this) }.orEmpty()
         binding.btnStartPatrol.setText(
             if (dron.enVuelo) R.string.main_comenzar_patrullaje else R.string.main_despegar_y_patrullar,
         )
