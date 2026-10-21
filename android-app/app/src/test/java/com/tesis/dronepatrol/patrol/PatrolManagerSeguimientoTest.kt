@@ -484,6 +484,95 @@ class PatrolManagerSeguimientoTest {
         assertEquals("Dron aterrizado", comandoCentral.eventos("LANDED").single().getString("message"))
     }
 
+    /** Con la batería bien, la ruta desde el suelo arranca: el despegue lo hace el controlador. */
+    @Test
+    fun conLaBateriaBienLaRutaArrancaDesdeElSuelo() = runBlocking {
+        dron.estado.value = dron.estado.value.copy(enVuelo = false)
+        patrulla.start()
+        telemetriaConBateria(80.0)
+        patrulla.startPatrol(ruta)
+        withTimeout(5_000) { patrulla.state.first { it == PatrolState.PATROLLING } }
+        esperarA("la ruta") { dron.ordenes.contains("startRoute(1, 0)") }
+        assertTrue(comandoCentral.eventos("DRONE_PROBLEM").isEmpty())
+    }
+
+    /** Sin enlace y sin que el controlador diga por qué, el aviso igual dice qué falta. */
+    @Test
+    fun desdeLaAppSinEnlaceYSinDetalleDiceQueFalta() = runBlocking {
+        dron.estado.value = dron.estado.value.copy(enVuelo = false, conectado = false, detalle = "")
+        patrulla.start()
+        patrulla.despegarAqui()
+        esperarA("el aviso") { comandoCentral.eventos("DRONE_PROBLEM").isNotEmpty() }
+        assertTrue(comandoCentral.eventos("DRONE_PROBLEM").single().getString("message").contains("sin enlace con la aeronave"))
+        assertFalse(dron.ordenes.contains("despegarEnElLugar"))
+    }
+
+    /**
+     * En interior no hay GPS: el despegue en el lugar igual sale, y el registro
+     * dice que el dron se sostiene con los sensores de visión. Vale tanto sin
+     * telemetría todavía (sin dato de batería no se frena: decide el dron) como
+     * con telemetría sin posición.
+     */
+    @Test
+    fun desdeLaAppSinTelemetriaDespegaYAvisaQueNoHayGps() = runBlocking {
+        dron.estado.value = dron.estado.value.copy(enVuelo = false)
+        patrulla.start()
+        patrulla.despegarAqui()
+        esperarA("el despegue") { dron.ordenes.contains("despegarEnElLugar") }
+        esperarA("TAKEOFF") { comandoCentral.eventos("TAKEOFF").isNotEmpty() }
+        assertTrue(comandoCentral.eventos("TAKEOFF").single().getString("message").contains("sin GPS"))
+    }
+
+    @Test
+    fun desdeLaAppSinPosicionDespegaYAvisaQueNoHayGps() = runBlocking {
+        dron.estado.value = dron.estado.value.copy(enVuelo = false)
+        patrulla.start()
+        dron.emitirTelemetria(Double.NaN, Double.NaN, alt = 0.0)
+        delay(100)
+        patrulla.despegarAqui()
+        esperarA("TAKEOFF") { comandoCentral.eventos("TAKEOFF").isNotEmpty() }
+        assertTrue(comandoCentral.eventos("TAKEOFF").single().getString("message").contains("sin GPS"))
+    }
+
+    @Test
+    fun desdeLaAppConGpsNoAvisaQueFalta() = runBlocking {
+        dron.estado.value = dron.estado.value.copy(enVuelo = false)
+        patrulla.start()
+        telemetria()
+        patrulla.despegarAqui()
+        esperarA("TAKEOFF") { comandoCentral.eventos("TAKEOFF").isNotEmpty() }
+        assertFalse(comandoCentral.eventos("TAKEOFF").single().getString("message").contains("sin GPS"))
+    }
+
+    /**
+     * El failsafe de batería salta también con el control manual tomado. Al
+     * aterrizar el control sigue siendo del operador, pero el aviso de cambiar
+     * la batería no se pierde, y despegar de nuevo queda frenado.
+     */
+    @Test
+    fun conElControlTomadoAterrizarPorBateriaBajaLoDiceYNoDejaDespegar() = runBlocking {
+        patrulla.start()
+        telemetria()
+        mensaje("""{"type":"control_taken","by":"op"}""")
+        withTimeout(5_000) { patrulla.state.first { it == PatrolState.MANUAL } }
+        dron.emitirTelemetria(LAT, LON, bateria = 20.0, alt = ALT, rumbo = 90.0, gimbal = -70.0)
+        withTimeout(5_000) { patrulla.state.first { it == PatrolState.RETURNING_HOME_BATTERY } }
+
+        dron.estado.value = dron.estado.value.copy(enVuelo = false)
+        dron.flightEvents.emit(FlightEvent.Aterrizado)
+        withTimeout(5_000) { patrulla.state.first { it == PatrolState.MANUAL } }
+        esperarA("LANDED") { comandoCentral.eventos("LANDED").isNotEmpty() }
+        val aviso = comandoCentral.eventos("LANDED").single().getString("message")
+        assertTrue(aviso, aviso.contains("batería baja"))
+        assertTrue(aviso, aviso.contains("control manual sigue tomado"))
+
+        mensaje("""{"type":"takeoff","by":"op"}""")
+        esperarA("el aviso de la batería") {
+            comandoCentral.eventos("DRONE_PROBLEM").any { it.getString("message").contains("20%") }
+        }
+        assertFalse(dron.ordenes.contains("despegarEnElLugar"))
+    }
+
     /** Un despegue que no corresponde (sin el control tomado) se avisa a la consola, no queda mudo. */
     @Test
     fun unDespegueSinElControlSeAvisaALaConsola() = runBlocking {

@@ -1145,9 +1145,21 @@ class PatrolManager(
                 when {
                     // Con el control tomado sigue siendo del operador, en el
                     // suelo: puede volver a despegar sin soltarlo y retomarlo.
+                    // Si venía volviendo por batería baja (el failsafe salta
+                    // también con el control tomado), el aviso de cambiarla no
+                    // se pierde: despegar igual queda frenado por la batería.
                     controlTomado -> {
+                        val porBateria = _state.value == PatrolState.RETURNING_HOME_BATTERY
                         if (_state.value != PatrolState.MANUAL) pasarA(PatrolState.MANUAL)
-                        report("LANDED", "Dron aterrizado: el control manual sigue tomado")
+                        report(
+                            "LANDED",
+                            if (porBateria) {
+                                "Dron aterrizado con la batería baja: hay que cambiarla antes de volver a volar " +
+                                    "(el control manual sigue tomado)"
+                            } else {
+                                "Dron aterrizado: el control manual sigue tomado"
+                            },
+                        )
                     }
                     // Aterrizó volviendo por batería baja (el propio dron, o un
                     // regreso que terminó en otro lado): hay que cambiarla.
