@@ -171,6 +171,7 @@
     <string name="main_confirmar_despegue_texto">El dron va a encender los motores, subir solo a la altura de la ruta %1$s y arrancar el patrullaje. Confirmá que el área de despegue está despejada y que el control está en modo N.</string>
     <string name="main_confirmar_despegue_boton">Despegar</string>
     <string name="main_despegar_aqui">Despegar aquí (sin ruta)</string>
+    <string name="main_no_se_puede_patrullar">Para patrullar hace falta GPS y el punto de retorno fijado: %1$s. "Despegar aquí" funciona sin GPS.</string>
     <string name="main_confirmar_despegue_aqui_titulo">¿Despegar aquí?</string>
     <string name="main_confirmar_despegue_aqui_texto">El dron va a encender los motores, despegar en el lugar y quedar suspendido a ~1,2 m, sin ruta. Funciona sin GPS (en interior se sostiene con los sensores de visión: hace falta buena luz y un piso con textura). Confirmá que alrededor está despejado y que el control está en modo N.</string>
     <string name="main_confirmar_rth_titulo">¿Volver a la base?</string>

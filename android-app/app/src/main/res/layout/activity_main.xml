@@ -419,6 +419,15 @@
                             app:icon="@drawable/ic_despegar"
                             app:iconGravity="textStart" />
 
+                        <TextView
+                            android:id="@+id/txtNoPatrulla"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:textAppearance="@style/TextAppearance.DronePatrol.Apagado"
+                            android:textColor="@color/estado_alerta"
+                            android:visibility="gone" />
+
                         <!-- Despegue en el lugar, sin ruta ni GPS: para no tener que
                              despegar con las palancas del control -->
                         <com.google.android.material.button.MaterialButton

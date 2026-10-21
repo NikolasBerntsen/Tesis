@@ -611,6 +611,7 @@ class PatrolManager(
             report("DRONE_PROBLEM", "No se despega con la batería al ${pct.toInt()}%: hace falta más del ${LOW_BATTERY_PCT.toInt()}%")
             return
         }
+        olvidarElUltimoProblema()
         val sinGps = lastTelemetry?.tienePosicion != true
         despegueEnElLugar = true
         controller.despegarEnElLugar()
@@ -939,6 +940,7 @@ class PatrolManager(
             report("DRONE_PROBLEM", "No se despega con la batería al ${pct.toInt()}%: hace falta más del ${LOW_BATTERY_PCT.toInt()}%")
             return
         }
+        olvidarElUltimoProblema()
         val sinGps = lastTelemetry?.tienePosicion != true
         despegueEnElLugar = true
         controller.despegarEnElLugar()
@@ -987,6 +989,17 @@ class PatrolManager(
         if (!controller.estado.value.enVuelo) return false
         val estado = _state.value
         return estado in ESTADOS_EN_VUELO || estado == PatrolState.IDLE
+    }
+
+    /**
+     * Un pedido explícito del operador (despegar): si el dron lo rechaza, el
+     * motivo tiene que llegar aunque sea el mismo de la vez anterior. El filtro
+     * de avisos repetidos (ver hayQueAvisarElProblema()) es para los rechazos
+     * que se repiten solos a 10 Hz, no para el operador que vuelve a apretar.
+     */
+    private fun olvidarElUltimoProblema() {
+        ultimoProblemaAvisado = null
+        ultimoProblemaAvisadoMs = 0L
     }
 
     /**
