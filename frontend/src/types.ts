@@ -110,6 +110,11 @@ export interface Me {
 export interface UserView {
   username: string;
   fullName: string;
+  /**
+   * DNI en dígitos, sin puntos. Vacío en las cuentas anteriores al DNI, y
+   * opcional porque un backend viejo directamente no lo manda.
+   */
+  dni?: string;
   role: RolConsola;
   active: boolean;
   canControl: boolean;
@@ -118,6 +123,24 @@ export interface UserView {
   /** Fecha ISO de esa baja; queda como dato de auditoría. */
   deletedAt: string | null;
 }
+
+/** Cuerpo de POST /api/users. La contraseña no va: la genera el sistema. */
+export interface AltaDeUsuario {
+  username: string;
+  fullName: string;
+  /** Ya normalizado a dígitos. */
+  dni: string;
+  role: RolAsignable;
+  canControl: boolean;
+}
+
+/**
+ * Cuerpo de PATCH /api/users/:username: sólo lo que cambió. El supervisor
+ * nada más puede mandar `canControl`; el resto es del admin.
+ */
+export type CambiosDeUsuario = Partial<Pick<UserView, 'fullName' | 'dni' | 'active' | 'canControl'>> & {
+  role?: RolAsignable;
+};
 
 /** Ficha de dron que devuelve GET /api/drones y los mensajes drone_online/offline/updated. */
 export interface Drone {

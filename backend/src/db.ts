@@ -18,6 +18,9 @@ db.exec(`
     role          TEXT NOT NULL,
     display_name  TEXT,
     full_name     TEXT NOT NULL DEFAULT '',
+    -- DNI argentino, solo dígitos (7 u 8). Vacío en las cuentas anteriores al
+    -- cambio: no hay de dónde sacarlo y se completa desde la consola.
+    dni           TEXT NOT NULL DEFAULT '',
     active        INTEGER NOT NULL DEFAULT 1,
     can_control   INTEGER NOT NULL DEFAULT 1,
     -- Borrado lógico: la fila queda y por lo tanto el username SIGUE OCUPADO
@@ -265,6 +268,14 @@ for (const [col, def] of [
 }
 const userCols2 = (db.prepare('PRAGMA table_info(users)').all() as { name: string }[]).map((c) => c.name);
 if (!userCols2.includes('full_name')) db.exec("ALTER TABLE users ADD COLUMN full_name TEXT NOT NULL DEFAULT ''");
+// El DNI va después de la reconstrucción de `users` por el mismo motivo que el
+// borrado lógico: la tabla rearmada no lo traería.
+if (!userCols2.includes('dni')) db.exec("ALTER TABLE users ADD COLUMN dni TEXT NOT NULL DEFAULT ''");
+// Un DNI es de una sola persona viva: el índice lo garantiza aunque algún
+// camino se saltee el chequeo de la API. Es parcial a propósito: las cuentas
+// viejas comparten el DNI vacío, y una baja lógica libera el número para que la
+// misma persona pueda volver con una cuenta nueva.
+db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_dni_vivo ON users(dni) WHERE deleted = 0 AND dni != ''");
 
 // Las bases que vivían embebidas en cada dron se promueven a filas de `bases`.
 // Se agrupan por nombre y coordenada: tres drones que compartían "Base Norte"

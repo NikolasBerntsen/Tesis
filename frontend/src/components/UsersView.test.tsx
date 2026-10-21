@@ -1,8 +1,9 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import UsersView from './UsersView';
 import { api, buscarUsuarios } from '../api';
+import { AYUDA_DNI } from '../dni';
 import { makeMe, makeUser } from '../test/fixtures';
 import type { RolConsola, UserView } from '../types';
 
@@ -11,6 +12,7 @@ const apiMock = vi.mocked(api);
 const traerMock = vi.mocked(buscarUsuarios);
 
 const BORRADO = '2024-03-01T10:00:00.000Z';
+const NOTA_CAMPO = /sólo los da de alta y los empareja por QR/;
 
 function montar(role: RolConsola = 'admin', username = 'admin1') {
   return render(<UsersView me={makeMe({ username, role })} />);
@@ -28,6 +30,25 @@ function servir(...listas: UserView[][]) {
   for (const lista of listas) traerMock.mockResolvedValueOnce(lista);
   traerMock.mockResolvedValue(listas[listas.length - 1]);
 }
+
+/** El cuerpo, ya parseado, del último pedido a esa ruta con ese método. */
+function cuerpoDe(ruta: string, metodo: string): unknown {
+  const llamada = apiMock.mock.calls.filter(([r, o]) => r === ruta && o?.method === metodo).at(-1);
+  return llamada ? JSON.parse(String(llamada[1]!.body)) : undefined;
+}
+
+/** Una promesa que el test resuelve o rechaza cuando quiere, para ver el estado intermedio. */
+function pendiente<T>() {
+  let resolver!: (valor: T) => void;
+  let rechazar!: (motivo: unknown) => void;
+  const promesa = new Promise<T>((res, rej) => {
+    resolver = res;
+    rechazar = rej;
+  });
+  return { promesa, resolver, rechazar };
+}
+
+const ADMIN1 = makeUser({ username: 'admin1', role: 'admin', fullName: 'Ada Admin', dni: '20111222' });
 
 beforeEach(() => {
   apiMock.mockReset();
@@ -52,7 +73,6 @@ describe('UsersView', () => {
 
     expect(await screen.findByText('oper1')).toBeInTheDocument();
     expect(traerMock).toHaveBeenCalledWith({ incluirEliminados: false, q: '' });
-    // Los roles aparecen también en el <select> del alta, por eso se acota a la celda.
     expect(screen.getByText('Operador', { selector: 'td' })).toBeInTheDocument();
     expect(screen.getByText('Supervisor', { selector: 'td' })).toBeInTheDocument();
     expect(screen.getByText('Administrador', { selector: 'td' })).toBeInTheDocument();
@@ -62,6 +82,36 @@ describe('UsersView', () => {
     // corresponde, y el backend rechaza con un 400 cualquier intento de darlo.
     expect(within(fila('campo1')).getByText('No aplica')).toBeInTheDocument();
     expect(within(fila('campo1')).queryByRole('button', { name: 'Autorizar' })).not.toBeInTheDocument();
+  });
+
+  it('muestra el DNI con puntos, y una raya en las cuentas que no lo tienen', async () => {
+    servir([
+      ADMIN1,
+      makeUser({ username: 'oper1', dni: '30123456' }),
+      makeUser({ username: 'mayor1', dni: '1234567' }),
+      makeUser({ username: 'viejo1', dni: '' }),
+      // un backend anterior al DNI directamente no manda el campo
+      makeUser({ username: 'antiguo1' }),
+    ]);
+    montar();
+    await screen.findByText('oper1');
+
+    expect(screen.getByRole('columnheader', { name: 'DNI' })).toBeInTheDocument();
+    expect(within(fila('oper1')).getByText('30.123.456')).toBeInTheDocument();
+    expect(within(fila('mayor1')).getByText('1.234.567')).toBeInTheDocument();
+    for (const u of ['viejo1', 'antiguo1']) {
+      expect(within(fila(u)).getByText('—', { selector: '.dni span' })).toBeInTheDocument();
+    }
+  });
+
+  it('el buscador avisa que también busca por DNI y pide lo tipeado', async () => {
+    servir([ADMIN1]);
+    montar();
+    const buscador = await screen.findByRole('searchbox', { name: 'Buscar usuarios' });
+    expect(buscador).toHaveAttribute('placeholder', expect.stringMatching(/DNI/));
+
+    await userEvent.type(buscador, '30.123');
+    await waitFor(() => expect(traerMock).toHaveBeenLastCalledWith({ incluirEliminados: false, q: '30.123' }));
   });
 
   it('muestra el estado vacío cuando no hay a quién listar', async () => {
@@ -123,7 +173,7 @@ describe('UsersView', () => {
     );
   });
 
-  it('nadie se toca a sí mismo: sin desactivar ni eliminar en la fila propia', async () => {
+  it('nadie se toca a sí mismo: sin desactivar, eliminar ni editar en la fila propia', async () => {
     servir([makeUser({ username: 'admin1', role: 'admin' }), makeUser({ username: 'oper1' })]);
     montar();
     await screen.findByText('oper1');
@@ -132,6 +182,30 @@ describe('UsersView', () => {
     expect(propia.queryByRole('button', { name: 'Desactivar' })).not.toBeInTheDocument();
     expect(propia.queryByRole('button', { name: 'Eliminar' })).not.toBeInTheDocument();
     expect(propia.queryByRole('button', { name: 'Suspender' })).not.toBeInTheDocument();
+    expect(propia.queryByRole('button', { name: /^Editar/ })).not.toBeInTheDocument();
+    // la contraseña propia sí se puede regenerar, como antes
+    expect(propia.getByRole('button', { name: 'Regenerar contraseña' })).toBeInTheDocument();
+  });
+
+  it('regenerar la contraseña la muestra una sola vez y se puede copiar', async () => {
+    servir([ADMIN1, makeUser({ username: 'oper1' })]);
+    apiMock.mockResolvedValue({ username: 'oper1', password: 'NUEVA-CLAVE' });
+    // userEvent instala su propio portapapeles en `navigator` al arrancar: el
+    // espía va después, sobre ese, para que sea el que ve el botón.
+    const usuario = userEvent.setup();
+    const escribir = vi.spyOn(navigator.clipboard, 'writeText');
+    montar();
+    await screen.findByText('oper1');
+
+    await usuario.click(within(fila('oper1')).getByRole('button', { name: 'Regenerar contraseña' }));
+    const dialogo = await screen.findByRole('dialog', { name: 'Contraseña regenerada' });
+    expect(apiMock).toHaveBeenCalledWith('/users/oper1/regenerate-password', { method: 'POST' });
+    expect(within(dialogo).getByText('NUEVA-CLAVE')).toBeInTheDocument();
+
+    await usuario.click(within(dialogo).getByRole('button', { name: 'Copiar' }));
+    expect(escribir).toHaveBeenCalledWith('NUEVA-CLAVE');
+    await usuario.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   describe('borrado lógico', () => {
@@ -258,6 +332,8 @@ describe('UsersView', () => {
       expect(eliminada.queryByRole('button', { name: 'Suspender' })).not.toBeInTheDocument();
       expect(eliminada.queryByRole('button', { name: 'Desactivar' })).not.toBeInTheDocument();
       expect(eliminada.queryByRole('button', { name: 'Eliminar' })).not.toBeInTheDocument();
+      // a una cuenta eliminada no se la edita: primero se restaura
+      expect(eliminada.queryByRole('button', { name: /^Editar/ })).not.toBeInTheDocument();
 
       // Y el toggle vuelve a esconderlos.
       await userEvent.click(screen.getByRole('button', { name: 'Ocultar eliminados' }));
@@ -288,79 +364,366 @@ describe('UsersView', () => {
     });
   });
 
-  describe('alta', () => {
-    it('el admin crea un supervisor y limpia el formulario', async () => {
-      servir([makeUser({ username: 'admin1', role: 'admin' })]);
+  describe('alta en un diálogo', () => {
+    async function abrirAlta() {
+      servir([ADMIN1]);
       montar();
-      const alta = await screen.findByRole('form', { name: 'Crear usuario' });
+      await userEvent.click(await screen.findByRole('button', { name: 'Nuevo usuario' }));
+      return screen.findByRole('dialog', { name: 'Nuevo usuario' });
+    }
 
-      const usuario = within(alta).getByLabelText('Usuario');
-      await userEvent.type(usuario, 'nuevo1');
-      await userEvent.type(within(alta).getByLabelText('Nombre y apellido'), 'Persona Nueva');
-      await userEvent.selectOptions(within(alta).getByLabelText('Rol'), 'supervisor');
-      await userEvent.click(within(alta).getByRole('button', { name: 'Crear' }));
+    async function completar(dialogo: HTMLElement, datos: { usuario?: string; nombre?: string; dni?: string }) {
+      const d = within(dialogo);
+      if (datos.usuario) await userEvent.type(d.getByLabelText('Usuario'), datos.usuario);
+      if (datos.nombre) await userEvent.type(d.getByLabelText('Nombre y apellido'), datos.nombre);
+      if (datos.dni) await userEvent.type(d.getByLabelText('DNI'), datos.dni);
+    }
+
+    it('ya no hay formulario suelto en la página: el alta se abre en un diálogo', async () => {
+      servir([ADMIN1]);
+      montar();
+      await screen.findByText('admin1');
+      expect(screen.queryByRole('form')).not.toBeInTheDocument();
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    it('el admin crea un supervisor: manda el DNI sin puntos, cierra y muestra la contraseña una vez', async () => {
+      const dialogo = await abrirAlta();
+      // Como todo diálogo, arranca con el foco en la caja: el lector de
+      // pantalla anuncia el título antes de caer en el primer campo.
+      expect(dialogo).toHaveFocus();
+
+      await completar(dialogo, { usuario: 'nuevo1', nombre: 'Persona Nueva', dni: '30.123.456' });
+      await userEvent.selectOptions(within(dialogo).getByLabelText('Rol'), 'supervisor');
+      await userEvent.click(within(dialogo).getByRole('button', { name: 'Crear' }));
 
       await waitFor(() =>
-        expect(JSON.parse(apiMock.mock.calls.at(-1)![1].body)).toEqual({
+        expect(cuerpoDe('/users', 'POST')).toEqual({
           username: 'nuevo1',
           fullName: 'Persona Nueva',
+          dni: '30123456',
           role: 'supervisor',
           canControl: true,
         }),
       );
-      await waitFor(() => expect((usuario as HTMLInputElement).value).toBe(''));
+      const credencial = await screen.findByRole('dialog', { name: 'Usuario creado' });
+      expect(within(credencial).getByText('ABCD-EFGH-JKLM-NPQR')).toBeInTheDocument();
+      expect(screen.queryByRole('dialog', { name: 'Nuevo usuario' })).not.toBeInTheDocument();
+      // El listado se vuelve a pedir para que aparezca la cuenta nueva.
+      await waitFor(() => expect(traerMock).toHaveBeenCalledTimes(2));
+
+      // Y al volver a abrir el alta, arranca vacía.
+      await userEvent.click(within(credencial).getByRole('button', { name: 'Ya la anoté' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Nuevo usuario' }));
+      const otra = await screen.findByRole('dialog', { name: 'Nuevo usuario' });
+      expect(within(otra).getByLabelText('Usuario')).toHaveValue('');
+      expect(within(otra).getByLabelText('DNI')).toHaveValue('');
+    });
+
+    it('un DNI mal tipeado se marca en el campo y no viaja al backend', async () => {
+      const dialogo = await abrirAlta();
+      await completar(dialogo, { usuario: 'nuevo1', nombre: 'Persona Nueva', dni: '30-123-456' });
+      await userEvent.click(within(dialogo).getByRole('button', { name: 'Crear' }));
+
+      const dni = within(dialogo).getByLabelText('DNI');
+      expect(dni).toHaveAttribute('aria-invalid', 'true');
+      expect(dni).toHaveAccessibleDescription(AYUDA_DNI);
+      expect(apiMock).not.toHaveBeenCalled();
+
+      // Al corregirlo, el error se va.
+      await userEvent.clear(dni);
+      await userEvent.type(dni, '1234567');
+      expect(dni).not.toHaveAttribute('aria-invalid');
+      expect(within(dialogo).queryByText(AYUDA_DNI)).not.toBeInTheDocument();
+      await userEvent.click(within(dialogo).getByRole('button', { name: 'Crear' }));
+      await waitFor(() => expect(cuerpoDe('/users', 'POST')).toMatchObject({ dni: '1234567' }));
+    });
+
+    it('sin DNI tampoco se crea', async () => {
+      const dialogo = await abrirAlta();
+      await completar(dialogo, { usuario: 'nuevo1', nombre: 'Persona Nueva' });
+      await userEvent.click(within(dialogo).getByRole('button', { name: 'Crear' }));
+      expect(within(dialogo).getByText(AYUDA_DNI)).toBeInTheDocument();
+      expect(apiMock).not.toHaveBeenCalled();
     });
 
     it('el operador de campo no puede controlar drones: la casilla queda deshabilitada y explicada', async () => {
-      servir([makeUser({ username: 'admin1', role: 'admin' })]);
-      montar();
-      const alta = await screen.findByRole('form', { name: 'Crear usuario' });
+      const dialogo = await abrirAlta();
+      const d = within(dialogo);
 
-      const casilla = within(alta).getByLabelText('Puede controlar drones');
+      const casilla = d.getByLabelText('Puede controlar drones');
       expect(casilla).toBeEnabled();
       expect(casilla).toBeChecked();
 
-      await userEvent.selectOptions(within(alta).getByLabelText('Rol'), 'field_operator');
+      await userEvent.selectOptions(d.getByLabelText('Rol'), 'field_operator');
       expect(casilla).toBeDisabled();
       expect(casilla).not.toBeChecked();
-      expect(screen.getByText(/sólo los da de alta y los empareja por QR/)).toBeInTheDocument();
+      expect(casilla).toHaveAccessibleDescription(NOTA_CAMPO);
 
-      await userEvent.type(within(alta).getByLabelText('Usuario'), 'campo1');
-      await userEvent.type(within(alta).getByLabelText('Nombre y apellido'), 'Persona Nueva');
-      await userEvent.click(within(alta).getByRole('button', { name: 'Crear' }));
+      await completar(dialogo, { usuario: 'campo1', nombre: 'Persona Nueva', dni: '40111222' });
+      // Al volver a un rol que sí opera, la casilla se rehabilita...
+      await userEvent.selectOptions(d.getByLabelText('Rol'), 'operator');
+      expect(casilla).toBeEnabled();
+      expect(d.queryByText(NOTA_CAMPO)).not.toBeInTheDocument();
+      // ...y se puede apagar a mano.
+      await userEvent.click(casilla);
+      await userEvent.selectOptions(d.getByLabelText('Rol'), 'field_operator');
+      await userEvent.click(d.getByRole('button', { name: 'Crear' }));
 
       await waitFor(() =>
-        expect(JSON.parse(apiMock.mock.calls.at(-1)![1].body)).toEqual({
-          username: 'campo1',
-          fullName: 'Persona Nueva',
-          role: 'field_operator',
-          canControl: false,
-        }),
+        expect(cuerpoDe('/users', 'POST')).toMatchObject({ role: 'field_operator', canControl: false }),
       );
-      // Al volver a un rol que sí opera, la casilla se rehabilita.
-      await userEvent.selectOptions(within(alta).getByLabelText('Rol'), 'operator');
-      expect(casilla).toBeEnabled();
-      expect(screen.queryByText(/sólo los da de alta y los empareja por QR/)).not.toBeInTheDocument();
     });
 
-    it('avisa si el nombre de usuario ya está ocupado', async () => {
-      servir([makeUser({ username: 'admin1', role: 'admin' })]);
-      apiMock.mockRejectedValue(new Error('El nombre de usuario ya está en uso'));
-      montar();
-      const alta = await screen.findByRole('form', { name: 'Crear usuario' });
+    it('un rol que no está en la lista no se cuela por el select', async () => {
+      const dialogo = await abrirAlta();
+      const rol = within(dialogo).getByLabelText('Rol');
+      await userEvent.selectOptions(rol, 'supervisor');
+      fireEvent.change(rol, { target: { value: 'admin' } });
+      expect(rol).toHaveValue('operator');
+    });
 
-      await userEvent.type(within(alta).getByLabelText('Usuario'), 'oper1');
-      await userEvent.type(within(alta).getByLabelText('Nombre y apellido'), 'Persona Nueva');
-      await userEvent.click(within(alta).getByRole('button', { name: 'Crear' }));
+    it('el rechazo del backend se muestra adentro del diálogo, que queda abierto con lo tipeado', async () => {
+      const espera = pendiente<unknown>();
+      apiMock.mockReturnValue(espera.promesa as Promise<never>);
+      const dialogo = await abrirAlta();
+      await completar(dialogo, { usuario: 'oper1', nombre: 'Persona Nueva', dni: '30123456' });
+      await userEvent.click(within(dialogo).getByRole('button', { name: 'Crear' }));
 
-      expect(await screen.findByRole('alert')).toHaveTextContent('El nombre de usuario ya está en uso');
-      // El formulario no se vacía: el nombre rechazado sigue ahí para corregirlo.
-      expect(within(alta).getByLabelText('Usuario')).toHaveValue('oper1');
+      // Mientras viaja, el botón no deja mandarla dos veces.
+      expect(await within(dialogo).findByRole('button', { name: 'Creando…' })).toBeDisabled();
+      espera.rechazar(new Error('Ese DNI ya está registrado a nombre de oper1'));
+
+      expect(await within(dialogo).findByRole('alert')).toHaveTextContent('Ese DNI ya está registrado a nombre de oper1');
+      expect(within(dialogo).getByLabelText('Usuario')).toHaveValue('oper1');
+      expect(within(dialogo).getByRole('button', { name: 'Crear' })).toBeEnabled();
+      // El error es del diálogo: la página no muestra otro aviso aparte.
+      expect(screen.getAllByRole('alert')).toHaveLength(1);
+    });
+
+    it('un rechazo que no es un Error también se muestra, como texto', async () => {
+      apiMock.mockRejectedValue('sin conexión con el Comando Central');
+      const dialogo = await abrirAlta();
+      await completar(dialogo, { usuario: 'nuevo1', nombre: 'Persona Nueva', dni: '30123456' });
+      await userEvent.click(within(dialogo).getByRole('button', { name: 'Crear' }));
+      expect(await within(dialogo).findByRole('alert')).toHaveTextContent('sin conexión con el Comando Central');
+    });
+
+    it('cancelar, la cruz o Escape cierran el alta sin crear nada', async () => {
+      let dialogo = await abrirAlta();
+      await userEvent.click(within(dialogo).getByRole('button', { name: 'Cancelar' }));
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Nuevo usuario' }));
+      dialogo = await screen.findByRole('dialog', { name: 'Nuevo usuario' });
+      await userEvent.click(within(dialogo).getByRole('button', { name: 'Cerrar sin guardar' }));
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Nuevo usuario' }));
+      await screen.findByRole('dialog', { name: 'Nuevo usuario' });
+      await userEvent.keyboard('{Escape}');
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(apiMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('edición en un diálogo', () => {
+    const OPER1 = makeUser({ username: 'oper1', fullName: 'Olga Operadora', dni: '30123456' });
+
+    async function abrirEdicion(usuario: UserView, role: RolConsola = 'admin', yo = 'admin1') {
+      servir([ADMIN1, usuario]);
+      montar(role, yo);
+      await screen.findByText(usuario.username);
+      await userEvent.click(within(fila(usuario.username)).getByRole('button', { name: `Editar a ${usuario.username}` }));
+      return screen.findByRole('dialog', { name: `Editar a ${usuario.username}` });
+    }
+
+    it('abre con la ficha actual de la cuenta', async () => {
+      const dialogo = await abrirEdicion(OPER1);
+      const d = within(dialogo);
+      expect(d.getByLabelText('Nombre y apellido')).toHaveValue('Olga Operadora');
+      expect(d.getByLabelText('DNI')).toHaveValue('30.123.456');
+      expect(d.getByLabelText('Rol')).toHaveValue('operator');
+      expect(d.getByLabelText('Puede controlar drones')).toBeChecked();
+      expect(d.getByLabelText('Cuenta activa')).toBeChecked();
+      expect(d.getByText('Operador', { selector: '.modal-subtitulo' })).toBeInTheDocument();
+      // con el rol de siempre no hay nada que advertir
+      expect(d.queryByRole('status')).not.toBeInTheDocument();
+    });
+
+    it('el admin cambia nombre, DNI y acceso: manda sólo lo que cambió, cierra y recarga', async () => {
+      const dialogo = await abrirEdicion(OPER1);
+      const d = within(dialogo);
+
+      await userEvent.clear(d.getByLabelText('Nombre y apellido'));
+      await userEvent.type(d.getByLabelText('Nombre y apellido'), 'Olga Otero ');
+      await userEvent.clear(d.getByLabelText('DNI'));
+      await userEvent.type(d.getByLabelText('DNI'), '30 123 457');
+      await userEvent.click(d.getByLabelText('Puede controlar drones'));
+      await userEvent.click(d.getByLabelText('Cuenta activa'));
+      await userEvent.click(d.getByRole('button', { name: 'Guardar' }));
+
+      await waitFor(() =>
+        expect(cuerpoDe('/users/oper1', 'PATCH')).toEqual({
+          fullName: 'Olga Otero',
+          dni: '30123457',
+          canControl: false,
+          active: false,
+        }),
+      );
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(traerMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('guardar una ficha intacta sólo cierra el diálogo', async () => {
+      const dialogo = await abrirEdicion(OPER1);
+      await userEvent.click(within(dialogo).getByRole('button', { name: 'Guardar' }));
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(apiMock).not.toHaveBeenCalled();
+    });
+
+    it('cambiar el rol avisa que la cuenta tiene que volver a entrar, y volver al de antes no lo manda', async () => {
+      const dialogo = await abrirEdicion(OPER1);
+      const d = within(dialogo);
+
+      await userEvent.selectOptions(d.getByLabelText('Rol'), 'supervisor');
+      expect(d.getByRole('status')).toHaveTextContent('oper1 va a tener que volver a iniciar sesión');
+
+      await userEvent.selectOptions(d.getByLabelText('Rol'), 'operator');
+      expect(d.queryByRole('status')).not.toBeInTheDocument();
+
+      await userEvent.selectOptions(d.getByLabelText('Rol'), 'supervisor');
+      await userEvent.click(d.getByRole('button', { name: 'Guardar' }));
+      await waitFor(() => expect(cuerpoDe('/users/oper1', 'PATCH')).toEqual({ role: 'supervisor' }));
+    });
+
+    it('pasar a operador de campo le apaga el control a la vista y en lo que se manda', async () => {
+      const dialogo = await abrirEdicion(OPER1);
+      const d = within(dialogo);
+
+      await userEvent.selectOptions(d.getByLabelText('Rol'), 'field_operator');
+      const casilla = d.getByLabelText('Puede controlar drones');
+      expect(casilla).toBeDisabled();
+      expect(casilla).not.toBeChecked();
+      expect(casilla).toHaveAccessibleDescription(NOTA_CAMPO);
+
+      await userEvent.click(d.getByRole('button', { name: 'Guardar' }));
+      await waitFor(() =>
+        expect(cuerpoDe('/users/oper1', 'PATCH')).toEqual({ role: 'field_operator', canControl: false }),
+      );
+    });
+
+    it('un operador de campo que pasa a operador puede quedar autorizado en el mismo cambio', async () => {
+      const campo = makeUser({ username: 'campo1', role: 'field_operator', canControl: false, fullName: 'Ceci Campo', dni: '40111222' });
+      const dialogo = await abrirEdicion(campo);
+      const d = within(dialogo);
+      expect(d.getByLabelText('Puede controlar drones')).toBeDisabled();
+
+      await userEvent.selectOptions(d.getByLabelText('Rol'), 'operator');
+      await userEvent.click(d.getByLabelText('Puede controlar drones'));
+      await userEvent.click(d.getByRole('button', { name: 'Guardar' }));
+      await waitFor(() => expect(cuerpoDe('/users/campo1', 'PATCH')).toEqual({ role: 'operator', canControl: true }));
+    });
+
+    it('un rol que no está en la lista se toma como "el de siempre"', async () => {
+      const dialogo = await abrirEdicion(OPER1);
+      const rol = within(dialogo).getByLabelText('Rol');
+      await userEvent.selectOptions(rol, 'supervisor');
+      fireEvent.change(rol, { target: { value: 'admin' } });
+      expect(rol).toHaveValue('operator');
+      expect(within(dialogo).queryByRole('status')).not.toBeInTheDocument();
+    });
+
+    it('un DNI inválido, o borrar uno cargado, se marca en el campo y no se manda', async () => {
+      const dialogo = await abrirEdicion(OPER1);
+      const dni = within(dialogo).getByLabelText('DNI');
+
+      await userEvent.clear(dni);
+      await userEvent.click(within(dialogo).getByRole('button', { name: 'Guardar' }));
+      expect(dni).toHaveAttribute('aria-invalid', 'true');
+      expect(dni).toHaveAccessibleDescription(AYUDA_DNI);
+
+      await userEvent.type(dni, '12');
+      expect(dni).not.toHaveAttribute('aria-invalid');
+      await userEvent.click(within(dialogo).getByRole('button', { name: 'Guardar' }));
+      expect(dni).toHaveAttribute('aria-invalid', 'true');
+      expect(apiMock).not.toHaveBeenCalled();
+    });
+
+    it('a una cuenta vieja sin DNI se le puede editar el resto sin cargarlo, o cargárselo', async () => {
+      const viejo = makeUser({ username: 'viejo1', fullName: 'Vito Viejo', dni: '' });
+      const dialogo = await abrirEdicion(viejo);
+      const d = within(dialogo);
+      expect(d.getByLabelText('DNI')).toHaveValue('');
+
+      await userEvent.type(d.getByLabelText('Nombre y apellido'), 'ni');
+      await userEvent.click(d.getByRole('button', { name: 'Guardar' }));
+      await waitFor(() => expect(cuerpoDe('/users/viejo1', 'PATCH')).toEqual({ fullName: 'Vito Viejoni' }));
+    });
+
+    it('a una cuenta de un backend sin DNI se le puede cargar uno', async () => {
+      const antiguo = makeUser({ username: 'antiguo1', fullName: 'Ana Antigua' });
+      const dialogo = await abrirEdicion(antiguo);
+      await userEvent.type(within(dialogo).getByLabelText('DNI'), '25.777.888');
+      await userEvent.click(within(dialogo).getByRole('button', { name: 'Guardar' }));
+      await waitFor(() => expect(cuerpoDe('/users/antiguo1', 'PATCH')).toEqual({ dni: '25777888' }));
+    });
+
+    it('el rechazo del backend queda adentro del diálogo, que sigue abierto', async () => {
+      const espera = pendiente<unknown>();
+      apiMock.mockReturnValue(espera.promesa as Promise<never>);
+      const dialogo = await abrirEdicion(OPER1);
+      const d = within(dialogo);
+      await userEvent.clear(d.getByLabelText('DNI'));
+      await userEvent.type(d.getByLabelText('DNI'), '28999111');
+      await userEvent.click(d.getByRole('button', { name: 'Guardar' }));
+
+      expect(await d.findByRole('button', { name: 'Guardando…' })).toBeDisabled();
+      espera.rechazar(new Error('Ese DNI ya está registrado a nombre de beto'));
+
+      expect(await d.findByRole('alert')).toHaveTextContent('Ese DNI ya está registrado a nombre de beto');
+      expect(d.getByLabelText('DNI')).toHaveValue('28999111');
+      expect(d.getByRole('button', { name: 'Guardar' })).toBeEnabled();
+    });
+
+    it('el rol de otro administrador no se cambia: el select queda fijo y explicado', async () => {
+      const otroAdmin = makeUser({ username: 'admin2', role: 'admin', fullName: 'Otra Admin', dni: '20333444' });
+      const dialogo = await abrirEdicion(otroAdmin);
+      const rol = within(dialogo).getByLabelText('Rol');
+      expect(rol).toBeDisabled();
+      expect(rol).toHaveValue('admin');
+      expect(within(rol).getAllByRole('option')).toHaveLength(1);
+      expect(within(dialogo).getByText(/El rol de un administrador no se cambia/)).toBeInTheDocument();
+    });
+
+    it('la cruz y Cancelar cierran sin guardar', async () => {
+      let dialogo = await abrirEdicion(OPER1);
+      await userEvent.click(within(dialogo).getByRole('button', { name: 'Cerrar sin guardar' }));
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+      await userEvent.click(within(fila('oper1')).getByRole('button', { name: 'Editar a oper1' }));
+      dialogo = await screen.findByRole('dialog', { name: 'Editar a oper1' });
+      await userEvent.click(within(dialogo).getByRole('button', { name: 'Cancelar' }));
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(apiMock).not.toHaveBeenCalled();
+    });
+
+    it('el supervisor sólo cambia el permiso de control: el resto de la ficha se ve bloqueado', async () => {
+      const dialogo = await abrirEdicion(OPER1, 'supervisor', 'super1');
+      const d = within(dialogo);
+      expect(d.getByText(/Como supervisor podés autorizar o suspender/)).toBeInTheDocument();
+      for (const campo of ['Nombre y apellido', 'DNI', 'Rol', 'Cuenta activa']) {
+        expect(d.getByLabelText(campo), campo).toBeDisabled();
+      }
+
+      await userEvent.click(d.getByLabelText('Puede controlar drones'));
+      await userEvent.click(d.getByRole('button', { name: 'Guardar' }));
+      await waitFor(() => expect(cuerpoDe('/users/oper1', 'PATCH')).toEqual({ canControl: false }));
     });
   });
 
   describe('permisos', () => {
-    it('el supervisor no ve el alta ni el borrado, y sólo suspende operadores', async () => {
+    it('el supervisor no ve el alta ni el borrado, y sólo edita y suspende operadores', async () => {
       servir([
         makeUser({ username: 'oper1', role: 'operator' }),
         makeUser({ username: 'super2', role: 'supervisor' }),
@@ -368,20 +731,23 @@ describe('UsersView', () => {
       montar('supervisor', 'super1');
       await screen.findByText('oper1');
 
-      expect(screen.queryByRole('form', { name: 'Crear usuario' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Nuevo usuario' })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Eliminar' })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Desactivar' })).not.toBeInTheDocument();
-      expect(screen.queryByRole('columnheader', { name: 'Acciones' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Regenerar contraseña' })).not.toBeInTheDocument();
       expect(within(fila('oper1')).getByRole('button', { name: 'Suspender' })).toBeInTheDocument();
+      expect(within(fila('oper1')).getByRole('button', { name: 'Editar a oper1' })).toBeInTheDocument();
       expect(within(fila('super2')).queryByRole('button', { name: 'Suspender' })).not.toBeInTheDocument();
+      expect(within(fila('super2')).queryByRole('button', { name: /^Editar/ })).not.toBeInTheDocument();
     });
 
-    it('sin rango de supervisor no se ofrece ver los eliminados', async () => {
+    it('sin rango de supervisor no se ofrece ver los eliminados ni editar', async () => {
       servir([makeUser({ username: 'oper1' })]);
       montar('operator', 'oper1');
       await screen.findByText('oper1');
 
       expect(screen.queryByRole('button', { name: 'Ver eliminados' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('columnheader', { name: 'Acciones' })).not.toBeInTheDocument();
     });
   });
 

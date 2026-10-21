@@ -311,7 +311,7 @@ describe('integración — hub WebSocket multi-dron', () => {
     await wait(50);
     const alta = await api(srv.base, '/api/users', adm, {
       method: 'POST',
-      body: JSON.stringify({ username: 'mirame', fullName: 'Persona mirame', role: 'operator' }),
+      body: JSON.stringify({ username: 'mirame', fullName: 'Persona mirame', dni: '20999002', role: 'operator' }),
     });
     expect(alta.status).toBe(201);
     await admWs.waitFor((m) => m.type === 'event' && m.event.type === 'USER_CREATED');
