@@ -327,6 +327,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun configurarAccionesDeVuelo() {
         binding.btnStartPatrol.setOnClickListener { comenzarPatrullaje() }
+        binding.btnDespegarAqui.setOnClickListener {
+            confirmar(
+                R.string.main_confirmar_despegue_aqui_titulo,
+                getString(R.string.main_confirmar_despegue_aqui_texto),
+                R.string.main_confirmar_despegue_boton,
+            ) { manager.despegarAqui() }
+        }
         binding.btnStopPatrol.setOnClickListener { manager.detenerPatrullaje() }
         binding.btnResumePatrol.setOnClickListener { manager.reanudarPatrullaje() }
         binding.btnReturnHome.setOnClickListener {
@@ -377,6 +384,10 @@ class MainActivity : AppCompatActivity() {
         binding.btnStartPatrol.setText(
             if (dron.enVuelo) R.string.main_comenzar_patrullaje else R.string.main_despegar_y_patrullar,
         )
+        // En el lugar: con enlace y en el suelo, salvo con un regreso a base en curso
+        binding.btnDespegarAqui.isEnabled = !dron.enVuelo && dron.conectado &&
+            estado != PatrolState.RETURNING_HOME && estado != PatrolState.RETURNING_HOME_BATTERY &&
+            estado != PatrolState.RETURNING_HOME_SIGNAL
         binding.btnStopPatrol.isEnabled = estado in ESTADOS_DETENIBLES
         binding.btnResumePatrol.isEnabled = manager.tieneRuta && estado in ESTADOS_REANUDABLES
         binding.btnReturnHome.isEnabled =

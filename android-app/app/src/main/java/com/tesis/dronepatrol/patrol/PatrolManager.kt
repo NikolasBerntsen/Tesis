@@ -344,6 +344,15 @@ class PatrolManager(
     private var enAlturaDeTrabajo = true
 
     /**
+     * Hay en curso un despegue EN EL LUGAR (desde la consola o desde la propia
+     * app), no el de una ruta: sus eventos de vuelo se anotan distinto, porque
+     * el despegue ya quedó registrado con quién lo pidió y el dron no va a ir a
+     * ninguna altura de trabajo.
+     */
+    @Volatile
+    private var despegueEnElLugar = false
+
+    /**
      * Momento del último `manual_stick`; 0 = ninguno desde que se tomó el
      * control. Lo escribe el hilo del WebSocket y lo lee el watchdog del mando,
      * que corre en otra corrutina: de ahí el volátil. Ojo: el volátil solo evita
@@ -573,6 +582,33 @@ class PatrolManager(
         pasarA(PatrolState.RETURNING_HOME)
         controller.returnHome()
         report("RTH_MANUAL", "El operador de campo ordenó volver a la base")
+    }
+
+    /**
+     * Despegue en el lugar ordenado desde la propia app: el dron sube a ~1,2 m
+     * y queda suspendido, sin ruta y sin necesitar GPS. Es lo que evita tener
+     * que despegar con las palancas del control para una prueba o para tomarlo
+     * después desde la consola. Queda en IDLE en el aire: desde ahí se puede
+     * comenzar un patrullaje sin volver a despegar.
+     */
+    fun despegarAqui() {
+        val dron = controller.estado.value
+        if (dron.enVuelo) {
+            log("El dron ya está en el aire")
+            return
+        }
+        if (!dron.conectado) {
+            report("DRONE_PROBLEM", "No se puede despegar: ${dron.detalle.ifBlank { "sin enlace con la aeronave" }}")
+            return
+        }
+        val sinGps = lastTelemetry?.tienePosicion != true
+        despegueEnElLugar = true
+        controller.despegarEnElLugar()
+        report(
+            "TAKEOFF",
+            "Despegue en el lugar ordenado por el operador de campo: el dron queda suspendido a ~1 m" +
+                if (sinGps) " (sin GPS: se sostiene con los sensores de visión)" else "",
+        )
     }
 
     /** Aterriza donde está. Al tocar el suelo (FlightEvent.Aterrizado) queda en base. */
@@ -887,6 +923,7 @@ class PatrolManager(
             return
         }
         val sinGps = lastTelemetry?.tienePosicion != true
+        despegueEnElLugar = true
         controller.despegarEnElLugar()
         report(
             "TAKEOFF",
@@ -915,10 +952,19 @@ class PatrolManager(
     // por más de SIGNAL_TIMEOUT_MS. El dron real inicia su RTH failsafe por su
     // cuenta; acá reflejamos ese estado y avisamos al Comando Central (el celular
     // sigue online: lo que se cortó es el enlace de radio con el dron).
+    /**
+     * En el aire para los failsafes: los estados de vuelo, y también IDLE con el
+     * dron en el aire, que es como queda después de un despegue en el lugar
+     * desde la app. Volviendo a base NO: ahí ya hay un regreso en curso y
+     * dispararlo de nuevo en cada telemetría sería pisarlo.
+     */
+    private fun enVueloParaLosFailsafes(): Boolean =
+        _state.value in ESTADOS_EN_VUELO || (_state.value == PatrolState.IDLE && controller.estado.value.enVuelo)
+
     private suspend fun signalWatchdog() {
         while (true) {
             delay(1_000)
-            val flying = _state.value in ESTADOS_EN_VUELO
+            val flying = enVueloParaLosFailsafes()
             val silent = lastTelemetryAt > 0 && System.currentTimeMillis() - lastTelemetryAt > SIGNAL_TIMEOUT_MS
             if (flying && silent) {
                 _signalOk.value = false
@@ -986,7 +1032,7 @@ class PatrolManager(
     // Si la batería cae del umbral en pleno vuelo, se ordena RTH y se avisa al
     // Comando Central. No hay reanudación automática: hace falta cambiar batería.
     private suspend fun checkLowBattery(t: Telemetry) {
-        val flying = _state.value in ESTADOS_EN_VUELO
+        val flying = enVueloParaLosFailsafes()
         if (flying && t.batteryPct <= LOW_BATTERY_PCT) {
             terminarSeguimiento("batería al ${t.batteryPct.toInt()}%: el dron vuelve a la base")
             // Sin frenar: el regreso a base de abajo ya es la orden que manda y
@@ -1026,8 +1072,9 @@ class PatrolManager(
             }
             is FlightEvent.Despegando -> {
                 enAlturaDeTrabajo = false
-                // El despegue pedido desde la consola ya quedó registrado en onTakeoff().
-                if (controlTomado) {
+                // El despegue en el lugar ya quedó registrado con quién lo pidió
+                // (onTakeoff() o despegarAqui()).
+                if (despegueEnElLugar) {
                     log("Despegando en el lugar")
                 } else {
                     report("TAKEOFF", "Despegue automático: el dron sube a la altura de trabajo")
@@ -1036,12 +1083,13 @@ class PatrolManager(
             is FlightEvent.EnElAire -> {
                 enAlturaDeTrabajo = true
                 log(
-                    if (controlTomado) {
-                        "El dron está en el aire, suspendido: listo para el mando"
+                    if (despegueEnElLugar) {
+                        "El dron está en el aire, suspendido en el lugar"
                     } else {
                         "Despegue completado: el dron está a la altura de trabajo"
                     },
                 )
+                despegueEnElLugar = false
             }
             is FlightEvent.Aterrizado -> {
                 terminarSeguimiento("el dron aterrizó")

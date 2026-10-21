@@ -419,6 +419,19 @@
                             app:icon="@drawable/ic_despegar"
                             app:iconGravity="textStart" />
 
+                        <!-- Despegue en el lugar, sin ruta ni GPS: para no tener que
+                             despegar con las palancas del control -->
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnDespegarAqui"
+                            style="@style/Widget.DronePatrol.Boton.Secundario"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="@dimen/espacio_medio"
+                            android:enabled="false"
+                            android:text="@string/main_despegar_aqui"
+                            app:icon="@drawable/ic_despegar"
+                            app:iconGravity="textStart" />
+
                         <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"

@@ -362,6 +362,37 @@ class PatrolManagerSeguimientoTest {
         esperarA("la órbita sobre el objetivo") { dron.ultimaOrbita != null }
     }
 
+    // ---- Despegue en el lugar desde la propia app ----
+
+    @Test
+    fun desdeLaAppDespegaEnElLugarYQuedaRegistrado() = runBlocking {
+        dron.estado.value = dron.estado.value.copy(enVuelo = false)
+        patrulla.start()
+        telemetria()
+        patrulla.despegarAqui()
+        esperarA("el despegue") { dron.ordenes.contains("despegarEnElLugar") }
+        esperarA("TAKEOFF") { comandoCentral.eventos("TAKEOFF").isNotEmpty() }
+        assertTrue(comandoCentral.eventos("TAKEOFF").single().getString("message").contains("operador de campo"))
+        // El evento de vuelo del despegue no lo vuelve a registrar como "automático"
+        dron.flightEvents.emit(FlightEvent.Despegando)
+        delay(200)
+        assertEquals(1, comandoCentral.eventos("TAKEOFF").size)
+    }
+
+    @Test
+    fun desdeLaAppEnElAireODesenlazadoNoDespega() = runBlocking {
+        patrulla.start()
+        telemetria()
+        patrulla.despegarAqui() // el espía arranca en el aire
+        delay(200)
+        assertFalse(dron.ordenes.contains("despegarEnElLugar"))
+
+        dron.estado.value = dron.estado.value.copy(enVuelo = false, conectado = false, detalle = "sin enlace")
+        patrulla.despegarAqui()
+        esperarA("el aviso") { comandoCentral.eventos("DRONE_PROBLEM").isNotEmpty() }
+        assertFalse(dron.ordenes.contains("despegarEnElLugar"))
+    }
+
     // ---- Despegue y aterrizaje desde la consola ----
 
     private suspend fun enElSueloConElControlTomado() {
