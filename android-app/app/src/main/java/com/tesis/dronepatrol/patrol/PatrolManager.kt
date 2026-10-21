@@ -1098,7 +1098,8 @@ class PatrolManager(
      */
     private fun verSiSeCambioLaBateria(t: Telemetry) {
         if (_state.value != PatrolState.LANDED || controller.estado.value.enVuelo) return
-        if (!(t.batteryPct >= BATERIA_CAMBIADA_PCT)) return
+        // Sin dato de batería (NaN) no hay cambio que confirmar: sigue en LANDED
+        if (t.batteryPct.isNaN() || t.batteryPct < BATERIA_CAMBIADA_PCT) return
         pasarA(PatrolState.IDLE)
         report("BATTERY_RECHARGED", "Batería al ${t.batteryPct.toInt()}%: se cambió la batería y el dron queda listo para volar")
     }

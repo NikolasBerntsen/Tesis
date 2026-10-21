@@ -674,6 +674,16 @@ class PatrolManagerSeguimientoTest {
         esperarA("el despegue") { dron.ordenes.contains("despegarEnElLugar") }
     }
 
+    /** Una lectura sin dato de batería no cuenta como batería cambiada. */
+    @Test
+    fun sinDatoDeBateriaSigueEsperandoLaBateriaNueva() = runBlocking {
+        enBaseConLaBateriaPorCambiar()
+        telemetriaConBateria(Double.NaN)
+        delay(200)
+        assertEquals(PatrolState.LANDED, patrulla.state.value)
+        assertTrue(comandoCentral.eventos("BATTERY_RECHARGED").isEmpty())
+    }
+
     /**
      * La consola también puede ordenar una ruta con el dron en el suelo, y eso
      * es despegar solo: sin GPS no sale, y con la batería por cambiar tampoco.
