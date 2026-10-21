@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { api, traerRutas } from '../api';
 import { makeMe, makeRoute } from '../test/fixtures';
@@ -222,6 +222,126 @@ describe('EditorDeRuta — repaso, edición de nodos y arrastre', () => {
     await userEvent.click(within(dialogo).getByRole('button', { name: 'Cancelar' }));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(apiMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('RutasView — el editor es un formulario y la lista, más prolija', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    limpiarEstadoMapa();
+  });
+
+  const CAMPO = makeMe({ username: 'campo1', role: 'field_operator' });
+
+  async function abrirNueva() {
+    rutasMock.mockResolvedValue([]);
+    render(<RutasView me={ADMIN} />);
+    await screen.findByText(/todavía no hay rutas/i);
+    await userEvent.click(screen.getByRole('button', { name: /nueva ruta/i }));
+    return screen.getByRole('dialog', { name: 'Nueva ruta de patrullaje' });
+  }
+
+  function clicEnElMapa(lat: number, lng: number) {
+    act(() => estadoMapa.clic!({ latlng: { lat, lng } }));
+  }
+
+  it('el estado vacío dice cómo dibujar la primera', async () => {
+    rutasMock.mockResolvedValue([]);
+    render(<RutasView me={CAMPO} />);
+    expect(await screen.findByText(/Con «Nueva ruta» marcás los nodos en el mapa/)).toBeInTheDocument();
+  });
+
+  it('al operador común el estado vacío no le ofrece dibujar', async () => {
+    rutasMock.mockResolvedValue([]);
+    render(<RutasView me={OPERADOR} />);
+    expect(await screen.findByText(/Las rutas las dibujan los operadores de campo/)).toBeInTheDocument();
+  });
+
+  it('el foco arranca en el nombre de la ruta', async () => {
+    const dialogo = await abrirNueva();
+    expect(within(dialogo).getByLabelText('Nombre')).toHaveFocus();
+  });
+
+  it('el pie dice qué le falta a la ruta para poder guardarla', async () => {
+    const dialogo = await abrirNueva();
+    const nota = () => dialogo.querySelector('.pie-nota')?.textContent ?? '';
+
+    expect(nota()).toBe('Faltan el nombre y los nodos: marcá al menos dos en el mapa.');
+    clicEnElMapa(-34.9, -56.15);
+    expect(nota()).toBe('Faltan el nombre y un nodo más en el mapa.');
+    await userEvent.type(within(dialogo).getByLabelText('Nombre'), 'Perímetro');
+    expect(nota()).toBe('Falta un nodo más: una ruta necesita al menos dos.');
+    clicEnElMapa(-34.91, -56.16);
+    expect(nota()).toBe('');
+    expect(within(dialogo).getByRole('button', { name: /guardar ruta/i })).toBeEnabled();
+
+    await userEvent.clear(within(dialogo).getByLabelText('Nombre'));
+    expect(nota()).toBe('Falta el nombre de la ruta.');
+
+    await userEvent.type(within(dialogo).getByLabelText('Nombre'), 'Perímetro');
+    await userEvent.click(within(dialogo).getByRole('button', { name: /quitar el nodo 2/i }));
+    await userEvent.click(within(dialogo).getByRole('button', { name: /quitar el nodo 1/i }));
+    expect(nota()).toBe('Faltan los nodos: marcá al menos dos en el mapa.');
+  });
+
+  it('Enter en el nombre guarda la ruta, igual que el botón', async () => {
+    apiMock.mockResolvedValue(ruta());
+    const dialogo = await abrirNueva();
+    clicEnElMapa(-34.9, -56.15);
+    clicEnElMapa(-34.91, -56.16);
+
+    await userEvent.type(within(dialogo).getByLabelText('Nombre'), 'Perímetro{Enter}');
+
+    expect(apiMock).toHaveBeenCalledWith('/routes', expect.objectContaining({ method: 'POST' }));
+    expect(JSON.parse(apiMock.mock.calls.at(-1)![1].body).name).toBe('Perímetro');
+  });
+
+  it('una ruta incompleta no se manda aunque el navegador lo intente', async () => {
+    const dialogo = await abrirNueva();
+    await userEvent.type(within(dialogo).getByLabelText('Nombre'), 'Perímetro');
+
+    fireEvent.submit(within(dialogo).getByLabelText('Nombre').closest('form')!);
+    expect(apiMock).not.toHaveBeenCalled();
+  });
+
+  it('Escape cierra el editor sin guardar', async () => {
+    const dialogo = await abrirNueva();
+    await userEvent.type(within(dialogo).getByLabelText('Nombre'), 'A medias');
+    await userEvent.keyboard('{Escape}');
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(apiMock).not.toHaveBeenCalled();
+  });
+
+  it('editar dice cuál ruta se está editando', async () => {
+    rutasMock.mockResolvedValue([ruta()]);
+    render(<RutasView me={ADMIN} />);
+    await screen.findAllByText('Perímetro Norte');
+    await userEvent.click(screen.getByRole('button', { name: 'Editar' }));
+
+    const dialogo = screen.getByRole('dialog', { name: 'Editar ruta' });
+    expect(dialogo.querySelector('.modal-subtitulo')).toHaveTextContent('Perímetro Norte');
+  });
+
+  it('las acciones de cada fila van juntas: Editar y después Eliminar', async () => {
+    rutasMock.mockResolvedValue([ruta()]);
+    render(<RutasView me={ADMIN} />);
+    await screen.findAllByText('Perímetro Norte');
+
+    const grupo = screen.getByRole('group', { name: 'Acciones de Perímetro Norte' });
+    expect(within(grupo).getAllByRole('button').map((b) => b.textContent)).toEqual(['Editar', 'Eliminar']);
+  });
+
+  it('una ruta eliminada sólo ofrece restaurarla', async () => {
+    rutasMock.mockResolvedValue([ruta({ deleted: true, deletedAt: '2026-01-02T00:00:00.000Z' })]);
+    apiMock.mockResolvedValue(ruta());
+    render(<RutasView me={ADMIN} />);
+    await screen.findAllByText('Perímetro Norte');
+
+    const grupo = screen.getByRole('group', { name: 'Acciones de Perímetro Norte' });
+    expect(within(grupo).getAllByRole('button').map((b) => b.textContent)).toEqual(['Restaurar']);
+    await userEvent.click(within(grupo).getByRole('button', { name: 'Restaurar' }));
+    expect(apiMock).toHaveBeenLastCalledWith('/routes/1/restore', { method: 'POST' });
   });
 });
 

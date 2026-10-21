@@ -50,8 +50,19 @@ function fila(nombre: string): HTMLElement {
   return screen.getByText(nombre, { selector: 'div' }).closest('tr') as HTMLElement;
 }
 
-function formulario(nombre: string): HTMLElement {
-  return screen.getByRole('form', { name: nombre });
+/** El diálogo de alta o edición, por su título. */
+function dialogo(titulo: 'Nuevo dron' | 'Editar dron'): HTMLElement {
+  return screen.getByRole('dialog', { name: titulo });
+}
+
+async function abrirAlta() {
+  await userEvent.click(screen.getByRole('button', { name: 'Nuevo dron' }));
+  return dialogo('Nuevo dron');
+}
+
+async function abrirEdicion(nombre: string) {
+  await userEvent.click(within(fila(nombre)).getByRole('button', { name: 'Editar' }));
+  return dialogo('Editar dron');
 }
 
 beforeEach(() => {
@@ -88,12 +99,21 @@ describe('DronesView', () => {
     expect(within(fila('Bravo')).getByText('No')).toBeInTheDocument();
   });
 
-  it('muestra el estado vacío cuando no hay drones', async () => {
+  it('muestra el estado vacío cuando no hay drones, con qué hacer para dar uno de alta', async () => {
     traerMock.mockResolvedValue([]);
     montar();
 
     expect(await screen.findByText('Todavía no hay drones dados de alta.')).toBeInTheDocument();
+    expect(screen.getByText(/Con «Nuevo dron» se da de alta/)).toBeInTheDocument();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  it('al operador, el estado vacío no le ofrece un alta que no puede hacer', async () => {
+    traerMock.mockResolvedValue([]);
+    montar('operator');
+
+    expect(await screen.findByText(/Cuando un supervisor o un operador de campo dé de alta uno/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Nuevo dron' })).not.toBeInTheDocument();
   });
 
   it('muestra el error si falla la carga, sin contradecirlo con el estado vacío', async () => {
@@ -126,32 +146,47 @@ describe('DronesView', () => {
 
 
 
-  it('da de alta un dron con inventario y base elegida del desplegable', async () => {
+  it('el alta ya no vive en la página: se abre en un diálogo desde la cabecera', async () => {
+    montar();
+    await screen.findByText('Alfa', { selector: 'div' });
+
+    // nada de formularios desplegados en la vista
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    const alta = await abrirAlta();
+    // y el foco arranca en el nombre, que es lo primero que hay que escribir
+    expect(within(alta).getByLabelText('Nombre')).toHaveFocus();
+  });
+
+  it('da de alta un dron con inventario y base elegida del desplegable, y abre su sticker', async () => {
     traerMock.mockResolvedValue([]);
     basesMock.mockResolvedValue([
       { id: 7, name: 'Base Norte', lat: -34.85, lon: -56.2, active: true, createdAt: '', createdBy: null, deleted: false, deletedAt: null },
       { id: 8, name: 'Base Sur', lat: -34.9, lon: -56.1, active: true, createdAt: '', createdBy: null, deleted: false, deletedAt: null },
     ]);
-    apiMock.mockResolvedValue(makeDrone({ hash: 'nuevo', displayName: 'Delta' }));
+    apiMock.mockResolvedValue(makeDrone({ hash: 'nuevo', droneId: 'nuevo', displayName: 'Delta' }));
     render(<DronesView me={makeMe({ username: 'admin1', role: 'admin' })} />);
     await screen.findByText(/todavía no hay drones/i);
 
-    await userEvent.type(screen.getByLabelText('Nombre'), 'Delta');
-    await userEvent.type(screen.getByLabelText('Número de inventario'), 'INV-9');
+    const alta = await abrirAlta();
+    await userEvent.type(within(alta).getByLabelText('Nombre'), 'Delta');
+    await userEvent.type(within(alta).getByLabelText('Número de inventario'), 'INV-9');
 
     // el buscador filtra a medida que se escribe
-    const buscador = screen.getByLabelText('Buscar base');
-    await userEvent.type(buscador, 'sur');
-    expect(screen.queryByRole('option', { name: /Base Norte/ })).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole('option', { name: /Base Sur/ }));
+    await userEvent.type(within(alta).getByLabelText('Buscar base'), 'sur');
+    expect(within(alta).queryByRole('option', { name: /Base Norte/ })).not.toBeInTheDocument();
+    await userEvent.click(within(alta).getByRole('option', { name: /Base Sur/ }));
 
-    await userEvent.click(screen.getByRole('button', { name: /dar de alta/i }));
+    await userEvent.click(within(alta).getByRole('button', { name: 'Dar de alta' }));
 
     expect(apiMock).toHaveBeenCalledWith('/drones', expect.objectContaining({ method: 'POST' }));
     const cuerpo = JSON.parse(apiMock.mock.calls.at(-1)![1].body);
     expect(cuerpo).toEqual({ displayName: 'Delta', model: '', inventoryCode: 'INV-9', baseId: 8 });
-    // el sticker se abre solo
-    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    // el diálogo del alta deja su lugar al sticker, que se abre solo
+    expect(await screen.findByRole('dialog', { name: 'Sticker del dron Delta' })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Nuevo dron' })).not.toBeInTheDocument();
+    // y el dron nuevo ya está en la tabla, sin volver a pedir la lista
+    expect(screen.getByText('Delta', { selector: 'div' })).toBeInTheDocument();
+    expect(traerMock).toHaveBeenCalledTimes(1);
   });
 
   it('el alta sin base no manda baseId', async () => {
@@ -161,13 +196,25 @@ describe('DronesView', () => {
     render(<DronesView me={makeMe({ username: 'admin1', role: 'admin' })} />);
     await screen.findByText(/todavía no hay drones/i);
 
-    await userEvent.type(screen.getByLabelText('Nombre'), 'Sin base');
-    await userEvent.click(screen.getByRole('button', { name: /dar de alta/i }));
+    const alta = await abrirAlta();
+    // y el selector avisa por qué no hay nada para elegir
+    expect(within(alta).getByLabelText('Buscar base')).toBeDisabled();
+    await userEvent.type(within(alta).getByLabelText('Nombre'), 'Sin base');
+    await userEvent.click(within(alta).getByRole('button', { name: 'Dar de alta' }));
 
     const cuerpo = JSON.parse(apiMock.mock.calls.at(-1)![1].body);
     expect(cuerpo.baseId).toBeUndefined();
-    // y el selector avisa por qué no hay nada para elegir
-    expect(screen.getByLabelText('Buscar base')).toBeDisabled();
+  });
+
+  it('Enter en un campo da de alta, igual que el botón', async () => {
+    apiMock.mockResolvedValue(makeDrone({ hash: 'nuevo', displayName: 'Eco' }));
+    montar();
+    await screen.findByText('Alfa', { selector: 'div' });
+
+    const alta = await abrirAlta();
+    await userEvent.type(within(alta).getByLabelText('Nombre'), 'Eco{Enter}');
+
+    expect(apiMock).toHaveBeenCalledWith('/drones', expect.objectContaining({ method: 'POST' }));
   });
 
   it('la latitud y la longitud del dron no se pueden escribir a mano', async () => {
@@ -176,22 +223,39 @@ describe('DronesView', () => {
     render(<DronesView me={makeMe({ username: 'admin1', role: 'admin' })} />);
     await screen.findByText(/todavía no hay drones/i);
 
+    const alta = await abrirAlta();
     // son un dato de la base, no del dron: no hay campos para tipearlas
-    expect(screen.queryByLabelText('Latitud')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Longitud')).not.toBeInTheDocument();
+    expect(within(alta).queryByLabelText('Latitud')).not.toBeInTheDocument();
+    expect(within(alta).queryByLabelText('Longitud')).not.toBeInTheDocument();
   });
 
-  it('muestra el error del backend al dar de alta', async () => {
+  it('muestra el error del backend adentro del diálogo de alta y lo deja abierto', async () => {
     apiMock.mockRejectedValue(new Error('displayName no puede superar 40 caracteres'));
     montar();
     await screen.findByText('Alfa', { selector: 'div' });
 
-    const alta = formulario('Dar de alta un dron');
+    const alta = await abrirAlta();
     await userEvent.type(within(alta).getByLabelText('Nombre'), 'Delta');
     await userEvent.click(within(alta).getByRole('button', { name: 'Dar de alta' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('displayName no puede superar 40 caracteres');
+    expect(await within(alta).findByRole('alert')).toHaveTextContent('displayName no puede superar 40 caracteres');
+    // lo escrito sigue ahí para corregirlo, y el sticker no se abrió
+    expect(within(alta).getByLabelText('Nombre')).toHaveValue('Delta');
+    expect(screen.queryByRole('dialog', { name: /sticker/i })).not.toBeInTheDocument();
+  });
+
+  it('cancelar el alta cierra el diálogo sin pegarle al backend', async () => {
+    montar();
+    await screen.findByText('Alfa', { selector: 'div' });
+
+    const alta = await abrirAlta();
+    await userEvent.type(within(alta).getByLabelText('Nombre'), 'A medias');
+    await userEvent.click(within(alta).getByRole('button', { name: 'Cancelar' }));
+
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(apiMock).not.toHaveBeenCalled();
+    // y reabrirlo arranca de cero
+    expect(within(await abrirAlta()).getByLabelText('Nombre')).toHaveValue('');
   });
 
   it('el supervisor desactiva un dron con el interruptor', async () => {
@@ -216,9 +280,11 @@ describe('DronesView', () => {
     montar('supervisor');
     await screen.findByText('Bravo', { selector: 'div' });
 
-    await userEvent.click(within(fila('Bravo')).getByRole('button', { name: 'Editar' }));
-    await userEvent.type(within(formulario('Editar Bravo')).getByLabelText('Modelo'), 'DJI Air 3');
-    await userEvent.click(within(formulario('Editar Bravo')).getByRole('button', { name: 'Guardar' }));
+    const edicion = await abrirEdicion('Bravo');
+    // el diálogo dice a qué dron se está editando
+    expect(edicion).toHaveTextContent('Bravo');
+    await userEvent.type(within(edicion).getByLabelText('Modelo'), 'DJI Air 3');
+    await userEvent.click(within(edicion).getByRole('button', { name: 'Guardar cambios' }));
 
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith(`/drones/${HASH_BRAVO}`, {
@@ -226,33 +292,48 @@ describe('DronesView', () => {
         body: JSON.stringify({ model: 'DJI Air 3' }),
       }),
     );
+    // guardado, el diálogo se cierra y la fila muestra la ficha que volvió
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(within(fila('Bravo')).getByText('DJI Air 3')).toBeInTheDocument();
   });
 
+  it('la edición arranca con los datos del dron cargados', async () => {
+    montar('supervisor');
+    await screen.findByText('Alfa', { selector: 'div' });
+
+    const edicion = await abrirEdicion('Alfa');
+    expect(within(edicion).getByLabelText('Nombre')).toHaveValue('Alfa');
+    expect(within(edicion).getByLabelText('Modelo')).toHaveValue('DJI Mini 3');
+    expect(within(edicion).getByLabelText('Número de inventario')).toHaveValue('INV-0001');
+  });
 
   it('deja la edición abierta si el backend rechaza el cambio', async () => {
     apiMock.mockRejectedValue(new Error('Solo un supervisor puede modificar el activo'));
     montar('supervisor');
     await screen.findByText('Alfa', { selector: 'div' });
 
-    await userEvent.click(within(fila('Alfa')).getByRole('button', { name: 'Editar' }));
-    await userEvent.type(within(formulario('Editar Alfa')).getByLabelText('Modelo'), ' Pro');
-    await userEvent.click(within(formulario('Editar Alfa')).getByRole('button', { name: 'Guardar' }));
+    const edicion = await abrirEdicion('Alfa');
+    await userEvent.type(within(edicion).getByLabelText('Modelo'), ' Pro');
+    await userEvent.click(within(edicion).getByRole('button', { name: 'Guardar cambios' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Solo un supervisor puede modificar el activo');
-    expect(formulario('Editar Alfa')).toBeInTheDocument();
+    expect(await within(edicion).findByRole('alert')).toHaveTextContent('Solo un supervisor puede modificar el activo');
+    expect(dialogo('Editar dron')).toBeInTheDocument();
   });
 
-  it('se sale de la edición con Cancelar y con el mismo botón de Editar', async () => {
+  it('se sale de la edición con Cancelar y con Escape, sin guardar', async () => {
     montar('supervisor');
     await screen.findByText('Alfa', { selector: 'div' });
 
-    await userEvent.click(within(fila('Alfa')).getByRole('button', { name: 'Editar' }));
-    await userEvent.click(within(formulario('Editar Alfa')).getByRole('button', { name: 'Cancelar' }));
-    expect(screen.queryByRole('form', { name: 'Editar Alfa' })).not.toBeInTheDocument();
+    let edicion = await abrirEdicion('Alfa');
+    await userEvent.type(within(edicion).getByLabelText('Modelo'), ' Pro');
+    await userEvent.click(within(edicion).getByRole('button', { name: 'Cancelar' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 
-    await userEvent.click(within(fila('Alfa')).getByRole('button', { name: 'Editar' }));
-    await userEvent.click(within(fila('Alfa')).getByRole('button', { name: 'Editar' }));
-    expect(screen.queryByRole('form', { name: 'Editar Alfa' })).not.toBeInTheDocument();
+    edicion = await abrirEdicion('Alfa');
+    // lo tipeado antes de cancelar no quedó guardado en ningún lado
+    expect(within(edicion).getByLabelText('Modelo')).toHaveValue('DJI Mini 3');
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(apiMock).not.toHaveBeenCalled();
   });
 
@@ -260,11 +341,19 @@ describe('DronesView', () => {
     montar('supervisor');
     await screen.findByText('Alfa', { selector: 'div' });
 
-    await userEvent.click(within(fila('Alfa')).getByRole('button', { name: 'Editar' }));
-    await userEvent.click(within(formulario('Editar Alfa')).getByRole('button', { name: 'Guardar' }));
+    const edicion = await abrirEdicion('Alfa');
+    await userEvent.click(within(edicion).getByRole('button', { name: 'Guardar cambios' }));
 
     expect(apiMock).not.toHaveBeenCalled();
-    expect(screen.queryByRole('form', { name: 'Editar Alfa' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('las acciones de cada fila van juntas y en el mismo orden: Editar, Ver QR, Eliminar', async () => {
+    montar('supervisor');
+    await screen.findByText('Alfa', { selector: 'div' });
+
+    const grupo = within(fila('Alfa')).getByRole('group', { name: 'Acciones de Alfa' });
+    expect(within(grupo).getAllByRole('button').map((b) => b.textContent)).toEqual(['Editar', 'Ver QR', 'Eliminar']);
   });
 
   it('elimina un dron sólo si se confirma', async () => {
@@ -392,7 +481,7 @@ describe('DronesView', () => {
     montar('field_operator');
     await screen.findByText('Alfa', { selector: 'div' });
 
-    expect(formulario('Dar de alta un dron')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Nuevo dron' })).toBeInTheDocument();
     expect(within(fila('Alfa')).getByRole('button', { name: 'Ver QR' })).toBeInTheDocument();
     expect(within(fila('Alfa')).queryByRole('checkbox')).not.toBeInTheDocument();
     expect(within(fila('Alfa')).queryByRole('button', { name: 'Editar' })).not.toBeInTheDocument();
@@ -405,7 +494,7 @@ describe('DronesView', () => {
     montar('operator');
     await screen.findByText('Alfa', { selector: 'div' });
 
-    expect(screen.queryByRole('form', { name: 'Dar de alta un dron' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Nuevo dron' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Ver eliminados' })).not.toBeInTheDocument();
     expect(within(fila('Alfa')).queryByRole('checkbox')).not.toBeInTheDocument();
     expect(within(fila('Alfa')).getByText('No operativo')).toBeInTheDocument();
@@ -418,7 +507,7 @@ describe('DronesView', () => {
     await screen.findByText('Alfa', { selector: 'div' });
 
     expect(screen.getByRole('button', { name: 'Ver eliminados' })).toBeInTheDocument();
-    expect(formulario('Dar de alta un dron')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Nuevo dron' })).toBeInTheDocument();
     expect(within(fila('Alfa')).getByRole('checkbox')).toBeInTheDocument();
     expect(within(fila('Alfa')).getByRole('button', { name: 'Editar' })).toBeInTheDocument();
     expect(within(fila('Alfa')).getByRole('button', { name: 'Eliminar' })).toBeInTheDocument();

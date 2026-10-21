@@ -127,17 +127,26 @@ export default function RutasView({ me }: { me: Me }) {
 
         {error && <p className="aviso malo">{error}</p>}
         {cargando && <p className="vacio">Trayendo las rutas…</p>}
-        {!cargando && !error && rutas.length === 0 && <p className="vacio">Todavía no hay rutas de patrullaje.</p>}
+        {!cargando && !error && rutas.length === 0 && (
+          <div className="vacio-guia">
+            <p className="vacio">Todavía no hay rutas de patrullaje.</p>
+            <p className="muted">
+              {puedeCrear
+                ? 'Con «Nueva ruta» marcás los nodos en el mapa, en el orden en que el dron los tiene que recorrer.'
+                : 'Las rutas las dibujan los operadores de campo y los supervisores; cuando haya alguna, va a aparecer acá.'}
+            </p>
+          </div>
+        )}
 
         {rutas.length > 0 && (
           <div className="rutas-cuerpo">
             <div className="tabla-envoltorio">
-              <table className="tabla">
+              <table className="tabla tabla-gestion">
                 <thead>
                   <tr>
                     <th>Ruta</th>
                     <th>Nodos</th>
-                    {esSupervisor && <th />}
+                    {esSupervisor && <th className="columna-acciones">Acciones</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -154,20 +163,30 @@ export default function RutasView({ me }: { me: Me }) {
                       <td className="mono">{r.waypoints.length}</td>
                       {esSupervisor && (
                         <td className="barra-acciones">
-                          {r.deleted ? (
-                            <button className="chico" onClick={() => accion(() => api(`/routes/${r.id}/restore`, { method: 'POST' }))}>
-                              Restaurar
-                            </button>
-                          ) : (
-                            <>
-                              <button className="chico" onClick={() => setEditando(r)}>
-                                Editar
+                          <div className="acciones-fila" role="group" aria-label={`Acciones de ${r.name}`}>
+                            {r.deleted ? (
+                              <button
+                                type="button"
+                                className="chico"
+                                onClick={() => accion(() => api(`/routes/${r.id}/restore`, { method: 'POST' }))}
+                              >
+                                Restaurar
                               </button>
-                              <button className="chico dismiss" onClick={() => accion(() => api(`/routes/${r.id}`, { method: 'DELETE' }))}>
-                                Eliminar
-                              </button>
-                            </>
-                          )}
+                            ) : (
+                              <>
+                                <button type="button" className="chico" onClick={() => setEditando(r)}>
+                                  Editar
+                                </button>
+                                <button
+                                  type="button"
+                                  className="chico dismiss"
+                                  onClick={() => accion(() => api(`/routes/${r.id}`, { method: 'DELETE' }))}
+                                >
+                                  Eliminar
+                                </button>
+                              </>
+                            )}
+                          </div>
                         </td>
                       )}
                     </tr>

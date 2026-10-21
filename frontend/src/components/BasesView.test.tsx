@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { api, rutasDeBase, traerBases, traerRutas } from '../api';
 import { makeMe } from '../test/fixtures';
@@ -181,9 +181,12 @@ describe('BasesView', () => {
 
     await userEvent.clear(within(dialogo).getByLabelText('Nombre'));
     await userEvent.type(within(dialogo).getByLabelText('Nombre'), 'Base Norte II');
-    await userEvent.click(within(dialogo).getByRole('button', { name: 'Guardar' }));
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Guardar cambios' }));
 
     expect(apiMock).toHaveBeenCalledWith('/bases/1', expect.objectContaining({ method: 'PATCH' }));
+    // guardado, el diálogo se cierra y la lista se vuelve a pedir
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(basesMock).toHaveBeenCalledTimes(2);
   });
 
   it('desactivar y eliminar pegan a los endpoints que corresponden', async () => {
@@ -281,6 +284,199 @@ describe('BasesView — caminos que faltaban cubrir', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Restaurar' }));
 
     expect(apiMock).toHaveBeenLastCalledWith('/bases/1/restore', { method: 'POST' });
+  });
+});
+
+describe('BasesView — el alta y la edición son un diálogo de formulario', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    limpiarEstadoMapa();
+  });
+
+  async function abrirAlta() {
+    basesMock.mockResolvedValue([]);
+    render(<BasesView me={CAMPO} />);
+    await screen.findByText(/todavía no hay bases/i);
+    await userEvent.click(screen.getByRole('button', { name: /nueva base/i }));
+    return screen.getByRole('dialog', { name: 'Nueva base' });
+  }
+
+  async function abrirEdicion() {
+    basesMock.mockResolvedValue([base()]);
+    render(<BasesView me={ADMIN} />);
+    await screen.findByText('Base Norte');
+    await userEvent.click(screen.getByRole('button', { name: 'Editar' }));
+    return screen.getByRole('dialog', { name: 'Editar base' });
+  }
+
+  it('el estado vacío dice cómo dar de alta la primera', async () => {
+    await abrirAlta();
+    expect(screen.getByText(/Con «Nueva base» la das de alta/)).toBeInTheDocument();
+  });
+
+  it('al operador común el estado vacío no le ofrece un alta que no puede hacer', async () => {
+    basesMock.mockResolvedValue([]);
+    render(<BasesView me={OPERADOR} />);
+
+    expect(await screen.findByText(/Las bases las dan de alta los operadores de campo/)).toBeInTheDocument();
+  });
+
+  it('el foco arranca en el nombre', async () => {
+    const dialogo = await abrirAlta();
+    expect(within(dialogo).getByLabelText('Nombre')).toHaveFocus();
+  });
+
+  it('el pie dice qué falta mientras el botón está apagado', async () => {
+    const dialogo = await abrirAlta();
+    expect(within(dialogo).getByText('Faltan el nombre y el punto de la base.')).toBeInTheDocument();
+
+    await userEvent.type(within(dialogo).getByLabelText('Nombre'), 'Base Río');
+    expect(within(dialogo).getByText(/Falta el punto: marcalo en el mapa/)).toBeInTheDocument();
+
+    await userEvent.clear(within(dialogo).getByLabelText('Nombre'));
+    act(() => estadoMapa.clic!({ latlng: { lat: -34.9, lng: -56.15 } }));
+    expect(within(dialogo).getByText('Falta el nombre de la base.')).toBeInTheDocument();
+
+    await userEvent.type(within(dialogo).getByLabelText('Nombre'), 'Base Río');
+    expect(within(dialogo).queryByText(/^Falta/)).not.toBeInTheDocument();
+    expect(within(dialogo).getByRole('button', { name: 'Dar de alta' })).toBeEnabled();
+  });
+
+  it('una coordenada fuera de rango se marca en el campo y explica el rango', async () => {
+    const dialogo = await abrirAlta();
+    const lat = within(dialogo).getByLabelText('Latitud');
+    const lon = within(dialogo).getByLabelText('Longitud');
+
+    await userEvent.type(lat, '95');
+    expect(lat).toHaveAttribute('aria-invalid', 'true');
+    expect(lat).toHaveAccessibleDescription(/la latitud va de -90 a 90/i);
+    expect(lon).toHaveAttribute('aria-invalid', 'false');
+
+    await userEvent.clear(lat);
+    await userEvent.type(lon, 'oeste');
+    expect(lon).toHaveAttribute('aria-invalid', 'true');
+    expect(lat).toHaveAttribute('aria-invalid', 'false');
+
+    await userEvent.clear(lon);
+    expect(within(dialogo).queryByText(/la latitud va de -90 a 90/i)).not.toBeInTheDocument();
+  });
+
+  it('Enter en un campo da de alta, igual que el botón', async () => {
+    apiMock.mockResolvedValue(base({ id: 9, name: 'Base Río' }));
+    const dialogo = await abrirAlta();
+
+    await userEvent.type(within(dialogo).getByLabelText('Latitud'), '-34.9');
+    await userEvent.type(within(dialogo).getByLabelText('Longitud'), '-56.15');
+    await userEvent.type(within(dialogo).getByLabelText('Nombre'), 'Base Río{Enter}');
+
+    expect(apiMock).toHaveBeenCalledWith('/bases', expect.objectContaining({ method: 'POST' }));
+  });
+
+  it('un formulario incompleto no se manda aunque el navegador lo intente', async () => {
+    const dialogo = await abrirAlta();
+    await userEvent.type(within(dialogo).getByLabelText('Nombre'), 'Base Río');
+
+    fireEvent.submit(within(dialogo).getByLabelText('Nombre').closest('form')!);
+    expect(apiMock).not.toHaveBeenCalled();
+  });
+
+  it('si el backend rechaza el alta, el error se lee adentro del diálogo, que sigue abierto', async () => {
+    apiMock.mockRejectedValue(new Error('Ya existe una base con ese nombre'));
+    const dialogo = await abrirAlta();
+
+    await userEvent.type(within(dialogo).getByLabelText('Nombre'), 'Base Río');
+    await userEvent.type(within(dialogo).getByLabelText('Latitud'), '-34.9');
+    await userEvent.type(within(dialogo).getByLabelText('Longitud'), '-56.15');
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Dar de alta' }));
+
+    expect(await within(dialogo).findByRole('alert')).toHaveTextContent('Ya existe una base con ese nombre');
+    expect(within(dialogo).getByLabelText('Nombre')).toHaveValue('Base Río');
+    // y el botón vuelve a estar disponible para reintentar
+    expect(within(dialogo).getByRole('button', { name: 'Dar de alta' })).toBeEnabled();
+    // no se pasó al paso de las rutas
+    expect(screen.queryByText(/quedó dada de alta/i)).not.toBeInTheDocument();
+  });
+
+  it('si el backend rechaza la edición, el error también queda adentro', async () => {
+    apiMock.mockRejectedValue(new Error('La base está eliminada'));
+    const dialogo = await abrirEdicion();
+    // el subtítulo dice cuál se está editando
+    expect(dialogo).toHaveTextContent('Base Norte');
+
+    await userEvent.type(within(dialogo).getByLabelText('Nombre'), ' II');
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Guardar cambios' }));
+
+    expect(await within(dialogo).findByRole('alert')).toHaveTextContent('La base está eliminada');
+    expect(screen.getByRole('dialog', { name: 'Editar base' })).toBeInTheDocument();
+  });
+
+  it('un rechazo que no es un Error igual se lee en el diálogo', async () => {
+    apiMock.mockRejectedValue('sin conexión');
+    const dialogo = await abrirEdicion();
+
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Guardar cambios' }));
+    expect(await within(dialogo).findByRole('alert')).toHaveTextContent('sin conexión');
+  });
+
+  it('mientras guarda, el botón no deja mandar dos veces', async () => {
+    apiMock.mockReturnValue(new Promise(() => {}));
+    const dialogo = await abrirEdicion();
+
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Guardar cambios' }));
+    expect(within(dialogo).getByRole('button', { name: 'Guardando…' })).toBeDisabled();
+  });
+
+  it('reabrir el alta después de un error arranca limpio', async () => {
+    apiMock.mockRejectedValue(new Error('Ya existe una base con ese nombre'));
+    let dialogo = await abrirAlta();
+    await userEvent.type(within(dialogo).getByLabelText('Nombre'), 'Base Río');
+    await userEvent.type(within(dialogo).getByLabelText('Latitud'), '-34.9');
+    await userEvent.type(within(dialogo).getByLabelText('Longitud'), '-56.15');
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Dar de alta' }));
+    await within(dialogo).findByRole('alert');
+
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /nueva base/i }));
+    dialogo = screen.getByRole('dialog', { name: 'Nueva base' });
+    expect(within(dialogo).queryByRole('alert')).not.toBeInTheDocument();
+    expect(within(dialogo).getByLabelText('Nombre')).toHaveValue('');
+  });
+
+  it('mientras el GPS contesta, el botón lo dice y no se puede volver a pedir', async () => {
+    Object.defineProperty(navigator, 'geolocation', {
+      value: { getCurrentPosition: () => {} },
+      configurable: true,
+    });
+    const dialogo = await abrirAlta();
+
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Usar mi ubicación' }));
+    expect(within(dialogo).getByRole('button', { name: 'Ubicando…' })).toBeDisabled();
+  });
+
+  it('una base inactiva ofrece activarla', async () => {
+    basesMock.mockResolvedValue([base({ active: false })]);
+    apiMock.mockResolvedValue(base());
+    render(<BasesView me={ADMIN} />);
+    await screen.findByText('Base Norte');
+
+    expect(screen.getByText('Inactiva')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Activar' }));
+    expect(JSON.parse(apiMock.mock.calls.at(-1)![1].body)).toEqual({ active: true });
+  });
+
+  it('las acciones de cada fila van juntas: Editar primero y Eliminar al final', async () => {
+    basesMock.mockResolvedValue([base()]);
+    render(<BasesView me={ADMIN} />);
+    await screen.findByText('Base Norte');
+
+    const grupo = screen.getByRole('group', { name: 'Acciones de Base Norte' });
+    expect(within(grupo).getAllByRole('button').map((b) => b.textContent)).toEqual([
+      'Editar',
+      'Rutas',
+      'Desactivar',
+      'Eliminar',
+    ]);
   });
 });
 
