@@ -393,6 +393,69 @@ class PatrolManagerSeguimientoTest {
         assertFalse(dron.ordenes.contains("despegarEnElLugar"))
     }
 
+    // ---- Batería baja con el dron en el suelo ----
+
+    private suspend fun telemetriaConBateria(pct: Double) {
+        dron.emitirTelemetria(LAT, LON, bateria = pct, alt = 0.0, rumbo = 90.0, gimbal = -70.0)
+        delay(100)
+    }
+
+    /**
+     * Lo que pasó en la prueba en interior: aterrizado con el control tomado, la
+     * batería bajó del 25 % y el estado quedaba clavado en "volviendo a base",
+     * de donde la consola ya no podía despegarlo. En el suelo no hay regreso.
+     */
+    @Test
+    fun enElSueloLaBateriaBajaNoDisparaElRegresoNiTrabaElEstado() = runBlocking {
+        enElSueloConElControlTomado()
+        telemetriaConBateria(20.0)
+        delay(200)
+        assertEquals(PatrolState.MANUAL, patrulla.state.value)
+        assertTrue(comandoCentral.eventos("RTH_LOW_BATTERY").isEmpty())
+        assertFalse(dron.ordenes.contains("returnHome"))
+    }
+
+    /** Con la batería al 25 % o menos no se despega, y la consola se entera del motivo. */
+    @Test
+    fun conLaBateriaBajaNoSeDespegaYSeAvisa() = runBlocking {
+        enElSueloConElControlTomado()
+        telemetriaConBateria(22.0)
+        mensaje("""{"type":"takeoff","by":"op"}""")
+        esperarA("el aviso") { comandoCentral.eventos("DRONE_PROBLEM").isNotEmpty() }
+        assertTrue(comandoCentral.eventos("DRONE_PROBLEM").single().getString("message").contains("22%"))
+        assertFalse(dron.ordenes.contains("despegarEnElLugar"))
+
+        patrulla.despegarAqui()
+        delay(200)
+        assertFalse(dron.ordenes.contains("despegarEnElLugar"))
+    }
+
+    /** Un despegue que no corresponde (sin el control tomado) se avisa a la consola, no queda mudo. */
+    @Test
+    fun unDespegueSinElControlSeAvisaALaConsola() = runBlocking {
+        dron.estado.value = dron.estado.value.copy(enVuelo = false)
+        patrulla.start()
+        telemetria()
+        mensaje("""{"type":"takeoff","by":"op"}""")
+        esperarA("el aviso") { comandoCentral.eventos("DRONE_PROBLEM").isNotEmpty() }
+        assertFalse(dron.ordenes.contains("despegarEnElLugar"))
+    }
+
+    /** Si aterriza volviendo por batería baja, queda LANDED y no clavado en el regreso. */
+    @Test
+    fun aterrizarVolviendoPorBateriaBajaDejaElDronEnBase() = runBlocking<Unit> {
+        patrulla.start()
+        telemetria()
+        patrulla.startPatrol(ruta)
+        withTimeout(5_000) { patrulla.state.first { it == PatrolState.PATROLLING } }
+        dron.emitirTelemetria(LAT, LON, bateria = 20.0, alt = ALT, rumbo = 90.0, gimbal = -70.0)
+        withTimeout(5_000) { patrulla.state.first { it == PatrolState.RETURNING_HOME_BATTERY } }
+
+        dron.estado.value = dron.estado.value.copy(enVuelo = false)
+        dron.flightEvents.emit(FlightEvent.Aterrizado)
+        withTimeout(5_000) { patrulla.state.first { it == PatrolState.LANDED } }
+    }
+
     // ---- Despegue y aterrizaje desde la consola ----
 
     private suspend fun enElSueloConElControlTomado() {

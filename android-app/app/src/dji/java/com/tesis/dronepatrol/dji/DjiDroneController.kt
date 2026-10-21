@@ -803,7 +803,11 @@ class DjiDroneController : DroneController {
         when (aterrizajeEsperado) {
             Aterrizaje.EN_BASE -> flightEvents.tryEmit(FlightEvent.ArrivedHome)
             Aterrizaje.AQUI -> flightEvents.tryEmit(FlightEvent.Aterrizado)
-            Aterrizaje.NINGUNO -> Unit
+            // Aterrizó sin que la app lo ordenara (el propio regreso a base del
+            // dron por señal o batería, o las palancas del control): igual hay
+            // que avisarlo, o la patrulla queda en un estado de vuelo con el dron
+            // en el suelo.
+            Aterrizaje.NINGUNO -> flightEvents.tryEmit(FlightEvent.Aterrizado)
         }
         aterrizajeEsperado = Aterrizaje.NINGUNO
         // En el suelo no se sostiene ningún lazo: el que hubiera manda ceros a

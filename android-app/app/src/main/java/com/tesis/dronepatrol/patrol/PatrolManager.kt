@@ -540,6 +540,12 @@ class PatrolManager(
             report("DRONE_PROBLEM", "No se puede despegar: ${dron.detalle.ifBlank { "el dron no está listo" }}")
             return
         }
+        if (!dron.enVuelo) {
+            bateriaParaDespegar()?.let { pct ->
+                report("DRONE_PROBLEM", "No se despega con la batería al ${pct.toInt()}%: hace falta más del ${LOW_BATTERY_PCT.toInt()}%")
+                return
+            }
+        }
         terminarSeguimiento("empezó otro patrullaje")
         this.route = route
         lastReachedWaypoint = 0
@@ -599,6 +605,10 @@ class PatrolManager(
         }
         if (!dron.conectado) {
             report("DRONE_PROBLEM", "No se puede despegar: ${dron.detalle.ifBlank { "sin enlace con la aeronave" }}")
+            return
+        }
+        bateriaParaDespegar()?.let { pct ->
+            report("DRONE_PROBLEM", "No se despega con la batería al ${pct.toInt()}%: hace falta más del ${LOW_BATTERY_PCT.toInt()}%")
             return
         }
         val sinGps = lastTelemetry?.tienePosicion != true
@@ -909,8 +919,11 @@ class PatrolManager(
      * prueba de mandos en interior, despegar, girar y aterrizar.
      */
     private fun onTakeoff(by: String) {
+        // Los rechazos van al Comando Central y no solo al log del teléfono: el
+        // que apretó "Despegar" está en la consola y tiene que saber por qué no
+        // pasa nada.
         if (!controlTomado || _state.value != PatrolState.MANUAL) {
-            log("$by pidió despegar sin el control manual tomado: se ignora")
+            report("DRONE_PROBLEM", "No se despega: $by no tiene el control manual tomado en el dron (estado ${_state.value})")
             return
         }
         val dron = controller.estado.value
@@ -920,6 +933,10 @@ class PatrolManager(
         }
         if (!dron.conectado) {
             report("DRONE_PROBLEM", "No se puede despegar: ${dron.detalle.ifBlank { "sin enlace con la aeronave" }}")
+            return
+        }
+        bateriaParaDespegar()?.let { pct ->
+            report("DRONE_PROBLEM", "No se despega con la batería al ${pct.toInt()}%: hace falta más del ${LOW_BATTERY_PCT.toInt()}%")
             return
         }
         val sinGps = lastTelemetry?.tienePosicion != true
@@ -953,13 +970,32 @@ class PatrolManager(
     // cuenta; acá reflejamos ese estado y avisamos al Comando Central (el celular
     // sigue online: lo que se cortó es el enlace de radio con el dron).
     /**
-     * En el aire para los failsafes: los estados de vuelo, y también IDLE con el
-     * dron en el aire, que es como queda después de un despegue en el lugar
+     * En el aire para los failsafes (batería baja, pérdida de señal): el dron
+     * TIENE que estar en el aire —lo dice el propio dron— y en un estado de
+     * vuelo, o en IDLE, que es como queda después de un despegue en el lugar
      * desde la app. Volviendo a base NO: ahí ya hay un regreso en curso y
      * dispararlo de nuevo en cada telemetría sería pisarlo.
+     *
+     * Mirar solo el estado no alcanzaba: con el control manual tomado y el dron
+     * aterrizado el estado sigue en MANUAL, la batería baja al 25 % disparaba
+     * el regreso a base de un dron en el suelo, el estado quedaba clavado en
+     * RETURNING_HOME_BATTERY (nunca llega a una base de la que no salió) y desde
+     * ahí la consola ya no podía volver a despegarlo. Pasó en la prueba en
+     * interior.
      */
-    private fun enVueloParaLosFailsafes(): Boolean =
-        _state.value in ESTADOS_EN_VUELO || (_state.value == PatrolState.IDLE && controller.estado.value.enVuelo)
+    private fun enVueloParaLosFailsafes(): Boolean {
+        if (!controller.estado.value.enVuelo) return false
+        val estado = _state.value
+        return estado in ESTADOS_EN_VUELO || estado == PatrolState.IDLE
+    }
+
+    /**
+     * La batería alcanza para despegar: más que el umbral del regreso a base,
+     * que si no salta apenas el dron se despega del suelo. Sin dato de batería
+     * (todavía no llegó telemetría) no se frena: decide el propio dron.
+     */
+    private fun bateriaParaDespegar(): Double? =
+        lastTelemetry?.batteryPct?.takeIf { it <= LOW_BATTERY_PCT }
 
     private suspend fun signalWatchdog() {
         while (true) {
@@ -1093,13 +1129,23 @@ class PatrolManager(
             }
             is FlightEvent.Aterrizado -> {
                 terminarSeguimiento("el dron aterrizó")
-                // Con el control tomado sigue siendo del operador, en el suelo:
-                // puede volver a despegar sin soltarlo y retomarlo.
-                if (controlTomado) {
-                    report("LANDED", "Dron aterrizado: el control manual sigue tomado")
-                } else {
-                    pasarA(PatrolState.IDLE)
-                    report("LANDED", "Dron aterrizado por orden del operador de campo")
+                when {
+                    // Con el control tomado sigue siendo del operador, en el
+                    // suelo: puede volver a despegar sin soltarlo y retomarlo.
+                    controlTomado -> {
+                        if (_state.value != PatrolState.MANUAL) pasarA(PatrolState.MANUAL)
+                        report("LANDED", "Dron aterrizado: el control manual sigue tomado")
+                    }
+                    // Aterrizó volviendo por batería baja (el propio dron, o un
+                    // regreso que terminó en otro lado): hay que cambiarla.
+                    _state.value == PatrolState.RETURNING_HOME_BATTERY -> {
+                        pasarA(PatrolState.LANDED)
+                        report("LANDED", "Dron aterrizado con la batería baja: hay que cambiarla antes de volver a volar")
+                    }
+                    else -> {
+                        pasarA(PatrolState.IDLE)
+                        report("LANDED", "Dron aterrizado")
+                    }
                 }
             }
             is FlightEvent.GotoArrived -> {
