@@ -26,7 +26,10 @@ data class Telemetry(
     val ts: Long,
     /**
      * Inclinación del gimbal en grados: 0 es el horizonte, −90 es mirar derecho
-     * al suelo. Hace falta para ubicar en el terreno lo que la cámara ve.
+     * al suelo. Hace falta para ubicar en el terreno lo que la cámara ve. **NaN
+     * si el dron todavía no la informó** (el real, recién enlazado), igual que la
+     * posición sin fix: así el status no le muestra a la consola un valor que
+     * nadie midió.
      */
     val gimbalPitch: Double = GIMBAL_PATRULLA,
     /**

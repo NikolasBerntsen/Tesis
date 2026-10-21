@@ -41,13 +41,39 @@ class ContratoDelSeguimientoTest {
         alcance.cancel()
     }
 
-    private fun status(lat: Double, lon: Double, objetivo: ObjetivoReportado? = null): JSONObject {
+    private fun status(lat: Double, lon: Double, objetivo: ObjetivoReportado? = null, gimbalPitch: Double = Double.NaN): JSONObject {
         cliente.sendStatus(
             state = "MANUAL", battery = 80.0, lat = lat, lon = lon, routeId = null, waypointIndex = 0,
             waypointTotal = 0, signalOk = true, signalPct = 90, heading = 45.0, mode = "TEST",
             altM = 1.2, satellites = 4, flying = true, flightMode = "ATTI", target = objetivo,
+            gimbalPitch = gimbalPitch,
         )
         return cliente.enviados.last()
+    }
+
+    /** La inclinación de la cámara viaja con el nombre del contrato (§1, `gimbalPitch`), en grados y tal cual. */
+    @Test
+    fun laInclinacionDeLaCamaraVaEnElStatus() {
+        assertEquals(-35.5, status(-34.6, -58.38, gimbalPitch = -35.5).getDouble("gimbalPitch"), 0.0)
+        // El horizonte es una inclinación como cualquier otra, no un "no sé"
+        assertEquals(0.0, status(-34.6, -58.38, gimbalPitch = 0.0).getDouble("gimbalPitch"), 0.0)
+    }
+
+    /**
+     * Sin inclinación conocida el campo NO sale (ni siquiera en null): es
+     * opcional en el contrato y la consola supone su valor cuando falta. Y el
+     * status sale igual, sin explotar por el NaN.
+     */
+    @Test
+    fun sinInclinacionConocidaElCampoNoSale() {
+        for (desconocida in listOf(Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY)) {
+            val s = status(-34.6, -58.38, gimbalPitch = desconocida)
+            assertFalse("con $desconocida no tendría que salir: $s", s.has("gimbalPitch"))
+            assertEquals("MANUAL", s.getString("state"))
+        }
+        // Y quien no la pasa (el default) tampoco la manda
+        cliente.sendStatus("IDLE", 50.0, -34.6, -58.38, null, 0, 0, true, 90, 0.0, "TEST")
+        assertFalse(cliente.enviados.last().has("gimbalPitch"))
     }
 
     /** Sin GPS el status sale igual, con la posición en null y gpsFix en false (y sin explotar por el NaN). */

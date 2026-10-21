@@ -89,6 +89,15 @@ class PatrolManager(
         const val REVISION_MANDO_MS = 250L
 
         /**
+         * Rango de la inclinación de la cámara que acepta `manual_gimbal`
+         * (docs/PROTOCOLS.md §3.b): del nadir a un poco por arriba del horizonte.
+         * El hub ya la recorta; se vuelve a recortar acá porque es la app la que
+         * le habla al gimbal y no puede depender de que cada hub lo haga.
+         */
+        const val INCLINACION_MINIMA = -90.0
+        const val INCLINACION_MAXIMA = 30.0
+
+        /**
          * Cada cuánto, como mucho, se vuelve a avisar un problema del dron que
          * sigue siendo el MISMO (ver hayQueAvisarElProblema()).
          */
@@ -459,6 +468,11 @@ class PatrolManager(
         commandCenter.onManualStick = { pitch, roll, yaw, throttle, _ ->
             onManualStick(pitch, roll, yaw, throttle)
         }
+        // Igual que el mando y por lo mismo: hasta diez por segundo mientras el
+        // operador arrastra la cámara. Además, en el mismo hilo lector del socket
+        // llegan en orden, y con una corrutina por mensaje la inclinación vieja
+        // podría pisar a la nueva.
+        commandCenter.onManualGimbal = { pitch, _ -> onManualGimbal(pitch) }
         commandCenter.onControlReleased = { by -> scope.launch { onControlReleased(by) } }
         scope.launch { signalWatchdog() }
         scope.launch { mandoWatchdog() }
@@ -734,6 +748,33 @@ class PatrolManager(
             if (v.estacionario && saltoManualEnCurso) return@synchronized
             saltoManualEnCurso = false
             controller.manualStick(pitch, roll, yaw, throttle)
+        }
+    }
+
+    /**
+     * Inclinación de la cámara pedida por el titular del control (`manual_gimbal`).
+     * Se aplica solo con el control TOMADO y el estado en MANUAL: patrullando,
+     * orbitando o siguiendo al objetivo la cámara la apunta la app, y una orden
+     * de la consola ahí se la desacomodaría a la detección. El hub ya exige el
+     * lock; acá se vuelve a mirar porque el control se puede haber soltado (o el
+     * estado salido de MANUAL por batería o señal) con el mensaje en camino.
+     *
+     * A diferencia del mando, vale también en el suelo: inclinar la cámara no
+     * mueve al dron, y es justo lo que el operador quiere probar antes de
+     * despegar. No se registra nada, por el mismo motivo que el mando.
+     *
+     * Va adentro de [cerrojoDelMando] por lo mismo que [onManualStick]: mirar el
+     * estado y darle la orden al dron son un solo paso contra las transiciones,
+     * así que una inclinación que pasó la puerta le llega al controlador ANTES
+     * que la orden del estado siguiente (la ruta, la órbita), que vuelve a
+     * apuntar la cámara, y nunca después.
+     */
+    private fun onManualGimbal(pitch: Double) {
+        if (!pitch.isFinite()) return
+        val inclinacion = pitch.coerceIn(INCLINACION_MINIMA, INCLINACION_MAXIMA)
+        synchronized(cerrojoDelMando) {
+            if (!controlTomado || _state.value != PatrolState.MANUAL) return@synchronized
+            controller.inclinarCamara(inclinacion)
         }
     }
 
@@ -1193,8 +1234,13 @@ class PatrolManager(
             return d.cajas.map { Punto(it.clase, it.confianza, Double.NaN, Double.NaN) }
         }
         if (d.cajas.isEmpty()) return listOf(Punto(d.tipoDeAlerta, d.confianza, pose.lat, pose.lon))
+        // Si el dron todavía no informó su gimbal (NaN), se proyecta con la
+        // inclinación de patrulla, que es donde la app lo deja: una suposición
+        // razonable es mejor que tirar la detección. Al status, en cambio, no
+        // se le inventa nada (ver statusTicker()).
+        val inclinacion = pose.gimbalPitch.takeUnless { it.isNaN() } ?: Telemetry.GIMBAL_PATRULLA
         return d.cajas.map { caja ->
-            val o = Georreferencia.proyectar(pose.lat, pose.lon, pose.altM, pose.rumboCamara, pose.gimbalPitch, caja.x, caja.y)
+            val o = Georreferencia.proyectar(pose.lat, pose.lon, pose.altM, pose.rumboCamara, inclinacion, caja.x, caja.y)
             Punto(caja.clase, caja.confianza, o?.lat ?: pose.lat, o?.lon ?: pose.lon)
         }
     }
@@ -1449,6 +1495,9 @@ class PatrolManager(
                 flying = dron.enVuelo,
                 flightMode = dron.modoDeVuelo,
                 target = objetivo,
+                // NaN mientras el dron real no la informó: así no sale, y la
+                // consola supone su valor en vez de creerle a uno inventado.
+                gimbalPitch = t.gimbalPitch,
             )
         }
     }
