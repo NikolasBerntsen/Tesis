@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import { api, traerRutas } from '../api';
-import { CENTRO_POR_DEFECTO, TRAZO, useFondo, vestirAtribucion } from '../mapa';
+import { CENTRO_POR_DEFECTO, TRAZO, etiquetaDeNodo, useFondo, vestirAtribucion } from '../mapa';
 import type { Me, PatrolRoute } from '../types';
 import { useAvisar } from './AvisosFlotantes';
 import ConmutadorDeFondo from './ConmutadorDeFondo';
@@ -53,7 +53,7 @@ function MapaDeRuta({ ruta }: { ruta: PatrolRoute | null }) {
         fillColor: i === 0 ? '#F2C230' : '#9C3B30',
         fillOpacity: 1,
       })
-        .bindTooltip(`${i + 1}${w.label ? ` · ${w.label}` : ''}`, { permanent: true, direction: 'top' })
+        .bindTooltip(etiquetaDeNodo(i, w.label), { permanent: true, direction: 'top' })
         .addTo(grupo);
     });
     m.fitBounds(L.latLngBounds(puntos).pad(0.25));

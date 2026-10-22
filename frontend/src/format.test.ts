@@ -249,6 +249,17 @@ describe('waypointLabel', () => {
   it('muestra "índice+1 de total"', () => {
     expect(waypointLabel(fakeStatus({ waypointIndex: 6, waypointTotal: 10 }))).toBe('7 de 10');
   });
+
+  // Los dos números llegan del celular sin revisar, y la etiqueta termina
+  // adentro del HTML del globo del mapa.
+  it('si alguno de los dos no es un número de verdad, muestra la raya', () => {
+    const texto = '<img src=x onerror=alert(1)>' as unknown as number;
+    expect(waypointLabel(fakeStatus({ waypointIndex: texto, waypointTotal: 10 }))).toBe('—');
+    expect(waypointLabel(fakeStatus({ waypointIndex: 2, waypointTotal: texto }))).toBe('—');
+    expect(waypointLabel(fakeStatus({ waypointIndex: '3' as unknown as number, waypointTotal: 10 }))).toBe('—');
+    expect(waypointLabel(fakeStatus({ waypointIndex: Number.NaN, waypointTotal: 10 }))).toBe('—');
+    expect(waypointLabel(fakeStatus({ waypointIndex: 0, waypointTotal: -3 }))).toBe('—');
+  });
 });
 
 describe('initials', () => {

@@ -14,6 +14,7 @@ import {
   velocidad,
   waypointLabel,
 } from '../format';
+import { esc } from '../html';
 import {
   CENTRO_POR_DEFECTO,
   OPACIDAD_TRAZO,
@@ -222,10 +223,6 @@ function iconoObjetivo(a: AspectoObjetivo): L.DivIcon {
   });
 }
 
-function esc(text: string): string {
-  return text.replace(/[<>&"]/g, (c) => `&#${c.charCodeAt(0)};`);
-}
-
 /* --- Marcadores: SVG inline, sin depender de hojas de estilo ------------- */
 
 // Cada medallón trae su propio degradé, así que necesita un id único
@@ -260,9 +257,33 @@ function droneIcon(name: string): L.DivIcon {
 
 /* --- Globos y etiquetas --------------------------------------------------- */
 
-function ficha(filas: [string, string][]): string {
-  const cuerpo = filas.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+const SIN_DATOS = '<span class="muted">sin datos</span>';
+
+/**
+ * Las filas de datos de un globo. Los valores entran como TEXTO y se escapan
+ * acá, todos y sin excepción: varios salen del status que manda el celular, que
+ * el hub reenvía tal cual (sólo revisa la posición y el gimbal), y con la señal
+ * interpolada cruda un `<img onerror>` en `signalPct` corría en la consola de
+ * quien abriera el globo. Escapar en un solo lugar es lo que evita que el
+ * próximo dato que se agregue se olvide. Un valor null es un dato que no vino o
+ * que no es lo que dice ser, y se dice así.
+ */
+function ficha(filas: [string, string | null][]): string {
+  const cuerpo = filas.map(([k, v]) => `<dt>${k}</dt><dd>${v === null ? SIN_DATOS : esc(v)}</dd>`).join('');
   return `<hr class="regla" style="margin:var(--e-3) 0"><dl class="datos">${cuerpo}</dl>`;
+}
+
+/**
+ * Un porcentaje del status (batería, señal), sólo si es un número de verdad.
+ * El tipo dice `number`, pero el JSON llega del celular sin que nadie lo
+ * revise: un texto ahí no es una señal, y `toFixed` sobre algo que no es un
+ * número tiraba abajo el dibujo del mapa entero. `Number.isFinite` y no
+ * `Number(...)`, como en el hub: `Number(null)` es 0 y "sin señal" no es lo
+ * mismo que "no sé". Entre la cifra y el % va el espacio fino que no se corta
+ * (U+202F), el `&#8239;` de antes, ahora como carácter porque ficha escapa.
+ */
+function porcentaje(valor: unknown): string | null {
+  return Number.isFinite(valor) ? `${(valor as number).toFixed(0)}\u202F%` : null;
 }
 
 function titulo(etiqueta: string, nombre: string): string {
@@ -275,8 +296,8 @@ function dronePopup(item: MapItem): string {
   return (
     titulo('Dron', item.displayName) +
     ficha([
-      ['Batería', `${s.battery.toFixed(0)}&#8239;%`],
-      ['Señal', `${s.signalPct}&#8239;%`],
+      ['Batería', porcentaje(s.battery)],
+      ['Señal', porcentaje(s.signalPct)],
       ['Nodo', waypointLabel(s)],
     ])
   );
@@ -284,14 +305,13 @@ function dronePopup(item: MapItem): string {
 
 function basePopup(item: MapItem): string {
   const s = item.status;
-  const sinDatos = '<span class="muted">sin datos</span>';
   return (
     titulo('Base', item.base!.name) +
     ficha([
-      ['Dron', esc(item.displayName)],
-      ['Batería', s ? `${s.battery.toFixed(0)}&#8239;%` : sinDatos],
-      ['Señal', s ? `${s.signalPct}&#8239;%` : sinDatos],
-      ['Nodo', s ? waypointLabel(s) : sinDatos],
+      ['Dron', item.displayName],
+      ['Batería', s ? porcentaje(s.battery) : null],
+      ['Señal', s ? porcentaje(s.signalPct) : null],
+      ['Nodo', s ? waypointLabel(s) : null],
     ])
   );
 }

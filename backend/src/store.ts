@@ -1,5 +1,10 @@
 import { randomBytes } from 'node:crypto';
 import { db } from './db';
+import { dniParaBuscar } from './dni';
+
+// La regla del DNI vive en dni.ts para que la migración de db.ts use la misma;
+// se reexporta acá porque la API la toma de store junto con el resto.
+export { normalizarDni } from './dni';
 
 export type Role = 'drone' | 'field_operator' | 'operator' | 'supervisor' | 'admin';
 
@@ -9,7 +14,7 @@ export interface UserRow {
   password_hash: string;
   role: Role;
   full_name: string;
-  /** Solo dígitos; vacío en las cuentas anteriores al DNI. */
+  /** Forma canónica: solo dígitos y sin ceros a la izquierda (dni.ts). Vacío en las cuentas anteriores al DNI. */
   dni: string;
   display_name: string | null;
   active: number;
@@ -25,7 +30,7 @@ export interface UserView {
   username: string;
   /** Nombre y apellido de la persona. Vacío en las cuentas anteriores al cambio. */
   fullName: string;
-  /** DNI normalizado a dígitos (7 u 8). Vacío en las cuentas anteriores al cambio. */
+  /** DNI en su forma canónica (7 u 8 dígitos, sin ceros a la izquierda). Vacío en las cuentas anteriores al cambio. */
   dni: string;
   role: Role;
   active: boolean;
@@ -180,24 +185,10 @@ export function getActiveUser(username: string): UserRow | undefined {
 }
 
 /**
- * Lleva un DNI a solo dígitos, o devuelve null si no es uno válido. Se aceptan
- * los puntos y los espacios con que la gente lo escribe ("30.123.456") porque
- * así figura en el documento; cualquier otro carácter lo invalida en vez de
- * descartarse, para no convertir un error de tipeo en el DNI de otra persona.
- * Válido es de 7 u 8 dígitos: los de 7 son los de las personas mayores.
- *
- * Solo se acepta texto: un número de JSON como 3012345.6 pasaría a "30123456"
- * al sacarle el punto, y ese no es el DNI que nadie escribió.
- */
-export function normalizarDni(valor: unknown): string | null {
-  if (typeof valor !== 'string') return null;
-  const digitos = valor.replace(/[.\s]/g, '');
-  return /^\d{7,8}$/.test(digitos) ? digitos : null;
-}
-
-/**
  * Otra cuenta viva con ese DNI, si la hay. Las eliminadas no cuentan: la baja
  * lógica libera el número para que la persona pueda volver con otra cuenta.
+ * `dni` tiene que venir en la forma canónica (normalizarDni): es la única que
+ * se guarda, así que la comparación por igualdad alcanza.
  */
 export function usuarioConDni(dni: string, excepto?: string): UserRow | undefined {
   return db
@@ -226,9 +217,10 @@ export function listUsers(roles: Role[], opts: { includeDeleted?: boolean; q?: s
     .all(...roles) as UserRow[];
 
   const q = (opts.q ?? '').trim().toLowerCase();
-  // El DNI se guarda sin puntos y la persona lo tipea con ellos: se comparan
-  // los dos sin puntos ni espacios, así "30.123" encuentra a 30123456.
-  const qDni = q.replace(/[.\s]/g, '');
+  // El DNI se guarda en su forma canónica y la persona lo tipea con puntos o
+  // con el cero del CUIL: se lleva la búsqueda a esa forma, así "30.123"
+  // encuentra a 30123456 y "05123456" a 5123456 (ver dniParaBuscar).
+  const qDni = dniParaBuscar(q);
   const filtradas = q
     ? rows.filter((u) =>
         u.username.toLowerCase().includes(q) ||

@@ -44,10 +44,17 @@ export function signalClass(pct: number): string {
   return pct <= 20 ? 'bad' : pct <= 50 ? 'warn' : 'ok';
 }
 
-/** Nodo actual del patrullaje con el formato "7 de 10". */
+/**
+ * Nodo actual del patrullaje con el formato "7 de 10". Los dos números salen
+ * del status que manda el celular y el hub los reenvía sin revisarlos: si
+ * alguno no es un número de verdad se muestra la raya, como sin ruta. Antes se
+ * interpolaban tal cual, y un texto en `waypointIndex` terminaba adentro del
+ * globo del mapa, que es HTML (y un "3" en texto daba "31 de 10").
+ */
 export function waypointLabel(status: DroneStatus): string {
-  if (!status.waypointTotal) return '—';
-  return `${status.waypointIndex + 1} de ${status.waypointTotal}`;
+  const { waypointIndex, waypointTotal } = status;
+  if (!Number.isFinite(waypointTotal) || waypointTotal <= 0 || !Number.isFinite(waypointIndex)) return '—';
+  return `${waypointIndex + 1} de ${waypointTotal}`;
 }
 
 /** Iniciales para el marcador del mapa: "Base Norte" → "BN", "Alfa" → "AL". */

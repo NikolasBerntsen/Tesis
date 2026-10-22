@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event';
 import { api, rutasDeBase, traerBases, traerRutas } from '../api';
 import { makeMe } from '../test/fixtures';
-import { estadoMapa, fondosPuestos, limpiarEstadoMapa } from '../test/dobleLeaflet';
+import { estadoMapa, fondosPuestos, limpiarEstadoMapa, pintarComoLeaflet } from '../test/dobleLeaflet';
 import { ProveedorDeAvisos } from './AvisosFlotantes';
 import BasesView from './BasesView';
 
@@ -871,6 +871,28 @@ describe('BasesView — mapas con doble fondo y la base como referencia', () => 
 
     const marcador = estadoMapa.puestas.find((c) => c.clase === 'marker');
     expect(marcador?.latlng).toEqual([-34.6037, -58.3816]);
+  });
+
+  // El nombre de la base lo escribe un operador de campo y el editor lo pone
+  // en la etiqueta del rombo, que Leaflet pinta con innerHTML.
+  it('el nombre de la base, en la etiqueta del editor, se pinta como texto', async () => {
+    const malicioso = 'Base <img src=x onerror=alert(1)>';
+    basesMock.mockResolvedValue([
+      { id: 1, name: malicioso, lat: -34.6037, lon: -58.3816, active: true, createdAt: '', createdBy: 'admin1', deleted: false, deletedAt: null },
+    ]);
+    rutasMock.mockResolvedValue([]);
+    rutasDeBaseMock.mockResolvedValue([]);
+    render(<BasesView me={ADMIN} />);
+    await screen.findByText(malicioso);
+    await userEvent.click(screen.getByRole('button', { name: 'Rutas' }));
+    await screen.findByRole('dialog', { name: /rutas de base/i });
+    limpiarEstadoMapa();
+    await userEvent.click(screen.getByRole('button', { name: /nueva ruta/i }));
+    await screen.findByRole('dialog', { name: /nueva ruta de patrullaje/i });
+
+    const etiqueta = pintarComoLeaflet(estadoMapa.puestas.find((c) => c.clase === 'marker')?.etiqueta);
+    expect(etiqueta.querySelector('img')).toBeNull();
+    expect(etiqueta.textContent).toBe(malicioso);
   });
 });
 

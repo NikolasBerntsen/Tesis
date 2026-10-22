@@ -14,6 +14,21 @@ describe('normalizarDni', () => {
       expect(normalizarDni(malo), malo).toBeNull();
     }
   });
+
+  // Mismo criterio que el backend: "05.123.456" es el 5.123.456 como figura en
+  // el CUIL. Si la consola lo dejaba pasar con el cero, el admin creía que
+  // cargaba otro DNI y el backend lo guardaba como uno distinto.
+  it('saca los ceros a la izquierda: no cambian el número', () => {
+    expect(normalizarDni('05.123.456')).toBe('5123456');
+    expect(normalizarDni('05123456')).toBe('5123456');
+    expect(normalizarDni('0001234567')).toBe('1234567');
+  });
+
+  it('los 7 u 8 dígitos se cuentan ya sin los ceros', () => {
+    for (const malo of ['00000000', '00.000.000', '0', '0612345']) {
+      expect(normalizarDni(malo), malo).toBeNull();
+    }
+  });
 });
 
 describe('formatearDni', () => {
@@ -26,5 +41,10 @@ describe('formatearDni', () => {
   it('una cuenta sin DNI no se formatea', () => {
     expect(formatearDni('')).toBe('');
     expect(formatearDni(undefined)).toBe('');
+  });
+
+  it('muestra la forma canónica aunque llegue con el cero del CUIL', () => {
+    expect(formatearDni('05123456')).toBe('5.123.456');
+    expect(formatearDni('00000000')).toBe('');
   });
 });

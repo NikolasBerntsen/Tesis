@@ -1,5 +1,6 @@
 import L from 'leaflet';
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
+import { esc } from './html';
 
 /**
  * Lo que todos los mapas de la consola tienen en común. Vive acá y no copiado
@@ -134,6 +135,17 @@ const ROMBO = `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www
       <path d="M12 1.2 22.8 12 12 22.8 1.2 12z" fill="${NEGRO}" stroke="${AMBAR}" stroke-width="2" stroke-linejoin="round"/>
       <path d="M12 6.6 17.4 12 12 17.4 6.6 12z" fill="${AMBAR}"/>
     </svg>`;
+
+/**
+ * La etiqueta fija de un nodo de ruta: su número y, si tiene, su apodo
+ * ("2 · Portón"). Sale ya escapada, lista para `bindTooltip`: Leaflet pinta el
+ * texto de una etiqueta con innerHTML, y el apodo lo escribe un operador y lo
+ * mira cualquiera que abra la ruta (ver html.ts). La comparten el catálogo de
+ * rutas y el editor, que es donde se veían los apodos crudos.
+ */
+export function etiquetaDeNodo(indice: number, apodo?: string): string {
+  return esc(`${indice + 1}${apodo ? ` · ${apodo}` : ''}`);
+}
 
 let rombo: L.DivIcon | null = null;
 
