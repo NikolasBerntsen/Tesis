@@ -114,6 +114,10 @@ export default function BasesView({ me }: { me: Me }) {
   // después de dar de alta una base y a pedido desde la fila de cualquier otra:
   // las rutas de una base cambian mucho después del alta.
   const [asignando, setAsignando] = useState<BaseAsset | null>(null);
+  // El error de la asignación es del diálogo, como el del formulario. Leía el
+  // de la página, que tiene su propio aviso: un PUT rechazado se anunciaba dos
+  // veces, y la copia de la página quedaba repetida detrás del velo.
+  const [errorRutas, setErrorRutas] = useState('');
   const [reciencreada, setReciencreada] = useState(false);
   const [rutas, setRutas] = useState<PatrolRoute[]>([]);
   const [elegidas, setElegidas] = useState<number[]>([]);
@@ -224,7 +228,7 @@ export default function BasesView({ me }: { me: Me }) {
    * tiene ya marcadas: acá se agrega y se saca, no se empieza de cero.
    */
   async function abrirRutas(b: BaseAsset) {
-    setError('');
+    setErrorRutas('');
     setBusqueda('');
     setReciencreada(false);
     setElegidas([]);
@@ -234,8 +238,22 @@ export default function BasesView({ me }: { me: Me }) {
       setRutas(todas);
       setElegidas(asignadas.map((r) => r.id));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setErrorRutas(textoError(e));
     }
+  }
+
+  /** Guarda la asignación. Si el backend la rechaza, el diálogo queda abierto con el error adentro. */
+  async function guardarRutas(b: BaseAsset) {
+    setErrorRutas('');
+    try {
+      await api(`/bases/${b.id}/routes`, { method: 'PUT', body: JSON.stringify({ routeIds: elegidas }) });
+    } catch (e) {
+      setErrorRutas(textoError(e));
+      return;
+    }
+    setAsignando(null);
+    avisar(`Rutas de ${b.name} guardadas.`);
+    await cargar();
   }
 
   /**
@@ -340,6 +358,7 @@ export default function BasesView({ me }: { me: Me }) {
       // orden en que se piensa el problema (primero dónde está, después qué
       // patrulla).
       setElegidas([]);
+      setErrorRutas('');
       setReciencreada(true);
       setAsignando(creada);
       setRutas(await traerRutas().catch(() => []));
@@ -573,9 +592,9 @@ export default function BasesView({ me }: { me: Me }) {
             </button>
           </header>
           <div className="modal-cuerpo form-base">
-            {error && (
+            {errorRutas && (
               <p className="aviso malo" role="alert">
-                {error}
+                {errorRutas}
               </p>
             )}
             <p className="muted">
@@ -631,19 +650,7 @@ export default function BasesView({ me }: { me: Me }) {
             <button type="button" className="ghost" onClick={() => setAsignando(null)}>
               {reciencreada ? 'Después' : 'Cancelar'}
             </button>
-            <button
-              type="button"
-              className="primario"
-              onClick={() =>
-                accion(async () => {
-                  await api(`/bases/${asignando.id}/routes`, {
-                    method: 'PUT',
-                    body: JSON.stringify({ routeIds: elegidas }),
-                  });
-                  setAsignando(null);
-                }, `Rutas de ${asignando.name} guardadas.`)
-              }
-            >
+            <button type="button" className="primario" onClick={() => guardarRutas(asignando)}>
               {rotuloDeAsignacion(elegidas.length)}
             </button>
           </div>

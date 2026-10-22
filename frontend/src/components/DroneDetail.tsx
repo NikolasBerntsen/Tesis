@@ -180,13 +180,23 @@ export default function DroneDetail({
     };
   }, [drone.droneId, drone.baseId]);
 
+  // Como los demás cargadores: la respuesta de un dron que ya se dejó no se
+  // escribe. Sin esto, saltar de A a B desde la campana dejaba que la
+  // respuesta de A llenara el registro de B con eventos ajenos, o que diera
+  // por cargado el de B y dijera "Sin eventos" mientras el suyo seguía viajando.
   useEffect(() => {
+    let vigente = true;
     setHistory([]);
     setHistoriaCargada(false);
     api<EventRow[]>(`/events?droneId=${encodeURIComponent(drone.droneId)}`)
-      .then(setHistory)
+      .then((h) => vigente && setHistory(h))
       .catch(console.error)
-      .finally(() => setHistoriaCargada(true));
+      .finally(() => {
+        if (vigente) setHistoriaCargada(true);
+      });
+    return () => {
+      vigente = false;
+    };
   }, [drone.droneId]);
 
   // Historial del dron más los eventos que fueron llegando por WebSocket.

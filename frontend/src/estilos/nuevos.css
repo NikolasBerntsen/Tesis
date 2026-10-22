@@ -782,6 +782,19 @@
   from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: none; }
 }
+/* En un teléfono la sesión baja a su propia fila y la campana queda a la
+   izquierda (layout.css): colgado de su borde derecho, el panel se salía de
+   la pantalla. Ahí se cuelga de la fila entera de la sesión y toma su ancho. */
+@media (max-width: 640px) {
+  .topbar-right { position: relative; }
+  .campana { position: static; }
+  .campana-panel {
+    left: 0;
+    right: 0;
+    width: auto;
+    transform-origin: top left;
+  }
+}
 /* El vacío del desplegable va en el cuerpo del panel, no en el de una vista. */
 .campana-panel .vacio {
   padding: var(--e-4) var(--e-3);

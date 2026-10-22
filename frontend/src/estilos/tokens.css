@@ -49,6 +49,11 @@
     linear-gradient(180deg, rgba(255, 255, 255, .42), rgba(255, 255, 255, .24)),
     linear-gradient(135deg, #F0E3B8 0%, #D9BE6B 28%, #B8912F 55%, #8A6A1C 100%);
   --oro-velo: rgba(184, 145, 47, .10); /* fondo de lo seleccionado */
+  /* El velo de una fila que se abre con un clic (el Registro), bajo el mouse.
+     En mármol es el de lo seleccionado; en obsidiana va más tenue: encima
+     viven las pastillas de categoría, texto chico sobre su propio velo, y con
+     el velo entero "DRON" quedaba en 3,9. */
+  --oro-velo-fila: var(--oro-velo);
   --sombra-oro: 0 2px 6px -1px rgba(138, 106, 28, .35);
 
   /* Cara de los controles. Estaba escrita con blancos literales dentro de
@@ -156,6 +161,13 @@
   --mapa-hilo: #5C544A;
   --mapa-recorrido: #8A6A1C;
   --mapa-filo-nodo: #14120F;
+  /* El hilo del dron a su objetivo y el rastro del objetivo: óxido mientras
+     la alerta espera, oro una vez validada. Son los colores de TEXTO del tema,
+     no los de los filos: van finos y translúcidos sobre las teselas, y el
+     --oro de la lámina no llegaba a 3:1 ni sobre el callejero claro. Como
+     apuntan a tokens que cambian con el tema, en obsidiana se aclaran solos. */
+  --mapa-objetivo-pendiente: var(--peligro);
+  --mapa-objetivo-validado: var(--oro-texto);
 
   /* --- Geometría -------------------------------------------------------- */
   --radio: 10px;
@@ -292,6 +304,7 @@
      obsidiana encima, el bronce daba 3,7. */
   --oro-lamina-relleno: linear-gradient(135deg, #F6E7B4 0%, #DFC276 28%, #C39B34 55%, #A8832A 100%);
   --oro-velo: rgba(217, 180, 79, .14);
+  --oro-velo-fila: rgba(217, 180, 79, .06);
   --sombra-oro: 0 2px 6px -1px rgba(0, 0, 0, .5);
 
   --piedra-cara:

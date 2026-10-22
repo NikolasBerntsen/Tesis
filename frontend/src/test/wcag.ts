@@ -200,6 +200,65 @@ export function mezclar(arriba: Rgba, abajo: Rgba): Rgba {
   return { r: canal('r'), g: canal('g'), b: canal('b'), a };
 }
 
+type Matriz = [number, number, number][];
+
+const acotar = (v: number) => Math.min(1, Math.max(0, v));
+
+function porMatriz(c: number[], m: Matriz): number[] {
+  return m.map(([a, b, d]) => acotar(a * c[0] + b * c[1] + d * c[2]));
+}
+
+/**
+ * Las funciones de `filter` que usa el callejero de noche, con las matrices
+ * de la especificación (Filter Effects 1, en sRGB como las aplica el
+ * navegador). Hace falta para medir un trazo contra el mapa de noche: las
+ * teselas son fotos de un mapa claro, y el color sobre el que se apoya el
+ * trazo es el que sale del filtro, no el de la tesela.
+ */
+const FILTROS: Record<string, (c: number[], n: number) => number[]> = {
+  invert: (c, n) => c.map((v) => acotar(n * (1 - v) + (1 - n) * v)),
+  'hue-rotate': (c, grados) => {
+    const t = (grados * Math.PI) / 180;
+    const [cos, sen] = [Math.cos(t), Math.sin(t)];
+    return porMatriz(c, [
+      [0.213 + cos * 0.787 - sen * 0.213, 0.715 - cos * 0.715 - sen * 0.715, 0.072 - cos * 0.072 + sen * 0.928],
+      [0.213 - cos * 0.213 + sen * 0.143, 0.715 + cos * 0.285 + sen * 0.14, 0.072 - cos * 0.072 - sen * 0.283],
+      [0.213 - cos * 0.213 - sen * 0.787, 0.715 - cos * 0.715 + sen * 0.715, 0.072 + cos * 0.928 + sen * 0.072],
+    ]);
+  },
+  sepia: (c, n) => {
+    const r = 1 - n;
+    return porMatriz(c, [
+      [0.393 + 0.607 * r, 0.769 - 0.769 * r, 0.189 - 0.189 * r],
+      [0.349 - 0.349 * r, 0.686 + 0.314 * r, 0.168 - 0.168 * r],
+      [0.272 - 0.272 * r, 0.534 - 0.534 * r, 0.131 + 0.869 * r],
+    ]);
+  },
+  saturate: (c, s) =>
+    porMatriz(c, [
+      [0.213 + 0.787 * s, 0.715 - 0.715 * s, 0.072 - 0.072 * s],
+      [0.213 - 0.213 * s, 0.715 + 0.285 * s, 0.072 - 0.072 * s],
+      [0.213 - 0.213 * s, 0.715 - 0.715 * s, 0.072 + 0.928 * s],
+    ]),
+  brightness: (c, n) => c.map((v) => acotar(v * n)),
+  contrast: (c, n) => c.map((v) => acotar(v * n + 0.5 - 0.5 * n)),
+};
+
+/** Un color opaco pasado por un `filter` de CSS ya resuelto (`none` lo deja igual). */
+export function aplicarFiltro(color: Rgba, filtro: string): Rgba {
+  if (filtro.trim() === 'none') return color;
+  let c = [color.r / 255, color.g / 255, color.b / 255];
+  for (const [, nombre, argumento] of filtro.matchAll(/([a-z-]+)\(([^)]*)\)/g)) {
+    const funcion = FILTROS[nombre];
+    // Una función nueva en el token tiene que entrar acá antes que en el mapa:
+    // si no, el test mediría el callejero sin ella.
+    if (!funcion) throw new Error(`función de filtro que no se sabe aplicar: ${nombre}`);
+    const n = parseFloat(argumento);
+    c = funcion(c, argumento.trim().endsWith('%') ? n / 100 : n);
+  }
+  return { r: c[0] * 255, g: c[1] * 255, b: c[2] * 255, a: color.a };
+}
+
 /** Luminancia relativa de WCAG 2.x (sRGB linealizado, pesos de Rec. 709). */
 export function luminancia({ r, g, b }: Rgba): number {
   const lineal = (v: number) => {

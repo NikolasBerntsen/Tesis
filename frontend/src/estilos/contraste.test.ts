@@ -14,6 +14,7 @@ import {
   type Rgba,
   type Tema,
 } from '../test/wcag';
+import { valorDe } from '../test/hojas';
 
 /**
  * Contraste del sistema de diseño en los dos temas, medido sobre los tokens.
@@ -174,7 +175,39 @@ pares.push(
   { donde: 'botón deshabilitado', texto: '--tinta-suave', base: '--marmol-2', minimo: CONTROL },
   { donde: 'placeholder de un campo', texto: '--tinta-suave', base: '--marmol-0', minimo: TEXTO },
   { donde: 'fila eliminada sobre la tarjeta', texto: '--tinta-suave', sobre: ['--piedra-cara'], base: '--marmol-0', minimo: TEXTO },
+  // "Cancelar" con el pedido en viaje: el fantasma no tiene hueco, apoya en el diálogo.
+  { donde: 'botón fantasma deshabilitado', texto: '--tinta-suave', sobre: ['--piedra-cara'], base: '--marmol-0', minimo: CONTROL },
 );
+// Bajo el mouse o elegida (Rutas con «Ver eliminadas»), el realce o el velo
+// de la selección le aclaran el fondo a la fila eliminada, y su tinta sube a
+// la media (primitivos.css): la apagada ahí quedaba en 3,7.
+sobreSuperficies('fila eliminada elegida', '--tinta-media', ['--oro-velo']);
+sobreSuperficies('fila eliminada bajo el mouse', '--tinta-media', ['--realce-70']);
+
+// --- El Registro: filas que se abren con un clic ------------------------------------
+// Bajo el mouse la fila toma su velo de oro, y encima quedan las pastillas de
+// categoría, en texto chico sobre su propio velo. Las filas viven sólo en la
+// tarjeta del Registro: se miden sobre su cara y sobre el mármol 1 liso en
+// que termina, no sobre el hueco.
+const PASTILLAS_DEL_REGISTRO: [string, string, string][] = [
+  ['.cat-drone', '--info', '--info-velo'],
+  ['.cat-sistema', '--ok-texto', '--ok-velo'],
+  ['.cat-usuarios', '--oro-texto', '--oro-velo'],
+];
+const EN_LA_TARJETA = SUPERFICIES.filter((s) => s.nombre === 'cara de la tarjeta' || s.nombre === 'mármol 1');
+const filaDelRegistro = (donde: string, texto: string, velo: string[]) => {
+  for (const s of EN_LA_TARJETA) {
+    pares.push({
+      donde: `${donde} en una fila del Registro bajo el mouse, sobre ${s.nombre}`,
+      texto,
+      sobre: [...velo, '--oro-velo-fila', ...s.sobre],
+      base: s.base,
+      minimo: TEXTO,
+    });
+  }
+};
+for (const [pastilla, texto, velo] of PASTILLAS_DEL_REGISTRO) filaDelRegistro(pastilla, texto, [velo]);
+filaDelRegistro('hora y tipo de evento', '--tinta-media', []);
 
 // --- Bordes de los controles y foco ----------------------------------------------
 for (const s of SUPERFICIES) {
@@ -244,6 +277,42 @@ describe('contraste WCAG AA de los pares del tema', () => {
 
   it.each(TEMAS)('%s · lo deshabilitado se ve apagado: contrasta menos que el texto secundario', (tema) => {
     expect(medir(tema, '--tinta-suave', [], '--marmol-2')).toBeLessThan(medir(tema, '--tinta-media', [], '--marmol-2'));
+  });
+});
+
+describe('los pares medidos son los que pintan las hojas', () => {
+  // Medir un par no sirve si la hoja pinta otra cosa: el velo de la fila del
+  // Registro era el de lo seleccionado, y el par que lo medía no existía.
+  const primitivos = leer('./primitivos.css');
+  const modales = leer('./modales.css');
+  const vistas = leer('./vistas.css');
+
+  it.each([
+    ['fila elegida', primitivos, '.tabla tbody tr.seleccionada', 'background', 'var(--oro-velo)'],
+    ['fila bajo el mouse', primitivos, '.tabla tbody tr:hover', 'background', 'var(--realce-70)'],
+    ['fila de gestión bajo el mouse', modales, '.tabla-gestion tbody tr:hover', 'background', 'var(--realce-70)'],
+    ['fila de gestión con el foco adentro', modales, '.tabla-gestion tbody tr:focus-within', 'background', 'var(--realce-70)'],
+    ['fila eliminada en reposo', primitivos, '.tabla tbody tr.fila-eliminada td', 'color', 'var(--tinta-suave)'],
+    [
+      'fila eliminada bajo el mouse, con el foco o elegida',
+      primitivos,
+      '.tabla tbody tr.fila-eliminada:is(:hover, :focus-within, .seleccionada) td',
+      'color',
+      'var(--tinta-media)',
+    ],
+    ['fila del Registro bajo el mouse', vistas, '.log-row.cliqueable:hover', 'background', 'var(--oro-velo-fila)'],
+  ])('%s', (_donde, hoja, selector, propiedad, esperado) => {
+    expect(valorDe(hoja, selector, propiedad)).toBe(esperado);
+  });
+
+  it('las filas del Registro se miden sobre las dos caras de la tarjeta', () => {
+    // Si una superficie cambia de nombre, el filtro las perdería en silencio.
+    expect(EN_LA_TARJETA).toHaveLength(2);
+  });
+
+  it.each(PASTILLAS_DEL_REGISTRO)('%s: la pastilla del Registro es %s sobre %s', (pastilla, texto, velo) => {
+    expect(valorDe(primitivos, pastilla, 'color')).toBe(`var(${texto})`);
+    expect(valorDe(primitivos, pastilla, 'background')).toBe(`var(${velo})`);
   });
 });
 

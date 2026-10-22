@@ -18,6 +18,19 @@ const ROLES_ASIGNABLES: readonly RolAsignable[] = ['operator', 'supervisor', 'fi
 const NOTA_CAMPO =
   'El operador de campo no opera drones: sólo los da de alta y los empareja por QR, así que el sistema le niega el control.';
 
+/**
+ * Lo que le pasa a una cuenta cuando se la desactiva o se le suspende el
+ * control. Lo dicen igual la confirmación de la fila y el diálogo de edición:
+ * por cualquiera de los dos caminos el corte le cae encima a otra persona, a
+ * veces en pleno vuelo.
+ */
+export const CONSECUENCIA = {
+  desactivar: (username: string) =>
+    `${username} deja de poder entrar a la consola: si tiene una sesión abierta, se le cierra en el acto y suelta el control de cualquier dron.`,
+  suspender: (username: string) =>
+    `${username} deja de poder tomar el control de los drones. Si ahora mismo está piloteando uno, lo suelta en el acto.`,
+};
+
 export function textoError(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
@@ -294,6 +307,17 @@ export function DialogoEditarUsuario({
   const rol: RolConsola = rolNuevo ?? usuario.role;
   const esOperadorDeCampo = rol === 'field_operator';
   const opcionesDeRol: readonly RolConsola[] = esAdminElEditado ? ['admin'] : ROLES_ASIGNABLES;
+  // Lo que el guardado le corta a la cuenta. Desde la fila, desactivar y
+  // suspender preguntan con la consecuencia dicha; acá se podía hacer lo mismo
+  // con dos casillas y un "Guardar" sin enterarse. Ahora la consecuencia
+  // aparece al destildar y el botón dice lo que va a hacer. Pasar a operador de
+  // campo también suspende el control: el sistema se lo niega.
+  const controlQueQueda = !esOperadorDeCampo && ficha.canControl;
+  const suspende = usuario.canControl && !controlQueQueda;
+  const desactiva = esAdmin && usuario.active && !ficha.active;
+  let textoGuardar = 'Guardar';
+  if (desactiva) textoGuardar = 'Guardar y desactivar';
+  else if (suspende) textoGuardar = 'Guardar y suspender';
 
   function elegirRol(valor: string) {
     const elegido = rolAsignable(valor);
@@ -303,8 +327,7 @@ export function DialogoEditarUsuario({
   /** Lo que cambió respecto de la cuenta, o null si el DNI tipeado no es válido. */
   function cambios(): CambiosDeUsuario | null {
     const resultado: CambiosDeUsuario = {};
-    const control = !esOperadorDeCampo && ficha.canControl;
-    if (control !== usuario.canControl) resultado.canControl = control;
+    if (controlQueQueda !== usuario.canControl) resultado.canControl = controlQueQueda;
     if (!esAdmin) return resultado;
 
     const fullName = ficha.fullName.trim();
@@ -420,13 +443,23 @@ export function DialogoEditarUsuario({
               Al guardar, {usuario.username} va a tener que volver a iniciar sesión para entrar con el rol nuevo.
             </p>
           )}
+          {desactiva && (
+            <p className="aviso" role="status">
+              Al guardar, {CONSECUENCIA.desactivar(usuario.username)}
+            </p>
+          )}
+          {suspende && (
+            <p className="aviso" role="status">
+              Al guardar, {CONSECUENCIA.suspender(usuario.username)}
+            </p>
+          )}
         </div>
         <footer className="modal-pie">
           <button type="button" className="ghost" onClick={onCerrar}>
             Cancelar
           </button>
           <button type="submit" className="primario" disabled={guardando}>
-            {guardando ? 'Guardando…' : 'Guardar'}
+            {guardando ? 'Guardando…' : textoGuardar}
           </button>
         </footer>
       </form>

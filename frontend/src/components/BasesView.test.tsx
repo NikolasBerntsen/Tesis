@@ -745,6 +745,47 @@ describe('BasesView — rutas de una base que ya existe', () => {
     expect(rutasDeBaseMock).not.toHaveBeenCalled();
   });
 
+  it('si el backend rechaza la asignación, el error se anuncia una vez, adentro del diálogo, que sigue abierto', async () => {
+    rutasDeBaseMock.mockResolvedValue([CERCA]);
+    apiMock.mockRejectedValueOnce(new Error('La ruta 1 está eliminada'));
+    const dialogo = await abrirRutas();
+    await within(dialogo).findAllByRole('option');
+
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Asignar 1 ruta' }));
+    // Antes salía también el de la página, detrás del velo: dos avisos iguales.
+    const avisos = await screen.findAllByRole('alert');
+    expect(avisos).toHaveLength(1);
+    expect(dialogo).toContainElement(avisos[0]);
+    expect(avisos[0]).toHaveTextContent('La ruta 1 está eliminada');
+
+    // Reintentar limpia el error; si sale bien, el diálogo se cierra.
+    apiMock.mockResolvedValueOnce({});
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Asignar 1 ruta' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('el error de una asignación anterior no aparece al abrir la de otra base', async () => {
+    basesMock.mockResolvedValue([base(), base({ id: 2, name: 'Base Sur' })]);
+    rutasMock.mockResolvedValue([CERCA]);
+    rutasDeBaseMock.mockResolvedValue([CERCA]);
+    apiMock.mockRejectedValueOnce(new Error('sin permiso'));
+    render(<BasesView me={ADMIN} />);
+    await screen.findByText('Base Norte');
+
+    await userEvent.click(within(screen.getByText('Base Norte').closest('tr')!).getByRole('button', { name: 'Rutas' }));
+    let dialogo = await screen.findByRole('dialog', { name: /rutas de base norte/i });
+    await within(dialogo).findAllByRole('option');
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Asignar 1 ruta' }));
+    await within(dialogo).findByRole('alert');
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Cancelar' }));
+
+    await userEvent.click(within(screen.getByText('Base Sur').closest('tr')!).getByRole('button', { name: 'Rutas' }));
+    dialogo = await screen.findByRole('dialog', { name: /rutas de base sur/i });
+    await within(dialogo).findAllByRole('option');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('si el backend no devuelve las rutas, el error se lee adentro del diálogo', async () => {
     basesMock.mockResolvedValue([base()]);
     rutasMock.mockResolvedValue([]);

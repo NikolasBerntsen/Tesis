@@ -663,6 +663,23 @@ describe('DronesView — avisos de lo que salió bien', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Sin permiso');
     expect(aviso()).toBeEmptyDOMElement();
   });
+
+  it('una acción confirmada que sale bien se lleva el error de la anterior', async () => {
+    // Restaurar a Bravo falla y deja el error arriba de la tabla; eliminar a
+    // Alfa después sale bien: el rojo no puede quedar al lado del "eliminado".
+    traerMock.mockResolvedValue([alfa(), bravo({ deleted: true, deletedAt: '2024-01-02T00:00:00.000Z' })]);
+    montarConAvisos();
+    await userEvent.click(await screen.findByRole('button', { name: 'Ver eliminados' }));
+    apiMock.mockRejectedValueOnce(new Error('Ya hay un dron activo con ese nombre'));
+    await userEvent.click(within(fila('Bravo')).getByRole('button', { name: 'Restaurar' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Ya hay un dron activo con ese nombre');
+
+    apiMock.mockResolvedValueOnce(alfa({ deleted: true, deletedAt: '2024-01-03T00:00:00.000Z' }));
+    await userEvent.click(within(fila('Alfa')).getByRole('button', { name: 'Eliminar' }));
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Eliminar' }));
+    await waitFor(() => expect(aviso()).toHaveTextContent('Dron Alfa eliminado.'));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
 });
 
 describe('DronesView — carga sin saltos', () => {

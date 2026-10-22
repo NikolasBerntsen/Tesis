@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProveedorDeAvisos } from './AvisosFlotantes';
@@ -265,6 +265,36 @@ describe('DroneDetail', () => {
     expect(screen.queryByText('Sin eventos registrados.')).not.toBeInTheDocument();
     contestar([]);
     expect(await screen.findByText('Sin eventos registrados.')).toBeInTheDocument();
+  });
+
+  it('al saltar a otro dron, el historial del anterior no se escribe en el registro del nuevo', async () => {
+    // Desde la campana se pasa de un dron a otro sin salir del detalle: la
+    // respuesta del primero puede llegar después de pedir la del segundo.
+    const contestar: Record<string, (v: unknown[]) => void> = {};
+    apiMock.mockImplementation((path: string) =>
+      path.startsWith('/events')
+        ? new Promise((r) => (contestar[new URLSearchParams(path.split('?')[1]).get('droneId')!] = r))
+        : Promise.resolve({}),
+    );
+    const { volverARenderizar } = renderDetail();
+    await waitFor(() => expect(contestar.d1).toBeDefined());
+
+    volverARenderizar({
+      drone: makeDrone({ droneId: 'd2', displayName: 'Bravo', online: true }),
+      status: makeStatus({ droneId: 'd2', state: 'PATROLLING', routeId: null }),
+    });
+    await waitFor(() => expect(contestar.d2).toBeDefined());
+
+    contestar.d1([makeEvent({ id: 1, drone_id: 'd1', message: 'evento de Alfa' })]);
+    // Ni los eventos de Alfa ni un "Sin eventos" adelantado: el de Bravo sigue viajando.
+    await act(async () => {});
+    expect(screen.queryByText('evento de Alfa')).not.toBeInTheDocument();
+    expect(screen.queryByText('Sin eventos registrados.')).not.toBeInTheDocument();
+    expect(screen.getByText('Trayendo los eventos del dron…')).toBeInTheDocument();
+
+    contestar.d2([makeEvent({ id: 2, drone_id: 'd2', message: 'evento de Bravo' })]);
+    expect(await screen.findByText('evento de Bravo')).toBeInTheDocument();
+    expect(screen.queryByText('evento de Alfa')).not.toBeInTheDocument();
   });
 
   it('si el control cambia de manos con la pregunta abierta, la pregunta se descarta', async () => {

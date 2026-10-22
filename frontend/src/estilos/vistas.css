@@ -166,7 +166,9 @@
 }
 /* Fila del registro que se puede abrir en el pop-up */
 .log-row.cliqueable { cursor: pointer; }
-.log-row.cliqueable:hover { background: var(--oro-velo); }
+/* El velo propio de la fila (tokens.css): con el de lo seleccionado, en
+   obsidiana las pastillas de categoría bajaban de AA bajo el mouse. */
+.log-row.cliqueable:hover { background: var(--oro-velo-fila); }
 .log-row.cliqueable:focus-visible {
   outline: var(--filo) solid var(--anillo-foco);
   outline-offset: -2px;
@@ -400,6 +402,8 @@ details.meta pre {
 .mapa-hilo { stroke: var(--mapa-hilo); }
 .mapa-recorrido { stroke: var(--mapa-recorrido); }
 .mapa-nodo { stroke: var(--mapa-filo-nodo); }
+.mapa-objetivo-pendiente { stroke: var(--mapa-objetivo-pendiente); }
+.mapa-objetivo-validado { stroke: var(--mapa-objetivo-validado); }
 
 .mapa-head {
   position: relative;

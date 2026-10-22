@@ -1,8 +1,17 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { CLASE_TESELAS_CALLES, CLASE_TESELAS_SATELITE, TRAZO } from '../mapa';
-import { contraste, leerTokens, parsearColor, resolver } from '../test/wcag';
+import { CLASE_TESELAS_CALLES, CLASE_TESELAS_SATELITE, OPACIDAD_TRAZO, TRAZO } from '../mapa';
+import {
+  aplicarFiltro,
+  contraste,
+  leerTokens,
+  luminancia,
+  mezclar,
+  parsearColor,
+  resolver,
+  type Rgba,
+} from '../test/wcag';
 
 /**
  * El mapa de noche. jsdom no aplica filtros ni pinta SVG, así que lo que se
@@ -61,25 +70,106 @@ describe('teselas de noche', () => {
   });
 });
 
+describe('la cuenta del filtro que se usa para medir', () => {
+  const blanco = parsearColor('#FFFFFF')!;
+  it('none deja el color como está', () => {
+    expect(aplicarFiltro(blanco, 'none')).toEqual(blanco);
+  });
+
+  it('cada función hace lo que dice la especificación', () => {
+    expect(aplicarFiltro(blanco, 'invert(1)')).toEqual({ r: 0, g: 0, b: 0, a: 1 });
+    expect(aplicarFiltro(blanco, 'brightness(.5)').r).toBeCloseTo(127.5, 5);
+    expect(aplicarFiltro(blanco, 'brightness(50%)').r).toBeCloseTo(127.5, 5);
+    // El contraste acerca al gris del medio; el giro y la saturación no le
+    // cambian nada a un gris.
+    expect(aplicarFiltro(blanco, 'contrast(.5)').g).toBeCloseTo(191.25, 5);
+    const gris = parsearColor('#808080')!;
+    for (const f of ['hue-rotate(180deg)', 'saturate(.3)']) {
+      const g = aplicarFiltro(gris, f);
+      expect(g.r, f).toBeCloseTo(128, 0);
+      expect(g.b, f).toBeCloseTo(128, 0);
+    }
+    // El sepia entero lleva el blanco al papel viejo: el rojo arriba, el azul abajo.
+    const sepia = aplicarFiltro(blanco, 'sepia(1)');
+    expect(sepia.r).toBeGreaterThan(sepia.b);
+  });
+
+  it('una función que no sabe aplicar no se saltea en silencio', () => {
+    expect(() => aplicarFiltro(blanco, 'blur(2px)')).toThrow(/blur/);
+  });
+
+  it('de noche la tierra del callejero queda oscura como la piedra: no encandila', () => {
+    const tierra = aplicarFiltro(parsearColor('#F2EFE9')!, enTema('oscuro', '--filtro-calles'));
+    expect(luminancia(tierra)).toBeLessThan(0.05);
+  });
+});
+
 describe('trazos sobre el mapa', () => {
-  const TOKENS: Record<keyof typeof TRAZO, string> = {
-    hilo: '--mapa-hilo',
-    recorrido: '--mapa-recorrido',
-    nodo: '--mapa-filo-nodo',
+  // Cada trazo: el token que lo tiñe y las opacidades con que Leaflet lo
+  // dibuja. Lo que se ve es la mezcla de los dos sobre el mapa, así que eso es
+  // lo que se mide. El objetivo usa su clase en el hilo y en el rastro. Lo
+  // que se dibuja apagado a propósito (el objetivo perdido) queda afuera: que
+  // se lea menos es justamente lo que dice.
+  const DIBUJO: Record<keyof typeof TRAZO, { token: string; opacidades: number[] }> = {
+    hilo: { token: '--mapa-hilo', opacidades: [OPACIDAD_TRAZO.hilo] },
+    recorrido: { token: '--mapa-recorrido', opacidades: [1] },
+    nodo: { token: '--mapa-filo-nodo', opacidades: [1] },
+    objetivoPendiente: {
+      token: '--mapa-objetivo-pendiente',
+      opacidades: [OPACIDAD_TRAZO.hiloObjetivo, OPACIDAD_TRAZO.rastroObjetivo],
+    },
+    objetivoValidado: {
+      token: '--mapa-objetivo-validado',
+      opacidades: [OPACIDAD_TRAZO.hiloObjetivo, OPACIDAD_TRAZO.rastroObjetivo],
+    },
   };
 
   it.each(Object.entries(TRAZO) as [keyof typeof TRAZO, string][])('%s: .%s se tiñe con su token', (rol, clase) => {
-    expect(declaracion(`.${clase}`, 'stroke')).toBe(`var(${TOKENS[rol]})`);
+    expect(declaracion(`.${clase}`, 'stroke')).toBe(`var(${DIBUJO[rol].token})`);
   });
 
-  // Contra qué se miden: en mármol, el crema de la tierra de OpenStreetMap;
-  // en obsidiana, la piedra hundida, que es el tono al que el filtro lleva el
-  // callejero (y el fondo del mapa mientras cargan las teselas).
-  const TIERRA_OSM = parsearColor('#F2EFE9')!;
-  it.each(Object.values(TOKENS))('%s se distingue del mapa en los dos temas (3:1)', (token) => {
-    expect(contraste(parsearColor(enTema('claro', token))!, TIERRA_OSM)).toBeGreaterThanOrEqual(3);
-    const piedra = parsearColor(enTema('oscuro', '--marmol-2'))!;
-    expect(contraste(parsearColor(enTema('oscuro', token))!, piedra)).toBeGreaterThanOrEqual(3);
+  // Contra qué se miden: la tierra y los edificios de OpenStreetMap tal como
+  // quedan después del filtro del tema (en mármol no hay filtro), y la piedra
+  // hundida, que es el fondo del mapa mientras cargan las teselas. Los
+  // edificios son el peor caso de día; de noche, al darse vuelta, también.
+  const OSM = { tierra: '#F2EFE9', edificios: '#D9D0C9' };
+  function fondosDelMapa(tema: 'claro' | 'oscuro'): [string, Rgba][] {
+    const filtro = enTema(tema, '--filtro-calles');
+    return [
+      ...Object.entries(OSM).map(([nombre, hex]) => [nombre, aplicarFiltro(parsearColor(hex)!, filtro)] as [string, Rgba]),
+      ['piedra hundida', parsearColor(enTema(tema, '--marmol-2'))!],
+    ];
+  }
+
+  const casos = (Object.keys(DIBUJO) as (keyof typeof TRAZO)[]).flatMap((rol) =>
+    (['claro', 'oscuro'] as const).map((tema) => ({ rol, tema })),
+  );
+  it.each(casos)('$rol se distingue del mapa en $tema, con la opacidad con que se dibuja (3:1)', ({ rol, tema }) => {
+    const { token, opacidades } = DIBUJO[rol];
+    const trazo = parsearColor(enTema(tema, token))!;
+    for (const opacidad of opacidades) {
+      for (const [nombre, fondo] of fondosDelMapa(tema)) {
+        const razon = contraste(mezclar({ ...trazo, a: trazo.a * opacidad }, fondo), fondo);
+        expect(razon, `${token} al ${opacidad} sobre ${nombre} da ${razon.toFixed(2)}:1`).toBeGreaterThanOrEqual(3);
+      }
+    }
+  });
+});
+
+describe('la paleta que DronesMap le pasa a Leaflet', () => {
+  // Leaflet recibe los colores por JS, así que DronesMap los repite. Cada uno
+  // que dice copiar un token tiene que valer lo que ese token vale en mármol:
+  // el óxido y el azul se habían quedado en los de antes del ajuste del tema.
+  const fuente = leer('../components/DronesMap.tsx');
+  const paleta = /const PALETA = \{([\s\S]*?)\n\} as const;/.exec(fuente)?.[1] ?? '';
+  const copias = [...paleta.matchAll(/'(#[0-9a-f]{6})',\s*\/\/\s*(--[\w-]+)/gi)].map(([, hex, token]) => ({ hex, token }));
+
+  it('hay copias que revisar', () => {
+    expect(copias.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it.each(copias)('$token: $hex', ({ hex, token }) => {
+    expect(hex.toUpperCase()).toBe(enTema('claro', token).toUpperCase());
   });
 });
 

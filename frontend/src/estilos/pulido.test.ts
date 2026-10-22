@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { DURACION_AVISO_MS } from '../components/AvisosFlotantes';
 import { SALIDA_MS } from '../components/Modal';
+import { valorDe } from '../test/hojas';
 import { leerTokens } from '../test/wcag';
 
 /**
@@ -109,6 +110,33 @@ describe('arreglos del sistema que el pulido fija', () => {
     const mediana = /@media \(max-width: 1279px\)\s*\{([\s\S]*?)\n\}/.exec(layout);
     expect(mediana, 'falta la consulta de pantallas medianas').not.toBeNull();
     expect(mediana![1]).toMatch(/'marca sesion'\s*'secciones secciones'/);
+  });
+
+  // Las variantes (Validar, Devolver al patrullaje, Eliminar, Cancelar) tienen
+  // la misma especificidad que `button:disabled` y vienen después: sin su
+  // propio :disabled le pisaban la cara apagada y se veían tocables.
+  it.each(['validate', 'resume', 'dismiss'])('button.%s deshabilitado vuelve al hueco apagado', (variante) => {
+    const primitivos = leer('./primitivos.css');
+    const selector = `button.${variante}:disabled`;
+    expect(valorDe(primitivos, selector, 'color')).toBe('var(--tinta-suave)');
+    expect(valorDe(primitivos, selector, 'border-color')).toBe('var(--veta)');
+    expect(valorDe(primitivos, selector, 'background-image')).toBe('none');
+    expect(valorDe(primitivos, selector, 'background-color')).toBe('var(--marmol-2)');
+  });
+
+  it('el botón fantasma deshabilitado apaga la tinta', () => {
+    expect(valorDe(leer('./primitivos.css'), 'button.ghost:disabled', 'color')).toBe('var(--tinta-suave)');
+  });
+
+  it('en un teléfono la barra apila marca, sesión y secciones: el título no queda en una columna de 0 px', () => {
+    const layout = sinComentarios(leer('./layout.css'));
+    const telefono = /@media \(max-width: 640px\)\s*\{([\s\S]*?)\n\}/.exec(layout);
+    expect(telefono, 'falta la consulta de teléfonos').not.toBeNull();
+    expect(telefono![1]).toMatch(/grid-template-areas:\s*'marca'\s*'sesion'\s*'secciones'/);
+    // Y entre el teléfono y el escritorio el título conserva su ancho: la
+    // columna que se encoge (y parte en renglones) es la de la sesión.
+    const mediana = /@media \(max-width: 1279px\)\s*\{([\s\S]*?)\n\}/.exec(layout)![1];
+    expect(mediana).toMatch(/grid-template-columns:\s*auto minmax\(0, 1fr\)/);
   });
 
   it('el nombre de usuario largo se recorta en vez de empujar la barra', () => {

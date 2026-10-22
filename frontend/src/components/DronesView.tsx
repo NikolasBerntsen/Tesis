@@ -120,11 +120,14 @@ export default function DronesView({ me, novedad = null }: PropsDronesView) {
   /**
    * Lo mismo para las que pasan por la confirmación: el error SUBE, para que
    * el diálogo lo muestre adentro y siga abierto. Tragárselo acá cerraría el
-   * diálogo como si hubiera salido bien.
+   * diálogo como si hubiera salido bien. Si sale bien, se lleva el error de
+   * una acción anterior, como hace `accion`: si no, quedaba en rojo arriba de
+   * la tabla al lado del aviso de "Dron eliminado".
    */
   function confirmada(fn: () => Promise<Drone>, aviso: (ficha: Drone) => string) {
     return async () => {
       const ficha = await fn();
+      setError('');
       setDrones((prev) => upsert(prev, ficha));
       avisar(aviso(ficha));
     };

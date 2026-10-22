@@ -195,6 +195,22 @@ button.dismiss:hover:not(:disabled) {
   background-image: linear-gradient(var(--peligro-velo), var(--peligro-velo)), var(--cara-boton);
 }
 
+/* Las variantes tienen la misma especificidad que `button:disabled` y vienen
+   después, así que le pisaban la tinta, el filo y la cara: con una decisión
+   en viaje "Validar" seguía con su cara y su verde, "Descartar" con su filo
+   óxido, y el "Cancelar" de un diálogo ocupado con su tinta de siempre: todo
+   parecía tocable. Deshabilitadas vuelven al hueco apagado de todos. */
+button.validate:disabled,
+button.resume:disabled,
+button.dismiss:disabled {
+  color: var(--tinta-suave);
+  border-color: var(--veta);
+  background-image: none;
+  background-color: var(--marmol-2);
+}
+/* El fantasma no tiene cara que hundir: sólo se le apaga la tinta. */
+button.ghost:disabled { color: var(--tinta-suave); }
+
 /* Activo/seleccionado: filo dorado + velo, nunca relleno macizo. Un botón
    presionado (aria-pressed) es lo mismo dicho para el lector de pantalla:
    "Modo mouse" encendido se tiene que ver encendido. */
@@ -355,6 +371,11 @@ legend {
 /* Fila de un registro borrado lógicamente */
 .tabla tbody tr.fila-eliminada td { color: var(--tinta-suave); }
 .tabla tbody tr.fila-eliminada td:first-child { text-decoration: line-through; }
+/* Bajo el mouse, con el foco adentro o elegida (Rutas con «Ver eliminadas»),
+   el realce o el velo de oro aclaran el fondo y la tinta apagada bajaba de AA
+   (3,7 en obsidiana sobre la selección). Ahí sube a la media: lo que dice
+   "eliminada" es el tachado, no el gris. */
+.tabla tbody tr.fila-eliminada:is(:hover, :focus-within, .seleccionada) td { color: var(--tinta-media); }
 
 .tabla-envoltorio {
   overflow-x: auto;

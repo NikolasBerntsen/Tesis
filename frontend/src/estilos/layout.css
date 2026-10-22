@@ -67,12 +67,29 @@
 }
 @media (max-width: 1279px) {
   .topbar {
-    grid-template-columns: minmax(0, 1fr) auto;
+    /* El título conserva su ancho y la que se encoge (partiéndose en
+       renglones) es la sesión. Al revés, con la marca en `minmax(0, 1fr)`,
+       en un teléfono la sesión se quedaba con todo el ancho y "Comando
+       Central" caía en una columna de 0 px, encimado sobre la campana. */
+    grid-template-columns: auto minmax(0, 1fr);
     grid-template-areas:
       'marca sesion'
       'secciones secciones';
   }
   .topbar > .topnav { justify-content: flex-start; }
+}
+/* En un teléfono la marca y la sesión ya no entran en una fila: se apilan, y
+   la sesión arranca a la izquierda, debajo del título. Es el ancho en que más
+   se usa la sesión de campo. */
+@media (max-width: 640px) {
+  .topbar {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'marca'
+      'sesion'
+      'secciones';
+  }
+  .topbar-right { justify-content: flex-start; }
 }
 /* Un nombre largo no empuja la barra: se recorta, y el title lo deja leer. */
 .username {

@@ -55,6 +55,24 @@ export const TRAZO = {
   recorrido: 'mapa-recorrido',
   /** El filo de cada nodo de una ruta. */
   nodo: 'mapa-nodo',
+  /** El hilo del dron a su objetivo y el rastro del objetivo, con la alerta esperando. */
+  objetivoPendiente: 'mapa-objetivo-pendiente',
+  /** Lo mismo, una vez validada la alerta. */
+  objetivoValidado: 'mapa-objetivo-validado',
+} as const;
+
+/**
+ * Con qué opacidad dibuja Leaflet cada trazo. La escribe como stroke-opacity
+ * y el CSS del tema no la toca, así que lo que se ve es el token mezclado con
+ * el mapa a esta opacidad: así lo mide teselas.test.ts. El hilo a la base iba
+ * al 0,55 y en mármol quedaba en 2,2 contra los edificios; el rastro, al 0,6,
+ * en 1,7 sobre el callejero de noche. Los trazos del editor de rutas no fijan
+ * opacidad: Leaflet los dibuja opacos.
+ */
+export const OPACIDAD_TRAZO = {
+  hilo: 0.8,
+  hiloObjetivo: 0.85,
+  rastroObjetivo: 0.75,
 } as const;
 
 /** Aplica estilos inline a un nodo que Leaflet crea por su cuenta. */

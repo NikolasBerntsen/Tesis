@@ -4,7 +4,7 @@ import { formatearDni } from '../dni';
 import type { Me, UserView } from '../types';
 import { useAvisar } from './AvisosFlotantes';
 import DialogoConfirmacion, { type PedidoDeConfirmacion } from './DialogoConfirmacion';
-import { DialogoEditarUsuario, DialogoNuevoUsuario, ROL, textoError } from './DialogosDeUsuario';
+import { CONSECUENCIA, DialogoEditarUsuario, DialogoNuevoUsuario, ROL, textoError } from './DialogosDeUsuario';
 import EncabezadoDeVista from './EncabezadoDeVista';
 import { EsqueletoDeTabla, EstadoVacio } from './EstadosDeVista';
 import Modal from './Modal';
@@ -28,6 +28,12 @@ export default function UsersView({ me }: { me: Me }) {
   // Hasta la primera respuesta no se puede afirmar que "no hay usuarios": antes
   // el cartel salía en el primer cuadro, antes de preguntarle nada al backend.
   const [cargando, setCargando] = useState(true);
+  // La búsqueda con que llegó la lista que se está viendo; null hasta la
+  // primera respuesta. El esqueleto es sólo para ese primer viaje: la búsqueda
+  // recarga con cada tecla, y con la lista vacía cada tecla cambiaba el cartel
+  // de "ningún usuario coincide" por el esqueleto y de vuelta. Y el cartel
+  // habla de la lista que se ve, no de lo que se está tipeando.
+  const [consultaMostrada, setConsultaMostrada] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [verEliminados, setVerEliminados] = useState(false);
   const [recarga, setRecarga] = useState(0);
@@ -47,7 +53,14 @@ export default function UsersView({ me }: { me: Me }) {
     let vigente = true;
     setCargando(true);
     buscarUsuarios({ incluirEliminados: verEliminados, q: busqueda })
-      .then((lista) => vigente && setUsers(lista))
+      .then((lista) => {
+        if (!vigente) return;
+        setUsers(lista);
+        setConsultaMostrada(busqueda);
+        // Como en Bases y Rutas: una lista que llegó bien se lleva el error de
+        // la carga que había fallado antes.
+        setError('');
+      })
       .catch((e) => vigente && setError(textoError(e)))
       .finally(() => {
         if (vigente) setCargando(false);
@@ -69,10 +82,15 @@ export default function UsersView({ me }: { me: Me }) {
     }
   }
 
-  /** Lo que pasa por la confirmación: el error sube al diálogo, que queda abierto. */
+  /**
+   * Lo que pasa por la confirmación: el error sube al diálogo, que queda
+   * abierto. Si sale bien se lleva el error de una acción anterior: si no,
+   * quedaba en rojo arriba de la tabla al lado del aviso de que salió bien.
+   */
   function confirmada(fn: () => Promise<unknown>, aviso: string) {
     return async () => {
       await fn();
+      setError('');
       avisar(aviso);
       setRecarga((n) => n + 1);
     };
@@ -88,7 +106,7 @@ export default function UsersView({ me }: { me: Me }) {
     }
     setPedido({
       titulo: `Suspender el control de ${u.username}`,
-      consecuencia: `${u.username} deja de poder tomar el control de los drones. Si ahora mismo está piloteando uno, lo suelta en el acto.`,
+      consecuencia: CONSECUENCIA.suspender(u.username),
       detalle: 'Se vuelve a autorizar desde esta misma fila.',
       confirmar: 'Suspender',
       enCurso: 'Suspendiendo…',
@@ -103,7 +121,7 @@ export default function UsersView({ me }: { me: Me }) {
     }
     setPedido({
       titulo: `Desactivar a ${u.username}`,
-      consecuencia: `${u.username} deja de poder entrar a la consola: si tiene una sesión abierta, se le cierra en el acto y suelta el control de cualquier dron.`,
+      consecuencia: CONSECUENCIA.desactivar(u.username),
       detalle: 'La cuenta se conserva tal cual y se reactiva desde esta misma fila.',
       confirmar: 'Desactivar',
       enCurso: 'Desactivando…',
@@ -183,7 +201,7 @@ export default function UsersView({ me }: { me: Me }) {
   // El backend sólo respeta `includeDeleted` para supervisor+; el filtro de acá
   // es el que garantiza que con el toggle apagado no se cuele ninguna baja.
   const visibles = users.filter((u) => verEliminados || !u.deleted);
-  const hayBusqueda = busqueda.trim() !== '';
+  const hayBusqueda = (consultaMostrada ?? '').trim() !== '';
 
   return (
     <main className="page-main">
@@ -227,15 +245,21 @@ export default function UsersView({ me }: { me: Me }) {
       )}
 
       <section className="card">
-        {cargando && visibles.length === 0 && <EsqueletoDeTabla texto="Trayendo los usuarios…" />}
-        {!cargando && visibles.length === 0 &&
-          (hayBusqueda ? (
-            <EstadoVacio titulo="Ningún usuario coincide con la búsqueda.">
-              Probá con otra parte del nombre, el DNI sin puntos o el rol.
-            </EstadoVacio>
-          ) : (
-            <EstadoVacio titulo="No hay usuarios para mostrar." />
-          ))}
+        {cargando && consultaMostrada === null && <EsqueletoDeTabla texto="Trayendo los usuarios…" />}
+        {/* Sin el error afuera, con la carga caída el cartel decía que no
+            había usuarios, o que la búsqueda no coincidía, sin haberla hecho.
+            Mientras viaja la búsqueda siguiente el cartel queda, ocupado. */}
+        {consultaMostrada !== null && !error && visibles.length === 0 && (
+          <div aria-busy={cargando || undefined}>
+            {hayBusqueda ? (
+              <EstadoVacio titulo="Ningún usuario coincide con la búsqueda.">
+                Probá con otra parte del nombre, el DNI sin puntos o el rol.
+              </EstadoVacio>
+            ) : (
+              <EstadoVacio titulo="No hay usuarios para mostrar." />
+            )}
+          </div>
+        )}
         {visibles.length > 0 && (
           <div className="tabla-envoltorio" aria-busy={cargando || undefined}>
             <table className="tabla tabla-gestion">

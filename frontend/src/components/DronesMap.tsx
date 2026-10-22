@@ -14,7 +14,16 @@ import {
   velocidad,
   waypointLabel,
 } from '../format';
-import { CENTRO_POR_DEFECTO, TRAZO, aplicarFondo, crearFondos, iconoBase, vestir, type Fondo } from '../mapa';
+import {
+  CENTRO_POR_DEFECTO,
+  OPACIDAD_TRAZO,
+  TRAZO,
+  aplicarFondo,
+  crearFondos,
+  iconoBase,
+  vestir,
+  type Fondo,
+} from '../mapa';
 import type { Base, DroneStatus, ObjetivoEnSeguimiento, PatrolRoute } from '../types';
 import ConmutadorDeFondo from './ConmutadorDeFondo';
 
@@ -54,9 +63,16 @@ export interface WaypointsLayer {
 }
 
 /* Leaflet pinta sus capas con colores pasados por JS, no con CSS: por eso la
-   paleta se repite acá. Son los mismos valores que los tokens de tokens.css. */
+   paleta se repite acá. Los que llevan un token al lado son los valores de
+   mármol de ese token, y teselas.test.ts los compara con tokens.css: el óxido
+   y el azul se habían quedado en los de antes de que el tema los ajustara.
+   Los trazos que van sobre las teselas, además, llevan una clase de TRAZO
+   (mapa.ts) para que el CSS les ponga el color del tema; el de acá queda de
+   respaldo. */
 const PALETA = {
-  marfil: '#FBFAF7', // --marmol-0
+  // El halo de los marcadores: un marfil casi blanco, más claro que la piedra
+  // de la página, para que el marcador se despegue de cualquier tesela.
+  marfil: '#FBFAF7',
   tinta: '#2B2620', // --tinta
   tintaMedia: '#5C544A', // --tinta-media
   oroClaro: '#F0E3B8',
@@ -64,8 +80,8 @@ const PALETA = {
   oro: '#B8912F', // --oro
   oroOscuro: '#8A6A1C', // --oro-oscuro
   oliva: '#4F7A46', // --ok
-  oxido: '#9C3B30', // --peligro
-  info: '#3D6076', // --info
+  oxido: '#8E3328', // --peligro
+  info: '#375870', // --info
   negro: '#14120F',
   ambar: '#F2C230', // el par negro/ámbar es el de mayor contraste posible
 } as const;
@@ -89,6 +105,8 @@ interface Layers {
   objetivoIcono?: string;
   lineaObjetivo?: L.Polyline;
   rastro?: L.Polyline;
+  /** La clase con que se crearon el hilo y el rastro (ver dibujarObjetivo). */
+  trazoObjetivo?: string;
   /** Lo que copia el botón del globo: se lee al clickear, no al abrir. */
   coordenadasObjetivo?: string;
 }
@@ -125,11 +143,12 @@ const EN_TIERRA = ['IDLE', 'LANDED'];
 // Hilo grabado entre el dron y su base: es una referencia, no un dato de vuelo,
 // así que va en tinta apagada y no compite con los nodos ni con el medallón.
 // La clase deja que el CSS lo aclare en obsidiana: pardo sobre el callejero
-// oscurecido no se veía.
+// oscurecido no se veía. Lo apagado lo dan el punteado y el grosor, no la
+// transparencia: al 0,55 no se distinguía de los edificios (OPACIDAD_TRAZO).
 const LINE_STYLE: L.PolylineOptions = {
   color: PALETA.tintaMedia,
   weight: 1.5,
-  opacity: 0.55,
+  opacity: OPACIDAD_TRAZO.hilo,
   dashArray: '2 7',
   interactive: false,
   className: TRAZO.hilo,
@@ -143,25 +162,43 @@ const LINE_STYLE: L.PolylineOptions = {
 
 interface AspectoObjetivo {
   color: string;
+  /** La clase de TRAZO con que el CSS tiñe el hilo y el rastro según el tema. */
+  trazo: string;
   perdido: boolean;
   /** Identifica el ícono: sólo se rehace cuando cambia. */
   clave: string;
 }
 
 function aspectoDelObjetivo(o: ObjetivoEnSeguimiento): AspectoObjetivo {
-  const color = o.decision === 'VALIDATED' ? PALETA.oro : PALETA.oxido;
-  return { color, perdido: o.lost, clave: `${o.decision}-${o.lost}` };
+  const validado = o.decision === 'VALIDATED';
+  return {
+    color: validado ? PALETA.oro : PALETA.oxido,
+    trazo: validado ? TRAZO.objetivoValidado : TRAZO.objetivoPendiente,
+    perdido: o.lost,
+    clave: `${o.decision}-${o.lost}`,
+  };
 }
 
+// Perdido, el hilo y el rastro se apagan a propósito: lo que se ve es la
+// última posición conocida, no una presencia. Esas dos opacidades quedan fuera
+// de la medición de contraste de teselas.test.ts por eso mismo.
 function estiloLineaObjetivo(a: AspectoObjetivo): L.PolylineOptions {
-  return { color: a.color, weight: 1.5, opacity: a.perdido ? 0.45 : 0.85, dashArray: '4 6', interactive: false };
+  return {
+    color: a.color,
+    weight: 1.5,
+    opacity: a.perdido ? 0.45 : OPACIDAD_TRAZO.hiloObjetivo,
+    dashArray: '4 6',
+    interactive: false,
+    className: a.trazo,
+  };
 }
 
 function estiloRastro(a: AspectoObjetivo): L.PolylineOptions {
   return {
     color: a.color,
     weight: 2.5,
-    opacity: a.perdido ? 0.35 : 0.6,
+    opacity: a.perdido ? 0.35 : OPACIDAD_TRAZO.rastroObjetivo,
+    className: a.trazo,
     dashArray: a.perdido ? '2 6' : undefined,
     lineCap: 'round',
     lineJoin: 'round',
@@ -623,6 +660,7 @@ export default function DronesMap({
     l.objetivoIcono = undefined;
     l.lineaObjetivo = undefined;
     l.rastro = undefined;
+    l.trazoObjetivo = undefined;
     l.coordenadasObjetivo = undefined;
   }
 
@@ -698,6 +736,18 @@ export default function DronesMap({
     }
     if (l.objetivo.isPopupOpen()) refrescarPopupObjetivo(l.objetivo, objetivo);
     else setPopup(l.objetivo, objetivoPopup(objetivo));
+
+    // Leaflet le pone la clase a un trazo una sola vez, al crear su path:
+    // `setStyle` cambia el color del atributo pero no la clase, que es lo que
+    // el CSS tiñe por tema. Si la alerta se decidió, el hilo y el rastro se
+    // rehacen con la clase nueva; si no, quedaba el óxido sobre el oro.
+    if (l.trazoObjetivo !== aspecto.trazo) {
+      l.lineaObjetivo?.remove();
+      l.rastro?.remove();
+      l.lineaObjetivo = undefined;
+      l.rastro = undefined;
+      l.trazoObjetivo = aspecto.trazo;
+    }
 
     // El hilo dice qué dron está sobre qué objetivo: con dos drones sobre dos
     // objetivos en el mapa de la flota, sin él no se sabe cuál es de cuál.
