@@ -73,6 +73,7 @@ class PatrolManagerVideoTest {
         override fun gotoPoint(lat: Double, lon: Double) = Unit
         override fun manualStick(pitch: Double, roll: Double, yaw: Double, throttle: Double) = Unit
         override fun inclinarCamara(pitchGrados: Double) = Unit
+        override fun cancelarInclinacionManual() = Unit
         override fun returnHome() = Unit
         override fun land() = Unit
         override fun seguirObjetivo(lat: Double, lon: Double, vNorteMs: Double, vEsteMs: Double) = Unit

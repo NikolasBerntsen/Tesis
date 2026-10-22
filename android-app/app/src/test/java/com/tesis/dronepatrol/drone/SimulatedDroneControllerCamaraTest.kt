@@ -98,6 +98,28 @@ class SimulatedDroneControllerCamaraTest {
         siguientes.forEach { assertEquals(-15.0, it.gimbalPitch, 0.0) }
     }
 
+    /**
+     * Acá la inclinación se aplica en el acto, así que al salir de MANUAL no hay
+     * ninguna esperando que tirar: cancelar no deshace la que ya se aplicó (como
+     * en el real con la que el gimbal está cumpliendo) y la siguiente se aplica
+     * igual.
+     */
+    @Test
+    fun cancelarLaInclinacionManualNoDeshaceLaAplicada() = runBlocking<Unit> {
+        dron = SimulatedDroneController(arrancaEnElAire = true)
+        dron.connect()
+        dron.inclinarCamara(-25.0)
+        esperarInclinacion(-25.0)
+
+        dron.cancelarInclinacionManual()
+
+        delay(1_100)
+        val siguientes = withTimeout(5_000) { dron.telemetry.take(2).toList() }
+        siguientes.forEach { assertEquals(-25.0, it.gimbalPitch, 0.0) }
+        dron.inclinarCamara(-40.0)
+        esperarInclinacion(-40.0)
+    }
+
     /** Retomar la ruta vuelve a la cámara de patrulla: la que necesita el detector. */
     @Test
     fun alArrancarLaRutaLaCamaraVuelveALaDePatrulla() = runBlocking<Unit> {

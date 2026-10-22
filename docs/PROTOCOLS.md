@@ -317,7 +317,7 @@ Los mensajes se dirigen **solo al dron correspondiente**, salvo que se indique.
 | **`land`** | **`by`** | **Aterriza donde está. Solo con el control manual tomado y el dron en el aire. Al tocar el suelo el control sigue tomado (`MANUAL` en el suelo)** |
 | `manual_move` | `bearing, distanceM, by` | **Desplazamiento puntual** de esa distancia en ese rumbo (solo en `MANUAL`, en el aire y con GPS) |
 | `manual_stick` | `pitch, roll, yaw, throttle, by` | **Vuelo continuo con palancas** (solo en `MANUAL` y **en el aire**: en el suelo se descarta en silencio, la consola muestra "despegá primero"): cada eje es un número en `[-1, 1]` y el dron lo sostiene hasta el mensaje siguiente. Ver §3.b |
-| **`manual_gimbal`** | **`pitch, by`** | **Inclina la cámara a `pitch` grados, en ángulo ABSOLUTO** (`0` horizonte, negativo hacia abajo; llega ya recortado a `[-90, 30]`). **Solo con el control manual tomado (`MANUAL`), en el suelo o en el aire**: inclinar la cámara no mueve al dron. En cualquier otro estado se descarta en silencio (patrullando, orbitando o siguiendo, la cámara la maneja la app). No cambia el estado ni toca el vuelo; la inclinación nueva se ve en `status.gimbalPitch`. Al retomar la ruta la app vuelve a la inclinación de patrulla. Ver §3.b |
+| **`manual_gimbal`** | **`pitch, by`** | **Inclina la cámara a `pitch` grados, en ángulo ABSOLUTO** (`0` horizonte, negativo hacia abajo; llega ya recortado a `[-90, 30]`). **Solo con el control manual tomado (`MANUAL`), en el suelo o en el aire**: inclinar la cámara no mueve al dron. En cualquier otro estado se descarta en silencio (patrullando, orbitando o siguiendo, la cámara la maneja la app). No cambia el estado ni toca el vuelo; la inclinación nueva se ve en `status.gimbalPitch`. **Al salir de `MANUAL` la app tira la inclinación que todavía no le pasó al gimbal: después de salir, al gimbal solo puede llegarle la que ya estaba cumpliendo, y la cámara que apunta el estado siguiente (la de patrulla al retomar la ruta, la de la órbita o el seguimiento al volver al objetivo) sale después de esa, nunca antes.** Ver §3.b |
 | `control_released` | `by` | Sale del control manual. **Con un objetivo en seguimiento, el dron vuelve a él (`ORBITING` o `FOLLOWING`, evento `TRACKING_RESUMED`)**; sin objetivo, si no llega un `resume_patrol` a continuación queda `PAUSED` |
 | `renamed` | `displayName` | El operador renombró al dron: la app actualiza el nombre que muestra |
 
@@ -463,8 +463,16 @@ la aeronave y su ajuste de inclinación hacia arriba).
 - Con el dron real, la app le pasa al gimbal **una inclinación por vez**: espera
   a que el SDK conteste la anterior (con un tope de 2 s) y deja al menos 300 ms
   entre una y otra. Las que llegan mientras tanto se pisan y va la última, que
-  nunca se pierde. Diez órdenes por segundo al gimbal eran diez recorridos que
-  se interrumpían entre sí.
+  no se pierde mientras el dron siga en `MANUAL`. Diez órdenes por segundo al
+  gimbal eran diez recorridos que se interrumpían entre sí.
+- **Al salir de `MANUAL`** (se soltó el control, se retomó la ruta, batería
+  baja, pérdida de señal…) **la inclinación que esperaba su turno se tira**: la
+  que el gimbal ya estaba cumpliendo termina —no hay forma de retirársela—, pero
+  ninguna otra de la consola le llega después. Y la cámara que apunta la app en
+  los modos autónomos va **por la misma fila**, así que sale detrás de esa y no
+  la puede pisar una inclinación vieja: antes, una que esperaba llegaba 300 ms
+  después de que la ruta apuntara a la de patrulla, y la ruta —que apunta una
+  sola vez— seguía mirando al horizonte sin poder ubicar ninguna detección.
 - Con la cámara **al horizonte o más arriba**, lo que el detector ve no se
   puede ubicar en el terreno: la alerta sale sin posición del objetivo y sin
   seguimiento (§4, "Qué hace la app con una detección").
