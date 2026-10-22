@@ -21,7 +21,15 @@ interface DroneController {
      */
     val estado: StateFlow<EstadoDelDron>
 
-    /** Telemetría a ~2 Hz. Si el enlace RC se corta, este flujo se silencia. */
+    /**
+     * Telemetría a ~2 Hz. Si el enlace RC se corta, este flujo se silencia.
+     *
+     * [Telemetry.gimbalPitch] viene en NaN mientras el dron todavía no informó
+     * su gimbal (el real, recién enlazado), igual que la posición sin fix: así el
+     * status no le muestra a la consola una inclinación que nadie midió. Quien
+     * la use tiene que mirarlo; PatrolManager proyecta las detecciones con la de
+     * patrulla mientras tanto.
+     */
     val telemetry: SharedFlow<Telemetry>
 
     /**

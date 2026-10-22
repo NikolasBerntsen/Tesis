@@ -10,6 +10,7 @@ import com.tesis.dronepatrol.drone.LimitadorDeRitmo
 import com.tesis.dronepatrol.drone.MandoVirtual
 import com.tesis.dronepatrol.drone.Navegacion
 import com.tesis.dronepatrol.drone.OrdenVirtualStick
+import com.tesis.dronepatrol.drone.UltimoPedido
 import com.tesis.dronepatrol.model.EstadoDelDron
 import com.tesis.dronepatrol.model.FlightEvent
 import com.tesis.dronepatrol.model.PatrolRoute
@@ -128,11 +129,25 @@ class DjiDroneController : DroneController {
 
     /**
      * Inclinaciones de la cámara pedidas desde la consola ([inclinarCamara]),
-     * camino del gimbal. CONFLATED a propósito: llegan hasta diez por segundo
-     * mientras el operador arrastra, y si el SDK se atrasa la que importa es la
-     * última; las intermedias son posiciones por las que la cámara ya pasó.
+     * camino del gimbal. Llegan hasta diez por segundo mientras el operador
+     * arrastra, y cada una es una acción del SDK que interrumpe el recorrido de
+     * la anterior: [UltimoPedido] espera a que el gimbal conteste cada orden (y
+     * deja al menos [INTERVALO_GIMBAL_MANUAL_MS] entre una y otra), y mientras
+     * tanto se queda solo con la última. Las de en medio son posiciones por las
+     * que la cámara ya no necesita pasar.
      */
-    private val inclinacionesPedidas = Channel<Double>(Channel.CONFLATED)
+    private val inclinacionesPedidas = UltimoPedido<Double>(
+        intervaloMs = INTERVALO_GIMBAL_MANUAL_MS,
+        topeMs = ESPERA_GIMBAL_MANUAL_MS,
+        cumplir = { pitch ->
+            girarGimbalYEsperar(pitch, DURACION_GIMBAL_MANUAL_S) { motivo ->
+                "el gimbal no aceptó la inclinación pedida desde la consola ($motivo)"
+            }
+        },
+        // Sin el valor en el texto: avisar() repite solo cuando el motivo
+        // cambia, y con el gimbal trabado cada inclinación nueva sería un aviso.
+        alVencerse = { avisar("el gimbal no contestó a tiempo una inclinación pedida desde la consola") },
+    )
 
     /** Corrutina que le pasa al gimbal las inclinaciones pedidas, una por vez y en orden. */
     private var camaraJob: Job? = null
@@ -400,18 +415,12 @@ class DjiDroneController : DroneController {
         sdkJob = scope.launch { DjiSdk.estado.collect { publicarEstado() } }
         // Un solo consumidor, como el de los cuadros: así las inclinaciones
         // llegan al SDK en el orden en que las pidió el operador. Lo que quedó
-        // encolado de antes de una desconexión (a lo sumo una, el canal es
-        // CONFLATED) se tira: era de un control que ya terminó, y aplicarlo al
-        // reconectar movería la cámara sin que nadie lo pida.
+        // esperando de antes de una desconexión (a lo sumo una) se tira: era de
+        // un control que ya terminó, y aplicarlo al reconectar movería la cámara
+        // sin que nadie lo pida.
         camaraJob?.cancel()
-        inclinacionesPedidas.tryReceive()
-        camaraJob = scope.launch {
-            for (pitch in inclinacionesPedidas) {
-                girarGimbal(pitch, DURACION_GIMBAL_MANUAL_S) { motivo ->
-                    "el gimbal no aceptó la inclinación pedida desde la consola ($motivo)"
-                }
-            }
-        }
+        inclinacionesPedidas.descartarPendiente()
+        camaraJob = scope.launch { inclinacionesPedidas.atender() }
         VirtualStickManager.getInstance().setVirtualStickStateListener(oyenteDeVirtualStick)
         // El modo avanzado es una marca local del SDK (no habla con la aeronave):
         // sin ella sendVirtualStickAdvancedParam vuelve sin hacer nada. Se pone
@@ -801,7 +810,7 @@ class DjiDroneController : DroneController {
      */
     override fun inclinarCamara(pitchGrados: Double) {
         if (!pitchGrados.isFinite()) return
-        inclinacionesPedidas.trySend(pitchGrados.coerceIn(INCLINACION_MINIMA, INCLINACION_MAXIMA))
+        inclinacionesPedidas.pedir(pitchGrados.coerceIn(INCLINACION_MINIMA, INCLINACION_MAXIMA))
     }
 
     override fun returnHome() {
@@ -947,23 +956,30 @@ class DjiDroneController : DroneController {
      * operador no se entera.
      */
     private fun apuntarCamara(pitchGrados: Double) {
-        girarGimbal(pitchGrados.coerceIn(-90.0, 0.0), DURACION_GIMBAL_AUTONOMO_S) { motivo ->
+        girarGimbal(pitchGrados.coerceIn(-90.0, 0.0), DURACION_GIMBAL_AUTONOMO_S, motivoDelRechazo = { motivo ->
             "el gimbal no aceptó apuntar la cámara a ${pitchGrados.toInt()}° ($motivo)"
-        }
+        })
     }
 
     /**
      * La orden al gimbal propiamente dicha (KeyRotateByAngle en ángulo ABSOLUTO,
      * solo el pitch), compartida por la cámara autónoma y la que pide la consola.
      * [duracionS] es lo que tarda en llegar. [motivoDelRechazo] arma el aviso
-     * con la descripción del error del SDK.
+     * con la descripción del error del SDK. [alTerminar] se llama una vez, cuando
+     * el SDK contestó (true si la aceptó); los modos autónomos no lo esperan,
+     * porque ya ralean sus órdenes con [GimbalQueAcompania].
      *
      * No puede tirar nunca: la llaman los lazos de vuelo y el consumidor de
      * inclinaciones de la consola, y una excepción del SDK (sin producto, sin
      * registrar) en cualquiera de los dos se llevaría puesto un lazo que no tiene
      * nada que ver con la cámara. Una excepción se avisa igual que un rechazo.
      */
-    private fun girarGimbal(pitchGrados: Double, duracionS: Double, motivoDelRechazo: (String) -> String) {
+    private fun girarGimbal(
+        pitchGrados: Double,
+        duracionS: Double,
+        motivoDelRechazo: (String) -> String,
+        alTerminar: (Boolean) -> Unit = {},
+    ) {
         val giro = GimbalAngleRotation().apply {
             mode = GimbalAngleRotationMode.ABSOLUTE_ANGLE
             pitch = pitchGrados
@@ -981,14 +997,33 @@ class DjiDroneController : DroneController {
                 KeyTools.createKey(GimbalKey.KeyRotateByAngle),
                 giro,
                 object : CommonCallbacks.CompletionCallbackWithParam<EmptyMsg> {
-                    override fun onSuccess(resultado: EmptyMsg?) = Unit
+                    override fun onSuccess(resultado: EmptyMsg?) = alTerminar(true)
 
                     override fun onFailure(error: IDJIError) {
                         avisar(motivoDelRechazo("${error.description()}"))
+                        alTerminar(false)
                     }
                 },
             )
-        }.onFailure { falla -> avisar(motivoDelRechazo(falla.message ?: falla.javaClass.simpleName)) }
+        }.onFailure { falla ->
+            avisar(motivoDelRechazo(falla.message ?: falla.javaClass.simpleName))
+            alTerminar(false)
+        }
+    }
+
+    /**
+     * [girarGimbal] esperando a que el SDK conteste: es lo que le da sentido a
+     * [inclinacionesPedidas], que solo puede quedarse con la última inclinación
+     * si la atención se detiene mientras el gimbal cumple la anterior. El tope
+     * por si el callback no llega nunca lo pone [UltimoPedido]; al vencer, la
+     * continuación ya está cancelada y un callback tardío no la toca.
+     */
+    private suspend fun girarGimbalYEsperar(pitchGrados: Double, duracionS: Double, motivoDelRechazo: (String) -> String) {
+        suspendCancellableCoroutine<Unit> { continuacion ->
+            girarGimbal(pitchGrados, duracionS, motivoDelRechazo) {
+                if (continuacion.isActive) continuacion.resume(Unit)
+            }
+        }
     }
 
     /**
@@ -1278,12 +1313,27 @@ class DjiDroneController : DroneController {
         const val DURACION_GIMBAL_AUTONOMO_S = 1.0
 
         /**
-         * Lo que tarda cuando lo mueve el operador: más corto, porque mientras
-         * arrastra le llega una inclinación nueva cada 100 ms y cada una arranca su
-         * recorrido de nuevo desde donde está. Con un segundo entero la cámara
-         * quedaba visiblemente atrás del deslizador.
+         * Como mucho una orden al gimbal cada esto cuando lo mueve el operador
+         * (ver [inclinacionesPedidas]): la consola manda hasta diez por segundo
+         * mientras arrastra, y pasarlas todas era pelearse con el SDK.
          */
-        const val DURACION_GIMBAL_MANUAL_S = 0.5
+        const val INTERVALO_GIMBAL_MANUAL_MS = 300L
+
+        /**
+         * Lo que tarda el gimbal en llegar cuando lo mueve el operador: lo mismo
+         * que el espaciado entre órdenes. Si el SDK contesta al aceptar la orden,
+         * la siguiente llega justo cuando la anterior terminó su recorrido; si
+         * contesta al terminarla, no se pisan nunca. Con el segundo entero de los
+         * modos autónomos la cámara quedaba visiblemente atrás del deslizador.
+         */
+        const val DURACION_GIMBAL_MANUAL_S = INTERVALO_GIMBAL_MANUAL_MS / 1_000.0
+
+        /**
+         * Tope de espera a que el SDK conteste una inclinación de la consola. Si
+         * no contestó, se avisa y se pasa a la siguiente: un callback perdido no
+         * puede dejar a la cámara sorda al resto de la sesión.
+         */
+        const val ESPERA_GIMBAL_MANUAL_MS = 2_000L
 
         /** Rango de la inclinación pedida desde la consola (`manual_gimbal`, docs/PROTOCOLS.md §3.b). */
         const val INCLINACION_MINIMA = -90.0

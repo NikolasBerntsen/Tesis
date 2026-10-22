@@ -286,7 +286,7 @@ la estimación vigente:
 `ORBIT_STARTED`, `GOTO_ARRIVED`, `FORCED_GOTO`, `CONTROL_RESUMED`, `LANDED`,
 `BATTERY_RECHARGED`, `DRONE_PROBLEM` (el dron o su SDK rechazó una orden: el
 motivo va en `message`, con un techo de repetición para no inundar el registro).
-`DETECTION` (detección confirmada que se avisa sin seguimiento: dron en el suelo, a baja altura o sin GPS; con `lat`/`lon` si se pudo ubicar),
+`DETECTION` (detección confirmada que se avisa sin seguimiento: dron en el suelo, a baja altura, sin GPS o con el objetivo imposible de ubicar en el terreno —la cámara al horizonte o más arriba—; con `lat`/`lon` si se pudo ubicar),
 `TARGET_DETECTED` (detección durante el control manual: arranca el seguimiento sin mover al dron).
 **Seguimiento** (todos con `alertId` si se conoce y con `lat`/`lon` del objetivo):
 `TARGET_MOVING` (el objetivo se mueve: el dron deja la órbita y lo sigue),
@@ -457,6 +457,14 @@ la aeronave y su ajuste de inclinación hacia arriba).
   acepta"), salvo el cupo de ritmo, que es **propio** (ver más abajo).
 - La app lo aplica solo en `MANUAL` (§2) y el dron informa la inclinación en la
   que quedó en `status.gimbalPitch` (§1).
+- Con el dron real, la app le pasa al gimbal **una inclinación por vez**: espera
+  a que el SDK conteste la anterior (con un tope de 2 s) y deja al menos 300 ms
+  entre una y otra. Las que llegan mientras tanto se pisan y va la última, que
+  nunca se pierde. Diez órdenes por segundo al gimbal eran diez recorridos que
+  se interrumpían entre sí.
+- Con la cámara **al horizonte o más arriba**, lo que el detector ve no se
+  puede ubicar en el terreno: la alerta sale sin posición del objetivo y sin
+  seguimiento (§4, "Qué hace la app con una detección").
 
 ### Por qué no es REST
 
@@ -617,7 +625,13 @@ cuadro viejo y nunca acumula retraso.
 2. **Ubica cada caja en el terreno** con la pose del dron en el instante del
    cuadro (`frameTs`): altura, rumbo de la cámara e inclinación del gimbal
    (`Georreferencia`). Sin GPS o por debajo de 2 m de altura no hay proyección
-   posible.
+   posible, y tampoco para una caja cuyo rayo no baja al menos 5° por debajo
+   del horizonte (la cámara al horizonte o más arriba, que el operador puede
+   pedir con `manual_gimbal`). En todos esos casos la caja queda **sin
+   posición**, nunca con la del dron, que con la cámara levantada es justo
+   donde el objetivo no está. Una detección sin cajas (el detector de
+   respaldo) cuenta en la posición del dron solo si el centro del cuadro se
+   puede proyectar; si no, también queda sin posición.
 3. **Toda detección confirmada avisa al Comando Central**: dos detecciones de
    la misma clase en menos de 2,5 s y a menos de 25 m una de otra (un solo
    cuadro no alerta). No se alerta despegando (el detector ve al equipo de
@@ -632,8 +646,9 @@ cuadro viejo y nunca acumula retraso.
    - **En control manual** (en el aire, con GPS): arranca el seguimiento SIN
      mover al dron (`TARGET_DETECTED`); al soltar el control, el dron va al
      objetivo.
-   - **En el suelo, a baja altura o sin GPS**: alerta sin seguimiento
-     (`DETECTION`), como mucho una por minuto.
+   - **En el suelo, a baja altura, sin GPS o con el objetivo sin posición**
+     (o en el aire sin patrullar): alerta sin seguimiento (`DETECTION`), como
+     mucho una por minuto.
    En todos los casos manda `alert_request` (tipo, **captura anotada**,
    posición del objetivo si se pudo ubicar, confianza, pose del dron y un
    `ref`) y, con seguimiento, queda a la espera del `alert_ack`.

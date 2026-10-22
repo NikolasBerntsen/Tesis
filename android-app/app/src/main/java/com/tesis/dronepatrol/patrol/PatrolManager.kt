@@ -1143,8 +1143,9 @@ class PatrolManager(
      *    Comando Central, salvo despegando o volviendo a base:
      *    - en el aire, a la altura de trabajo y con GPS, arranca el seguimiento
      *      del objetivo (órbita; en MANUAL solo la estimación);
-     *    - en el suelo, a baja altura o sin GPS, alerta sin seguimiento, con un
-     *      techo de una por minuto.
+     *    - en el suelo, a baja altura, sin GPS o sin poder ubicar al objetivo
+     *      en el terreno (la cámara al horizonte), alerta sin seguimiento, con
+     *      un techo de una por minuto.
      */
     private suspend fun onDetection(d: Deteccion) {
         _cajasRecientes.value = d.cajas
@@ -1189,17 +1190,27 @@ class PatrolManager(
 
     /**
      * Una detección confirmada con la que no se puede (o no corresponde) seguir
-     * al objetivo: el dron en el suelo, a baja altura o sin GPS. El Comando
-     * Central igual se entera —alerta con la captura y evento en el registro—,
-     * que es lo que el operador necesita para decidir; el dron no se mueve.
+     * al objetivo: el dron en el suelo, a baja altura, sin GPS o con el objetivo
+     * fuera del terreno que la cámara puede ubicar (ver [puntosEnElTerreno]). El
+     * Comando Central igual se entera —alerta con la captura y evento en el
+     * registro—, que es lo que el operador necesita para decidir; el dron no se
+     * mueve.
      */
     private fun alertarSinSeguimiento(p: Punto, d: Deteccion, pose: Telemetry, ahora: Long, enVuelo: Boolean) {
         if (ahora - ultimaAlertaSinSeguimientoMs < ENTRE_ALERTAS_SIN_SEGUIMIENTO_MS) return
         ultimaAlertaSinSeguimientoMs = ahora
+        // Sin posición ya no quiere decir sin GPS: también es el objetivo que la
+        // cámara ve por arriba de lo que se puede proyectar. La altura va antes
+        // porque, por debajo de la de trabajo, es ella la que manda. Lo que queda
+        // es un estado que no sigue objetivos (en el aire sin patrullar, por
+        // ejemplo al abrir la app con el dron volando), que antes salía como
+        // "a baja altura" a 45 m.
         val donde = when {
             !enVuelo -> "con el dron en el suelo"
-            p.sinPosicion -> "sin GPS"
-            else -> "a baja altura (${pose.altM.toInt()} m)"
+            !pose.tienePosicion -> "sin GPS"
+            pose.altM < ALTURA_MINIMA_PARA_ALERTAR_M -> "a baja altura (${pose.altM.toInt()} m)"
+            p.sinPosicion -> "sin poder ubicarlo en el terreno (la cámara mira al horizonte o más arriba)"
+            else -> "fuera de un patrullaje"
         }
         report(
             "DETECTION",
@@ -1221,27 +1232,48 @@ class PatrolManager(
     }
 
     /**
-     * Cada caja proyectada al terreno con la pose del cuadro. Si una caja no se
-     * puede proyectar (rayo casi al horizonte) se toma la posición del dron: el
-     * objetivo está dentro del campo visual. Sin cajas (el detector de
-     * respaldo no las manda) la detección entera cuenta como un punto en la
-     * posición del dron. Sin GPS los puntos van sin posición (NaN): no se pueden
-     * ubicar, pero la detección existe igual.
+     * Cada caja proyectada al terreno con la pose del cuadro. Una caja que no se
+     * puede proyectar —el rayo no baja lo suficiente para cortar el suelo, o el
+     * dron está a ras del suelo— queda SIN posición (NaN), igual que sin GPS: no
+     * se puede ubicar, pero la detección existe igual y se avisa sin seguimiento.
+     * Antes se tomaba la posición del dron, que es justo donde el objetivo NO
+     * está: con la cámara al horizonte o más arriba (el operador la puede subir
+     * con `manual_gimbal`) eso armaba un seguimiento "a 0 m" y, al soltar el
+     * control, el dron volvía a su propia posición en vez de ir al objetivo.
+     *
+     * Sin cajas (el detector de respaldo no las manda) no se sabe en qué parte
+     * del cuadro está, y la detección entera cuenta como un punto en la posición
+     * del dron: una aproximación gruesa, que vale solo si la cámara mira al
+     * terreno de abajo. Si ni el centro del cuadro se puede proyectar (la cámara
+     * al horizonte o más arriba, o el dron a ras del suelo), no hay cómo acotar
+     * dónde está —con la cámara al horizonte, a cientos de metros— y también
+     * queda sin posición.
      */
     private fun puntosEnElTerreno(d: Deteccion, pose: Telemetry): List<Punto> {
         if (!pose.tienePosicion) {
             if (d.cajas.isEmpty()) return listOf(Punto(d.tipoDeAlerta, d.confianza, Double.NaN, Double.NaN))
             return d.cajas.map { Punto(it.clase, it.confianza, Double.NaN, Double.NaN) }
         }
-        if (d.cajas.isEmpty()) return listOf(Punto(d.tipoDeAlerta, d.confianza, pose.lat, pose.lon))
         // Si el dron todavía no informó su gimbal (NaN), se proyecta con la
         // inclinación de patrulla, que es donde la app lo deja: una suposición
         // razonable es mejor que tirar la detección. Al status, en cambio, no
         // se le inventa nada (ver statusTicker()).
         val inclinacion = pose.gimbalPitch.takeUnless { it.isNaN() } ?: Telemetry.GIMBAL_PATRULLA
+        fun proyectar(x: Double, y: Double) =
+            Georreferencia.proyectar(pose.lat, pose.lon, pose.altM, pose.rumboCamara, inclinacion, x, y)
+        if (d.cajas.isEmpty()) {
+            val alTerreno = proyectar(0.5, 0.5) != null
+            return listOf(
+                if (alTerreno) {
+                    Punto(d.tipoDeAlerta, d.confianza, pose.lat, pose.lon)
+                } else {
+                    Punto(d.tipoDeAlerta, d.confianza, Double.NaN, Double.NaN)
+                },
+            )
+        }
         return d.cajas.map { caja ->
-            val o = Georreferencia.proyectar(pose.lat, pose.lon, pose.altM, pose.rumboCamara, inclinacion, caja.x, caja.y)
-            Punto(caja.clase, caja.confianza, o?.lat ?: pose.lat, o?.lon ?: pose.lon)
+            val o = proyectar(caja.x, caja.y)
+            Punto(caja.clase, caja.confianza, o?.lat ?: Double.NaN, o?.lon ?: Double.NaN)
         }
     }
 
