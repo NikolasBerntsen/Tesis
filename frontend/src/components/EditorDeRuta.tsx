@@ -3,6 +3,7 @@ import L from 'leaflet';
 import { CENTRO_POR_DEFECTO, TRAZO, iconoBase, useFondo, vestirAtribucion } from '../mapa';
 import type { PatrolRoute, Waypoint } from '../types';
 import ConmutadorDeFondo from './ConmutadorDeFondo';
+import IconoCerrar from './IconoCerrar';
 import Modal from './Modal';
 
 /** Un nodo con identidad estable, para poder arrastrarlo sin que se confunda. */
@@ -201,7 +202,7 @@ export default function EditorDeRuta({
           <p className="modal-subtitulo">{ruta ? ruta.name : base ? `Desde ${base.name}` : 'Nodos en el orden del recorrido'}</p>
         </div>
         <button type="button" className="modal-cerrar" aria-label="Cerrar" onClick={cerrar} disabled={guardando}>
-          ×
+          <IconoCerrar />
         </button>
       </header>
 

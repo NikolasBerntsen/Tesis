@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, traerBases, traerDrones } from '../api';
 import type { BaseAsset, Drone, Me, NovedadDron } from '../types';
+import { useAvisar } from './AvisosFlotantes';
+import DialogoConfirmacion, { type PedidoDeConfirmacion } from './DialogoConfirmacion';
 import DialogoDron, { type CuerpoDron } from './DialogoDron';
+import EncabezadoDeVista from './EncabezadoDeVista';
+import { EsqueletoDeTabla, EstadoVacio } from './EstadosDeVista';
 import QrDronModal from './QrDronModal';
 
 /** Primeros 6 y últimos 4: alcanza para reconocer el dron sin volcar los 32 hex. */
@@ -51,8 +55,10 @@ export default function DronesView({ me, novedad = null }: PropsDronesView) {
   const [verEliminados, setVerEliminados] = useState(false);
   const [dialogo, setDialogo] = useState<Dialogo>(undefined);
   const [qr, setQr] = useState<Drone | null>(null);
+  const [aConfirmar, setAConfirmar] = useState<PedidoDeConfirmacion | null>(null);
   const [copiado, setCopiado] = useState('');
   const temporizador = useRef<ReturnType<typeof setTimeout>>();
+  const avisar = useAvisar();
 
   const esSupervisor = me.role === 'supervisor' || me.role === 'admin';
   const puedeDarDeAlta = esSupervisor || me.role === 'field_operator';
@@ -96,17 +102,70 @@ export default function DronesView({ me, novedad = null }: PropsDronesView) {
 
   /**
    * Las acciones de la fila (interruptor, baja, restauración) devuelven la
-   * ficha ya actualizada, así que no hay que recargar. Su error va arriba de
-   * la tabla: no hay ningún diálogo abierto donde mostrarlo.
+   * ficha ya actualizada, así que no hay que recargar. Las que no preguntan
+   * (restaurar, volver a poner operativo) dejan su error arriba de la tabla:
+   * no hay ningún diálogo abierto donde mostrarlo.
    */
-  async function accion(fn: () => Promise<Drone>) {
+  async function accion(fn: () => Promise<Drone>, aviso: (ficha: Drone) => string) {
     setError('');
     try {
       const ficha = await fn();
       setDrones((prev) => upsert(prev, ficha));
+      avisar(aviso(ficha));
     } catch (e) {
       setError(textoError(e));
     }
+  }
+
+  /**
+   * Lo mismo para las que pasan por la confirmación: el error SUBE, para que
+   * el diálogo lo muestre adentro y siga abierto. Tragárselo acá cerraría el
+   * diálogo como si hubiera salido bien.
+   */
+  function confirmada(fn: () => Promise<Drone>, aviso: (ficha: Drone) => string) {
+    return async () => {
+      const ficha = await fn();
+      setDrones((prev) => upsert(prev, ficha));
+      avisar(aviso(ficha));
+    };
+  }
+
+  /**
+   * Apagar un dron no es un dato más de la ficha: el Comando Central lo
+   * desconecta en el acto y le suelta el control a quien lo tenga, aunque esté
+   * en el aire. Por eso apagar pregunta y encender no.
+   */
+  function alternarOperativo(d: Drone) {
+    const cambiar = () =>
+      api<Drone>(`/drones/${d.hash}`, { method: 'PATCH', body: JSON.stringify({ active: !d.active }) });
+    if (!d.active) {
+      void accion(cambiar, (f) => `${f.displayName} quedó operativo.`);
+      return;
+    }
+    setAConfirmar({
+      titulo: `Marcar a ${d.displayName} como no operativo`,
+      consecuencia:
+        'El dron se desconecta del Comando Central en el acto y, si alguien lo está piloteando, pierde el control.',
+      detalle: 'No va a poder volver a conectarse hasta que lo marques operativo otra vez.',
+      confirmar: 'Marcar no operativo',
+      enCurso: 'Guardando…',
+      accion: confirmada(cambiar, (f) => `${f.displayName} quedó no operativo.`),
+    });
+  }
+
+  function pedirBaja(d: Drone) {
+    setAConfirmar({
+      titulo: `Eliminar el dron ${d.displayName}`,
+      subtitulo: 'La baja se puede deshacer',
+      consecuencia: 'El dron se desconecta en el acto y sale de la operación; si alguien lo está piloteando, pierde el control.',
+      detalle: 'Un supervisor lo puede restaurar después desde «Ver eliminados», con el mismo QR.',
+      confirmar: 'Eliminar',
+      enCurso: 'Eliminando…',
+      accion: confirmada(
+        () => api<Drone>(`/drones/${d.hash}`, { method: 'DELETE' }),
+        (f) => `Dron ${f.displayName} eliminado.`,
+      ),
+    });
   }
 
   async function copiar(hash: string) {
@@ -136,11 +195,13 @@ export default function DronesView({ me, novedad = null }: PropsDronesView) {
       const ficha = await api<Drone>(`/drones/${dialogo.hash}`, { method: 'PATCH', body });
       setDrones((prev) => upsert(prev, ficha));
       setDialogo(undefined);
+      avisar(`Cambios de ${ficha.displayName} guardados.`);
       return;
     }
     const ficha = await api<Drone>('/drones', { method: 'POST', body });
     setDrones((prev) => upsert(prev, ficha));
     setDialogo(undefined);
+    avisar(`Dron ${ficha.displayName} dado de alta.`);
     // El sticker se abre solo: sin QR el dron recién dado de alta no se puede emparejar.
     setQr(ficha);
   }
@@ -149,50 +210,55 @@ export default function DronesView({ me, novedad = null }: PropsDronesView) {
 
   return (
     <main className="page-main">
+      <EncabezadoDeVista
+        titulo="Drones"
+        opciones={
+          esSupervisor && (
+            // El rótulo no cambia al apretarlo: el estado lo dice aria-pressed
+            // (y el filo dorado). Antes pasaba a "Ocultar eliminados", el botón
+            // cambiaba de ancho bajo el mouse y el lector leía otro control.
+            <button
+              type="button"
+              className={`toggle-eliminados${verEliminados ? ' activo' : ''}`}
+              aria-pressed={verEliminados}
+              onClick={() => setVerEliminados((v) => !v)}
+            >
+              Ver eliminados
+            </button>
+          )
+        }
+        accion={
+          puedeDarDeAlta && (
+            <button type="button" className="primario" onClick={() => setDialogo(null)}>
+              Nuevo dron
+            </button>
+          )
+        }
+      />
+
+      {error && (
+        <p className="aviso malo" role="alert">
+          {error}
+        </p>
+      )}
+
       <section className="card">
-        <div className="log-head">
-          <h2>Drones</h2>
-          <div className="barra-acciones">
-            {esSupervisor && (
-              <button
-                type="button"
-                className={`toggle-eliminados${verEliminados ? ' activo' : ''}`}
-                aria-pressed={verEliminados}
-                onClick={() => setVerEliminados((v) => !v)}
-              >
-                {verEliminados ? 'Ocultar eliminados' : 'Ver eliminados'}
-              </button>
-            )}
-            {puedeDarDeAlta && (
-              <button type="button" className="primario chico" onClick={() => setDialogo(null)}>
-                Nuevo dron
-              </button>
-            )}
-          </div>
-        </div>
-
-        {error && (
-          <p className="aviso malo" role="alert">
-            {error}
-          </p>
-        )}
-
         {/* Mientras el pedido viaja no se puede afirmar que no haya drones: ese
             cartel es justo el que empuja a dar de alta uno que ya existe, y el
             alta genera un hash nuevo, o sea un activo duplicado con su propio QR. */}
-        {cargando && visibles.length === 0 && <p className="vacio">Trayendo los drones…</p>}
+        {cargando && visibles.length === 0 && <EsqueletoDeTabla texto="Trayendo los drones…" />}
         {!cargando && !error && visibles.length === 0 && (
-          <div className="vacio-guia">
-            <p className="vacio">Todavía no hay drones dados de alta.</p>
-            <p className="muted">
-              {puedeDarDeAlta
-                ? 'Con «Nuevo dron» se da de alta y sale su sticker con el QR, que la app escanea para emparejarse.'
-                : 'Cuando un supervisor o un operador de campo dé de alta uno, va a aparecer acá.'}
-            </p>
-          </div>
+          <EstadoVacio titulo="Todavía no hay drones dados de alta.">
+            {puedeDarDeAlta
+              ? 'Con «Nuevo dron» se da de alta y sale su sticker con el QR, que la app escanea para emparejarse.'
+              : 'Cuando un supervisor o un operador de campo dé de alta uno, va a aparecer acá.'}
+          </EstadoVacio>
         )}
         {visibles.length > 0 && (
-          <div className="tabla-envoltorio">
+          // Con la lista a la vista, una recarga (el interruptor de eliminados)
+          // no la saca: la apaga un poco mientras llega la nueva, y así la
+          // tabla no salta a un cartel y de vuelta.
+          <div className="tabla-envoltorio" aria-busy={cargando || undefined}>
             <table className="tabla tabla-gestion">
               <thead>
                 <tr>
@@ -235,14 +301,7 @@ export default function DronesView({ me, novedad = null }: PropsDronesView) {
                               type="checkbox"
                               checked={d.active}
                               aria-label={`Dron ${d.displayName} operativo`}
-                              onChange={() =>
-                                accion(() =>
-                                  api<Drone>(`/drones/${d.hash}`, {
-                                    method: 'PATCH',
-                                    body: JSON.stringify({ active: !d.active }),
-                                  }),
-                                )
-                              }
+                              onChange={() => alternarOperativo(d)}
                             />
                             <span className="switch-pista" />
                             <span className="switch-texto">{d.active ? 'Operativo' : 'No operativo'}</span>
@@ -265,7 +324,12 @@ export default function DronesView({ me, novedad = null }: PropsDronesView) {
                             <button
                               type="button"
                               className="chico"
-                              onClick={() => accion(() => api<Drone>(`/drones/${d.hash}/restore`, { method: 'POST' }))}
+                              onClick={() =>
+                                accion(
+                                  () => api<Drone>(`/drones/${d.hash}/restore`, { method: 'POST' }),
+                                  (f) => `Dron ${f.displayName} restaurado.`,
+                                )
+                              }
                             >
                               Restaurar
                             </button>
@@ -280,14 +344,7 @@ export default function DronesView({ me, novedad = null }: PropsDronesView) {
                                 Ver QR
                               </button>
                               {esSupervisor && (
-                                <button
-                                  type="button"
-                                  className="chico dismiss"
-                                  onClick={() =>
-                                    confirm(`¿Eliminar el dron "${d.displayName}"? Se puede restaurar después.`) &&
-                                    accion(() => api<Drone>(`/drones/${d.hash}`, { method: 'DELETE' }))
-                                  }
-                                >
+                                <button type="button" className="chico dismiss" onClick={() => pedirBaja(d)}>
                                   Eliminar
                                 </button>
                               )}
@@ -309,6 +366,8 @@ export default function DronesView({ me, novedad = null }: PropsDronesView) {
       )}
 
       {qr && <QrDronModal dron={qr} onCerrar={() => setQr(null)} />}
+
+      {aConfirmar && <DialogoConfirmacion pedido={aConfirmar} onCerrar={() => setAConfirmar(null)} />}
     </main>
   );
 }

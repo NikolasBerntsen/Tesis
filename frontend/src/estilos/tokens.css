@@ -198,7 +198,41 @@
   --versalita: .09em; /* letter-spacing de las etiquetas en versalitas */
 
   /* --- Movimiento ------------------------------------------------------- */
-  --transicion: 160ms cubic-bezier(.4, 0, .2, 1);
+  /* Una sola duración para todo lo que responde a la mano (hover, presión,
+     interruptores, salida de un diálogo) y otra apenas más larga para lo que
+     entra a la pantalla (un diálogo, una vista, un aviso). Si cada pieza elige
+     la suya, la consola se siente despareja aunque nadie sepa decir por qué.
+     Modal.tsx repite la de salida en SALIDA_MS: si cambia acá, cambia allá. */
+  --duracion: 160ms;
+  --duracion-entrada: 200ms;
+  --curva: cubic-bezier(.4, 0, .2, 1);
+  --curva-entrada: cubic-bezier(.2, .8, .3, 1);
+  --transicion: var(--duracion) var(--curva);
+  /* El brillo que recorre el esqueleto mientras carga una tabla: lento a
+     propósito, para que se lea como "esperando" y no como una alarma. */
+  --duracion-brillo: 1400ms;
+  /* Lo que tarda en irse solo el aviso de "guardado": alcanza para leer una
+     línea sin que quede tapando la esquina. */
+  --duracion-aviso: 4500ms;
+
+  /* --- Controles -------------------------------------------------------- */
+  /* Alto común de lo que vive en la cabecera de una vista (buscador, "Ver
+     eliminados", "Nuevo …", el ícono de actualizar): antes cada uno traía su
+     relleno y en la misma fila había tres altos distintos. Es el mismo del
+     .icono-boton redondo, que no se puede estirar. */
+  --alto-control: 34px;
+  /* Ancho mínimo del botón de la acción en el pie de un diálogo: "Guardar
+     cambios" → "Guardando…" o "Eliminar" → "Eliminando…" no cambian el ancho
+     del botón bajo el dedo mientras el pedido viaja. */
+  --ancho-accion: 9.5rem;
+  /* El alto de una fila de tabla (relleno de 11px + un renglón): el esqueleto
+     de carga usa el mismo, así la tabla que llega no empuja nada. */
+  --alto-fila: 46px;
+
+  /* El esqueleto de carga: una franja hundida con una luz que la recorre. En
+     mármol la luz es la piedra más clara; en obsidiana, la pulida. */
+  --esqueleto: var(--marmol-2);
+  --esqueleto-brillo: var(--marmol-0);
 
   /* --- Texturas y ornamento --------------------------------------------- */
   /* Veta: manchas grandes y blandas de ruido fractal (baseFrequency muy baja).
@@ -290,6 +324,10 @@
   --sombra-cornisa: 0 1px 0 var(--realce-70), 0 14px 30px -22px rgba(0, 0, 0, .7);
 
   --velo-modal: rgba(8, 7, 5, .68);
+
+  /* Sobre obsidiana el mármol 0 es MÁS oscuro que el hueco: la luz del
+     esqueleto tiene que salir de la piedra pulida, que es la que se aclara. */
+  --esqueleto-brillo: var(--marmol-3);
 
   --cara-boton: linear-gradient(180deg, #2A2419 0%, var(--marmol-2) 100%);
   /* Bajo el mouse la piedra se levanta un escalón, no se blanquea. */

@@ -3,8 +3,13 @@ import L from 'leaflet';
 import { LEJOS_M, api, distanciaM, rutasDeBase, traerBases, traerRutas } from '../api';
 import { CENTRO_POR_DEFECTO, iconoBase, useFondo, vestirAtribucion } from '../mapa';
 import type { BaseAsset, Me, PatrolRoute } from '../types';
+import { useAvisar } from './AvisosFlotantes';
 import ConmutadorDeFondo from './ConmutadorDeFondo';
+import DialogoConfirmacion, { type PedidoDeConfirmacion } from './DialogoConfirmacion';
 import EditorDeRuta from './EditorDeRuta';
+import EncabezadoDeVista from './EncabezadoDeVista';
+import { EsqueletoDeTabla, EstadoVacio } from './EstadosDeVista';
+import IconoCerrar from './IconoCerrar';
 import Modal from './Modal';
 
 type Formulario = { name: string; lat: string; lon: string };
@@ -17,6 +22,16 @@ function coordValida(v: string, tope: number): boolean {
 
 function textoError(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * El botón que guarda la asignación dice cuántas rutas quedan. Antes era
+ * "Asignar 2 ruta(s)" y "Asignar sin rutas": el paréntesis no es castellano y
+ * lo segundo no se entiende sin pensarlo.
+ */
+function rotuloDeAsignacion(cantidad: number): string {
+  if (cantidad === 0) return 'Guardar sin rutas';
+  return cantidad === 1 ? 'Asignar 1 ruta' : `Asignar ${cantidad} rutas`;
 }
 
 /**
@@ -104,7 +119,11 @@ export default function BasesView({ me }: { me: Me }) {
   const [elegidas, setElegidas] = useState<number[]>([]);
   const [busqueda, setBusqueda] = useState('');
   const [editorAbierto, setEditorAbierto] = useState(false);
-  const [aConfirmar, setAConfirmar] = useState<{ ruta: PatrolRoute; metros: number } | null>(null);
+  const [lejana, setLejana] = useState<{ ruta: PatrolRoute; metros: number } | null>(null);
+  // Lo que borra o apaga una base pregunta antes: eliminar se hacía con un
+  // solo clic y sin vuelta atrás a la vista.
+  const [pedido, setPedido] = useState<PedidoDeConfirmacion | null>(null);
+  const avisar = useAvisar();
 
   const esSupervisor = me.role === 'supervisor' || me.role === 'admin';
   const puedeCrear = esSupervisor || me.role === 'field_operator';
@@ -124,16 +143,60 @@ export default function BasesView({ me }: { me: Me }) {
     void cargar();
   }, [verEliminadas]);
 
-  async function accion(fn: () => Promise<unknown>) {
+  async function accion(fn: () => Promise<unknown>, aviso: string) {
     setError('');
     try {
       await fn();
+      avisar(aviso);
       await cargar();
       return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       return false;
     }
+  }
+
+  /**
+   * Para lo que pasa por la confirmación: el error sube al diálogo, que lo
+   * muestra adentro y no se cierra. La lista se recarga sin esperarla: el
+   * diálogo se cierra apenas el backend dice que sí.
+   */
+  function confirmada(fn: () => Promise<unknown>, aviso: string) {
+    return async () => {
+      await fn();
+      avisar(aviso);
+      void cargar();
+    };
+  }
+
+  function pedirBaja(b: BaseAsset) {
+    setPedido({
+      titulo: `Eliminar la base ${b.name}`,
+      subtitulo: 'La baja se puede deshacer',
+      consecuencia: 'La base sale del catálogo y ya no se le puede asignar a ningún dron.',
+      detalle:
+        'Si todavía es la base de algún dron, el Comando Central no la deja eliminar: primero hay que reasignarlos. Un supervisor la puede restaurar desde «Ver eliminadas».',
+      confirmar: 'Eliminar',
+      enCurso: 'Eliminando…',
+      accion: confirmada(() => api(`/bases/${b.id}`, { method: 'DELETE' }), `Base ${b.name} eliminada.`),
+    });
+  }
+
+  /** Desactivar pregunta (deja de poder asignarse); activar no rompe nada. */
+  function alternarActiva(b: BaseAsset) {
+    const cambiar = () => api(`/bases/${b.id}`, { method: 'PATCH', body: JSON.stringify({ active: !b.active }) });
+    if (!b.active) {
+      void accion(cambiar, `Base ${b.name} activada.`);
+      return;
+    }
+    setPedido({
+      titulo: `Desactivar la base ${b.name}`,
+      consecuencia: 'Mientras esté inactiva no se le puede asignar a ningún dron. Los drones que ya la tienen la conservan.',
+      detalle: 'Se vuelve a activar desde esta misma fila.',
+      confirmar: 'Desactivar',
+      enCurso: 'Desactivando…',
+      accion: confirmada(cambiar, `Base ${b.name} desactivada.`),
+    });
   }
 
   const lat = coordValida(form.lat, 90) ? Number(form.lat) : null;
@@ -201,7 +264,7 @@ export default function BasesView({ me }: { me: Me }) {
     // Lejos de la base, el vuelo hasta el primer nodo se come la autonomía:
     // se pregunta antes de asignarla, con la distancia a la vista.
     if (metros != null && metros > LEJOS_M) {
-      setAConfirmar({ ruta, metros });
+      setLejana({ ruta, metros });
       return;
     }
     setElegidas((ids) => [...ids, ruta.id]);
@@ -271,6 +334,7 @@ export default function BasesView({ me }: { me: Me }) {
     // nacería con el botón apagado diciendo "Guardando…".
     setGuardando(false);
     setAbierto(false);
+    avisar(creada ? `Base ${creada.name} dada de alta.` : `Cambios de ${form.name.trim()} guardados.`);
     if (creada) {
       // Alta: se guarda la base y recién ahí se eligen sus rutas, que es el
       // orden en que se piensa el problema (primero dónde está, después qué
@@ -287,42 +351,52 @@ export default function BasesView({ me }: { me: Me }) {
 
   return (
     <main className="page-main">
-      <section className="card">
-        <div className="log-head">
-          <h2>Bases</h2>
-          <div className="barra-acciones">
-            {esSupervisor && (
-              <button
-                type="button"
-                className={verEliminadas ? 'toggle-eliminados activo' : 'toggle-eliminados'}
-                onClick={() => setVerEliminadas((v) => !v)}
-              >
-                {verEliminadas ? 'Ocultar eliminadas' : 'Ver eliminadas'}
-              </button>
-            )}
-            {puedeCrear && (
-              <button type="button" className="primario chico" onClick={abrirAlta}>
-                Nueva base
-              </button>
-            )}
-          </div>
-        </div>
+      <EncabezadoDeVista
+        titulo="Bases"
+        opciones={
+          esSupervisor && (
+            // Rótulo fijo y aria-pressed, como en Drones y Usuarios: antes este
+            // era el único interruptor que no decía si estaba apretado.
+            <button
+              type="button"
+              className={verEliminadas ? 'toggle-eliminados activo' : 'toggle-eliminados'}
+              aria-pressed={verEliminadas}
+              onClick={() => setVerEliminadas((v) => !v)}
+            >
+              Ver eliminadas
+            </button>
+          )
+        }
+        accion={
+          puedeCrear && (
+            <button type="button" className="primario" onClick={abrirAlta}>
+              Nueva base
+            </button>
+          )
+        }
+      />
 
-        {error && <p className="aviso malo">{error}</p>}
-        {cargando && <p className="vacio">Trayendo las bases…</p>}
+      {error && (
+        <p className="aviso malo" role="alert">
+          {error}
+        </p>
+      )}
+
+      <section className="card">
+        {/* El esqueleto sólo la primera vez: después de cada acción la lista se
+            recarga, y el cartel de "Trayendo…" aparecía arriba de la tabla y
+            la empujaba para abajo y para arriba en cada clic. */}
+        {cargando && visibles.length === 0 && <EsqueletoDeTabla texto="Trayendo las bases…" />}
         {!cargando && !error && visibles.length === 0 && (
-          <div className="vacio-guia">
-            <p className="vacio">Todavía no hay bases dadas de alta.</p>
-            <p className="muted">
-              {puedeCrear
-                ? 'Con «Nueva base» la das de alta: parado en el lugar, usá tu ubicación; si no, marcá el punto en el mapa.'
-                : 'Las bases las dan de alta los operadores de campo y los supervisores; cuando haya alguna, va a aparecer acá.'}
-            </p>
-          </div>
+          <EstadoVacio titulo="Todavía no hay bases dadas de alta.">
+            {puedeCrear
+              ? 'Con «Nueva base» la das de alta: parado en el lugar, usá tu ubicación; si no, marcá el punto en el mapa.'
+              : 'Las bases las dan de alta los operadores de campo y los supervisores; cuando haya alguna, va a aparecer acá.'}
+          </EstadoVacio>
         )}
 
         {visibles.length > 0 && (
-          <div className="tabla-envoltorio">
+          <div className="tabla-envoltorio" aria-busy={cargando || undefined}>
             <table className="tabla tabla-gestion">
               <thead>
                 <tr>
@@ -356,7 +430,9 @@ export default function BasesView({ me }: { me: Me }) {
                             <button
                               type="button"
                               className="chico"
-                              onClick={() => accion(() => api(`/bases/${b.id}/restore`, { method: 'POST' }))}
+                              onClick={() =>
+                                accion(() => api(`/bases/${b.id}/restore`, { method: 'POST' }), `Base ${b.name} restaurada.`)
+                              }
                             >
                               Restaurar
                             </button>
@@ -372,22 +448,10 @@ export default function BasesView({ me }: { me: Me }) {
                               </button>
                               {esSupervisor && (
                                 <>
-                                  <button
-                                    type="button"
-                                    className="chico"
-                                    onClick={() =>
-                                      accion(() =>
-                                        api(`/bases/${b.id}`, { method: 'PATCH', body: JSON.stringify({ active: !b.active }) }),
-                                      )
-                                    }
-                                  >
+                                  <button type="button" className="chico" onClick={() => alternarActiva(b)}>
                                     {b.active ? 'Desactivar' : 'Activar'}
                                   </button>
-                                  <button
-                                    type="button"
-                                    className="chico dismiss"
-                                    onClick={() => accion(() => api(`/bases/${b.id}`, { method: 'DELETE' }))}
-                                  >
+                                  <button type="button" className="chico dismiss" onClick={() => pedirBaja(b)}>
                                     Eliminar
                                   </button>
                                 </>
@@ -423,7 +487,7 @@ export default function BasesView({ me }: { me: Me }) {
               onClick={cerrarFormulario}
               disabled={guardando}
             >
-              ×
+              <IconoCerrar />
             </button>
           </header>
           <form className="modal-formulario" onSubmit={guardar} noValidate>
@@ -505,11 +569,15 @@ export default function BasesView({ me }: { me: Me }) {
               Rutas de {asignando.name}
             </h2>
             <button type="button" className="modal-cerrar" aria-label="Cerrar" onClick={() => setAsignando(null)}>
-              ×
+              <IconoCerrar />
             </button>
           </header>
           <div className="modal-cuerpo form-base">
-            {error && <p className="aviso malo">{error}</p>}
+            {error && (
+              <p className="aviso malo" role="alert">
+                {error}
+              </p>
+            )}
             <p className="muted">
               {reciencreada ? (
                 <>
@@ -573,10 +641,10 @@ export default function BasesView({ me }: { me: Me }) {
                     body: JSON.stringify({ routeIds: elegidas }),
                   });
                   setAsignando(null);
-                })
+                }, `Rutas de ${asignando.name} guardadas.`)
               }
             >
-              Asignar {elegidas.length > 0 ? `${elegidas.length} ruta(s)` : 'sin rutas'}
+              {rotuloDeAsignacion(elegidas.length)}
             </button>
           </div>
         </Modal>
@@ -598,38 +666,30 @@ export default function BasesView({ me }: { me: Me }) {
         />
       )}
 
-      {aConfirmar && (
-        <Modal etiquetadoPor="titulo-lejos" onCerrar={() => setAConfirmar(null)}>
-          <header className="modal-cabecera">
-            <h2 className="modal-titulo" id="titulo-lejos">
-              La ruta queda lejos de la base
-            </h2>
-          </header>
-          <div className="modal-cuerpo">
-            <p>
-              El primer nodo de <strong>{aConfirmar.ruta.name}</strong> está a{' '}
-              <strong>{(aConfirmar.metros / 1000).toFixed(1)} km</strong> de la base. El dron va a gastar
-              esa ida y esa vuelta de su autonomía antes de empezar a patrullar.
-            </p>
-            <p className="muted">¿Querés asignarla igual?</p>
-          </div>
-          <footer className="modal-pie">
-            <button type="button" className="ghost" onClick={() => setAConfirmar(null)}>
-              No asignarla
-            </button>
-            <button
-              type="button"
-              className="primario"
-              onClick={() => {
-                setElegidas((ids) => [...ids, aConfirmar.ruta.id]);
-                setAConfirmar(null);
-              }}
-            >
-              Asignarla igual
-            </button>
-          </footer>
-        </Modal>
+      {/* No borra nada, pero es la misma pregunta con la misma forma: qué
+          pasa si sí, y las dos salidas dichas con su verbo. */}
+      {lejana && (
+        <DialogoConfirmacion
+          pedido={{
+            titulo: 'La ruta queda lejos de la base',
+            consecuencia: (
+              <>
+                El primer nodo de <strong>{lejana.ruta.name}</strong> está a{' '}
+                <strong>{(lejana.metros / 1000).toFixed(1)} km</strong> de la base. El dron va a gastar esa
+                ida y esa vuelta de su autonomía antes de empezar a patrullar.
+              </>
+            ),
+            detalle: '¿Querés asignarla igual?',
+            confirmar: 'Asignarla igual',
+            cancelar: 'No asignarla',
+            tono: 'primario',
+            accion: () => setElegidas((ids) => [...ids, lejana.ruta.id]),
+          }}
+          onCerrar={() => setLejana(null)}
+        />
       )}
+
+      {pedido && <DialogoConfirmacion pedido={pedido} onCerrar={() => setPedido(null)} />}
     </main>
   );
 }

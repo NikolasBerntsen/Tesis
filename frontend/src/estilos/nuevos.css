@@ -33,7 +33,7 @@
   padding: var(--e-5);
   background: var(--velo-modal);
   backdrop-filter: blur(2px);
-  animation: velo-entra 180ms ease-out;
+  animation: velo-entra var(--duracion-entrada) var(--curva);
 }
 @keyframes velo-entra { from { opacity: 0; } to { opacity: 1; } }
 
@@ -49,7 +49,7 @@
   background-color: var(--marmol-0);
   background-image: var(--piedra-cara);
   box-shadow: var(--sombra-flotante);
-  animation: caja-entra 200ms cubic-bezier(.2, .8, .3, 1);
+  animation: caja-entra var(--duracion-entrada) var(--curva-entrada);
 }
 @keyframes caja-entra {
   from { opacity: 0; transform: translateY(10px) scale(.985); }
@@ -268,8 +268,9 @@
    Agregale .girando mientras carga.
 ------------------------------------------------------------------------------ */
 .icono-boton {
-  width: 34px;
-  height: 34px;
+  /* El mismo alto que el resto de los controles de una cabecera de vista. */
+  width: var(--alto-control);
+  height: var(--alto-control);
   padding: 0;
   display: inline-grid;
   place-items: center;
@@ -741,7 +742,11 @@
   display: inline-flex;
   align-items: center;
   gap: var(--e-2);
-  padding: 6px 9px;
+  /* Mide lo mismo que el botón redondo del tema que tiene al lado: antes era
+     una tecla rectangular de otro alto entre dos piezas redondas. */
+  min-height: var(--alto-control);
+  padding: 0 var(--e-3);
+  border-radius: 999px;
 }
 /* Con pendientes el botón se enciende: es la única pieza de la barra que pide
    atención por sí sola. */
@@ -768,6 +773,19 @@
   background-color: var(--marmol-0);
   background-image: var(--piedra-cara);
   box-shadow: var(--sombra-flotante);
+  /* Se despliega desde la campana, no aparece de golpe. Con movimiento
+     reducido no se anima: lo apaga el bloque del final de pulido.css. */
+  transform-origin: top right;
+  animation: panel-entra var(--duracion-entrada) var(--curva-entrada);
+}
+@keyframes panel-entra {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+/* El vacío del desplegable va en el cuerpo del panel, no en el de una vista. */
+.campana-panel .vacio {
+  padding: var(--e-4) var(--e-3);
+  font-size: var(--txt-base);
 }
 .campana-cabecera { display: flex; justify-content: space-between; align-items: baseline; }
 .campana-alerta {

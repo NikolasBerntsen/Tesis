@@ -1,0 +1,354 @@
+/* ============================================================================
+   PULIDO — las piezas que todas las vistas comparten para leerse como una sola
+   consola: la cabecera de vista, la confirmación, el aviso de "guardado", el
+   esqueleto de carga, el movimiento y el armado en pantallas medianas.
+   Cada bloque documenta el marcado que espera. Todo sale de los tokens.
+   ========================================================================= */
+
+/* ---------------------------------------------------------------------------
+   CABECERA DE VISTA (EncabezadoDeVista.tsx)
+   <header class="vista-cabecera">
+     <div class="vista-encabezado"><h2 class="vista-titulo"/><p class="vista-subtitulo"/></div>
+     <div class="vista-filtros"> buscador </div>
+     <div class="vista-acciones"><div class="vista-opciones"> … </div> <button class="primario"/></div>
+   </header>
+   Título a la izquierda, filtros al medio, opciones y acción principal a la
+   derecha. La línea grabada de abajo es la de `.card > h2`, con su tramo de
+   oro: la cabecera se lee como el título de la página entera.
+------------------------------------------------------------------------------ */
+.vista-cabecera {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: 'titulo filtros acciones';
+  align-items: center;
+  gap: var(--e-3) var(--e-5);
+  padding-bottom: var(--e-3);
+  border-bottom: 1px solid var(--veta);
+}
+.vista-cabecera::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: 38px;
+  height: 1px;
+  background: linear-gradient(90deg, var(--oro-oscuro) 0%, var(--oro-claro) 100%);
+}
+.vista-encabezado {
+  grid-area: titulo;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--e-1) var(--e-3);
+  min-width: 0;
+}
+.vista-titulo {
+  margin: 0;
+  font-size: var(--txt-lg);
+}
+.vista-subtitulo {
+  margin: 0;
+  font-size: var(--txt-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  color: var(--tinta-media);
+}
+.vista-filtros {
+  grid-area: filtros;
+  justify-self: center;
+  display: flex;
+  align-items: center;
+  gap: var(--e-3);
+  width: min(100%, 440px);
+}
+.vista-filtros .buscador {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: none;
+}
+.vista-acciones {
+  grid-area: acciones;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--e-3);
+}
+.vista-opciones {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--e-2);
+}
+
+/* Un solo alto para todo lo que vive en la cabecera: antes "Ver eliminados",
+   "Nuevo dron" y el buscador medían 27, 25 y 35 px en la misma fila. El ícono
+   redondo ya mide --alto-control y no se toca. */
+.vista-cabecera button:not(.icono-boton) {
+  min-height: var(--alto-control);
+  padding-block: 0;
+  padding-inline: 14px;
+  font-size: var(--txt-sm);
+}
+.vista-cabecera input,
+.vista-cabecera select {
+  height: var(--alto-control);
+  padding-block: 0;
+}
+
+/* "Por página" con su selector en la misma línea. */
+.selector-en-linea {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--e-2);
+}
+.selector-en-linea select {
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+}
+
+/* En una tableta el buscador baja a su propia fila, a todo el ancho. */
+@media (max-width: 900px) {
+  .vista-cabecera {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'titulo acciones'
+      'filtros filtros';
+  }
+  .vista-filtros {
+    justify-self: stretch;
+    width: auto;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   CONFIRMACIÓN (DialogoConfirmacion.tsx)
+   Una pregunta de dos renglones no necesita la caja de 720 px de un
+   formulario: angosta, el texto se lee de un golpe y los botones quedan
+   cerca de la consecuencia que se acaba de leer.
+------------------------------------------------------------------------------ */
+.modal-caja:has(> .confirmacion-cuerpo) {
+  width: min(540px, 100%);
+}
+.confirmacion-cuerpo > p { margin: 0; }
+
+/* La acción del pie de un diálogo no cambia de ancho mientras el pedido viaja
+   ("Guardar cambios" → "Guardando…"): el botón se quedaba más chico bajo el
+   dedo y el pie entero se corría. "Cancelar" queda a su medida. */
+.modal-pie > :is(button.primario, button[type='submit'], button.dismiss, button.resume) {
+  min-width: var(--ancho-accion);
+}
+/* Lo mismo para "Usar mi ubicación" → "Ubicando…" en el alta de una base. */
+.fila-coords > button { min-width: 10.5rem; }
+
+/* ---------------------------------------------------------------------------
+   AVISOS FLOTANTES (AvisosFlotantes.tsx)
+   <div class="avisos-flotantes" role="status"><p class="aviso-flotante">…</p></div>
+   La confirmación de que algo salió bien: abajo a la derecha, chica, sin
+   botones, y se va sola. Por encima del velo de los diálogos (el sticker que
+   se abre después de un alta no la tapa) pero sin recibir el mouse: nunca se
+   interpone entre el operador y un botón.
+------------------------------------------------------------------------------ */
+.avisos-flotantes {
+  position: fixed;
+  right: var(--e-5);
+  bottom: var(--e-5);
+  z-index: 2100;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--e-2);
+  max-width: min(420px, calc(100vw - var(--e-4) * 2));
+  pointer-events: none;
+}
+.aviso-flotante {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--e-3);
+  padding: var(--e-3) var(--e-4);
+  border: 1px solid var(--veta);
+  border-radius: var(--radio);
+  background-color: var(--marmol-0);
+  background-image: var(--piedra-cara);
+  /* El filo de oro a la izquierda, como la fila seleccionada. */
+  box-shadow: inset var(--filo) 0 0 0 var(--oro), var(--sombra-flotante);
+  color: var(--tinta);
+  font-size: var(--txt-sm);
+  line-height: var(--interlinea-titulo);
+  animation:
+    aviso-entra var(--duracion-entrada) var(--curva-entrada),
+    aviso-sale var(--duracion) var(--curva) calc(var(--duracion-aviso) - var(--duracion)) forwards;
+}
+/* El punto verde del "listo": el mismo de .estado.ok. */
+.aviso-flotante::before {
+  content: '';
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok-texto);
+  box-shadow: 0 0 0 2px var(--ok-velo);
+}
+@keyframes aviso-entra {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes aviso-sale { to { opacity: 0; } }
+@media (max-width: 640px) {
+  .avisos-flotantes { right: var(--e-4); bottom: var(--e-4); }
+}
+
+/* ---------------------------------------------------------------------------
+   ESQUELETO DE CARGA (EstadosDeVista.tsx)
+   <div class="esqueleto" role="status">
+     <span class="esqueleto-rotulo">Trayendo los drones…</span>
+     <div class="esqueleto-filas"><span class="esqueleto-fila"/> …</div>
+   </div>
+   Ocupa el lugar de la tabla: el rótulo va donde va el encabezado (mismo
+   relleno, misma línea de veta fuerte) y cada franja mide una fila.
+------------------------------------------------------------------------------ */
+.esqueleto {
+  display: flex;
+  flex-direction: column;
+}
+.esqueleto-rotulo {
+  padding: 11px 12px var(--e-2);
+  border-bottom: 1px solid var(--veta-fuerte);
+  font-size: var(--txt-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  color: var(--tinta-media);
+}
+.esqueleto-filas {
+  display: flex;
+  flex-direction: column;
+}
+.esqueleto-fila {
+  display: flex;
+  align-items: center;
+  height: var(--alto-fila);
+  padding: 0 12px;
+  border-bottom: 1px solid var(--veta);
+}
+.esqueleto-fila:last-child { border-bottom: none; }
+.esqueleto-fila::before {
+  content: '';
+  display: block;
+  width: 72%;
+  height: 10px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    var(--esqueleto) 0%,
+    var(--esqueleto) 38%,
+    var(--esqueleto-brillo) 50%,
+    var(--esqueleto) 62%,
+    var(--esqueleto) 100%
+  );
+  background-size: 300% 100%;
+  box-shadow: var(--sombra-hundida);
+  animation: esqueleto-brillo var(--duracion-brillo) ease-in-out infinite;
+}
+/* Anchos distintos: franjas iguales se leen como un dibujo, no como datos. */
+.esqueleto-fila:nth-child(2)::before { width: 58%; }
+.esqueleto-fila:nth-child(3)::before { width: 66%; }
+.esqueleto-fila:nth-child(4)::before { width: 48%; }
+.esqueleto-fila:nth-child(5)::before { width: 62%; }
+@keyframes esqueleto-brillo {
+  from { background-position: 100% 0; }
+  to { background-position: 0 0; }
+}
+
+/* Una recarga con la lista ya a la vista no la saca: la apaga un poco
+   mientras llega la nueva. Así no salta a un cartel y de vuelta. */
+.tabla-envoltorio,
+.vista-alta-cuerpo > .log {
+  transition: opacity var(--transicion);
+}
+.tabla-envoltorio[aria-busy='true'],
+.vista-alta-cuerpo[aria-busy='true'] > .log {
+  opacity: .6;
+}
+
+/* ---------------------------------------------------------------------------
+   PIEZAS CHICAS DE LAS TABLAS
+------------------------------------------------------------------------------ */
+/* El estado y su botón en la misma celda ("Autorizado · Suspender"). */
+.celda-con-accion {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--e-1) var(--e-2);
+}
+
+/* El nombre de la ruta es el botón que la elige: se lee como texto, se
+   subraya en oro al pasar, y con el teclado lleva el anillo de siempre.
+   Tiene que sacarse de encima todo lo que `button` le pone, en todos sus
+   estados, igual que `.enlace`. */
+.fila-elegir,
+.fila-elegir:hover:not(:disabled),
+.fila-elegir:active:not(:disabled) {
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  transform: none;
+}
+.fila-elegir {
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 3px;
+  transition: text-decoration-color var(--transicion);
+}
+.fila-elegir:hover:not(:disabled) { text-decoration-color: var(--oro); }
+
+/* ---------------------------------------------------------------------------
+   MOVIMIENTO ENTRE VISTAS
+   Cambiar de sección, abrir un dron o pasar de cámaras a mapa reemplaza el
+   contenido entero: sin transición era un corte seco, con la página en
+   blanco un cuadro. Entra con un fundido corto desde la piedra, sin
+   desplazamiento: el mapa de Leaflet mide su caja al nacer y no conviene
+   moverla mientras tanto.
+------------------------------------------------------------------------------ */
+.page-main,
+.dashboard-main,
+.detail-main,
+.dashboard-main > .camera-grid,
+.dashboard-main > .card {
+  animation: vista-entra var(--duracion-entrada) var(--curva);
+}
+@keyframes vista-entra {
+  from { opacity: .4; }
+  to { opacity: 1; }
+}
+
+/* Sin movimiento, nada se desliza ni se funde ni brilla: base.css ya acorta
+   todo, y acá se apaga del todo para que no quede ni un cuadro de nada. El
+   aviso igual se va solo: lo saca el reloj de AvisosFlotantes.tsx. */
+@media (prefers-reduced-motion: reduce) {
+  .page-main,
+  .dashboard-main,
+  .detail-main,
+  .dashboard-main > .camera-grid,
+  .dashboard-main > .card,
+  .campana-panel,
+  .aviso-flotante,
+  .esqueleto-fila::before {
+    animation: none;
+  }
+  .tabla-envoltorio,
+  .vista-alta-cuerpo > .log,
+  .fila-elegir {
+    transition: none;
+  }
+}

@@ -121,11 +121,16 @@ samp {
 .accent { color: var(--oro-texto); }
 
 /* --- Foco: SIEMPRE visible, anillo dorado -------------------------------- */
+/* El anillo sigue la forma del control (el outline respeta su border-radius):
+   antes esta regla le ponía un radio propio a todo lo enfocado, y los botones
+   redondos —la campana, el tema, la cruz de los diálogos, las flechas del
+   carrusel— se volvían cuadrados justo al llegarles con el tabulador. Sólo los
+   enlaces, que no tienen radio, reciben uno. */
 :focus-visible {
   outline: var(--filo) solid var(--anillo-foco);
   outline-offset: 2px;
-  border-radius: var(--radio-chico);
 }
+a:focus-visible { border-radius: var(--radio-sello); }
 /* Nada de outline:none sin reemplazo: si algún control lo apaga, este anillo
    de respaldo lo vuelve a mostrar. */
 :focus:not(:focus-visible) { outline: none; }

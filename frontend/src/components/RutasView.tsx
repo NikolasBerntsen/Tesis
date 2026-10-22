@@ -3,8 +3,12 @@ import L from 'leaflet';
 import { api, traerRutas } from '../api';
 import { CENTRO_POR_DEFECTO, TRAZO, useFondo, vestirAtribucion } from '../mapa';
 import type { Me, PatrolRoute } from '../types';
+import { useAvisar } from './AvisosFlotantes';
 import ConmutadorDeFondo from './ConmutadorDeFondo';
+import DialogoConfirmacion, { type PedidoDeConfirmacion } from './DialogoConfirmacion';
 import EditorDeRuta from './EditorDeRuta';
+import EncabezadoDeVista from './EncabezadoDeVista';
+import { EsqueletoDeTabla, EstadoVacio } from './EstadosDeVista';
 
 /** Mapa de sólo lectura con el recorrido de la ruta elegida. */
 function MapaDeRuta({ ruta }: { ruta: PatrolRoute | null }) {
@@ -71,6 +75,9 @@ export default function RutasView({ me }: { me: Me }) {
   const [error, setError] = useState('');
   const [verEliminadas, setVerEliminadas] = useState(false);
   const [editando, setEditando] = useState<PatrolRoute | null | undefined>(undefined);
+  // Eliminar una ruta era un solo clic sin pregunta, al lado de "Editar".
+  const [pedido, setPedido] = useState<PedidoDeConfirmacion | null>(null);
+  const avisar = useAvisar();
 
   const esSupervisor = me.role === 'supervisor' || me.role === 'admin';
   const puedeCrear = esSupervisor || me.role === 'field_operator';
@@ -92,10 +99,11 @@ export default function RutasView({ me }: { me: Me }) {
     void cargar();
   }, [verEliminadas]);
 
-  async function accion(fn: () => Promise<unknown>) {
+  async function accion(fn: () => Promise<unknown>, aviso: string) {
     setError('');
     try {
       await fn();
+      avisar(aviso);
       await cargar();
       return true;
     } catch (e) {
@@ -104,46 +112,69 @@ export default function RutasView({ me }: { me: Me }) {
     }
   }
 
+  function pedirBaja(r: PatrolRoute) {
+    setPedido({
+      titulo: `Eliminar la ruta ${r.name}`,
+      subtitulo: 'La baja se puede deshacer',
+      consecuencia: 'La ruta sale del catálogo y deja de ofrecerse para empezar un patrullaje.',
+      detalle: 'Un supervisor la puede restaurar desde «Ver eliminadas», con sus nodos tal como estaban.',
+      confirmar: 'Eliminar',
+      enCurso: 'Eliminando…',
+      // El error sube al diálogo; la lista se recarga sin hacerlo esperar.
+      accion: async () => {
+        await api(`/routes/${r.id}`, { method: 'DELETE' });
+        avisar(`Ruta ${r.name} eliminada.`);
+        void cargar();
+      },
+    });
+  }
+
   return (
     <main className="page-main">
-      <section className="card">
-        <div className="log-head">
-          <h2>Rutas de patrullaje</h2>
-          <div className="barra-acciones">
-            {esSupervisor && (
-              <button
-                type="button"
-                className={verEliminadas ? 'toggle-eliminados activo' : 'toggle-eliminados'}
-                aria-pressed={verEliminadas}
-                onClick={() => setVerEliminadas((v) => !v)}
-              >
-                {verEliminadas ? 'Ocultar eliminadas' : 'Ver eliminadas'}
-              </button>
-            )}
-            {puedeCrear && (
-              <button type="button" className="primario chico" onClick={() => setEditando(null)}>
-                Nueva ruta
-              </button>
-            )}
-          </div>
-        </div>
+      <EncabezadoDeVista
+        titulo="Rutas de patrullaje"
+        opciones={
+          esSupervisor && (
+            <button
+              type="button"
+              className={verEliminadas ? 'toggle-eliminados activo' : 'toggle-eliminados'}
+              aria-pressed={verEliminadas}
+              onClick={() => setVerEliminadas((v) => !v)}
+            >
+              Ver eliminadas
+            </button>
+          )
+        }
+        accion={
+          puedeCrear && (
+            <button type="button" className="primario" onClick={() => setEditando(null)}>
+              Nueva ruta
+            </button>
+          )
+        }
+      />
 
-        {error && <p className="aviso malo">{error}</p>}
-        {cargando && <p className="vacio">Trayendo las rutas…</p>}
+      {error && (
+        <p className="aviso malo" role="alert">
+          {error}
+        </p>
+      )}
+
+      <section className="card">
+        {/* El esqueleto sólo hasta que llega la primera lista: después, una
+            recarga apaga la tabla un momento en vez de empujarla con un cartel. */}
+        {cargando && rutas.length === 0 && <EsqueletoDeTabla texto="Trayendo las rutas…" />}
         {!cargando && !error && rutas.length === 0 && (
-          <div className="vacio-guia">
-            <p className="vacio">Todavía no hay rutas de patrullaje.</p>
-            <p className="muted">
-              {puedeCrear
-                ? 'Con «Nueva ruta» marcás los nodos en el mapa, en el orden en que el dron los tiene que recorrer.'
-                : 'Las rutas las dibujan los operadores de campo y los supervisores; cuando haya alguna, va a aparecer acá.'}
-            </p>
-          </div>
+          <EstadoVacio titulo="Todavía no hay rutas de patrullaje.">
+            {puedeCrear
+              ? 'Con «Nueva ruta» marcás los nodos en el mapa, en el orden en que el dron los tiene que recorrer.'
+              : 'Las rutas las dibujan los operadores de campo y los supervisores; cuando haya alguna, va a aparecer acá.'}
+          </EstadoVacio>
         )}
 
         {rutas.length > 0 && (
           <div className="rutas-cuerpo">
-            <div className="tabla-envoltorio">
+            <div className="tabla-envoltorio" aria-busy={cargando || undefined}>
               <table className="tabla tabla-gestion">
                 <thead>
                   <tr>
@@ -160,7 +191,19 @@ export default function RutasView({ me }: { me: Me }) {
                       onClick={() => setElegida(r)}
                     >
                       <td>
-                        <span className="inscripcion">{r.name}</span>
+                        {/* Elegir la ruta que se dibuja era un clic en la fila,
+                            y con el teclado no había forma: el nombre es el
+                            botón que lo hace (la fila sigue respondiendo al
+                            mouse, para no apuntarle al texto). */}
+                        <button
+                          type="button"
+                          className="fila-elegir inscripcion"
+                          aria-current={r.id === elegida?.id ? 'true' : undefined}
+                          title="Ver el recorrido en el mapa"
+                          onClick={() => setElegida(r)}
+                        >
+                          {r.name}
+                        </button>
                         {r.description && <div className="muted">{r.description}</div>}
                       </td>
                       <td className="mono">{r.waypoints.length}</td>
@@ -171,7 +214,9 @@ export default function RutasView({ me }: { me: Me }) {
                               <button
                                 type="button"
                                 className="chico"
-                                onClick={() => accion(() => api(`/routes/${r.id}/restore`, { method: 'POST' }))}
+                                onClick={() =>
+                                  accion(() => api(`/routes/${r.id}/restore`, { method: 'POST' }), `Ruta ${r.name} restaurada.`)
+                                }
                               >
                                 Restaurar
                               </button>
@@ -180,11 +225,7 @@ export default function RutasView({ me }: { me: Me }) {
                                 <button type="button" className="chico" onClick={() => setEditando(r)}>
                                   Editar
                                 </button>
-                                <button
-                                  type="button"
-                                  className="chico dismiss"
-                                  onClick={() => accion(() => api(`/routes/${r.id}`, { method: 'DELETE' }))}
-                                >
+                                <button type="button" className="chico dismiss" onClick={() => pedirBaja(r)}>
                                   Eliminar
                                 </button>
                               </>
@@ -221,10 +262,13 @@ export default function RutasView({ me }: { me: Me }) {
               ? api(`/routes/${editando.id}`, { method: 'PATCH', body: JSON.stringify(datos) })
               : api('/routes', { method: 'POST', body: JSON.stringify(datos) }));
             setEditando(undefined);
+            avisar(editando ? `Cambios de ${datos.name} guardados.` : `Ruta ${datos.name} creada.`);
             await cargar();
           }}
         />
       )}
+
+      {pedido && <DialogoConfirmacion pedido={pedido} onCerrar={() => setPedido(null)} />}
     </main>
   );
 }

@@ -147,6 +147,9 @@
 .log-row:last-child { border-bottom: none; }
 .log-row:hover { background: var(--realce-70); }
 .log-row-general { grid-template-columns: 150px 88px 180px 1fr; }
+/* La categoría es una pastilla: en la celda de la grilla se estiraba a los
+   88 px de la columna y se leía como una barra gris, no como un sello. */
+.log-row > .cat-badge { justify-self: start; }
 .event-type {
   font-weight: 600;
   color: var(--tinta-media);

@@ -34,6 +34,9 @@
   .icono-boton,
   .toggle-eliminados,
   .control-panel,
+  .vista-filtros,
+  .vista-acciones,
+  .avisos-flotantes,
   button {
     display: none !important;
   }

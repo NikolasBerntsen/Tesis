@@ -44,9 +44,25 @@ describe('Dashboard', () => {
     expect(screen.getByText('1 en vuelo · 2 registrados')).toBeInTheDocument();
   });
 
-  it('muestra el vacío cuando no hay drones activos', () => {
+  it('muestra el vacío cuando no hay drones activos, con qué esperar', () => {
     renderDashboard({ drones: [makeDrone({ online: false })] });
     expect(screen.getByText('No hay drones activos.')).toBeInTheDocument();
+    expect(screen.getByText(/Cuando un dron se conecte al Comando Central, su cámara aparece acá/)).toBeInTheDocument();
+  });
+
+  it('la cabecera es la de todas las vistas: título, la flota al lado y cómo mirarla a la derecha', () => {
+    renderDashboard();
+    expect(screen.getByRole('heading', { level: 2, name: 'Operación' })).toBeInTheDocument();
+    const como = screen.getByRole('group', { name: 'Cómo ver la flota' });
+    expect(within(como).getByRole('button', { name: 'Cámaras' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(como).getByRole('button', { name: 'Mapa' })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('la alerta sin atender va debajo de la cabecera y arriba de las cámaras', () => {
+    renderDashboard({ alerts: [makeAlert({ id: 5, status: 'PENDING', drone_id: 'd1' })] });
+    const cabecera = screen.getByRole('heading', { name: 'Operación' }).closest('header') as HTMLElement;
+    const alerta = screen.getByRole('region', { name: '1 alerta sin atender' });
+    expect(cabecera.compareDocumentPosition(alerta) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('cambia entre la vista de cámaras y la de mapa', async () => {

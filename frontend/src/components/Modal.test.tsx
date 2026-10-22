@@ -226,3 +226,39 @@ describe('Modal con algo en pantalla completa', () => {
     }
   });
 });
+
+describe('Modal: dónde arranca el foco', () => {
+  it('un elemento marcado con data-autofoco gana sobre la caja y sobre el primer campo', () => {
+    render(
+      <Modal etiquetadoPor="t-conf" enfocarPrimerCampo onCerrar={vi.fn()}>
+        <h2 id="t-conf">Eliminar la base</h2>
+        <input aria-label="Motivo" />
+        <button type="button" data-autofoco>
+          Cancelar
+        </button>
+        <button type="button">Eliminar</button>
+      </Modal>,
+    );
+    expect(screen.getByRole('button', { name: 'Cancelar' })).toHaveFocus();
+  });
+
+  it('con todo apagado, el tabulador se queda en la caja en vez de escaparse', async () => {
+    render(
+      <>
+        <button type="button">Atrás del velo</button>
+        <Modal etiquetadoPor="t-apagado" onCerrar={vi.fn()}>
+          <h2 id="t-apagado">Eliminando…</h2>
+          <button type="button" disabled>
+            Cancelar
+          </button>
+        </Modal>
+      </>,
+    );
+    const caja = screen.getByRole('dialog');
+    expect(caja).toHaveFocus();
+    await userEvent.tab();
+    expect(caja).toHaveFocus();
+    await userEvent.tab({ shift: true });
+    expect(caja).toHaveFocus();
+  });
+});

@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ProveedorDeAvisos } from './AvisosFlotantes';
 import DroneDetail from './DroneDetail';
 import type { MapItem } from './DronesMap';
 import { api, rutasDeBase } from '../api';
@@ -40,7 +41,11 @@ async function abrirPilotaje(): Promise<HTMLElement> {
 const apretar = (code: string) => fireEvent.keyDown(window, { code });
 const soltar = (code: string) => fireEvent.keyUp(window, { code });
 
-function renderDetail(props: Partial<Parameters<typeof DroneDetail>[0]> = {}) {
+/**
+ * `conAvisos` lo monta adentro del proveedor de avisos, como en la consola:
+ * sólo así se ve el "listo" que la vista dice al terminar una acción.
+ */
+function renderDetail(props: Partial<Parameters<typeof DroneDetail>[0]> = {}, { conAvisos = false } = {}) {
   const base = {
     me: makeMe({ username: 'admin1', role: 'admin', canControl: true }),
     drone: makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true }),
@@ -60,12 +65,13 @@ function renderDetail(props: Partial<Parameters<typeof DroneDetail>[0]> = {}) {
     onCamara: vi.fn(() => true),
   };
   const merged = { ...base, ...props } as Parameters<typeof DroneDetail>[0];
-  const { rerender } = render(<DroneDetail {...merged} />);
+  const envolver = (vista: JSX.Element) => (conAvisos ? <ProveedorDeAvisos>{vista}</ProveedorDeAvisos> : vista);
+  const { rerender } = render(envolver(<DroneDetail {...merged} />));
   // Volver a renderizar con algo cambiado es la única forma de probar lo que le
   // pasa al mando EN el momento en que se cae el enlace o llega el primer status:
   // con un render nuevo el estado del mando arrancaría de cero.
   const volverARenderizar = (cambios: Partial<Parameters<typeof DroneDetail>[0]>) =>
-    rerender(<DroneDetail {...merged} {...cambios} />);
+    rerender(envolver(<DroneDetail {...merged} {...cambios} />));
   return { ...merged, volverARenderizar };
 }
 
@@ -95,7 +101,7 @@ describe('DroneDetail', () => {
     expect(screen.getByText('En vuelo')).toBeInTheDocument();
     expect(screen.getByTestId('mapa-mock')).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: /Volver a Drones/ }));
+    await userEvent.click(screen.getByRole('button', { name: /Volver a Operación/ }));
     expect(props.onBack).toHaveBeenCalled();
   });
 
@@ -189,14 +195,91 @@ describe('DroneDetail', () => {
     );
   });
 
-  it('un supervisor puede quitarle el control a otro operador', async () => {
+  it('un supervisor puede quitarle el control a otro operador, después de confirmarlo', async () => {
     renderDetail({
       me: makeMe({ username: 'super1', role: 'supervisor', canControl: true }),
       drone: makeDrone({ controlledBy: 'oper9' }),
     });
     expect(screen.getByText(/Controlado por/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Quitar control' }));
+
+    // Le corta el vuelo a otra persona: primero pregunta, con la consecuencia dicha.
+    const dialogo = await screen.findByRole('dialog', { name: 'Quitarle el control a oper9' });
+    expect(dialogo).toHaveTextContent('oper9 deja de pilotear Alfa en el acto y el dron vuelve a patrullar su ruta.');
+    expect(apiMock).not.toHaveBeenCalledWith('/drones/d1/control', expect.anything());
+
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Quitar control' }));
     await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', expect.objectContaining({ method: 'DELETE' })));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('cancelar la pregunta no le quita el control a nadie', async () => {
+    renderDetail({
+      me: makeMe({ username: 'super1', role: 'supervisor', canControl: true }),
+      drone: makeDrone({ controlledBy: 'oper9' }),
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'Quitar control' }));
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Cancelar' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(apiMock).not.toHaveBeenCalledWith('/drones/d1/control', expect.anything());
+  });
+
+  it('si el backend no deja quitar el control, el motivo se lee en la pregunta, que sigue abierta', async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path === '/drones/d1/control') return Promise.reject(new Error('El dron ya no tiene el control tomado'));
+      return Promise.resolve([]);
+    });
+    renderDetail({
+      me: makeMe({ username: 'super1', role: 'supervisor', canControl: true }),
+      drone: makeDrone({ controlledBy: 'oper9' }),
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'Quitar control' }));
+    const dialogo = await screen.findByRole('dialog');
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Quitar control' }));
+    expect(await within(dialogo).findByRole('alert')).toHaveTextContent('El dron ya no tiene el control tomado');
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('quitar el control lo confirma con un aviso, no en silencio', async () => {
+    renderDetail(
+      {
+        me: makeMe({ username: 'super1', role: 'supervisor', canControl: true }),
+        drone: makeDrone({ controlledBy: 'oper9' }),
+      },
+      { conAvisos: true },
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Quitar control' }));
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Quitar control' }));
+    await waitFor(() =>
+      expect(document.querySelector('.avisos-flotantes')).toHaveTextContent('Se le quitó el control de Alfa a oper9.'),
+    );
+  });
+
+  it('el registro del dron espera el historial antes de decir que está vacío', async () => {
+    let contestar: (v: unknown[]) => void = () => {};
+    apiMock.mockImplementation((path: string) =>
+      path.startsWith('/events') ? new Promise((r) => (contestar = r)) : Promise.resolve({}),
+    );
+    renderDetail();
+    expect(await screen.findByText('Trayendo los eventos del dron…')).toBeInTheDocument();
+    expect(screen.queryByText('Sin eventos registrados.')).not.toBeInTheDocument();
+    contestar([]);
+    expect(await screen.findByText('Sin eventos registrados.')).toBeInTheDocument();
+  });
+
+  it('si el control cambia de manos con la pregunta abierta, la pregunta se descarta', async () => {
+    const usados = renderDetail({
+      me: makeMe({ username: 'super1', role: 'supervisor', canControl: true }),
+      drone: makeDrone({ controlledBy: 'oper9' }),
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'Quitar control' }));
+    await screen.findByRole('dialog');
+
+    usados.volverARenderizar({ drone: makeDrone({ controlledBy: null }) });
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    // Y no reaparece cuando lo toma el próximo: esa sería otra pregunta.
+    usados.volverARenderizar({ drone: makeDrone({ controlledBy: 'oper7' }) });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('sin alertas pendientes no hay tarjeta de alerta', async () => {
@@ -918,6 +1001,9 @@ describe('DroneDetail — objetivo', () => {
       status: makeStatus({ state: 'MANUAL', controlledBy: 'oper9', target: OBJETIVO }),
     });
     await userEvent.click(screen.getByRole('button', { name: 'Quitar control' }));
+    const dialogo = await screen.findByRole('dialog');
+    expect(dialogo).toHaveTextContent('el dron vuelve al objetivo que estaba siguiendo');
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Quitar control' }));
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', {
         method: 'DELETE',

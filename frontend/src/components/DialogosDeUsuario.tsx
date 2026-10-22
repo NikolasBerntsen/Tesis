@@ -2,6 +2,7 @@ import { useId, useState, type FormEvent } from 'react';
 import { api } from '../api';
 import { AYUDA_DNI, formatearDni, normalizarDni } from '../dni';
 import type { AltaDeUsuario, CambiosDeUsuario, RolAsignable, RolConsola, UserView } from '../types';
+import IconoCerrar from './IconoCerrar';
 import Modal from './Modal';
 
 export const ROL: Record<RolConsola, string> = {
@@ -13,17 +14,6 @@ export const ROL: Record<RolConsola, string> = {
 
 /** Los roles que el backend deja dar, al alta o después: un admin no se crea ni se fabrica desde acá. */
 const ROLES_ASIGNABLES: readonly RolAsignable[] = ['operator', 'supervisor', 'field_operator'];
-
-export const ICONO_CERRAR = {
-  width: 15,
-  height: 15,
-  viewBox: '0 0 16 16',
-  fill: 'none',
-  stroke: 'currentColor',
-  strokeWidth: 1.5,
-  strokeLinecap: 'round',
-  'aria-hidden': true,
-} as const;
 
 const NOTA_CAMPO =
   'El operador de campo no opera drones: sólo los da de alta y los empareja por QR, así que el sistema le niega el control.';
@@ -57,9 +47,7 @@ function Cabecera({
         <p className="modal-subtitulo">{subtitulo}</p>
       </div>
       <button type="button" className="modal-cerrar" aria-label="Cerrar sin guardar" onClick={onCerrar}>
-        <svg {...ICONO_CERRAR}>
-          <path d="M4.2 4.2 11.8 11.8M11.8 4.2 4.2 11.8" />
-        </svg>
+        <IconoCerrar />
       </button>
     </header>
   );

@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { api, rutasDeBase, traerBases, traerRutas } from '../api';
 import { makeMe } from '../test/fixtures';
 import { estadoMapa, fondosPuestos, limpiarEstadoMapa } from '../test/dobleLeaflet';
+import { ProveedorDeAvisos } from './AvisosFlotantes';
 import BasesView from './BasesView';
 
 vi.mock('../api', async (original) => ({
@@ -189,27 +190,51 @@ describe('BasesView', () => {
     expect(basesMock).toHaveBeenCalledTimes(2);
   });
 
-  it('desactivar y eliminar pegan a los endpoints que corresponden', async () => {
+  it('desactivar y eliminar preguntan antes y pegan a los endpoints que corresponden', async () => {
     basesMock.mockResolvedValue([base()]);
     apiMock.mockResolvedValue(base());
     render(<BasesView me={ADMIN} />);
     await screen.findByText('Base Norte');
 
     await userEvent.click(screen.getByRole('button', { name: 'Desactivar' }));
+    let dialogo = await screen.findByRole('dialog', { name: 'Desactivar la base Base Norte' });
+    expect(dialogo).toHaveTextContent('no se le puede asignar a ningún dron');
+    expect(apiMock).not.toHaveBeenCalled();
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Desactivar' }));
     expect(JSON.parse(apiMock.mock.calls.at(-1)![1].body)).toEqual({ active: false });
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
 
     await userEvent.click(screen.getByRole('button', { name: 'Eliminar' }));
+    dialogo = await screen.findByRole('dialog', { name: 'Eliminar la base Base Norte' });
+    expect(dialogo).toHaveTextContent('La baja se puede deshacer');
+    expect(apiMock).not.toHaveBeenCalledWith('/bases/1', { method: 'DELETE' });
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Eliminar' }));
     expect(apiMock).toHaveBeenLastCalledWith('/bases/1', { method: 'DELETE' });
   });
 
-  it('muestra el error del backend al intentar eliminar una base en uso', async () => {
+  it('eliminar sin confirmar no borra nada (antes era un solo clic)', async () => {
+    basesMock.mockResolvedValue([base()]);
+    render(<BasesView me={ADMIN} />);
+    await screen.findByText('Base Norte');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Eliminar' }));
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(apiMock).not.toHaveBeenCalled();
+  });
+
+  it('muestra el error del backend al intentar eliminar una base en uso, adentro de la pregunta', async () => {
     basesMock.mockResolvedValue([base()]);
     apiMock.mockRejectedValue(new Error('La base tiene 2 drones asignados: reasignalos antes de eliminarla'));
     render(<BasesView me={ADMIN} />);
     await screen.findByText('Base Norte');
 
     await userEvent.click(screen.getByRole('button', { name: 'Eliminar' }));
-    expect(await screen.findByText(/2 drones asignados/)).toBeInTheDocument();
+    const dialogo = await screen.findByRole('dialog');
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Eliminar' }));
+    expect(await within(dialogo).findByRole('alert')).toHaveTextContent(/2 drones asignados/);
+    // Sigue abierta: se puede cancelar e ir a reasignar los drones.
+    expect(within(dialogo).getByRole('button', { name: 'Cancelar' })).toBeEnabled();
   });
 });
 
@@ -518,6 +543,8 @@ describe('BasesView — el alta y la edición son un diálogo de formulario', ()
 
     expect(screen.getByText('Inactiva')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Activar' }));
+    // Activar no rompe nada: no pregunta.
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(JSON.parse(apiMock.mock.calls.at(-1)![1].body)).toEqual({ active: true });
   });
 
@@ -803,5 +830,143 @@ describe('BasesView — mapas con doble fondo y la base como referencia', () => 
 
     const marcador = estadoMapa.puestas.find((c) => c.clase === 'marker');
     expect(marcador?.latlng).toEqual([-34.6037, -58.3816]);
+  });
+});
+
+describe('BasesView — avisos de lo que salió bien', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    limpiarEstadoMapa();
+  });
+
+  function montarConAvisos(me = ADMIN) {
+    return render(
+      <ProveedorDeAvisos>
+        <BasesView me={me} />
+      </ProveedorDeAvisos>,
+    );
+  }
+  const aviso = () => document.querySelector('.avisos-flotantes') as HTMLElement;
+
+  it('el alta lo dice antes de pasar a elegir sus rutas', async () => {
+    basesMock.mockResolvedValue([]);
+    apiMock.mockResolvedValue(base({ id: 9, name: 'Base Río' }));
+    montarConAvisos(CAMPO);
+    await screen.findByText(/todavía no hay bases/i);
+
+    await userEvent.click(screen.getByRole('button', { name: /nueva base/i }));
+    const dialogo = screen.getByRole('dialog');
+    await userEvent.type(within(dialogo).getByLabelText('Nombre'), 'Base Río');
+    await userEvent.type(within(dialogo).getByLabelText('Latitud'), '-34.9');
+    await userEvent.type(within(dialogo).getByLabelText('Longitud'), '-56.15');
+    await userEvent.click(within(dialogo).getByRole('button', { name: /dar de alta/i }));
+
+    await waitFor(() => expect(aviso()).toHaveTextContent('Base Base Río dada de alta.'));
+  });
+
+  it('la edición avisa que se guardó', async () => {
+    basesMock.mockResolvedValue([base()]);
+    apiMock.mockResolvedValue(base({ name: 'Base Norte II' }));
+    montarConAvisos();
+    await screen.findByText('Base Norte');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Editar' }));
+    const dialogo = screen.getByRole('dialog');
+    await userEvent.clear(within(dialogo).getByLabelText('Nombre'));
+    await userEvent.type(within(dialogo).getByLabelText('Nombre'), 'Base Norte II');
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Guardar cambios' }));
+    await waitFor(() => expect(aviso()).toHaveTextContent('Cambios de Base Norte II guardados.'));
+  });
+
+  it('desactivar, activar y eliminar lo dicen', async () => {
+    basesMock.mockResolvedValue([base()]);
+    apiMock.mockResolvedValue(base());
+    montarConAvisos();
+    await screen.findByText('Base Norte');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Desactivar' }));
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Desactivar' }));
+    await waitFor(() => expect(aviso()).toHaveTextContent('Base Base Norte desactivada.'));
+
+    basesMock.mockResolvedValue([base({ active: false })]);
+    await userEvent.click(screen.getByRole('button', { name: 'Eliminar' }));
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Eliminar' }));
+    await waitFor(() => expect(aviso()).toHaveTextContent('Base Base Norte eliminada.'));
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Activar' }));
+    await waitFor(() => expect(aviso()).toHaveTextContent('Base Base Norte activada.'));
+  });
+
+  it('restaurar lo dice', async () => {
+    basesMock.mockResolvedValue([base({ deleted: true, deletedAt: '2026-01-02T00:00:00.000Z' })]);
+    apiMock.mockResolvedValue(base());
+    montarConAvisos();
+    await userEvent.click(await screen.findByRole('button', { name: 'Restaurar' }));
+    await waitFor(() => expect(aviso()).toHaveTextContent('Base Base Norte restaurada.'));
+  });
+
+  it('lo que no pregunta deja su error arriba de la tabla, sin avisar que salió bien', async () => {
+    basesMock.mockResolvedValue([base({ deleted: true, deletedAt: '2026-01-02T00:00:00.000Z' })]);
+    apiMock.mockRejectedValue(new Error('Ya existe una base activa con ese nombre'));
+    montarConAvisos();
+    await userEvent.click(await screen.findByRole('button', { name: 'Restaurar' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Ya existe una base activa con ese nombre');
+    expect(aviso()).toBeEmptyDOMElement();
+  });
+
+  it('guardar las rutas de una base lo dice, y el botón cuenta en castellano', async () => {
+    const CERCA_1 = { id: 1, name: 'Perímetro A', description: '', waypoints: [{ lat: -34.857, lon: -56.208, alt: 40 }, { lat: -34.858, lon: -56.209, alt: 40 }], createdBy: null, deleted: false, deletedAt: null };
+    const CERCA_2 = { ...CERCA_1, id: 2, name: 'Perímetro B' };
+    basesMock.mockResolvedValue([base()]);
+    rutasMock.mockResolvedValue([CERCA_1, CERCA_2]);
+    rutasDeBaseMock.mockResolvedValue([CERCA_1, CERCA_2]);
+    apiMock.mockResolvedValue({});
+    montarConAvisos();
+    await screen.findByText('Base Norte');
+    await userEvent.click(screen.getByRole('button', { name: 'Rutas' }));
+    const dialogo = await screen.findByRole('dialog', { name: /rutas de base norte/i });
+
+    // "Asignar 2 rutas", no "Asignar 2 ruta(s)".
+    const guardar = await within(dialogo).findByRole('button', { name: 'Asignar 2 rutas' });
+    await userEvent.click(guardar);
+    await waitFor(() => expect(aviso()).toHaveTextContent('Rutas de Base Norte guardadas.'));
+  });
+});
+
+describe('BasesView — carga sin saltos', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    limpiarEstadoMapa();
+  });
+
+  it('la primera carga es un esqueleto; las recargas después de una acción no lo vuelven a mostrar', async () => {
+    let contestar: (v: ReturnType<typeof base>[]) => void = () => {};
+    basesMock.mockReturnValueOnce(new Promise((r) => (contestar = r)));
+    render(<BasesView me={ADMIN} />);
+    expect(screen.getByRole('status')).toHaveClass('esqueleto');
+    await act(async () => contestar([base({ active: false })]));
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+
+    // Activar recarga la lista: la tabla se queda, marcada como ocupada.
+    let recargar: (v: ReturnType<typeof base>[]) => void = () => {};
+    basesMock.mockReturnValueOnce(new Promise((r) => (recargar = r)));
+    apiMock.mockResolvedValue(base());
+    await userEvent.click(screen.getByRole('button', { name: 'Activar' }));
+    const envoltorio = screen.getByRole('table').parentElement as HTMLElement;
+    await waitFor(() => expect(envoltorio).toHaveAttribute('aria-busy', 'true'));
+    expect(screen.queryByText(/trayendo las bases/i)).not.toBeInTheDocument();
+
+    await act(async () => recargar([base()]));
+    expect(envoltorio).not.toHaveAttribute('aria-busy');
+  });
+
+  it('el interruptor de eliminadas dice si está apretado, como los de las otras vistas', async () => {
+    basesMock.mockResolvedValue([base()]);
+    render(<BasesView me={ADMIN} />);
+    const interruptor = await screen.findByRole('button', { name: 'Ver eliminadas' });
+    expect(interruptor).toHaveAttribute('aria-pressed', 'false');
+    await userEvent.click(interruptor);
+    expect(interruptor).toHaveAttribute('aria-pressed', 'true');
+    expect(interruptor).toHaveTextContent('Ver eliminadas');
   });
 });

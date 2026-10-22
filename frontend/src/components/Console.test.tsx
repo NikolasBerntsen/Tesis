@@ -139,6 +139,11 @@ describe('Console', () => {
     expect(screen.getByRole('button', { name: 'Operación' })).toHaveClass('active');
     expect(screen.getByRole('button', { name: 'Drones' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Bases' })).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: 'Secciones de la consola' })).toBeInTheDocument();
+    // El nombre se recorta en una tableta: el title lo deja leer entero.
+    expect(screen.getByText('oper1', { selector: '.username' })).toHaveAttribute('title', 'oper1');
+    // La región de los avisos de "guardado" está desde el arranque, vacía.
+    expect(document.querySelector('.avisos-flotantes')).toBeEmptyDOMElement();
     expect(screen.queryByRole('button', { name: 'Usuarios' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Registro' })).not.toBeInTheDocument();
   });
@@ -245,7 +250,7 @@ describe('Console', () => {
     dronesFix = [makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true, baseId: 4, base: { name: 'Base Vieja', lat: -34.6, lon: -58.4 } })];
     render(<Console onLogout={() => {}} />);
     await abrirDetalleDelPrimerDron();
-    await screen.findByRole('button', { name: /Volver a Drones/ });
+    await screen.findByRole('button', { name: /Volver a Operación/ });
     // La tarjeta de estado sólo se dibuja con telemetría: el buffer se vuelca
     // en el próximo tick.
     fire({ type: 'status', ...makeStatus({ droneId: 'd1' }) });
@@ -268,7 +273,7 @@ describe('Console', () => {
     dronesFix = [makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true, baseId: 4, base: { name: 'Base Vieja', lat: -34.6, lon: -58.4 } })];
     render(<Console onLogout={() => {}} />);
     await abrirDetalleDelPrimerDron();
-    await screen.findByRole('button', { name: /Volver a Drones/ });
+    await screen.findByRole('button', { name: /Volver a Operación/ });
     fire({ type: 'status', ...makeStatus({ droneId: 'd1' }) });
     const estado = (await screen.findByText('Modo y posición', undefined, { timeout: 3000 })).closest(
       '.status-segundo-nivel',
@@ -327,7 +332,7 @@ describe('Console', () => {
     render(<Console onLogout={() => {}} />);
     await abrirDetalleDelPrimerDron();
 
-    const volver = await screen.findByRole('button', { name: /Volver a Drones/ });
+    const volver = await screen.findByRole('button', { name: /Volver a Operación/ });
     expect(volver).toBeInTheDocument();
 
     // Renombrar desde el detalle dispara el PATCH del dron.
@@ -351,7 +356,7 @@ describe('Console', () => {
     routesFix = [makeRoute({ id: 7 })];
     render(<Console onLogout={() => {}} />);
     await abrirDetalleDelPrimerDron();
-    await screen.findByRole('button', { name: /Volver a Drones/ });
+    await screen.findByRole('button', { name: /Volver a Operación/ });
     // El mapa sólo dibuja los nodos de la ruta elegida en el selector.
     await userEvent.selectOptions(screen.getByLabelText('Ruta de patrullaje'), '7');
 
@@ -372,7 +377,7 @@ describe('Console', () => {
     render(<Console onLogout={() => {}} />);
     await abrirDetalleDelPrimerDron();
 
-    const volver = await screen.findByRole('button', { name: /Volver a Drones/ });
+    const volver = await screen.findByRole('button', { name: /Volver a Operación/ });
     const header = volver.closest('.detail-main') as HTMLElement;
     await userEvent.click(within(header).getByTitle('Renombrar dron'));
     await userEvent.clear(within(header).getByDisplayValue('Alfa'));

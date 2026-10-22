@@ -3,6 +3,7 @@ import { api, getRole, getUsername, motivoDelRechazoDeDecision } from '../api';
 import { sumarAlRastro, type RastroObjetivo } from '../rastro';
 import type { Alert, Drone, DroneStatus, EventRow, Me, NovedadDron, PatrolRoute, RolConsola } from '../types';
 import { useWebSocket } from '../useWebSocket';
+import { ProveedorDeAvisos } from './AvisosFlotantes';
 import BasesView from './BasesView';
 import BotonTema from './BotonTema';
 import CampanaDeAlertas from './CampanaDeAlertas';
@@ -247,96 +248,107 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
   }, [alerts]);
 
   const selected = abierta === 'operacion' ? (drones.find((d) => d.droneId === selectedId) ?? null) : null;
+  const usuario = getUsername();
 
   return (
-    <div className="dashboard">
-      <header className="topbar">
-        <h1>Comando Central</h1>
-        <nav className="topnav">
-          {secciones.map((s) => (
-            <button
-              key={s}
-              className={abierta === s ? 'active' : ''}
-              aria-current={abierta === s ? 'page' : undefined}
-              onClick={() => setSeccion(s)}
-            >
-              {ETIQUETA[s]}
+    // Los avisos de "guardado" viven acá, una sola región para toda la consola:
+    // cambiar de sección no los corta ni los duplica.
+    <ProveedorDeAvisos>
+      <div className="dashboard">
+        <header className="topbar">
+          <h1>Comando Central</h1>
+          <nav className="topnav" aria-label="Secciones de la consola">
+            {secciones.map((s) => (
+              <button
+                key={s}
+                className={abierta === s ? 'active' : ''}
+                aria-current={abierta === s ? 'page' : undefined}
+                onClick={() => setSeccion(s)}
+              >
+                {ETIQUETA[s]}
+              </button>
+            ))}
+          </nav>
+          <div className="topbar-right">
+            {/* El operador de campo entra a una consola recortada: conviene que lo
+                lea, y no que lo deduzca de que no hay más botones. */}
+            {deCampo && <span className="badge oro">Sesión de campo</span>}
+            {/* El operador de campo no recibe alertas: el backend no se las manda. */}
+            {!deCampo && (
+              <CampanaDeAlertas
+                alerts={alerts}
+                drones={drones}
+                onDecidir={decidirAlerta}
+                onVerDron={(droneId) => {
+                  setSeccion('operacion');
+                  setSelectedId(droneId);
+                }}
+              />
+            )}
+            {/* El punto lo dibuja .estado con currentColor: en la interfaz no hay
+                caracteres decorativos, y así el punto toma el verde o el rojo. */}
+            <span className={`conn estado versalita ${conectado ? 'ok' : 'bad'}`} aria-live="polite">
+              {conectado ? 'conectado' : 'sin conexión'}
+            </span>
+            <BotonTema />
+            {/* En una tableta el nombre se recorta con puntos suspensivos: el
+                title lo deja leer entero. */}
+            <span className="username" title={usuario}>
+              {usuario}
+            </span>
+            <button className="ghost versalita" onClick={onLogout}>
+              Salir
             </button>
-          ))}
-        </nav>
-        <div className="topbar-right">
-          {/* El operador de campo entra a una consola recortada: conviene que lo
-              lea, y no que lo deduzca de que no hay más botones. */}
-          {deCampo && <span className="badge oro">Sesión de campo</span>}
-          {/* El operador de campo no recibe alertas: el backend no se las manda. */}
-          {!deCampo && (
-            <CampanaDeAlertas
-              alerts={alerts}
-              drones={drones}
-              onDecidir={decidirAlerta}
-              onVerDron={(droneId) => {
-                setSeccion('operacion');
-                setSelectedId(droneId);
-              }}
-            />
-          )}
-          {/* El punto lo dibuja .estado con currentColor: en la interfaz no hay
-              caracteres decorativos, y así el punto toma el verde o el rojo. */}
-          <span className={`conn estado versalita ${conectado ? 'ok' : 'bad'}`} aria-live="polite">
-            {conectado ? 'conectado' : 'sin conexión'}
-          </span>
-          <BotonTema />
-          <span className="username">{getUsername()}</span>
-          <button className="ghost versalita" onClick={onLogout}>
-            Salir
-          </button>
-        </div>
-      </header>
-      {!me ? (
-        <main className="page-main">
-          <p className="vacio">Cargando la consola…</p>
-        </main>
-      ) : abierta === 'drones' ? (
-        <DronesView me={me} novedad={novedadDron} />
-      ) : abierta === 'bases' ? (
-        me && <BasesView me={me} />
-      ) : abierta === 'rutas' ? (
-        me && <RutasView me={me} />
-      ) : abierta === 'usuarios' ? (
-        <UsersView me={me} />
-      ) : abierta === 'registro' ? (
-        <LogsView />
-      ) : selected ? (
-        <DroneDetail
-          me={me}
-          drone={selected}
-          status={statuses[selected.droneId] ?? null}
-          frame={frames[selected.droneId] ?? null}
-          conectado={conectado}
-          liveEvents={liveEvents}
-          routes={routes}
-          alertas={alerts}
-          rastro={rastros[selected.droneId] ?? null}
-          onDecidir={decidirAlerta}
-          onBack={() => setSelectedId(null)}
-          onRename={(name) => rename(selected.droneId, name)}
-          onWaypointLabel={setWaypointLabel}
-          onMando={(ejes) => enviar({ type: 'manual_stick', droneId: selected.droneId, ...ejes })}
-          onCamara={(pitch) => enviar({ type: 'manual_gimbal', droneId: selected.droneId, pitch })}
-        />
-      ) : (
-        <Dashboard
-          drones={drones}
-          statuses={statuses}
-          frames={frames}
-          alerts={alerts}
-          pendingAlerts={pendingAlerts}
-          rastros={rastros}
-          onDecidir={decidirAlerta}
-          onOpenDrone={setSelectedId}
-          onRename={rename}
-        />
-      )}
-    </div>
+          </div>
+        </header>
+        {!me ? (
+          <main className="page-main">
+            <p className="vacio" role="status">
+              Cargando la consola…
+            </p>
+          </main>
+        ) : abierta === 'drones' ? (
+          <DronesView me={me} novedad={novedadDron} />
+        ) : abierta === 'bases' ? (
+          me && <BasesView me={me} />
+        ) : abierta === 'rutas' ? (
+          me && <RutasView me={me} />
+        ) : abierta === 'usuarios' ? (
+          <UsersView me={me} />
+        ) : abierta === 'registro' ? (
+          <LogsView />
+        ) : selected ? (
+          <DroneDetail
+            me={me}
+            drone={selected}
+            status={statuses[selected.droneId] ?? null}
+            frame={frames[selected.droneId] ?? null}
+            conectado={conectado}
+            liveEvents={liveEvents}
+            routes={routes}
+            alertas={alerts}
+            rastro={rastros[selected.droneId] ?? null}
+            onDecidir={decidirAlerta}
+            onBack={() => setSelectedId(null)}
+            onRename={(name) => rename(selected.droneId, name)}
+            onWaypointLabel={setWaypointLabel}
+            onMando={(ejes) => enviar({ type: 'manual_stick', droneId: selected.droneId, ...ejes })}
+            onCamara={(pitch) => enviar({ type: 'manual_gimbal', droneId: selected.droneId, pitch })}
+          />
+        ) : (
+          <Dashboard
+            drones={drones}
+            statuses={statuses}
+            frames={frames}
+            alerts={alerts}
+            pendingAlerts={pendingAlerts}
+            rastros={rastros}
+            onDecidir={decidirAlerta}
+            onOpenDrone={setSelectedId}
+            onRename={rename}
+          />
+        )}
+      </div>
+    </ProveedorDeAvisos>
   );
 }

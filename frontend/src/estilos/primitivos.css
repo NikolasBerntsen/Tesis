@@ -85,8 +85,11 @@ button {
   background-image: var(--cara-boton);
   box-shadow: inset 0 1px 0 var(--filo-luz), var(--sombra-boton);
   cursor: pointer;
+  /* La presión (el medio píxel que baja) también entra en la transición: sin
+     ella el botón saltaba, y con ella se hunde y vuelve con el mismo pulso que
+     el borde y la sombra. */
   transition: border-color var(--transicion), background-color var(--transicion),
-    box-shadow var(--transicion), color var(--transicion);
+    box-shadow var(--transicion), color var(--transicion), transform var(--transicion);
 }
 button:hover:not(:disabled) {
   border-color: var(--oro); /* al pasar el mouse, la veta vira a oro */
@@ -355,8 +358,19 @@ legend {
 
 .tabla-envoltorio {
   overflow-x: auto;
+  /* Lo que se pasa de ancho scrollea acá adentro, no la página entera; y el
+     gesto de scroll lateral no se le escapa al navegador como "atrás". */
+  overscroll-behavior-x: contain;
   margin: 0 calc(var(--e-5) * -1);
   padding: 0 var(--e-5);
+}
+/* En una pantalla mediana las celdas se juntan un poco: con el relleno de
+   escritorio, la tabla de usuarios no entraba a 1024 px y obligaba a
+   scrollear de costado para llegar a "Eliminar". */
+@media (max-width: 1280px) {
+  .tabla th,
+  .tabla td { padding-inline: 6px; }
+  .tabla button.chico { padding-inline: 9px; }
 }
 
 /* --- Pastillas y distintivos ---------------------------------------------- */
