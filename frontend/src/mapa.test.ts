@@ -2,10 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import L from 'leaflet';
 import {
   CENTRO_POR_DEFECTO,
+  CLASE_TESELAS_CALLES,
+  CLASE_TESELAS_SATELITE,
   FONDOS,
+  TRAZO,
   aplicarFondo,
   crearFondos,
-  filtroDeTeselas,
   iconoBase,
   nombreDeFondo,
   vestir,
@@ -38,10 +40,30 @@ describe('mapa: lo que comparten todas las vistas', () => {
     expect((capas.satelite as unknown as { url: string }).url).toContain('World_Imagery');
   });
 
-  it('sólo atenúa las teselas en modo oscuro', () => {
-    expect(filtroDeTeselas()).toBe('none');
+  it('la capa de calles lleva la clase que el CSS oscurece de noche, y el satélite otra', () => {
+    // El filtro de obsidiana engancha de esta clase (vistas.css): si el
+    // satélite la llevara, la foto se daría vuelta y no se reconocería nada.
+    const capas = crearFondos();
+    const opciones = (c: unknown) => (c as { opciones: { className?: string } }).opciones;
+    expect(opciones(capas.mapa).className).toBe(CLASE_TESELAS_CALLES);
+    expect(opciones(capas.satelite).className).toBe(CLASE_TESELAS_SATELITE);
+    expect(CLASE_TESELAS_CALLES).not.toBe(CLASE_TESELAS_SATELITE);
+  });
+
+  it('aplicar un fondo ya no escribe un filtro inline sobre el pane de teselas', () => {
+    // Era el filtro de antes: se calculaba una sola vez con el tema de ese
+    // momento, oscurecía también el satélite y no seguía un cambio de tema.
     document.documentElement.dataset.tema = 'oscuro';
-    expect(filtroDeTeselas()).toMatch(/brightness/);
+    const mapa = L.map(document.createElement('div'));
+    const pane = document.createElement('div');
+    mapa.getPane = () => pane;
+    aplicarFondo(mapa, crearFondos(), 'mapa');
+    expect(pane.style.filter).toBe('');
+  });
+
+  it('los trazos que el tema aclara tienen cada uno su clase', () => {
+    expect(new Set(Object.values(TRAZO)).size).toBe(Object.keys(TRAZO).length);
+    for (const clase of Object.values(TRAZO)) expect(clase).toMatch(/^mapa-/);
   });
 
   it('aplicar un fondo pone el elegido y le saca el otro al mapa', () => {

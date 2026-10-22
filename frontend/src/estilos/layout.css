@@ -26,7 +26,7 @@
   background-image:
     var(--grano-textura),
     linear-gradient(180deg, var(--realce-cara) 0%, var(--marmol-0) 62%, var(--marmol-1) 100%);
-  box-shadow: 0 1px 0 var(--realce-70), 0 14px 30px -22px rgba(43, 38, 32, .55);
+  box-shadow: var(--sombra-cornisa);
 }
 /* Hilo dorado al pie de la cornisa: el único oro permanente de la pantalla */
 .topbar::after {
@@ -60,7 +60,7 @@
 }
 /* Sin letter-spacing propio: comparte el de las versalitas de al lado */
 .conn { font-size: var(--txt-xs); }
-.conn.ok { color: var(--ok); }
+.conn.ok { color: var(--ok-texto); }
 .conn.bad { color: var(--peligro); }
 
 /* --- Navegación por secciones y conmutadores de vista --------------------- */
@@ -93,7 +93,7 @@
 .topnav button.active,
 .view-switch button.active {
   color: var(--tinta);
-  background-image: linear-gradient(180deg, var(--realce-cara) 0%, var(--oro-velo) 100%);
+  background-image: var(--cara-activa);
 }
 
 /* --- Cuerpo de la página -------------------------------------------------- */

@@ -14,15 +14,7 @@ import {
   velocidad,
   waypointLabel,
 } from '../format';
-import {
-  CENTRO_POR_DEFECTO,
-  aplicarFondo,
-  crearFondos,
-  filtroDeTeselas,
-  iconoBase,
-  vestir,
-  type Fondo,
-} from '../mapa';
+import { CENTRO_POR_DEFECTO, TRAZO, aplicarFondo, crearFondos, iconoBase, vestir, type Fondo } from '../mapa';
 import type { Base, DroneStatus, ObjetivoEnSeguimiento, PatrolRoute } from '../types';
 import ConmutadorDeFondo from './ConmutadorDeFondo';
 
@@ -132,12 +124,15 @@ const EN_TIERRA = ['IDLE', 'LANDED'];
 
 // Hilo grabado entre el dron y su base: es una referencia, no un dato de vuelo,
 // así que va en tinta apagada y no compite con los nodos ni con el medallón.
+// La clase deja que el CSS lo aclare en obsidiana: pardo sobre el callejero
+// oscurecido no se veía.
 const LINE_STYLE: L.PolylineOptions = {
   color: PALETA.tintaMedia,
   weight: 1.5,
   opacity: 0.55,
   dashArray: '2 7',
   interactive: false,
+  className: TRAZO.hilo,
 };
 
 /* --- Objetivo ---------------------------------------------------------------
@@ -514,9 +509,9 @@ export default function DronesMap({
     // hace falta al decidir dónde poner un nodo de patrullaje.
     const capas = crearFondos();
     capasRef.current = capas;
+    // El oscurecido de noche lo pone el CSS sobre la capa de calles (mapa.ts).
     capas[fondoRef.current].addTo(map);
     mapaRef.current = map;
-    vestir(map.getPane('tilePane'), { filter: filtroDeTeselas() });
     // Sin la banderita de fábrica: es lo único de color frío que quedaba
     map.attributionControl.setPrefix('Leaflet');
     vestir(map.attributionControl.getContainer(), {

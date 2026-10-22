@@ -52,7 +52,7 @@ p { margin: 0 0 var(--e-3); }
 p:last-child { margin-bottom: 0; }
 
 a {
-  color: var(--oro-oscuro);
+  color: var(--oro-texto);
   text-decoration-color: var(--oro-claro);
   text-underline-offset: 3px;
 }
@@ -110,16 +110,19 @@ samp {
 }
 
 /* --- Colores de texto ---------------------------------------------------- */
-/* --tinta-suave no llega a AA sobre mármol: .muted usa --tinta-media. */
+/* --tinta-suave es la de lo deshabilitado: .muted usa --tinta-media, que es
+   texto secundario pero texto al fin. Los estados van con su variante de
+   texto, la que llega a AA sobre el velo de su propio color. */
 .muted { color: var(--tinta-media); }
-.ok { color: var(--ok); }
+.ok { color: var(--ok-texto); }
 .warn { color: var(--alerta-texto); }
 .bad { color: var(--peligro); }
-.accent { color: var(--oro-oscuro); } /* el oro más oscuro es el único legible */
+.info { color: var(--info); } /* "Ruta a comenzar" en la leyenda del mapa */
+.accent { color: var(--oro-texto); }
 
 /* --- Foco: SIEMPRE visible, anillo dorado -------------------------------- */
 :focus-visible {
-  outline: var(--filo) solid var(--oro);
+  outline: var(--filo) solid var(--anillo-foco);
   outline-offset: 2px;
   border-radius: var(--radio-chico);
 }
@@ -127,9 +130,11 @@ samp {
    de respaldo lo vuelve a mostrar. */
 :focus:not(:focus-visible) { outline: none; }
 
+/* Sobre el oro claro va obsidiana en los dos temas: con --tinta, en oscuro lo
+   seleccionado quedaba marfil sobre dorado pálido y desaparecía. */
 ::selection {
   background: var(--oro-claro);
-  color: var(--tinta);
+  color: var(--tinta-sobre-oro);
 }
 
 ::placeholder {
@@ -151,12 +156,8 @@ samp {
   border-radius: inherit;
   padding: var(--filo);
   background: var(--oro-lamina);
-  -webkit-mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
+  -webkit-mask: var(--mascara-llena) content-box, var(--mascara-llena);
+  mask: var(--mascara-llena) content-box, var(--mascara-llena);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
   pointer-events: none;

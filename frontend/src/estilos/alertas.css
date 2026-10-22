@@ -102,22 +102,11 @@
   .carrusel-cuenta.llego { animation: none; }
 }
 
+/* El nombre del dron y "Ver la alerta nueva" son `.enlace` (nuevos.css), que
+   ya se saca de encima la sombra y la cara de `button` en todos sus estados. */
 .carrusel-nuevas {
   align-self: flex-start;
   font-size: var(--txt-sm);
-}
-
-/* `.enlace` (nuevos.css) no le saca al botón la sombra de `button` ni la cara
-   que le pone el hover: en un renglón de texto se veía una tecla fantasma
-   alrededor del nombre del dron. */
-.carrusel-dron,
-.carrusel-nuevas,
-.carrusel-dron:hover:not(:disabled),
-.carrusel-nuevas:hover:not(:disabled),
-.carrusel-dron:active:not(:disabled),
-.carrusel-nuevas:active:not(:disabled) {
-  background: none;
-  box-shadow: none;
 }
 
 /* La alerta en pantalla: misma columna que la tarjeta tenía antes del carrusel. */
@@ -131,13 +120,9 @@
 }
 .alerta-detalle > p { margin: 0; }
 
-/* La cara de `button.validate` (primitivos.css) arranca en un blanco escrito a
-   mano, y en obsidiana el "Validar" quedaba como una tecla blanca con el verde
-   encima, casi ilegible. Con el carrusel ese botón pasa a estar en el tablero,
-   así que acá arranca en el realce del tema, que en claro es el mismo blanco. */
-.alerta-en-curso button.validate {
-  background-image: linear-gradient(180deg, var(--realce-cara) 0%, var(--ok-velo) 100%);
-}
+/* "Validar" no lleva arreglo propio acá: su cara sale de --cara-afirmativa
+   (primitivos.css), que tiene valor por tema, igual en la campana que en el
+   carrusel o en el detalle del dron. */
 .carrusel-dron { font-weight: 600; }
 
 /* --- Variante apaisada: el tablero ------------------------------------------

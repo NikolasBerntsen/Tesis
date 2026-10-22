@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import { api, traerRutas } from '../api';
-import { CENTRO_POR_DEFECTO, useFondo, vestirAtribucion } from '../mapa';
+import { CENTRO_POR_DEFECTO, TRAZO, useFondo, vestirAtribucion } from '../mapa';
 import type { Me, PatrolRoute } from '../types';
 import ConmutadorDeFondo from './ConmutadorDeFondo';
 import EditorDeRuta from './EditorDeRuta';
@@ -36,11 +36,14 @@ function MapaDeRuta({ ruta }: { ruta: PatrolRoute | null }) {
     if (!ruta || ruta.waypoints.length === 0) return;
 
     const puntos = ruta.waypoints.map((w) => [w.lat, w.lon] as [number, number]);
-    L.polyline(puntos, { color: '#8A6A1C', weight: 2 }).addTo(grupo);
+    // Las clases dejan que el CSS aclare el recorrido y el filo de los nodos
+    // en obsidiana, sobre el callejero oscurecido (ver TRAZO en mapa.ts).
+    L.polyline(puntos, { color: '#8A6A1C', weight: 2, className: TRAZO.recorrido }).addTo(grupo);
     ruta.waypoints.forEach((w, i) => {
       L.circleMarker([w.lat, w.lon], {
         radius: i === 0 ? 10 : 7,
         color: '#14120F',
+        className: TRAZO.nodo,
         weight: 1.5,
         // El primero se destaca: es el que decide si la ruta le queda cerca a una base
         fillColor: i === 0 ? '#F2C230' : '#9C3B30',
