@@ -3,6 +3,7 @@ package com.tesis.dronepatrol.patrol
 import com.tesis.dronepatrol.comms.CommandCenterClient
 import com.tesis.dronepatrol.comms.DetectionClient
 import com.tesis.dronepatrol.model.Deteccion
+import com.tesis.dronepatrol.model.FlightEvent
 import com.tesis.dronepatrol.model.PatrolRoute
 import com.tesis.dronepatrol.model.PatrolState
 import com.tesis.dronepatrol.model.Waypoint
@@ -120,6 +121,56 @@ class PatrolManagerPerdidaDeSenialTest {
             "hold",
             dron.ultimaOrden,
         )
+    }
+
+    /** Requisito: al recuperar la señal, el patrullaje en curso continúa donde quedó. */
+    @Test
+    fun alVolverLaSenialRetomaElPatrullajeEnCurso() = runBlocking {
+        arrancarConTelemetria()
+        patrulla.startPatrol(ruta)
+        withTimeout(5_000) { patrulla.state.first { it == PatrolState.PATROLLING } }
+        val rutasOrdenadas = dron.ordenes.count { it.startsWith("startRoute") }
+
+        esperarElCorteDeSenial()
+        dron.emitirTelemetria()
+
+        withTimeout(5_000) { patrulla.state.first { it == PatrolState.PATROLLING } }
+        esperarA("la ruta retomada") { dron.ordenes.count { it.startsWith("startRoute") } == rutasOrdenadas + 1 }
+    }
+
+    /**
+     * Un patrullaje que ya terminó deja la ruta cargada. Después, un "Despegar
+     * aquí" deja al dron suspendido en IDLE al lado del operador, y si ahí se
+     * corta el enlace, al volver la señal no hay ruta que retomar: quedaba
+     * volando la ruta vieja que nadie le pidió en este vuelo.
+     */
+    @Test
+    fun alVolverLaSenialNoRetomaUnaRutaQueYaTermino() = runBlocking {
+        arrancarConTelemetria()
+        patrulla.startPatrol(ruta)
+        withTimeout(5_000) { patrulla.state.first { it == PatrolState.PATROLLING } }
+        patrulla.volverABase()
+        dron.estado.value = dron.estado.value.copy(enVuelo = false)
+        dron.flightEvents.emit(FlightEvent.ArrivedHome)
+        withTimeout(5_000) { patrulla.state.first { it == PatrolState.IDLE } }
+
+        patrulla.despegarAqui()
+        esperarA("el despegue en el lugar") { dron.ordenes.contains("despegarEnElLugar") }
+        dron.estado.value = dron.estado.value.copy(enVuelo = true)
+        val rutasOrdenadas = dron.ordenes.count { it.startsWith("startRoute") }
+
+        esperarElCorteDeSenial()
+        dron.emitirTelemetria()
+
+        val estado = withTimeout(5_000) { patrulla.state.first { it != PatrolState.RETURNING_HOME_SIGNAL } }
+        assertEquals(PatrolState.PAUSED, estado)
+        delay(200)
+        assertEquals(
+            "al volver la señal retomó una ruta que ya había terminado",
+            rutasOrdenadas,
+            dron.ordenes.count { it.startsWith("startRoute") },
+        )
+        assertEquals("hold", dron.ultimaOrden)
     }
 
     /**

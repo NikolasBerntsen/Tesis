@@ -789,7 +789,7 @@ class DjiDroneController : DroneController {
                 return@relevarLazo
             }
             flightEvents.tryEmit(FlightEvent.Despegando)
-            if (!accion(FlightControllerKey.KeyStartTakeoff, "despegar")) return@relevarLazo
+            if (!ordenarDespegue()) return@relevarLazo
             if (!esperarDespegue()) return@relevarLazo
             flightEvents.tryEmit(FlightEvent.EnElAire)
             // Y nada más: el propio dron se sostiene suspendido donde quedó, y
@@ -798,12 +798,30 @@ class DjiDroneController : DroneController {
         }
     }
 
+    /**
+     * El motivo de un error del SDK para el operador. El MSDK suele rechazar con
+     * la descripción en null (en el campo: "el dron no aceptó despegar (null)"),
+     * así que se cae a la pista y, si tampoco hay, al tipo y código del error,
+     * que al menos se pueden buscar.
+     */
+    private fun describir(error: IDJIError): String =
+        error.description()?.takeIf { it.isNotBlank() && it != "null" }
+            ?: error.hint()?.takeIf { it.isNotBlank() && it != "null" }
+            ?: listOfNotNull(error.errorType()?.name, error.errorCode(), error.innerCode())
+                .filter { it.isNotBlank() && it != "null" }
+                .joinToString(" / ")
+                .ifBlank { "sin motivo del SDK" }
+
     /** Tocó el suelo: el evento depende de qué se había ordenado. */
     private fun alAterrizar() {
         when (aterrizajeEsperado) {
             Aterrizaje.EN_BASE -> flightEvents.tryEmit(FlightEvent.ArrivedHome)
             Aterrizaje.AQUI -> flightEvents.tryEmit(FlightEvent.Aterrizado)
-            Aterrizaje.NINGUNO -> Unit
+            // Aterrizó sin que la app lo ordenara (el propio regreso a base del
+            // dron por señal o batería, o las palancas del control): igual hay
+            // que avisarlo, o la patrulla queda en un estado de vuelo con el dron
+            // en el suelo.
+            Aterrizaje.NINGUNO -> flightEvents.tryEmit(FlightEvent.Aterrizado)
         }
         aterrizajeEsperado = Aterrizaje.NINGUNO
         // En el suelo no se sostiene ningún lazo: el que hubiera manda ceros a
@@ -915,7 +933,7 @@ class DjiDroneController : DroneController {
                 override fun onSuccess(resultado: EmptyMsg?) = Unit
 
                 override fun onFailure(error: IDJIError) {
-                    avisar("el gimbal no aceptó apuntar la cámara a ${pitchGrados.toInt()}° (${error.description()})")
+                    avisar("el gimbal no aceptó apuntar la cámara a ${pitchGrados.toInt()}° (${describir(error)})")
                 }
             },
         )
@@ -945,8 +963,55 @@ class DjiDroneController : DroneController {
             avisar("no se puede despegar: ${listo.detalle}")
             return false
         }
-        if (!accion(FlightControllerKey.KeyStartTakeoff, "despegar")) return false
+        if (!ordenarDespegue()) return false
         return esperarDespegue()
+    }
+
+    /**
+     * La orden de despegar, con lo que el campo enseñó:
+     *  - Es un pedido explícito del operador: si el dron la rechaza se avisa
+     *    SIEMPRE, aunque sea el mismo rechazo que la vez anterior. Con el aviso
+     *    por transición (ver [avisar]) el segundo "Despegar" que fallaba igual
+     *    quedaba mudo, y el operador apretaba sin saber por qué no pasaba nada.
+     *  - Recién aterrizado, los motores siguen girando unos segundos y el dron
+     *    rechaza el despegue: se espera a que se apaguen.
+     *  - El SDK suele rechazar con la descripción en null: el motivo se arma con
+     *    el código del error y con lo que el controlador de vuelo dice de por qué
+     *    no arrancan los motores (KeyTakeoffFailureError / KeyMotorStartFailureError).
+     */
+    private suspend fun ordenarDespegue(): Boolean {
+        seResolvioElProblema()
+        esperarMotoresApagados()
+        return accion(FlightControllerKey.KeyStartTakeoff, "despegar") { motivoDelDronParaNoDespegar() }
+    }
+
+    /** Recién aterrizado: hasta [ESPERA_MOTORES_MS] a que los motores se apaguen. */
+    private suspend fun esperarMotoresApagados() {
+        val limite = System.currentTimeMillis() + ESPERA_MOTORES_MS
+        val llave = KeyTools.createKey(FlightControllerKey.KeyAreMotorsOn)
+        while (System.currentTimeMillis() < limite) {
+            if (KeyManager.getInstance().getValue(llave) != true) return
+            delay(200)
+        }
+    }
+
+    /** Lo que el controlador de vuelo informa sobre por qué no despega (vacío si no informa nada). */
+    private fun motivoDelDronParaNoDespegar(): String {
+        val km = KeyManager.getInstance()
+        val motivos = listOf(
+            "despegue" to km.getValue(KeyTools.createKey(FlightControllerKey.KeyTakeoffFailureError)),
+            "motores" to km.getValue(KeyTools.createKey(FlightControllerKey.KeyMotorStartFailureError)),
+        ).mapNotNull { (que, valor) ->
+            valor?.toString()?.takeUnless { it.isBlank() || it == "NONE" || it == "UNKNOWN" }?.let { "$que: $it" }
+        }
+        val avisos = listOfNotNull(
+            "la IMU se está calentando".takeIf { km.getValue(KeyTools.createKey(FlightControllerKey.KeyIsIMUWarmingUp)) == true },
+            "error de brújula".takeIf { km.getValue(KeyTools.createKey(FlightControllerKey.KeyCompassHasError)) == true },
+            "el dron no permite arrancar los motores".takeIf {
+                km.getValue(KeyTools.createKey(FlightControllerKey.KeyNotAllowMotorStart)) == true
+            },
+        )
+        return (motivos + avisos).joinToString(", ")
     }
 
     /** Espera a que el despegue automático deje al dron en el aire, con tope. */
@@ -979,9 +1044,14 @@ class DjiDroneController : DroneController {
 
     /**
      * Ejecuta una acción del controlador de vuelo (despegar, aterrizar, volver a
-     * base) y espera su resultado. Un rechazo se avisa con el motivo del SDK.
+     * base) y espera su resultado. Un rechazo se avisa con el motivo del SDK y,
+     * si se da, con lo que agregue [masDetalle] (leído en el momento del rechazo).
      */
-    private suspend fun accion(llave: DJIActionKeyInfo<EmptyMsg, EmptyMsg>, que: String): Boolean =
+    private suspend fun accion(
+        llave: DJIActionKeyInfo<EmptyMsg, EmptyMsg>,
+        que: String,
+        masDetalle: () -> String = { "" },
+    ): Boolean =
         suspendCancellableCoroutine { continuacion ->
             KeyManager.getInstance().performAction(
                 KeyTools.createKey(llave),
@@ -992,7 +1062,8 @@ class DjiDroneController : DroneController {
                     }
 
                     override fun onFailure(error: IDJIError) {
-                        avisar("el dron no aceptó $que (${error.description()})")
+                        val extra = runCatching(masDetalle).getOrDefault("").takeIf { it.isNotBlank() }
+                        avisar("el dron no aceptó $que (${describir(error)}${extra?.let { "; $it" } ?: ""})")
                         if (continuacion.isActive) continuacion.resume(false)
                     }
                 },
@@ -1098,7 +1169,7 @@ class DjiDroneController : DroneController {
                     virtualStickListo.set(false)
                     reintentoDelMandoVirtual.fracaso(System.currentTimeMillis())
                     avisar(
-                        "el dron no aceptó el mando virtual (${error.description()}): " +
+                        "el dron no aceptó el mando virtual (${describir(error)}): " +
                             "revisá que el control esté en modo N. La app no lo va a poder mover",
                     )
                 }
@@ -1130,7 +1201,7 @@ class DjiDroneController : DroneController {
 
                 override fun onFailure(error: IDJIError) {
                     avisar(
-                        "no se pudo devolver el mando al control (${error.description()}): " +
+                        "no se pudo devolver el mando al control (${describir(error)}): " +
                             "el Virtual Stick puede haber quedado habilitado",
                     )
                 }
@@ -1215,6 +1286,9 @@ class DjiDroneController : DroneController {
 
         /** El despegue automático del SDK deja al dron a 1,2 m; se da por despegado a partir de 1 m. */
         const val ALTURA_DESPEGUE_SDK_M = 1.0
+
+        /** Recién aterrizado, cuánto se espera a que los motores se apaguen antes de volver a despegar. */
+        const val ESPERA_MOTORES_MS = 8_000L
 
         /** Tope para que el dron despegue (motores + salto a 1,2 m). */
         const val ESPERA_DESPEGUE_MS = 25_000L

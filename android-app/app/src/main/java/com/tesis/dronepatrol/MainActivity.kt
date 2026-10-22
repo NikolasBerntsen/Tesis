@@ -327,6 +327,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun configurarAccionesDeVuelo() {
         binding.btnStartPatrol.setOnClickListener { comenzarPatrullaje() }
+        binding.btnDespegarAqui.setOnClickListener {
+            confirmar(
+                R.string.main_confirmar_despegue_aqui_titulo,
+                getString(R.string.main_confirmar_despegue_aqui_texto),
+                R.string.main_confirmar_despegue_boton,
+            ) { manager.despegarAqui() }
+        }
         binding.btnStopPatrol.setOnClickListener { manager.detenerPatrullaje() }
         binding.btnResumePatrol.setOnClickListener { manager.reanudarPatrullaje() }
         binding.btnReturnHome.setOnClickListener {
@@ -372,11 +379,16 @@ class MainActivity : AppCompatActivity() {
     private fun actualizarBotones() {
         val estado = manager.state.value
         val dron = ultimoEstadoDron
-        binding.btnStartPatrol.isEnabled =
-            routes.isNotEmpty() && estado == PatrolState.IDLE && (dron.enVuelo || dron.listoParaDespegar)
+        binding.btnStartPatrol.isEnabled = BotonesDeVuelo.comenzarHabilitado(routes.isNotEmpty(), estado, dron)
+        // El botón apagado no dice nada: se explica por qué. Lo típico es la
+        // falta de GPS o de punto de retorno (en interior, siempre).
+        val aviso = BotonesDeVuelo.aviso(routes.isNotEmpty(), estado, dron)
+        binding.txtNoPatrulla.visibility = if (aviso != null) View.VISIBLE else View.GONE
+        binding.txtNoPatrulla.text = aviso?.let { BotonesDeVuelo.texto(it, this) }.orEmpty()
         binding.btnStartPatrol.setText(
             if (dron.enVuelo) R.string.main_comenzar_patrullaje else R.string.main_despegar_y_patrullar,
         )
+        binding.btnDespegarAqui.isEnabled = BotonesDeVuelo.despegarAquiHabilitado(estado, dron)
         binding.btnStopPatrol.isEnabled = estado in ESTADOS_DETENIBLES
         binding.btnResumePatrol.isEnabled = manager.tieneRuta && estado in ESTADOS_REANUDABLES
         binding.btnReturnHome.isEnabled =
