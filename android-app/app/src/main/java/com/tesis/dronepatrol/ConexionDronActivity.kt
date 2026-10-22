@@ -78,6 +78,23 @@ class ConexionDronActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Cómo se pide y cómo se suelta la ubicación del teléfono: por defecto, al
+     * proveedor de Google, con los avisos en el hilo principal. Son `internal`
+     * y reemplazables solo para las pruebas: ese proveedor no tiene doble en
+     * Robolectric, y sin ver qué se le pide no hay forma de probar que la
+     * pantalla de verdad siga al teléfono —sin eso nunca aparecen la distancia
+     * ni el aviso de "el dron enlazado está lejos"— ni que lo suelte al
+     * cerrarse. La app nunca los cambia.
+     */
+    @SuppressLint("MissingPermission") // solo se llama después de comprobar el permiso (ver seguirAlTelefono)
+    internal var pedirUbicacion: (LocationRequest, LocationCallback) -> Unit = { pedido, alCambiar ->
+        val cliente = LocationServices.getFusedLocationProviderClient(this)
+        localizacion = cliente
+        cliente.requestLocationUpdates(pedido, alCambiar, Looper.getMainLooper())
+    }
+    internal var soltarUbicacion: (LocationCallback) -> Unit = { alCambiar -> localizacion?.removeLocationUpdates(alCambiar) }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityConexionDronBinding.inflate(layoutInflater)
@@ -255,19 +272,12 @@ class ConexionDronActivity : AppCompatActivity() {
         )
     }
 
-    @SuppressLint("MissingPermission")
     private fun seguirAlTelefono() {
         val conPermiso = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
             ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
         if (!conPermiso) return
         runCatching {
-            val cliente = LocationServices.getFusedLocationProviderClient(this)
-            localizacion = cliente
-            cliente.requestLocationUpdates(
-                LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 2_000L).build(),
-                alCambiarUbicacion,
-                Looper.getMainLooper(),
-            )
+            pedirUbicacion(LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 2_000L).build(), alCambiarUbicacion)
         }
     }
 
@@ -290,6 +300,6 @@ class ConexionDronActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        runCatching { localizacion?.removeLocationUpdates(alCambiarUbicacion) }
+        runCatching { soltarUbicacion(alCambiarUbicacion) }
     }
 }

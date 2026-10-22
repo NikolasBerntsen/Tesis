@@ -45,7 +45,9 @@ open class CommandCenterClient(
      * El cliente del REST y, salvo que se pase otro, el del WebSocket. Es
      * parámetro solo para las pruebas: con un interceptor que contesta en lugar
      * del servidor se ve el pedido exacto (ruta, JWT, cuerpo) sin salir a la
-     * red. La app usa siempre el de por defecto.
+     * red, y las pantallas de login y del menú de campo recorren su flujo
+     * entero —incluido el texto de error que interpretan—. La app usa siempre
+     * el de por defecto.
      */
     private val http: OkHttpClient = OkHttpClient.Builder()
         .pingInterval(15, TimeUnit.SECONDS)
