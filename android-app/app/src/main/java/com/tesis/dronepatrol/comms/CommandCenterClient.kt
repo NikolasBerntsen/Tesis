@@ -227,7 +227,14 @@ open class CommandCenterClient(private val scope: CoroutineScope) {
         }
     }
 
-    suspend fun fetchRoutes(): List<PatrolRoute> = withContext(Dispatchers.IO) {
+    /**
+     * Rutas del dron autenticado. `open` por lo mismo que [send]: PatrolManager
+     * la vuelve a consultar cuando la consola ordena una ruta que la app no
+     * tiene descargada (una que se creó después de abrir la sesión), y sin un
+     * Comando Central de verdad el banco de pruebas no tiene otra forma de
+     * contestarle esa segunda consulta.
+     */
+    open suspend fun fetchRoutes(): List<PatrolRoute> = withContext(Dispatchers.IO) {
         val res = http.newCall(
             Request.Builder()
                 .url("$baseUrl/api/routes")

@@ -1,6 +1,7 @@
 package com.tesis.dronepatrol.drone
 
 import com.tesis.dronepatrol.model.FlightEvent
+import com.tesis.dronepatrol.model.Telemetry
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -114,5 +115,88 @@ class SimulatedDroneControllerSeguimientoTest {
         } finally {
             enElAire.disconnect()
         }
+    }
+
+    // ---- Órbita ----
+
+    /** Rumbo 0..360° del dron hacia el centro, con la misma convención que la telemetría. */
+    private fun rumboAlCentro(t: Telemetry, centroLat: Double, centroLon: Double) =
+        (Geo.rumboHacia(t.lat, t.lon, centroLat, centroLon) + 360.0) % 360.0
+
+    /**
+     * La órbita arranca desde el punto del círculo más cercano al dron: con el
+     * ángulo fijo en el norte, un dron que llegaba desde el sur cruzaba por
+     * encima del objetivo para ir al otro lado. Ya orbitando, la nariz mira al
+     * centro y la cámara baja lo justo para tenerlo en el cuadro.
+     */
+    @Test
+    fun laOrbitaArrancaDesdeElPuntoMasCercanoYMiraAlCentro() = runBlocking {
+        val enElAire = SimulatedDroneController(arrancaEnElAire = true)
+        try {
+            enElAire.connect()
+            withTimeout(5_000) { enElAire.telemetry.first() }
+            // El objetivo 50 m al norte: el punto más cercano del círculo de
+            // 30 m queda 20 m al norte del dron, del lado de acá del objetivo.
+            val centroLat = LAT + 50.0 / Geo.METROS_POR_GRADO_LAT
+            enElAire.startOrbit(centroLat, LON, 30.0)
+
+            var masCerca = Double.MAX_VALUE
+            var ultima = enElAire.telemetry.first()
+            repeat(10) {
+                delay(500)
+                ultima = enElAire.telemetry.first()
+                masCerca = minOf(masCerca, Geo.distanciaM(ultima.lat, ultima.lon, centroLat, LON))
+            }
+
+            assertTrue("cruzó por encima del objetivo: pasó a $masCerca m del centro", masCerca > 20.0)
+            val distancia = Geo.distanciaM(ultima.lat, ultima.lon, centroLat, LON)
+            assertEquals(30.0, distancia, 6.0)
+            assertEquals(rumboAlCentro(ultima, centroLat, LON), ultima.heading, 0.5)
+            assertEquals(Georreferencia.inclinacionParaOrbitar(ultima.altM, distancia), ultima.gimbalPitch, 0.5)
+        } finally {
+            enElAire.disconnect()
+        }
+    }
+
+    /**
+     * Cuando la estimación del objetivo se corre, la patrulla vuelve a pedir la
+     * órbita con el centro nuevo: el dron deja el círculo viejo y queda
+     * orbitando el nuevo. Los dos círculos no se tocan, así que estar a 30 m
+     * del centro nuevo solo puede ser haberse mudado a él.
+     */
+    @Test
+    fun siElCentroSeCorreLaOrbitaLoAcompania() = runBlocking {
+        val enElAire = SimulatedDroneController(arrancaEnElAire = true)
+        try {
+            enElAire.connect()
+            val centroLat = LAT + 50.0 / Geo.METROS_POR_GRADO_LAT
+            enElAire.startOrbit(centroLat, LON, 30.0)
+            delay(3_000)
+
+            val nuevoLon = LON + 100.0 / Geo.metrosPorGradoLon(centroLat)
+            enElAire.startOrbit(centroLat, nuevoLon, 30.0)
+            val limite = System.currentTimeMillis() + 20_000
+            var ultima = enElAire.telemetry.first()
+            while (System.currentTimeMillis() < limite) {
+                delay(500)
+                ultima = enElAire.telemetry.first()
+                if (kotlin.math.abs(Geo.distanciaM(ultima.lat, ultima.lon, centroLat, nuevoLon) - 30.0) < 6.0) break
+            }
+
+            assertEquals(30.0, Geo.distanciaM(ultima.lat, ultima.lon, centroLat, nuevoLon), 6.0)
+            assertEquals(rumboAlCentro(ultima, centroLat, nuevoLon), ultima.heading, 0.5)
+        } finally {
+            enElAire.disconnect()
+        }
+    }
+
+    @Test
+    fun enElSueloOrbitarSeRechaza() = runBlocking {
+        dron.connect()
+        val aviso = alOrdenar({ it is FlightEvent.Problema }) { dron.startOrbit(LAT, LON, 30.0) }
+        assertTrue((aviso as FlightEvent.Problema).motivo.contains("orbitar"))
+        delay(700)
+        assertEquals(0.0, dron.telemetry.first().altM, 0.0)
+        assertFalse(dron.estado.value.enVuelo)
     }
 }
