@@ -73,6 +73,12 @@ class SimulatedDroneControllerBordesTest {
      * vuelve a la base, sin que nadie se lo ordene (la app no le puede hablar,
      * el enlace es justamente lo que se cortó). Mientras dura el corte no llega
      * telemetría, y al volver el enlace el dron ya está en camino.
+     *
+     * El umbral se mira de los dos lados, porque un failsafe que saltara antes
+     * también terminaría con el dron yendo al norte: un corte de 5 s no lo
+     * mueve (y el corte siguiente cuenta sus 6 s desde cero, no desde el
+     * primero), y en el de más de 6 s el regreso arranca recién al cruzar el
+     * umbral, así que al volver el enlace hizo apenas unos metros del camino.
      */
     @Test
     fun sinEnlaceMasDeSeisSegundosVuelveSoloALaBase() = runBlocking {
@@ -82,6 +88,18 @@ class SimulatedDroneControllerBordesTest {
         enElAire.setHome(BASE_AL_NORTE, LON)
         enElAire.hold()
         delay(700)
+
+        // Un corte por debajo del umbral, con 1 s de margen para que los ticks
+        // reales no lo crucen en una máquina cargada.
+        enElAire.setSignalLost(true)
+        delay(5_000)
+        enElAire.setSignalLost(false)
+        val vueltaDelEnlace = System.currentTimeMillis()
+        delay(1_200)
+        val trasElCorteCorto = enElAire.telemetry.first()
+        // Que sea una lectura de después del corte: la de antes también dice 0 m.
+        assertTrue("no llegó telemetría al volver el enlace", trasElCorteCorto.ts >= vueltaDelEnlace)
+        assertEquals("salió hacia la base con 5 s sin enlace", 0.0, metrosAlNorte(trasElCorteCorto.lat), 1e-6)
 
         enElAire.setSignalLost(true)
         assertTrue(enElAire.signalLost)
@@ -95,8 +113,14 @@ class SimulatedDroneControllerBordesTest {
         assertFalse(enElAire.signalLost)
         delay(1_200)
 
+        // El regreso arranca en el primer tick pasados los 6 s y hasta la
+        // lectura van unos 2,4 s: 4 o 5 ticks de 6 m, entre 24 y 30 m. Con el
+        // tope de 45 m caben dos ticks de demora; un failsafe que saltara al
+        // cortar ya habría recorrido los 60 m hasta la base.
         val t = enElAire.telemetry.first()
-        assertTrue("no salió hacia la base: ${metrosAlNorte(t.lat)} m al norte", metrosAlNorte(t.lat) > 10.0)
+        val recorrido = metrosAlNorte(t.lat)
+        assertTrue("no salió hacia la base: $recorrido m al norte", recorrido > 10.0)
+        assertTrue("salió hacia la base antes de los 6 s: ya hizo $recorrido m", recorrido < 45.0)
         assertTrue("rumbo ${t.heading}: tendría que ir al norte", t.heading < 1.0 || t.heading > 359.0)
     }
 
