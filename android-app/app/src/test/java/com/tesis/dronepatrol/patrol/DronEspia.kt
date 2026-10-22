@@ -52,6 +52,11 @@ internal class DronEspia : DroneController {
      */
     fun laUltimaOrdenLoDejaQuieto(): Boolean = ultimaOrden == "hold" || ultimaOrden == "stick(0.0, 0.0, 0.0, 0.0)"
 
+    /**
+     * [ts] es la hora del dron en esa lectura. Por defecto, ahora; las pruebas de
+     * la georreferencia la fijan a mano para armar una historia de poses (qué
+     * pose corresponde al cuadro de cada detección) sin dormir el test.
+     */
     suspend fun emitirTelemetria(
         lat: Double = -34.6037,
         lon: Double = -58.3816,
@@ -59,8 +64,9 @@ internal class DronEspia : DroneController {
         alt: Double = 40.0,
         rumbo: Double = 0.0,
         gimbal: Double = Telemetry.GIMBAL_PATRULLA,
+        ts: Long = System.currentTimeMillis(),
     ) {
-        telemetria.emit(Telemetry(lat, lon, alt, bateria, 90, rumbo, System.currentTimeMillis(), gimbal))
+        telemetria.emit(Telemetry(lat, lon, alt, bateria, 90, rumbo, ts, gimbal))
     }
 
     /**

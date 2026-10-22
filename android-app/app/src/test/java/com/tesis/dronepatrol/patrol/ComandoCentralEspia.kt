@@ -1,6 +1,7 @@
 package com.tesis.dronepatrol.patrol
 
 import com.tesis.dronepatrol.comms.CommandCenterClient
+import com.tesis.dronepatrol.model.PatrolRoute
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import org.json.JSONObject
@@ -25,6 +26,17 @@ internal class ComandoCentralEspia(alcance: CoroutineScope) : CommandCenterClien
     fun eventos(tipo: String): List<JSONObject> = mensajes("event").filter { it.optString("eventType") == tipo }
 
     val alertas: List<JSONObject> get() = mensajes("alert_request")
+
+    /**
+     * Lo que contesta el Comando Central si la app vuelve a pedirle las rutas.
+     * null es "sin Comando Central": la consulta falla, igual que la del
+     * cliente real sin sesión, y PatrolManager se queda con las que tenía.
+     */
+    @Volatile
+    var rutasDelServidor: List<PatrolRoute>? = null
+
+    override suspend fun fetchRoutes(): List<PatrolRoute> =
+        rutasDelServidor ?: error("sin Comando Central del otro lado")
 }
 
 /** Reloj del seguimiento que el test adelanta a mano (ver PatrolManager.reloj). */
