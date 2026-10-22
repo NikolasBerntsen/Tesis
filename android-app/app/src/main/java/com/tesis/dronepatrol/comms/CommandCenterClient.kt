@@ -34,6 +34,10 @@ import org.json.JSONObject
  * distinguir lo que va al Comando Central de lo que va a la detección —dar vuelta
  * los dos destinos del video es un defecto que CI no veía— y para eso hereda y
  * pisa el envío.
+ *
+ * Por lo mismo son `open` [connect] y [fetchRoutes]: la pantalla de operación
+ * abre el socket y baja las rutas apenas se crea, y su banco de pruebas los
+ * reemplaza para no salir a la red (ver MainActivity.crearComandoCentral).
  */
 open class CommandCenterClient(
     private val scope: CoroutineScope,
@@ -213,7 +217,7 @@ open class CommandCenterClient(
         token = ""
     }
 
-    fun connect() {
+    open fun connect() {
         if (wantConnected) return
         wantConnected = true
         openWebSocket()

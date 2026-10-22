@@ -58,6 +58,14 @@ class PatrolManager(
      * no se prueban durmiendo el test.
      */
     private val reloj: () -> Long = System::currentTimeMillis,
+    /**
+     * Reloj del vigía de la señal (ver signalWatchdog()): "sin telemetría hace
+     * más de 4 s" tampoco se prueba durmiendo el test. Va aparte de [reloj]
+     * porque las pruebas del seguimiento lo adelantan de a 10 s sin telemetría
+     * de por medio, y con un solo reloj eso sería además una señal perdida que
+     * les corta el seguimiento en el medio.
+     */
+    private val relojDeLaSenial: () -> Long = System::currentTimeMillis,
 ) {
     // internal y no private: el banco de pruebas necesita los límites exactos
     // —el del watchdog del mando, el del reparto de cuadros y el de la repetición
@@ -1158,7 +1166,7 @@ class PatrolManager(
         while (true) {
             delay(1_000)
             val flying = enVueloParaLosFailsafes()
-            val silent = lastTelemetryAt > 0 && System.currentTimeMillis() - lastTelemetryAt > SIGNAL_TIMEOUT_MS
+            val silent = lastTelemetryAt > 0 && relojDeLaSenial() - lastTelemetryAt > SIGNAL_TIMEOUT_MS
             if (flying && silent) {
                 _signalOk.value = false
                 _signalPct.value = 0
@@ -1178,7 +1186,7 @@ class PatrolManager(
     private suspend fun onTelemetry(t: Telemetry) {
         val recovering = _state.value == PatrolState.RETURNING_HOME_SIGNAL
         lastTelemetry = t
-        lastTelemetryAt = System.currentTimeMillis()
+        lastTelemetryAt = relojDeLaSenial()
         poses.addLast(t)
         while (poses.isNotEmpty() && t.ts - poses.first().ts > HISTORIA_DE_POSES_MS) poses.removeFirst()
         _signalOk.value = true
