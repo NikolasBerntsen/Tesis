@@ -1,6 +1,7 @@
 import { useEffect, useId, useState } from 'react';
 import { toDataURL } from 'qrcode';
 import type { Drone } from '../types';
+import IconoCerrar from './IconoCerrar';
 import Modal from './Modal';
 
 /**
@@ -9,17 +10,6 @@ import Modal from './Modal';
  * Corrección M y 512 px para que el sticker impreso se lea con el celular.
  */
 const OPCIONES_QR = { errorCorrectionLevel: 'M', margin: 2, width: 512 } as const;
-
-const ICONO_CERRAR = {
-  width: 15,
-  height: 15,
-  viewBox: '0 0 16 16',
-  fill: 'none',
-  stroke: 'currentColor',
-  strokeWidth: 1.5,
-  strokeLinecap: 'round',
-  'aria-hidden': true,
-} as const;
 
 /**
  * Sticker imprimible de un dron: el QR lleva **únicamente** el hash (la app
@@ -54,9 +44,7 @@ export default function QrDronModal({ dron, onCerrar }: { dron: Drone; onCerrar:
           <p className="modal-subtitulo">El código lleva sólo el identificador</p>
         </div>
         <button className="modal-cerrar" aria-label="Cerrar el sticker" onClick={onCerrar}>
-          <svg {...ICONO_CERRAR}>
-            <path d="M4.2 4.2 11.8 11.8M11.8 4.2 4.2 11.8" />
-          </svg>
+          <IconoCerrar />
         </button>
       </header>
 

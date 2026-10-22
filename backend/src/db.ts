@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config';
+import { normalizarDni } from './dni';
 
 fs.mkdirSync(path.dirname(config.dbFile), { recursive: true });
 
@@ -18,6 +19,10 @@ db.exec(`
     role          TEXT NOT NULL,
     display_name  TEXT,
     full_name     TEXT NOT NULL DEFAULT '',
+    -- DNI argentino en su forma canónica: solo dígitos, sin ceros a la
+    -- izquierda, 7 u 8 (dni.ts). Vacío en las cuentas anteriores al cambio: no
+    -- hay de dónde sacarlo y se completa desde la consola.
+    dni           TEXT NOT NULL DEFAULT '',
     active        INTEGER NOT NULL DEFAULT 1,
     can_control   INTEGER NOT NULL DEFAULT 1,
     -- Borrado lógico: la fila queda y por lo tanto el username SIGUE OCUPADO
@@ -265,6 +270,76 @@ for (const [col, def] of [
 }
 const userCols2 = (db.prepare('PRAGMA table_info(users)').all() as { name: string }[]).map((c) => c.name);
 if (!userCols2.includes('full_name')) db.exec("ALTER TABLE users ADD COLUMN full_name TEXT NOT NULL DEFAULT ''");
+// El DNI va después de la reconstrucción de `users` por el mismo motivo que el
+// borrado lógico: la tabla rearmada no lo traería.
+if (!userCols2.includes('dni')) db.exec("ALTER TABLE users ADD COLUMN dni TEXT NOT NULL DEFAULT ''");
+
+/**
+ * Lleva los DNI ya guardados a su forma canónica (ver dni.ts). Hasta que la
+ * regla sacó los ceros a la izquierda, "5123456" y "05123456" (el mismo número,
+ * escrito como figura adentro del CUIL) entraban como DNI distintos: una misma
+ * persona podía tener dos cuentas vivas sin que el índice único se enterara, y
+ * el buscador no la encontraba por la otra forma. Corre en cada arranque y no
+ * escribe nada si ya está todo en forma, así que es idempotente.
+ *
+ * Si dos cuentas vivas colapsan al mismo DNI, se lo queda la de id más bajo —la
+ * más vieja— y a las demás se les vacía, con un aviso en el log que nombra a
+ * las dos. No hay forma automática de saber cuál es la buena, y frenar el
+ * arranque dejaría a todos sin consola por un dato que un admin corrige en un
+ * minuto; el DNI vacío es el mismo que tienen las cuentas anteriores al DNI, y
+ * la consola ya sabe pedirlo. Las eliminadas también se normalizan (restaurar
+ * una compara su DNI contra las vivas) pero no compiten: el índice no las mira.
+ *
+ * Un valor sin forma canónica (un "00000000") también se vacía: la API no lo
+ * aceptaría, así que nadie podría volver a guardarlo tal cual.
+ *
+ * El aviso no lleva el DNI: el log del servidor no es lugar para un dato
+ * personal, y con el usuario alcanza para ir a buscarlo.
+ */
+function normalizarDnisGuardados() {
+  const filas = db
+    .prepare("SELECT id, username, dni, deleted FROM users WHERE dni != '' ORDER BY id")
+    .all() as { id: number; username: string; dni: string; deleted: number }[];
+  const duenos = new Map<string, string>();
+  const cambios: { id: number; dni: string }[] = [];
+  for (const f of filas) {
+    const canonico = normalizarDni(f.dni);
+    let nuevo = canonico ?? '';
+    if (canonico === null) {
+      console.warn(`[migración] la cuenta ${f.username} tenía un DNI inválido: se vació para volver a cargarlo`);
+    } else if (f.deleted === 0) {
+      const dueno = duenos.get(canonico);
+      if (dueno === undefined) {
+        duenos.set(canonico, f.username);
+      } else {
+        nuevo = '';
+        console.warn(
+          `[migración] la cuenta ${f.username} tenía el mismo DNI que ${dueno} (con otros ceros adelante): ` +
+            `se lo queda ${dueno} y a ${f.username} se le vació para volver a cargarlo`,
+        );
+      }
+    }
+    if (nuevo !== f.dni) cambios.push({ id: f.id, dni: nuevo });
+  }
+  if (cambios.length === 0) return;
+  // En una base que ya tiene el índice, poner el canónico en una cuenta mientras
+  // otra todavía lo tiene violaría la unicidad: primero se vacían las que
+  // pierden y recién después se reescriben las que se lo quedan.
+  cambios.sort((a, b) => Number(a.dni !== '') - Number(b.dni !== ''));
+  const actualizar = db.prepare('UPDATE users SET dni = ? WHERE id = ?');
+  db.transaction(() => {
+    for (const c of cambios) actualizar.run(c.dni, c.id);
+  })();
+}
+
+// Va ANTES del índice: sobre una base vieja con "5123456" y "05123456" vivas,
+// crear el índice no falla (son textos distintos) pero tampoco protege nada.
+normalizarDnisGuardados();
+// Un DNI es de una sola persona viva: el índice lo garantiza aunque algún
+// camino se saltee el chequeo de la API. Es parcial a propósito: las cuentas
+// viejas comparten el DNI vacío, y una baja lógica libera el número para que la
+// misma persona pueda volver con una cuenta nueva.
+db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_dni_vivo ON users(dni) WHERE deleted = 0 AND dni != ''");
 
 // Las bases que vivían embebidas en cada dron se promueven a filas de `bases`.
 // Se agrupan por nombre y coordenada: tres drones que compartían "Base Norte"

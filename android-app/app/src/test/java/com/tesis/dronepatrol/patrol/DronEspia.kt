@@ -23,6 +23,11 @@ import kotlinx.coroutines.flow.SharedFlow
  */
 internal class DronEspia : DroneController {
 
+    companion object {
+        /** Cómo queda anotado [cancelarInclinacionManual]. */
+        const val CANCELAR_CAMARA = "cancelarInclinacionManual"
+    }
+
     private val telemetria = MutableSharedFlow<Telemetry>(replay = 1, extraBufferCapacity = 8)
     override val telemetry: SharedFlow<Telemetry> get() = telemetria
     override val videoFrames = MutableSharedFlow<ByteArray>(extraBufferCapacity = 4)
@@ -91,6 +96,9 @@ internal class DronEspia : DroneController {
     override fun gotoPoint(lat: Double, lon: Double) = anotar("gotoPoint")
     override fun manualStick(pitch: Double, roll: Double, yaw: Double, throttle: Double) =
         anotar("stick($pitch, $roll, $yaw, $throttle)")
+    override fun inclinarCamara(pitchGrados: Double) = anotar("camara($pitchGrados)")
+    /** Va en la lista con las demás: lo que se mira es que salga ANTES de la orden del estado siguiente. */
+    override fun cancelarInclinacionManual() = anotar(CANCELAR_CAMARA)
     override fun returnHome() = anotar("returnHome")
     override fun land() = anotar("land")
     override fun seguirObjetivo(lat: Double, lon: Double, vNorteMs: Double, vEsteMs: Double) {

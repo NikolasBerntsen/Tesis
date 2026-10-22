@@ -1,0 +1,338 @@
+/* ============================================================================
+   VISTA DE PILOTAJE — la cámara del dron a pantalla completa con un HUD de
+   juego encima (PilotajePantallaCompleta.tsx).
+   El video manda: los paneles son piedra translúcida apoyada en los bordes, y
+   el centro de la pantalla queda libre, que es donde el operador mira.
+   ========================================================================= */
+
+/* Leaflet apila sus capas hasta 1000 y el velo de los diálogos está en 2000:
+   la vista va en el medio. Tapa el mapa del detalle que queda atrás y deja que
+   los diálogos de despegar, aterrizar y salir se abran encima. */
+/* El recuadro del video (negro en los dos temas) y la piedra translúcida de
+   los paneles viven en tokens.css como --recuadro-video y --hud-panel: ahí
+   los mide contraste.test.ts contra un cuadro blanco y uno negro. */
+.pilotaje {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  overflow: hidden;
+  background: var(--recuadro-video);
+  color: var(--tinta);
+  /* Sin esto un doble clic sobre la imagen selecciona los textos del HUD. */
+  user-select: none;
+}
+.pilotaje:focus { outline: none; }
+/* En pantalla completa el navegador le pone su propio fondo al elemento. */
+.pilotaje:fullscreen { background: var(--recuadro-video); }
+.pilotaje-modo-mouse { cursor: none; }
+
+/* --- El video --------------------------------------------------------------- */
+.pilotaje-video {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  cursor: crosshair;
+}
+.pilotaje-encuadre {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  /* El zoom del botón derecho es un `scale` con el origen en el puntero: una
+     transición corta lo hace legible sin que se sienta lento. */
+  transition: transform var(--transicion);
+}
+.pilotaje-imagen {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  pointer-events: none;
+}
+.pilotaje-sin-senal {
+  font-family: var(--fuente-serif);
+  font-size: var(--txt-lg);
+  color: var(--tinta-media);
+  padding: var(--e-3) var(--e-5);
+  border-radius: var(--radio);
+  background: var(--hud-panel);
+}
+
+/* --- La capa del HUD --------------------------------------------------------
+   Una grilla de tres columnas: salida y minimapa, lecturas y avisos, ayuda.
+   La capa no recibe el mouse —la rueda y el botón derecho tienen que llegar a
+   la imagen— y sólo lo reciben las piezas de adentro. */
+.pilotaje-capa {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr) minmax(0, auto);
+  grid-template-rows: auto 1fr auto;
+  /* Cada pieza mide lo suyo: estiradas a la altura de la fila, el globo de la
+     ayuda —que cuelga del borde de abajo de su columna— caía lejos del "?". */
+  align-items: start;
+  gap: var(--e-3);
+  padding: var(--e-4);
+  pointer-events: none;
+}
+.pilotaje-capa button,
+.pilotaje-panel,
+.pilotaje-capa .aviso,
+.minimapa,
+.pilotaje-ayuda {
+  pointer-events: auto;
+}
+
+.pilotaje-panel,
+.pilotaje-capa .aviso,
+.pilotaje-pista {
+  background: var(--hud-panel);
+  border: 1px solid var(--veta);
+  border-radius: var(--radio);
+  box-shadow: var(--sombra-flotante);
+  backdrop-filter: blur(6px);
+}
+/* Los botones del HUD llevan la misma sombra: sobre una imagen cualquiera, la
+   cara de piedra sola se pierde contra un cielo claro. */
+.pilotaje-capa button { box-shadow: var(--sombra-flotante); }
+
+.pilotaje-izquierda {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--e-3);
+}
+
+.pilotaje-centro {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--e-2);
+  max-width: 640px;
+  min-width: 0;
+}
+.pilotaje-centro .aviso { margin: 0; max-width: 560px; }
+/* El velo rojo del aviso grave va encima de la piedra translúcida: solo, sobre
+   la imagen, no se leería. */
+.pilotaje-capa .aviso.malo {
+  border-color: var(--peligro);
+  background: linear-gradient(var(--peligro-velo), var(--peligro-velo)), var(--hud-panel);
+}
+.pilotaje-capa .pilotaje-alerta { border-color: var(--peligro); }
+
+.pilotaje-lecturas {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--e-2) var(--e-5);
+  margin: 0;
+  padding: var(--e-2) var(--e-4);
+}
+.pilotaje-lecturas > div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.pilotaje-lecturas dt { font-size: var(--txt-xxs); }
+.pilotaje-lecturas dd {
+  margin: 0;
+  font-family: var(--fuente-serif);
+  font-size: var(--txt-md);
+  font-variant-numeric: tabular-nums lining-nums;
+  white-space: nowrap;
+}
+
+.pilotaje-pista {
+  margin: 0;
+  padding: var(--e-1) var(--e-3);
+  font-size: var(--txt-sm);
+  color: var(--tinta-media);
+}
+
+.pilotaje-derecha {
+  grid-column: 3;
+  grid-row: 1;
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: var(--e-2);
+}
+.pilotaje-boton-ayuda {
+  font-family: var(--fuente-serif);
+  font-size: var(--txt-md);
+  font-weight: 600;
+}
+
+/* --- Pie: sticks y órdenes de vuelo -----------------------------------------
+   Los sticks van al centro de la pantalla, debajo de la mira, y las órdenes
+   contra el borde derecho: las dos piezas comparten la misma celda y cada una
+   se alinea por su cuenta, así los sticks no se corren cuando aparecen o
+   desaparecen botones. */
+.pilotaje-pie {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  display: grid;
+  align-items: end;
+}
+.pilotaje-pie > * { grid-area: 1 / 1; }
+.pilotaje-sticks {
+  justify-self: center;
+  width: min(560px, 100%);
+  padding: var(--e-3) var(--e-4);
+}
+/* Sobre el video sobran las lecturas y la ayuda del mando: el HUD ya dice la
+   velocidad y el "?" explica los sticks, y cada renglón de más tapa imagen. */
+.pilotaje-sticks .mando-lecturas,
+.pilotaje-sticks .mando-ayuda { display: none; }
+.pilotaje-acciones {
+  justify-self: end;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--e-2);
+}
+/* Entre la tableta y el escritorio chico los sticks centrados ya pisarían las
+   órdenes: se apilan, sticks arriba y órdenes en fila abajo. */
+@media (max-width: 1000px) {
+  .pilotaje-pie {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--e-3);
+  }
+  .pilotaje-sticks { align-self: center; }
+  .pilotaje-acciones { flex-direction: row; flex-wrap: wrap; justify-content: flex-end; }
+}
+
+/* --- Minimapa ---------------------------------------------------------------- */
+.minimapa {
+  position: relative;
+  /* Las capas de Leaflet (hasta 1000) quedan contenidas acá adentro: la flecha
+     y el "Sin GPS" van arriba de ellas sin competir con el resto del HUD. */
+  isolation: isolate;
+  width: 220px;
+  height: 150px;
+  overflow: hidden;
+  border: 1px solid var(--veta);
+  border-radius: var(--radio);
+  background: var(--marmol-2);
+  box-shadow: var(--sombra-flotante);
+}
+.minimapa-mapa {
+  position: absolute;
+  inset: 0;
+}
+.minimapa-dron {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 1100;
+  display: block;
+  line-height: 0;
+  pointer-events: none;
+}
+.minimapa-dron path {
+  fill: var(--oro);
+  stroke: var(--marmol-0);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+.minimapa-sin-gps {
+  position: absolute;
+  inset: 0;
+  z-index: 1100;
+  display: grid;
+  place-items: center;
+  background: var(--marmol-2);
+  color: var(--tinta-media);
+  font-family: var(--fuente-serif);
+  font-size: var(--txt-md);
+}
+
+/* --- Ayuda de los controles ---------------------------------------------------- */
+.pilotaje-ayuda {
+  position: absolute;
+  top: calc(100% + var(--e-2));
+  right: 0;
+  width: min(420px, calc(100vw - 2 * var(--e-4)));
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  padding: var(--e-4) var(--e-5);
+  border: 1px solid var(--veta);
+  border-radius: var(--radio);
+  background-color: var(--marmol-0);
+  background-image: var(--piedra-cara);
+  box-shadow: var(--sombra-flotante);
+  /* El texto de la ayuda sí se tiene que poder seleccionar y copiar. */
+  user-select: text;
+}
+.pilotaje-ayuda-cabecera {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--e-3);
+}
+.pilotaje-ayuda h2 {
+  margin: 0;
+  font-family: var(--fuente-serif);
+  font-size: var(--txt-lg);
+  font-weight: 400;
+}
+.pilotaje-ayuda h3 {
+  margin: var(--e-4) 0 var(--e-2);
+  font-size: var(--txt-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  color: var(--tinta-media);
+}
+.pilotaje-ayuda .muted { margin: var(--e-2) 0 0; font-size: var(--txt-xs); }
+.ayuda-controles {
+  display: grid;
+  gap: var(--e-1);
+  margin: 0;
+}
+.ayuda-controles > div {
+  display: grid;
+  grid-template-columns: minmax(118px, 40%) 1fr;
+  gap: var(--e-3);
+  align-items: baseline;
+}
+.ayuda-controles dt { font-size: var(--txt-sm); color: var(--tinta-media); }
+.ayuda-controles dd { margin: 0; font-size: var(--txt-sm); }
+.pilotaje kbd {
+  display: inline-block;
+  min-width: 1.8em;
+  padding: 1px 6px;
+  text-align: center;
+  border: 1px solid var(--veta-fuerte);
+  border-bottom-width: 2px;
+  border-radius: var(--radio-sello);
+  background: var(--marmol-1);
+  color: var(--tinta);
+  font-size: var(--txt-xs);
+}
+
+/* --- Pantallas angostas ----------------------------------------------------------
+   En un teléfono no entran tres columnas: las lecturas bajan a su propia fila
+   y el minimapa se achica. El video sigue entero de fondo. */
+@media (max-width: 760px) {
+  .pilotaje-capa {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto 1fr auto;
+    padding: var(--e-3);
+  }
+  .pilotaje-izquierda { grid-column: 1; grid-row: 1; }
+  .pilotaje-derecha { grid-column: 2; grid-row: 1; }
+  .pilotaje-centro { grid-column: 1 / -1; grid-row: 2; }
+  .pilotaje-pie { grid-row: 4; }
+  .pilotaje-lecturas { gap: var(--e-1) var(--e-3); }
+  .pilotaje-lecturas dd { font-size: var(--txt-base); }
+  .minimapa { width: 150px; height: 104px; }
+}

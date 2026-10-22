@@ -34,11 +34,13 @@ export function usuariosSinClavePropia(): Usuario[] {
   return (Object.keys(DE_FABRICA) as Usuario[]).filter((u) => claveDe(u) === DE_FABRICA[u]);
 }
 
-const humans: { username: Usuario; role: string; fullName: string }[] = [
-  { username: 'campo', role: 'field_operator', fullName: 'Camila Ferreira' },
-  { username: 'operador', role: 'operator', fullName: 'Martín Olivera' },
-  { username: 'supervisor', role: 'supervisor', fullName: 'Lucía Sosa' },
-  { username: 'admin', role: 'admin', fullName: 'Diego Antúnez' },
+/* Los DNI de demostración son tan ficticios como los nombres: están para que la
+   consola muestre la columna llena y se pueda probar el buscador por DNI. */
+const humans: { username: Usuario; role: string; fullName: string; dni: string }[] = [
+  { username: 'campo', role: 'field_operator', fullName: 'Camila Ferreira', dni: '40111222' },
+  { username: 'operador', role: 'operator', fullName: 'Martín Olivera', dni: '35333444' },
+  { username: 'supervisor', role: 'supervisor', fullName: 'Lucía Sosa', dni: '30555666' },
+  { username: 'admin', role: 'admin', fullName: 'Diego Antúnez', dni: '25777888' },
 ];
 
 /**
@@ -132,9 +134,16 @@ function sembrarUsuarios(): void {
   for (const h of humans) {
     const existe = db.prepare('SELECT 1 FROM users WHERE username = ?').get(h.username);
     if (existe) continue;
-    db.prepare('INSERT INTO users (username, full_name, password_hash, role, can_control) VALUES (?, ?, ?, ?, ?)').run(
+    // Si una persona de verdad ya tiene ese DNI, la cuenta de demostración nace
+    // sin él: el índice único haría fallar el seed, y un seed que falla tira el
+    // backend entero (ver revisarClaves).
+    const dniOcupado = db.prepare('SELECT 1 FROM users WHERE dni = ? AND deleted = 0').get(h.dni);
+    db.prepare(
+      'INSERT INTO users (username, full_name, dni, password_hash, role, can_control) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(
       h.username,
       h.fullName,
+      dniOcupado ? '' : h.dni,
       bcrypt.hashSync(claveDe(h.username), 10),
       h.role,
       // El operador de campo despliega drones, no los pilotea

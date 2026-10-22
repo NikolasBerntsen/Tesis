@@ -21,6 +21,21 @@ interface Capa {
   url?: string;
   latlng?: unknown;
   opciones?: Record<string, unknown>;
+  /** Lo que se le pasó a `bindTooltip`: texto (que Leaflet pinta como HTML) o un nodo. */
+  etiqueta?: unknown;
+}
+
+/**
+ * Pinta el contenido de una etiqueta o un globo como lo hace Leaflet
+ * (`Tooltip._updateContent`): un texto va con innerHTML y un nodo, tal cual.
+ * Es para probar que lo que escribió una persona —un apodo, un nombre— quede
+ * como texto y no se convierta en elementos con sus manejadores.
+ */
+export function pintarComoLeaflet(contenido: unknown): HTMLElement {
+  const caja = document.createElement('div');
+  if (typeof contenido === 'string') caja.innerHTML = contenido;
+  else if (contenido instanceof Node) caja.appendChild(contenido);
+  return caja;
 }
 
 export const estadoMapa = {
@@ -63,7 +78,10 @@ export function dobleLeaflet() {
       remove: () => {
         estadoMapa.sacadas.push(propia);
       },
-      bindTooltip: () => objeto,
+      bindTooltip: (contenido: unknown) => {
+        propia.etiqueta = contenido;
+        return objeto;
+      },
       bindPopup: () => objeto,
       setLatLng: (v: unknown) => {
         propia.latlng = v;

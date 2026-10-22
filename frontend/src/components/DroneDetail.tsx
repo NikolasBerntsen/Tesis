@@ -1,18 +1,20 @@
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, rutasDeBase } from '../api';
 import { posicionDelDron, stateLabel } from '../format';
 import type { RastroObjetivo } from '../rastro';
 import type { Alert, Drone, DroneStatus, EventRow, Me, PatrolRoute } from '../types';
 import type { DecidirAlerta } from '../useDecisionDeAlerta';
 import AlertaEnCurso from './AlertaEnCurso';
+import { useAvisar } from './AvisosFlotantes';
+import DialogoConfirmacion from './DialogoConfirmacion';
 import DroneStatusCard from './DroneStatusCard';
 import DronesMap, { type MapItem, type WaypointsLayer } from './DronesMap';
 import EditableName from './EditableName';
 import EventLog from './EventLog';
 import LiveVideo from './LiveVideo';
-import MandoVirtual, { type Ejes } from './MandoVirtual';
-import Modal from './Modal';
+import type { Ejes } from './MandoVirtual';
 import PanelObjetivo from './PanelObjetivo';
+import PilotajePantallaCompleta from './PilotajePantallaCompleta';
 
 // Estados en los que el patrullaje normal está interrumpido: habilitan
 // "Retomar ruta" y "Continuar desde acá" en los nodos.
@@ -62,6 +64,16 @@ const CONFIRMACION: Record<OrdenDeVuelo, { titulo: string; texto: string; aviso:
   },
 };
 
+/**
+ * Lo que se avisa mientras el dron no cumplió la orden que el backend ya
+ * aceptó. Se lee igual en la tarjeta y en el HUD de la vista de pilotaje.
+ */
+const ORDEN_EN_CURSO: Record<OrdenDeVuelo, string> = {
+  despegar:
+    'Despegue ordenado: el mando se habilita apenas el dron informe que está en el aire. Si no despega, el motivo queda en el registro de eventos.',
+  aterrizar: 'Aterrizaje ordenado: el dron baja donde está. El control sigue tomado.',
+};
+
 export default function DroneDetail({
   me,
   drone,
@@ -77,6 +89,7 @@ export default function DroneDetail({
   onRename,
   onWaypointLabel,
   onMando,
+  onCamara,
 }: {
   me: Me | null;
   drone: Drone;
@@ -100,8 +113,20 @@ export default function DroneDetail({
    * operador lo tiene que ver.
    */
   onMando: (ejes: Ejes) => boolean;
+  /**
+   * Inclinación de la cámara pedida desde la vista de pilotaje, en grados
+   * absolutos (`manual_gimbal`). Sale por el mismo WebSocket que los ejes y
+   * devuelve lo mismo: si el mensaje llegó a salir.
+   */
+  onCamara: (pitch: number) => boolean;
 }) {
   const [history, setHistory] = useState<EventRow[]>([]);
+  // Hasta que llega el historial, el registro no puede decir "sin eventos":
+  // es lo primero que se lee al entrar y era mentira por medio segundo.
+  const [historiaCargada, setHistoriaCargada] = useState(false);
+  /** El supervisor pidió quitarle el control a otro y falta confirmarlo. */
+  const [quitando, setQuitando] = useState(false);
+  const avisar = useAvisar();
   const [error, setError] = useState('');
   const [rutaElegida, setRutaElegida] = useState<number | ''>('');
   // Ids de las rutas que la base de este dron tiene habilitadas. `null` mientras
@@ -116,8 +141,64 @@ export default function DroneDetail({
    * operador cree que el botón no anduvo y lo vuelve a apretar.
    */
   const [ordenEnCurso, setOrdenEnCurso] = useState<OrdenDeVuelo | null>(null);
-  const idTitulo = useId();
-  const idTexto = useId();
+  /** La vista de pilotaje a pantalla completa está abierta. */
+  const [pilotando, setPilotando] = useState(false);
+  /** Por qué se cerró sola la vista de pilotaje (el control se perdió desde otro lado). */
+  const [avisoDePilotaje, setAvisoDePilotaje] = useState('');
+  /**
+   * Si la vista ya vio el control a nombre de este operador. Recién tomado, la
+   * vista se abre con la respuesta del POST y el `control_changed` llega un
+   * instante después: hasta entonces "no soy el controlador" es una espera, no
+   * una pérdida, y cerrar la vista ahí la cerraría apenas abierta.
+   */
+  const controlVistoAlPilotear = useRef(false);
+  /**
+   * La ficha del dron que había cuando se cortó el canal con el Comando Central
+   * en pleno pilotaje, o `null` si no se cortó. El backend suelta el control
+   * cuando se cierra la última consola de la cuenta, pero la consola se entera
+   * recién al reconectar, con la lista de drones que vuelve a pedir: para
+   * entonces el canal ya está arriba otra vez, y sin recordar el corte la vista
+   * se cerraba diciendo que el control se soltó "desde otra sesión".
+   */
+  const fichaAlCortarseElEnlace = useRef<Drone | null>(null);
+  /**
+   * El botón de la tarjeta del control que esté en pantalla: "Tomar control
+   * manual" sin nadie a cargo, o "Volver a la vista de pilotaje" con el control
+   * tomado (nunca los dos a la vez). Es adonde vuelve el foco al cerrarse la
+   * vista de pilotaje, si lo que lo tenía antes de abrirla ya no está.
+   */
+  const botonDelControl = useRef<HTMLButtonElement | null>(null);
+  /** El aviso de por qué se cerró sola la vista: el foco va ahí si no hay botón que lo reciba. */
+  const avisoDePilotajeRef = useRef<HTMLParagraphElement>(null);
+  /**
+   * El botón del control que se fue tenía el foco: lo hereda el que entra en su
+   * lugar en el mismo cambio. Es el camino de salir de la vista: el foco vuelve
+   * a "Volver a la vista de pilotaje", y cuando llega la confirmación de que se
+   * soltó el control ese botón deja paso a "Tomar control manual". Sin esto el
+   * foco se iba al body un instante después de haberlo devuelto.
+   */
+  const focoAHeredar = useRef(false);
+  // Estable a propósito: con una función nueva en cada render, React soltaría y
+  // volvería a poner la ref en cada status que llega.
+  const refDelBotonDelControl = useCallback((boton: HTMLButtonElement | null) => {
+    if (boton === null) {
+      // React suelta la ref antes de sacar el nodo de la página: todavía se
+      // puede preguntar si tenía el foco.
+      focoAHeredar.current = document.activeElement === botonDelControl.current;
+      botonDelControl.current = null;
+      return;
+    }
+    botonDelControl.current = boton;
+    if (focoAHeredar.current) boton.focus();
+    focoAHeredar.current = false;
+  }, []);
+  // Si en el mismo cambio no entró ningún botón (otro operador tomó el
+  // control), la herencia no puede quedar esperando al que aparezca mucho
+  // después y robarle el foco a lo que el operador esté haciendo. Las refs de
+  // los hijos se ponen antes que los efectos de layout del padre.
+  useLayoutEffect(() => {
+    focoAHeredar.current = false;
+  });
 
   // Un dron sólo puede patrullar las rutas de la base de la que sale. Ofrecerle
   // todas las del sistema era mandarlo a volar a la otra punta de la ciudad.
@@ -137,11 +218,23 @@ export default function DroneDetail({
     };
   }, [drone.droneId, drone.baseId]);
 
+  // Como los demás cargadores: la respuesta de un dron que ya se dejó no se
+  // escribe. Sin esto, saltar de A a B desde la campana dejaba que la
+  // respuesta de A llenara el registro de B con eventos ajenos, o que diera
+  // por cargado el de B y dijera "Sin eventos" mientras el suyo seguía viajando.
   useEffect(() => {
+    let vigente = true;
     setHistory([]);
+    setHistoriaCargada(false);
     api<EventRow[]>(`/events?droneId=${encodeURIComponent(drone.droneId)}`)
-      .then(setHistory)
-      .catch(console.error);
+      .then((h) => vigente && setHistory(h))
+      .catch(console.error)
+      .finally(() => {
+        if (vigente) setHistoriaCargada(true);
+      });
+    return () => {
+      vigente = false;
+    };
   }, [drone.droneId]);
 
   // Historial del dron más los eventos que fueron llegando por WebSocket.
@@ -185,17 +278,13 @@ export default function DroneDetail({
   const enElAire = status?.flying === true;
   const sinGps = !!status && posicionDelDron(status) === null;
 
-  // La alerta que se decide al lado del video: la pendiente más nueva de ESTE
-  // dron. Los ids crecen con cada alerta, así que la más nueva es la de id más
-  // alto, llegue en el orden que llegue la lista.
+  // Las alertas que se deciden al lado del video: las pendientes de ESTE dron.
+  // El carrusel las ordena (la más nueva primero) y recuerda cuál se mira.
   const pendientes = useMemo(
-    () =>
-      alertas
-        .filter((a) => a.drone_id === drone.droneId && a.status === 'PENDING')
-        .sort((a, b) => b.id - a.id),
+    () => alertas.filter((a) => a.drone_id === drone.droneId && a.status === 'PENDING'),
     [alertas, drone.droneId],
   );
-  const alertaEnCurso = pendientes[0] ?? null;
+  const hayAlerta = pendientes.length > 0;
 
   // El aviso de "orden en curso" se va solo cuando el dron confirma: en el aire
   // para el despegue, en el suelo para el aterrizaje. También si se suelta el
@@ -204,9 +293,23 @@ export default function DroneDetail({
     if (ordenEnCurso === 'despegar' && enElAire) setOrdenEnCurso(null);
     if (ordenEnCurso === 'aterrizar' && enElSuelo) setOrdenEnCurso(null);
   }, [ordenEnCurso, enElAire, enElSuelo]);
+  // Lo mismo con la orden que espera confirmación: sin el control ya no es de
+  // este operador (el backend la rechazaría), y confirmarla después, si el
+  // control vuelve, sería despegar con una pregunta vieja. Cubre también la
+  // vista de pilotaje que se cierra por la pérdida: el diálogo pedido desde
+  // ahí vive adentro de la vista en pantalla completa, y la vista se va en
+  // este mismo cambio (ver `contenedor` en Modal.tsx).
   useEffect(() => {
-    if (!soyControlador) setOrdenEnCurso(null);
+    if (soyControlador) return;
+    setOrdenEnCurso(null);
+    setAConfirmar(null);
   }, [soyControlador]);
+  // Si el control cambia de manos (o se suelta) mientras el supervisor lee la
+  // pregunta, la pregunta ya no es la misma: se descarta en vez de quedar
+  // pendiente y reaparecer con el próximo que lo tome.
+  useEffect(() => {
+    setQuitando(false);
+  }, [controlador]);
 
   /**
    * El estado que el dron reportó DESPUÉS de que se tomó el control, o `null`
@@ -245,15 +348,18 @@ export default function DroneDetail({
    * emite (los ejes que lleguen antes de tiempo la app los descarta sola, que es
    * mucho más barato que tragarse el gesto del operador) y se avisa aparte.
    */
-  const impedimentoDelMando = !drone.online
+  const impedimentoDeEnlace = !drone.online
     ? 'El dron está desconectado: el mando no responde.'
     : !conectado
       ? 'Sin conexión con el Comando Central: el mando no responde.'
       : estadoConfirmado !== null && estadoConfirmado !== 'MANUAL'
         ? `El dron no está en vuelo manual (${stateLabel(estadoConfirmado)}): el mando no responde.`
-        : enElSuelo
-          ? 'El dron está en el suelo: despegalo para usar el mando.'
-          : null;
+        : null;
+  // El enlace sin el suelo es lo que necesita la cámara: con el dron apoyado
+  // las palancas no hacen nada, pero inclinar la cámara sí (sirve para mirar
+  // alrededor antes de despegar).
+  const impedimentoDelMando =
+    impedimentoDeEnlace ?? (enElSuelo ? 'El dron está en el suelo: despegalo para usar el mando.' : null);
 
   /** Control tomado y el dron todavía sin decir en qué estado quedó. */
   const esperandoConfirmacion = impedimentoDelMando === null && estadoConfirmado === null;
@@ -299,7 +405,17 @@ export default function DroneDetail({
     llamar(`/drones/${drone.droneId}/route/start`, { method: 'POST', body: JSON.stringify({ routeId: rutaElegida }) });
   const interrumpirRuta = () => llamar(`/drones/${drone.droneId}/route/stop`, { method: 'POST' });
 
-  const tomarControl = () => llamar(`/drones/${drone.droneId}/control`, { method: 'POST' });
+  /**
+   * Tomar el control abre la vista de pilotaje: es para lo que se toma. Va en
+   * el mismo clic, y eso no es un detalle: el navegador sólo deja poner algo en
+   * pantalla completa como respuesta a un gesto del operador. Ese permiso dura
+   * unos segundos después del clic, que alcanzan para la respuesta del POST; si
+   * no alcanzaran, la vista ofrece su botón de pantalla completa.
+   */
+  async function tomarControl() {
+    setAvisoDePilotaje('');
+    if (await llamar(`/drones/${drone.droneId}/control`, { method: 'POST' })) setPilotando(true);
+  }
   /**
    * Soltar el control. Con un objetivo cargado, `'none'` hace que el dron
    * vuelva a él (§2 `control_released`); `'last'` además lo manda a patrullar,
@@ -308,10 +424,103 @@ export default function DroneDetail({
    */
   const soltarControl = (resume: 'none' | 'last') =>
     llamar(`/drones/${drone.droneId}/control`, { method: 'DELETE', body: JSON.stringify({ resume }) });
-  // Supervisor: mismo endpoint, el backend registra que fue forzado. Con
-  // objetivo, el dron vuelve a él: quitarle el control a alguien no es decidir
-  // que el objetivo deja de importar.
-  const quitarControl = () => soltarControl(objetivo ? 'none' : 'last');
+  /**
+   * Supervisor: mismo endpoint, el backend registra que fue forzado. Con
+   * objetivo, el dron vuelve a él: quitarle el control a alguien no es decidir
+   * que el objetivo deja de importar. Va por la confirmación (le corta el vuelo
+   * a otra persona), así que el error sube al diálogo en vez de quedar acá.
+   */
+  async function quitarControl() {
+    const otro = controlador;
+    await api(`/drones/${drone.droneId}/control`, {
+      method: 'DELETE',
+      body: JSON.stringify({ resume: objetivo ? 'none' : 'last' }),
+    });
+    avisar(`Se le quitó el control de ${drone.displayName} a ${otro}.`);
+  }
+  /**
+   * La salida de la vista de pilotaje suelta el control con la misma regla que
+   * el supervisor: con objetivo, el dron vuelve a él. La vista se cierra antes
+   * de soltar, así la pérdida del control que viene después no se lee como que
+   * se lo sacó otro.
+   */
+  const salirDelPilotaje = () => {
+    setPilotando(false);
+    // llamar() ya atrapa el rechazo y lo deja a la vista: no hay nada que esperar acá.
+    void soltarControl(objetivo ? 'none' : 'last');
+  };
+
+  // Otro dron en pantalla es otro vuelo: la vista no se queda abierta pilotando
+  // al que se dejó de mirar.
+  useEffect(() => {
+    setPilotando(false);
+  }, [drone.droneId]);
+
+  /**
+   * Volver a la vista con el control ya tomado. El error de una acción
+   * anterior (un salto del pad, una ruta) se borra: adentro de la vista se lee
+   * como el resultado de lo que se ordene ahí, y uno viejo confundiría.
+   */
+  function volverAPilotar() {
+    setError('');
+    setPilotando(true);
+  }
+
+  /**
+   * Adónde va el foco al cerrarse la vista si lo que lo tenía antes de abrirla
+   * ya no está: al botón del control que haya ahora. Si no hay ninguno que lo
+   * pueda recibir —otro operador se llevó el control, o el dron se desconectó y
+   * "Tomar control manual" está apagado—, al aviso que explica por qué se cerró.
+   */
+  function devolverFocoTrasElPilotaje() {
+    botonDelControl.current?.focus();
+    if (document.activeElement !== botonDelControl.current) avisoDePilotajeRef.current?.focus();
+  }
+
+  // El control se puede perder sin que este operador haga nada: un supervisor
+  // que se lo saca, la misma cuenta que lo suelta desde otra pestaña, el dron
+  // que se desconecta (el backend suelta su lock) o el canal de esta consola
+  // que se corta (lo suelta si era la última consola de la cuenta). Seguir
+  // mostrando la vista sería dejarlo apretando teclas que el backend ya no
+  // acepta; se cierra y se dice por qué, con el motivo más probable.
+  useEffect(() => {
+    if (!pilotando) {
+      controlVistoAlPilotear.current = false;
+      fichaAlCortarseElEnlace.current = null;
+      return;
+    }
+    if (!conectado) {
+      // Con el canal caído no llega ninguna ficha nueva: la que hay ahora es la
+      // última de antes del corte, y cualquier otra que llegue será posterior.
+      fichaAlCortarseElEnlace.current = drone;
+    } else if (
+      fichaAlCortarseElEnlace.current !== null &&
+      fichaAlCortarseElEnlace.current !== drone &&
+      soyControlador &&
+      drone.controlledBy === controlador
+    ) {
+      // Con el canal arriba llegó una ficha nueva del dron, y es ELLA la que
+      // dice que el control sigue siendo de este operador (no el status, que
+      // puede ser de antes del corte): había otra consola de la cuenta abierta
+      // y el corte no costó nada. Una pérdida posterior ya no es por el corte.
+      fichaAlCortarseElEnlace.current = null;
+    }
+    if (soyControlador) {
+      controlVistoAlPilotear.current = true;
+      return;
+    }
+    if (!controlVistoAlPilotear.current) return;
+    setPilotando(false);
+    setAvisoDePilotaje(
+      controlador
+        ? `${controlador} tomó el control del dron: se cerró la vista de pilotaje.`
+        : !drone.online
+          ? 'El dron se desconectó del Comando Central y el control manual se soltó: se cerró la vista de pilotaje.'
+          : fichaAlCortarseElEnlace.current !== null
+            ? 'Se cortó la conexión con el Comando Central y el control manual se soltó solo: se cerró la vista de pilotaje.'
+            : 'El control manual se soltó desde otra sesión: se cerró la vista de pilotaje.',
+    );
+  }, [pilotando, soyControlador, controlador, conectado, drone]);
   const mover = (bearing: number) => () =>
     llamar(`/drones/${drone.droneId}/manual_move`, { method: 'POST', body: JSON.stringify({ bearing, distanceM: 25 }) });
 
@@ -351,7 +560,7 @@ export default function DroneDetail({
           <svg width="15" height="15" viewBox="0 0 16 16" {...TRAZO} style={{ verticalAlign: '-2px' }}>
             <path d="M13 8H3.4M7.4 3.4 3 8l4.4 4.6" />
           </svg>{' '}
-          Volver a Drones
+          Volver a Operación
         </button>
         <h2>
           <EditableName name={drone.displayName} onRename={onRename} />
@@ -370,6 +579,13 @@ export default function DroneDetail({
           {error}
         </p>
       )}
+      {avisoDePilotaje && (
+        // Enfocable sólo desde el código (ver `devolverFocoTrasElPilotaje`):
+        // no es un control y no tiene que estar en el orden del tabulador.
+        <p className="aviso" role="status" data-testid="aviso-pilotaje" tabIndex={-1} ref={avisoDePilotajeRef}>
+          {avisoDePilotaje}
+        </p>
+      )}
       {/* El estado es lo primero que se mira y no compite con nada: cruza todo
           el ancho arriba. Debajo, el video manda sobre el mapa —es donde pasa
           lo que hay que decidir— y el resto queda en la columna angosta. */}
@@ -379,13 +595,15 @@ export default function DroneDetail({
           que está pasando y se miran juntas. Con una alerta pendiente se mete
           la captura ENTRE las dos, pegada al video: decidir es comparar lo que
           vio la detección con lo que el dron está viendo ahora. */}
-      <div className={alertaEnCurso ? 'par-video-mapa con-alerta' : 'par-video-mapa'}>
+      <div className={hayAlerta ? 'par-video-mapa con-alerta' : 'par-video-mapa'}>
         <LiveVideo frame={frame} />
-        {alertaEnCurso && (
+        {/* Con `key` por dron: al saltar de un dron a otro desde la campana, las
+            alertas del nuevo no son "nuevas" para el carrusel del anterior. */}
+        {hayAlerta && (
           <AlertaEnCurso
-            alerta={alertaEnCurso}
-            otrasPendientes={pendientes.length - 1}
-            siguiendo={objetivo?.alertId === alertaEnCurso.id}
+            key={drone.droneId}
+            alertas={pendientes}
+            seguidas={objetivo ? [objetivo.alertId] : []}
             onDecidir={onDecidir}
           />
         )}
@@ -477,9 +695,20 @@ export default function DroneDetail({
           <div className="card con-esquina">
             <h2>Control del dron</h2>
             {!controlador && (
-              <button className="primario" onClick={tomarControl} disabled={!drone.online}>
-                Tomar control manual
-              </button>
+              <>
+                <button
+                  ref={refDelBotonDelControl}
+                  className="primario"
+                  onClick={tomarControl}
+                  disabled={!drone.online}
+                >
+                  Tomar control manual
+                </button>
+                <p className="muted">
+                  Se abre la vista de pilotaje: la cámara a pantalla completa, para volar con el teclado, el
+                  mouse o los sticks virtuales.
+                </p>
+              </>
             )}
             {soyControlador && (
               <div className="control-panel">
@@ -499,9 +728,7 @@ export default function DroneDetail({
                     )}
                     {ordenEnCurso && (
                       <p className="aviso" role="status" data-testid="orden-en-curso">
-                        {ordenEnCurso === 'despegar'
-                          ? 'Despegue ordenado: el mando se habilita apenas el dron informe que está en el aire. Si no despega, el motivo queda en el registro de eventos.'
-                          : 'Aterrizaje ordenado: el dron baja donde está. El control sigue tomado.'}
+                        {ORDEN_EN_CURSO[ordenEnCurso]}
                       </p>
                     )}
                     <hr className="regla" />
@@ -540,23 +767,17 @@ export default function DroneDetail({
                 </p>
 
                 {/* Las dos formas de comandar conviven y no hacen lo mismo: el
-                    pad de arriba manda UN desplazamiento de 25 m; el mando de
-                    acá abajo es vuelo continuo, el dron se mueve mientras la
-                    palanca esté sostenida. Van separadas por la regla para que
-                    no se lean como un solo bloque de botones. */}
+                    pad de arriba manda UN desplazamiento de 25 m; el vuelo
+                    continuo —el dron se mueve mientras se sostiene la tecla o
+                    la palanca— vive en la vista de pilotaje, sobre el video a
+                    pantalla completa, porque volar mirando una imagen chica al
+                    costado de la tarjeta es volar a ciegas. */}
                 <hr className="regla" />
                 <h3>Vuelo continuo</h3>
-                {/* Recién tomado el control esto se ve alrededor de un segundo,
-                    con el mando VIVO: explica por qué la tarjeta de estado de
-                    arriba todavía dice "Patrullando" mientras el operador ya
-                    está comandando. */}
-                {esperandoConfirmacion && (
-                  <p className="aviso" role="status" data-testid="mando-esperando">
-                    El dron todavía no confirmó el vuelo manual (su telemetría llega cada ~1 s): el
-                    mando ya emite, pero hasta la confirmación puede descartar los ejes.
-                  </p>
-                )}
-                <MandoVirtual onMando={onMando} impedimento={impedimentoDelMando} />
+                <p className="muted">Teclado, mouse y sticks virtuales, con la cámara a pantalla completa.</p>
+                <button ref={refDelBotonDelControl} className="primario" onClick={volverAPilotar}>
+                  Volver a la vista de pilotaje
+                </button>
 
                 {/* Con un objetivo cargado hay dos formas de soltar, y la que
                     va primero es la que no pierde nada: el dron vuelve a
@@ -582,7 +803,7 @@ export default function DroneDetail({
               <p className="muted">
                 Controlado por <strong>{controlador}</strong>.{' '}
                 {esSupervisor && (
-                  <button className="chico dismiss" onClick={quitarControl}>
+                  <button className="chico dismiss" onClick={() => setQuitando(true)}>
                     Quitar control
                   </button>
                 )}
@@ -594,32 +815,68 @@ export default function DroneDetail({
 
       {/* La alerta de este dron se decide arriba, al lado del video; la
           campana del encabezado sigue avisando desde cualquier vista. */}
-      <EventLog events={events} />
+      <EventLog events={events} cargando={!historiaCargada} />
 
+      {pilotando && (
+        <PilotajePantallaCompleta
+          nombre={drone.displayName}
+          droneId={drone.droneId}
+          enLinea={drone.online}
+          status={status}
+          frame={frame}
+          alertas={alertas}
+          controlTomado={soyControlador}
+          impedimento={impedimentoDelMando}
+          camaraDisponible={impedimentoDeEnlace === null}
+          esperandoConfirmacion={esperandoConfirmacion}
+          enElSuelo={enElSuelo}
+          enElAire={enElAire}
+          avisoDeOrden={ordenEnCurso && ORDEN_EN_CURSO[ordenEnCurso]}
+          error={error}
+          hayObjetivo={!!objetivo}
+          suspendido={aConfirmar !== null}
+          onMando={onMando}
+          onCamara={onCamara}
+          onOrden={setAConfirmar}
+          onCerrar={() => setPilotando(false)}
+          onSalir={salirDelPilotaje}
+          onDevolverFoco={devolverFocoTrasElPilotaje}
+        />
+      )}
+
+      {/* La misma confirmación que el resto de la consola. La orden sale sin
+          esperar al backend (el diálogo se cierra en el acto) porque su
+          resultado se lee donde se está mirando: en la tarjeta o en el HUD. */}
       {aConfirmar && confirmacion && (
-        <Modal etiquetadoPor={idTitulo} descritoPor={idTexto} onCerrar={() => setAConfirmar(null)}>
-          <header className="modal-cabecera">
-            <h2 className="modal-titulo" id={idTitulo}>
-              {confirmacion.titulo} {drone.displayName}
-            </h2>
-          </header>
-          <div className="modal-cuerpo">
-            <p id={idTexto}>{confirmacion.texto}</p>
-            <p className="muted">{confirmacion.aviso}</p>
-          </div>
-          <footer className="modal-pie">
-            <button type="button" className="ghost" onClick={() => setAConfirmar(null)}>
-              Cancelar
-            </button>
-            <button
-              type="button"
-              className={aConfirmar === 'despegar' ? 'primario' : 'dismiss'}
-              onClick={() => confirmarOrden(aConfirmar)}
-            >
-              {confirmacion.boton}
-            </button>
-          </footer>
-        </Modal>
+        <DialogoConfirmacion
+          pedido={{
+            titulo: `${confirmacion.titulo} ${drone.displayName}`,
+            consecuencia: confirmacion.texto,
+            detalle: confirmacion.aviso,
+            confirmar: confirmacion.boton,
+            tono: aConfirmar === 'despegar' ? 'primario' : 'peligro',
+            accion: () => {
+              void confirmarOrden(aConfirmar);
+            },
+          }}
+          onCerrar={() => setAConfirmar(null)}
+        />
+      )}
+
+      {quitando && controlador && (
+        <DialogoConfirmacion
+          pedido={{
+            titulo: `Quitarle el control a ${controlador}`,
+            consecuencia: objetivo
+              ? `${controlador} deja de pilotear ${drone.displayName} en el acto y el dron vuelve al objetivo que estaba siguiendo.`
+              : `${controlador} deja de pilotear ${drone.displayName} en el acto y el dron vuelve a patrullar su ruta.`,
+            detalle: 'Queda en el registro que el control se soltó a la fuerza, y quién lo hizo.',
+            confirmar: 'Quitar control',
+            enCurso: 'Quitando…',
+            accion: quitarControl,
+          }}
+          onCerrar={() => setQuitando(false)}
+        />
       )}
     </main>
   );

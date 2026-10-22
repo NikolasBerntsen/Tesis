@@ -3,6 +3,8 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import {
   ROLE_RANK,
+  SESION_DE_OTRO_ROL,
+  esDeOtroRol,
   login,
   ttlEnSegundos,
   signDroneToken,
@@ -138,6 +140,16 @@ describe('auth — tokens', () => {
     expect(verifyToken(jwt.sign({ sub: 'x' }, 'otro-secreto'))).toBeNull();
   });
 
+  it('esDeOtroRol: el token vale solo para el rol con que se inició la sesión', () => {
+    // El login firma con el rol de la cuenta, así que una sesión recién abierta
+    // nunca es "de otro rol"; deja de valer recién cuando la cuenta cambia.
+    crearUsuario('rotado', 'clave123', 'operator');
+    const payload = verifyToken(sesionDe(login('rotado', 'clave123')).token)!;
+    expect(esDeOtroRol(payload, 'operator')).toBe(false);
+    expect(esDeOtroRol(payload, 'supervisor')).toBe(true);
+    expect(esDeOtroRol(payload, 'field_operator')).toBe(true);
+  });
+
   it('signDroneToken firma el hash como sub, con rol drone y 30 días', () => {
     const token = signDroneToken('a'.repeat(32));
     const payload = jwt.verify(token, config.jwtSecret) as jwt.JwtPayload;
@@ -203,15 +215,45 @@ describe('auth — requireAuth (middleware)', () => {
     expect(res.body.error).toMatch(/permiso/i);
   });
 
-  it('llama a next y setea req.user (rol y flags EN VIVO desde la base)', () => {
+  it('llama a next y setea req.user (flags EN VIVO desde la base)', () => {
     crearUsuario('sup', 'x', 'supervisor', 1, 0);
-    // el token dice operator, pero la base manda: role supervisor, canControl false
-    const req = reqCon(tokenDe('sup', 'operator'));
+    // el token no dice nada del permiso de control: lo que manda es la base
+    const req = reqCon(tokenDe('sup', 'supervisor'));
     let llamado = false;
     const res = fakeRes();
     requireAuth('operator')(req, res as any, () => (llamado = true));
     expect(llamado).toBe(true);
     expect(req.user).toEqual({ sub: 'sup', role: 'supervisor', canControl: false });
+  });
+
+  it('401 si el token se firmó con otro rol: el cambio de rol obliga a volver a entrar', () => {
+    // El caso de verdad: la consola abierta como operador, y un admin que lo
+    // asciende a supervisor. Con el token viejo no entra ni como uno ni como el
+    // otro, y el 401 es lo que la consola entiende como "volvé a iniciar sesión".
+    crearUsuario('ascendido', 'x', 'supervisor');
+    let llamado = false;
+    const res = fakeRes();
+    requireAuth()(reqCon(tokenDe('ascendido', 'operator')), res as any, () => (llamado = true));
+    expect(llamado).toBe(false);
+    expect(res.statusCode).toBe(401);
+    expect(res.body.error).toBe(SESION_DE_OTRO_ROL);
+
+    // Y lo mismo hacia abajo: bajar de rol tampoco deja seguir con la sesión vieja.
+    crearUsuario('bajado', 'x', 'field_operator', 1, 0);
+    const res2 = fakeRes();
+    requireRoles('field_operator')(reqCon(tokenDe('bajado', 'operator')), res2 as any, () => (llamado = true));
+    expect(llamado).toBe(false);
+    expect(res2.statusCode).toBe(401);
+  });
+
+  it('una cuenta desactivada sigue diciendo que está desactivada aunque el token sea de otro rol', () => {
+    // El motivo más grave gana: a quien le cambiaron el rol y además le
+    // desactivaron la cuenta, volver a iniciar sesión no le serviría de nada.
+    crearUsuario('apagado', 'x', 'supervisor', 0);
+    const res = fakeRes();
+    requireAuth()(reqCon(tokenDe('apagado', 'operator')), res as any, () => {});
+    expect(res.statusCode).toBe(403);
+    expect(res.body.error).toMatch(/desactivada/i);
   });
 
   it('el token del dron se resuelve contra la tabla drones, no contra users', () => {
@@ -251,10 +293,13 @@ describe('auth — requireAuth (middleware)', () => {
     // `ROLE_RANK['operador_viejo'] < ROLE_RANK.operator` es `undefined < 2`, que
     // en JS da false: sin el control explícito la request PASA el filtro de rol
     // de TODA la API REST, incluidos los endpoints de vuelo.
+    // El token lleva el mismo rol que la fila, como si el login hubiera sido
+    // con esa fila: con otro rol rebotaría antes, por sesión vieja, y lo que se
+    // prueba acá es el rango.
     crearUsuario('viejo', 'x', 'operador_viejo' as Role);
     const res = fakeRes();
     let llamado = false;
-    requireAuth('operator')(reqCon(tokenDe('viejo', 'operator')), res as any, () => (llamado = true));
+    requireAuth('operator')(reqCon(tokenDe('viejo', 'operador_viejo' as Role)), res as any, () => (llamado = true));
     expect(llamado).toBe(false);
     expect(res.statusCode).toBe(403);
     expect(res.body.error).toMatch(/permiso/i);
@@ -270,7 +315,7 @@ describe('auth — requireAuth (middleware)', () => {
       crearUsuario(`raro_${nombre}`, 'x', nombre as Role);
       const res = fakeRes();
       let llamado = false;
-      requireAuth('operator')(reqCon(tokenDe(`raro_${nombre}`, 'operator')), res as any, () => (llamado = true));
+      requireAuth('operator')(reqCon(tokenDe(`raro_${nombre}`, nombre as Role)), res as any, () => (llamado = true));
       expect(llamado, `el rol "${nombre}" pasó el filtro`).toBe(false);
       expect(res.statusCode).toBe(403);
     }
@@ -281,7 +326,7 @@ describe('auth — requireAuth (middleware)', () => {
     // (por ejemplo GET /me), y ahí el rol no decide nada. Lo que se comprueba es
     // que cerrar el rango no rompió ese caso.
     crearUsuario('viejo2', 'x', 'operador_viejo' as Role);
-    const req = reqCon(tokenDe('viejo2', 'operator'));
+    const req = reqCon(tokenDe('viejo2', 'operador_viejo' as Role));
     let llamado = false;
     requireAuth()(req, fakeRes() as any, () => (llamado = true));
     expect(llamado).toBe(true);

@@ -1,5 +1,6 @@
 import L from 'leaflet';
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
+import { esc } from './html';
 
 /**
  * Lo que todos los mapas de la consola tienen en común. Vive acá y no copiado
@@ -26,15 +27,54 @@ export function nombreDeFondo(f: Fondo): string {
   return f === 'mapa' ? 'Mapa' : 'Satélite';
 }
 
-/* El mapa se deja con sus colores propios: lavarlo a marfil lo volvía lindo y
-   difícil de leer, y un mapa es una herramienta de orientación antes que una
-   superficie decorativa. En modo oscuro se atenúa apenas: una lámina blanca a
-   pantalla completa en una guardia nocturna encandila. */
-const ATENUAR_OSCURO = 'brightness(.82) contrast(1.04)';
+/* El callejero se deja con sus colores propios en mármol: lavarlo a marfil lo
+   volvía lindo y difícil de leer, y un mapa es una herramienta de orientación
+   antes que una superficie decorativa. En obsidiana, en cambio, una lámina
+   blanca a pantalla completa en una guardia nocturna encandila, así que se
+   oscurece. Eso lo hace el CSS (vistas.css, con el token --filtro-calles) a
+   partir de esta clase, que va SÓLO en la capa de calles:
+   - el satélite es una foto y no se toca;
+   - los marcadores, los trazos y los globos viven en otros panes de Leaflet y
+     no heredan el filtro;
+   - y como es CSS, cambiar de tema con el mapa abierto lo oscurece en el acto.
+     Antes el filtro se escribía inline al crear el mapa, sobre el pane entero
+     (satélite incluido), y no se enteraba de un cambio de tema posterior. */
+export const CLASE_TESELAS_CALLES = 'teselas-calles';
+export const CLASE_TESELAS_SATELITE = 'teselas-satelite';
 
-export function filtroDeTeselas(): string {
-  return document.documentElement.dataset.tema === 'oscuro' ? ATENUAR_OSCURO : 'none';
-}
+/**
+ * Clases de los trazos oscuros que Leaflet dibuja encima de las teselas. El
+ * color va en el JS (Leaflet lo escribe como atributo del SVG) y queda de
+ * respaldo; el CSS de vistas.css le gana con un token del tema. Sin esto, en
+ * obsidiana el hilo pardo del dron a su base y el filo negro de los nodos se
+ * perdían sobre el callejero oscurecido.
+ */
+export const TRAZO = {
+  /** El hilo punteado entre el dron y su base. */
+  hilo: 'mapa-hilo',
+  /** La línea que une los nodos de una ruta. */
+  recorrido: 'mapa-recorrido',
+  /** El filo de cada nodo de una ruta. */
+  nodo: 'mapa-nodo',
+  /** El hilo del dron a su objetivo y el rastro del objetivo, con la alerta esperando. */
+  objetivoPendiente: 'mapa-objetivo-pendiente',
+  /** Lo mismo, una vez validada la alerta. */
+  objetivoValidado: 'mapa-objetivo-validado',
+} as const;
+
+/**
+ * Con qué opacidad dibuja Leaflet cada trazo. La escribe como stroke-opacity
+ * y el CSS del tema no la toca, así que lo que se ve es el token mezclado con
+ * el mapa a esta opacidad: así lo mide teselas.test.ts. El hilo a la base iba
+ * al 0,55 y en mármol quedaba en 2,2 contra los edificios; el rastro, al 0,6,
+ * en 1,7 sobre el callejero de noche. Los trazos del editor de rutas no fijan
+ * opacidad: Leaflet los dibuja opacos.
+ */
+export const OPACIDAD_TRAZO = {
+  hilo: 0.8,
+  hiloObjetivo: 0.85,
+  rastroObjetivo: 0.75,
+} as const;
 
 /** Aplica estilos inline a un nodo que Leaflet crea por su cuenta. */
 export function vestir(el: HTMLElement | null | undefined, estilos: Record<string, string>) {
@@ -52,10 +92,11 @@ export function crearFondos(): Record<Fondo, L.TileLayer> {
     mapa: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
       attribution: '&copy; OpenStreetMap',
+      className: CLASE_TESELAS_CALLES,
     }),
     satelite: L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      { maxZoom: 19, attribution: 'Imágenes &copy; Esri' },
+      { maxZoom: 19, attribution: 'Imágenes &copy; Esri', className: CLASE_TESELAS_SATELITE },
     ),
   };
 }
@@ -66,7 +107,6 @@ export function aplicarFondo(mapa: L.Map, capas: Record<Fondo, L.TileLayer>, fon
     if (nombre === fondo) capas[nombre].addTo(mapa);
     else mapa.removeLayer(capas[nombre]);
   }
-  vestir(mapa.getPane('tilePane'), { filter: filtroDeTeselas() });
 }
 
 /** La banderita de fábrica es lo único de color frío que quedaría en la piedra. */
@@ -95,6 +135,17 @@ const ROMBO = `<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www
       <path d="M12 1.2 22.8 12 12 22.8 1.2 12z" fill="${NEGRO}" stroke="${AMBAR}" stroke-width="2" stroke-linejoin="round"/>
       <path d="M12 6.6 17.4 12 12 17.4 6.6 12z" fill="${AMBAR}"/>
     </svg>`;
+
+/**
+ * La etiqueta fija de un nodo de ruta: su número y, si tiene, su apodo
+ * ("2 · Portón"). Sale ya escapada, lista para `bindTooltip`: Leaflet pinta el
+ * texto de una etiqueta con innerHTML, y el apodo lo escribe un operador y lo
+ * mira cualquiera que abra la ruta (ver html.ts). La comparten el catálogo de
+ * rutas y el editor, que es donde se veían los apodos crudos.
+ */
+export function etiquetaDeNodo(indice: number, apodo?: string): string {
+  return esc(`${indice + 1}${apodo ? ` · ${apodo}` : ''}`);
+}
 
 let rombo: L.DivIcon | null = null;
 

@@ -78,6 +78,10 @@ class SimulatedDroneController(private val arrancaEnElAire: Boolean = false) : D
         const val VELOCIDAD_ORBITA_MS = Navegacion.VELOCIDAD_ORBITA_MS
         // Más allá de esto la estimación del objetivo ya no se extrapola.
         const val EXTRAPOLACION_MAXIMA_MS = 3_000L
+        // Hasta dónde llega el gimbal simulado: el rango del contrato
+        // (manual_gimbal), del nadir a un poco por arriba del horizonte.
+        const val INCLINACION_MINIMA = -90.0
+        const val INCLINACION_MAXIMA = 30.0
     }
 
     /**
@@ -151,8 +155,9 @@ class SimulatedDroneController(private val arrancaEnElAire: Boolean = false) : D
     // Rumbo hacia el objetivo mientras se mueve; estacionario conserva el último
     private var heading = 0.0
 
-    // Inclinación de la cámara: la de patrulla, salvo en órbita, donde apunta
-    // al centro del círculo (igual que el dron real).
+    // Inclinación de la cámara: la de patrulla, salvo en órbita y siguiendo,
+    // donde apunta al objetivo, y salvo que el operador la mueva desde la
+    // consola (igual que el dron real).
     @Volatile
     private var gimbalPitch = Telemetry.GIMBAL_PATRULLA
 
@@ -284,6 +289,26 @@ class SimulatedDroneController(private val arrancaEnElAire: Boolean = false) : D
         // en vuelo estacionario obedeciendo al mando, no volviendo a lo anterior.
         mode = Mode.STICK
     }
+
+    /**
+     * La cámara queda en la inclinación pedida en el acto, en el suelo o en el
+     * aire, y sale así en la próxima telemetría. El gimbal real tarda menos de
+     * un segundo y la telemetría simulada sale cada medio: simular el recorrido
+     * no le agregaría nada a lo que la consola ve. El modo no cambia; la órbita
+     * y el seguimiento la vuelven a apuntar en su próximo tick, como el real.
+     */
+    override fun inclinarCamara(pitchGrados: Double) {
+        if (!pitchGrados.isFinite()) return
+        gimbalPitch = pitchGrados.coerceIn(INCLINACION_MINIMA, INCLINACION_MAXIMA)
+    }
+
+    /**
+     * Nada que tirar: acá la inclinación se aplica en el acto ([inclinarCamara]),
+     * así que nunca queda una esperando que pueda llegar después de la orden
+     * del modo siguiente. Tampoco se deshace la ya aplicada, igual que en el
+     * real con la que el gimbal está cumpliendo.
+     */
+    override fun cancelarInclinacionManual() = Unit
 
     override fun returnHome() {
         if (enElSuelo) return

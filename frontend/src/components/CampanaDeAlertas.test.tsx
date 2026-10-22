@@ -150,4 +150,33 @@ describe('CampanaDeAlertas', () => {
     await userEvent.click(document.body);
     expect(screen.queryByRole('region', { name: /alertas de detección/i })).not.toBeInTheDocument();
   });
+
+  it('Escape con el foco adentro del panel lo devuelve a la campana, no a la página', async () => {
+    montar([makeAlert({ id: 1 })]);
+    const campana = screen.getByRole('button', { name: /1 pendiente/ });
+    await userEvent.click(campana);
+    expect(campana).toHaveAttribute('aria-controls', screen.getByRole('region', { name: /alertas de detección/i }).id);
+
+    screen.getByRole('button', { name: 'Validar' }).focus();
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('region', { name: /alertas de detección/i })).not.toBeInTheDocument();
+    expect(campana).toHaveFocus();
+    expect(campana).not.toHaveAttribute('aria-controls');
+  });
+
+  it('Escape con el foco en otro lado cierra el panel sin robarle el foco a nadie', async () => {
+    render(
+      <>
+        <input aria-label="Otra cosa" />
+        <CampanaDeAlertas alerts={[makeAlert()]} drones={DRONES} onDecidir={vi.fn()} onVerDron={vi.fn()} />
+      </>,
+    );
+    await userEvent.click(screen.getByRole('button', { name: /1 pendiente/ }));
+    const otra = screen.getByRole('textbox', { name: 'Otra cosa' });
+    otra.focus();
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('region', { name: /alertas de detección/i })).not.toBeInTheDocument();
+    expect(otra).toHaveFocus();
+  });
 });
+

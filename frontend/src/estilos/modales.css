@@ -1,0 +1,158 @@
+/* ============================================================================
+   MODALES — formularios de alta y edición en diálogos, y las listas de
+   gestión (drones, bases, rutas) que los abren.
+   Antes, editar un dron desplegaba el formulario como una fila más de la
+   tabla. Ahora todo alta y toda edición de varios campos es un diálogo; acá
+   vive lo que esos diálogos y sus tablas necesitan por encima del Modal base.
+   ========================================================================= */
+
+/* ---------------------------------------------------------------------------
+   FORMULARIO DENTRO DE UN DIÁLOGO
+   <form class="modal-formulario">
+     <div class="modal-cuerpo"> … </div>
+     <footer class="modal-pie"> … </footer>
+   </form>
+   El form envuelve cuerpo y pie para que Enter guarde desde cualquier campo.
+   Tiene que repetir la columna flexible de `.modal-caja`: sin el
+   `min-height: 0`, el cuerpo deja de scrollear y empuja el pie afuera.
+------------------------------------------------------------------------------ */
+.modal-formulario {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Grilla de campos: dos columnas, y los que necesitan aire ocupan la fila. */
+.campos {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--e-4);
+}
+.campo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-1);
+  min-width: 0;
+}
+.campo-ancho { grid-column: 1 / -1; }
+@media (max-width: 640px) {
+  .campos { grid-template-columns: 1fr; }
+}
+
+/* El rótulo grabado del sistema (versalitas), el mismo de la placa de ingreso. */
+.campo-rotulo {
+  font-size: var(--txt-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  font-weight: 600;
+  color: var(--tinta-media);
+}
+.campo-ayuda {
+  margin: 0;
+  font-size: var(--txt-sm);
+  color: var(--tinta-media);
+}
+.campo-error {
+  margin: 0;
+  font-size: var(--txt-sm);
+  color: var(--peligro);
+}
+/* El campo con un valor que no sirve: el filo vira a óxido, como Eliminar. */
+.modal-formulario input[aria-invalid='true'] {
+  border-color: var(--peligro);
+}
+.modal-formulario input[aria-invalid='true']:focus {
+  box-shadow: var(--sombra-hundida), 0 0 0 3px var(--peligro-velo);
+}
+
+/* Lo que falta para poder guardar: a la izquierda del pie, lejos de los
+   botones, para que no se lea como una acción más. */
+.pie-nota {
+  margin: 0 auto 0 0;
+  align-self: center;
+  font-size: var(--txt-sm);
+  color: var(--tinta-media);
+}
+@media (max-width: 640px) {
+  .modal-formulario .modal-pie { flex-wrap: wrap; }
+  .pie-nota { flex-basis: 100%; }
+}
+
+/* La base elegida de un dron: los dos botones van juntos, a la derecha. */
+.base-elegida-acciones {
+  display: inline-flex;
+  gap: var(--e-2);
+  margin-left: auto;
+}
+
+/* Nombre y descripción del editor de rutas: la descripción pide más ancho. */
+.campos-ruta { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
+@media (max-width: 640px) {
+  .campos-ruta { grid-template-columns: 1fr; }
+}
+/* "Todavía no hay nodos" no es un nodo: sin esto heredaba la grilla de siete
+   columnas de las filas y se partía en una palabra por renglón. */
+.lista-nodos li.muted {
+  display: block;
+  cursor: default;
+}
+
+/* ---------------------------------------------------------------------------
+   SALIDA DEL DIÁLOGO
+   Modal.tsx deja una copia muda del diálogo que se cerró, con esta clase, y
+   la borra sola. La entrada ya la anima nuevos.css (`velo-entra`,
+   `caja-entra`); esto es la misma pieza al revés y un poco más corta, porque
+   cerrar tiene que sentirse inmediato. Con movimiento reducido, Modal.tsx ni
+   siquiera arma la copia.
+------------------------------------------------------------------------------ */
+.modal-fondo.modal-saliendo {
+  pointer-events: none;
+  animation: velo-sale var(--transicion) forwards;
+}
+.modal-saliendo .modal-caja {
+  animation: caja-sale var(--transicion) forwards;
+}
+@keyframes velo-sale { to { opacity: 0; } }
+@keyframes caja-sale { to { opacity: 0; transform: translateY(6px) scale(.985); } }
+
+/* ---------------------------------------------------------------------------
+   LISTAS DE GESTIÓN
+   <table class="tabla tabla-gestion"> … <td class="barra-acciones">
+     <div class="acciones-fila" role="group" aria-label="Acciones de …">
+       <button class="chico">Editar</button> … <button class="chico dismiss">Eliminar</button>
+     </div></td>
+   Las acciones de cada fila van en un solo grupo compacto y en el mismo
+   orden en todas las vistas: Editar primero, Eliminar al final.
+------------------------------------------------------------------------------ */
+.acciones-fila {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--e-2);
+}
+.tabla th.columna-acciones { text-align: right; }
+
+/* Al pasar por una fila, la veta se marca en el borde izquierdo: la misma
+   seña que la fila seleccionada, pero en piedra y no en oro. */
+.tabla-gestion tbody tr {
+  transition: background-color var(--transicion), box-shadow var(--transicion);
+}
+.tabla-gestion tbody tr:hover,
+.tabla-gestion tbody tr:focus-within {
+  background: var(--realce-70);
+  box-shadow: inset var(--filo) 0 0 0 var(--veta-fuerte);
+}
+/* La seleccionada (rutas) conserva su filo de oro aunque el mouse pase. */
+.tabla-gestion tbody tr.seleccionada:hover,
+.tabla-gestion tbody tr.seleccionada:focus-within {
+  background: var(--oro-velo);
+  box-shadow: inset var(--filo) 0 0 0 var(--oro);
+}
+
+/* Estado vacío con guía: el cartel de siempre y, debajo, qué hacer. */
+.vacio-guia .vacio { padding-bottom: var(--e-2); }
+.vacio-guia > .muted {
+  max-width: 56ch;
+  margin: 0 auto var(--e-6);
+  text-align: center;
+}

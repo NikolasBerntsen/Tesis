@@ -129,6 +129,59 @@ describe('MandoVirtual — teclado', () => {
     const ayuda = document.getElementById(mando.getAttribute('aria-describedby') ?? '');
     expect(ayuda).toHaveTextContent(/Arrastrá las palancas con el mouse o el dedo/);
   });
+
+  it('con el teclado apagado no atiende teclas, no es una parada del tabulador y no muestra las teclas', () => {
+    // Es como lo usa la vista de pilotaje: ahí W avanza y no sube, y el teclado
+    // lo maneja la vista. Las palancas siguen andando con el mouse.
+    const onMando = vi.fn<(ejes: Ejes) => boolean>(() => true);
+    render(<MandoVirtual onMando={onMando} teclado={false} />);
+    const mando = screen.getByRole('group', { name: 'Mando virtual de vuelo continuo' });
+
+    fireEvent.keyDown(mando, { key: 'w' });
+    fireEvent.keyDown(mando, { key: 'ArrowUp' });
+    expect(onMando).not.toHaveBeenCalled();
+    expect(mando).not.toHaveAttribute('tabindex');
+    expect(screen.queryByText('W S · A D')).not.toBeInTheDocument();
+    const ayuda = document.getElementById(mando.getAttribute('aria-describedby') ?? '');
+    expect(ayuda).toHaveTextContent('Arrastrá las palancas con el mouse o el dedo. Mientras sostengas');
+    expect(ayuda).not.toHaveTextContent(/teclado/);
+
+    const plato = screen.getByTestId('palanca-derecha');
+    medirPlato(plato);
+    fireEvent.mouseDown(plato, { clientX: 100, clientY: 0, buttons: 1 });
+    expect(onMando).toHaveBeenCalledWith({ ...EJES_EN_CERO, pitch: 1 });
+    fireEvent.mouseUp(window);
+    expect(onMando).toHaveBeenLastCalledWith(EJES_EN_CERO);
+  });
+});
+
+describe('MandoVirtual — informando sin emitir', () => {
+  it('informa los ejes con cada cambio, no arma ningún temporizador y al desmontarse informa el cero', () => {
+    // Es como lo usa la vista de pilotaje: los ejes salen sumados a los del
+    // teclado por el emisor de la vista, y el mando no puede tener el suyo.
+    const onEjes = vi.fn<(ejes: Ejes) => void>();
+    const { unmount } = render(<MandoVirtual onEjes={onEjes} teclado={false} />);
+    const plato = screen.getByTestId('palanca-derecha');
+    medirPlato(plato);
+
+    fireEvent.mouseDown(plato, { clientX: 100, clientY: 0, buttons: 1 });
+    expect(onEjes).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, pitch: 1 });
+    expect(screen.getByTestId('eje-pitch')).toHaveTextContent('100% adelante');
+    expect(vi.getTimerCount()).toBe(0);
+
+    // Sostener no repite nada: el ritmo lo pone el que emite.
+    const llamadas = onEjes.mock.calls.length;
+    act(() => vi.advanceTimersByTime(1000));
+    expect(onEjes).toHaveBeenCalledTimes(llamadas);
+
+    // Mover sí se informa en el acto, sin esperar ningún tick.
+    fireEvent.mouseMove(window, { clientX: 150, clientY: 100, buttons: 1 });
+    expect(onEjes).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, roll: 0.5 });
+
+    // Esconder el mando con la palanca agarrada no deja su eje sumado al vuelo.
+    unmount();
+    expect(onEjes).toHaveBeenLastCalledWith(EJES_EN_CERO);
+  });
 });
 
 describe('MandoVirtual — ritmo de emisión', () => {

@@ -31,6 +31,7 @@ erDiagram
         TEXT password_hash "bcrypt de costo 10; nunca sale del backend"
         TEXT role "field_operator, operator, supervisor o admin"
         TEXT full_name
+        TEXT dni "solo dígitos, sin ceros a la izquierda; único entre las cuentas no eliminadas"
         TEXT display_name
         INTEGER active "0 desactiva la cuenta sin borrarla"
         INTEGER can_control "permiso de control manual"

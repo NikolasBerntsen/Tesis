@@ -86,6 +86,12 @@ export interface DroneStatus {
   flightMode?: string;
   /** El objetivo que está orbitando o siguiendo; `null` si no hay ninguno. */
   target?: ObjetivoEnSeguimiento | null;
+  /**
+   * Inclinación actual de la cámara, en grados: 0 es el horizonte y negativo
+   * es mirar hacia abajo (de -90 a 30, ver `manual_gimbal`). Sin este dato la
+   * vista de pilotaje supone -30°.
+   */
+  gimbalPitch?: number;
 }
 
 /**
@@ -110,6 +116,11 @@ export interface Me {
 export interface UserView {
   username: string;
   fullName: string;
+  /**
+   * DNI en dígitos, sin puntos. Vacío en las cuentas anteriores al DNI, y
+   * opcional porque un backend viejo directamente no lo manda.
+   */
+  dni?: string;
   role: RolConsola;
   active: boolean;
   canControl: boolean;
@@ -118,6 +129,24 @@ export interface UserView {
   /** Fecha ISO de esa baja; queda como dato de auditoría. */
   deletedAt: string | null;
 }
+
+/** Cuerpo de POST /api/users. La contraseña no va: la genera el sistema. */
+export interface AltaDeUsuario {
+  username: string;
+  fullName: string;
+  /** Ya normalizado a dígitos. */
+  dni: string;
+  role: RolAsignable;
+  canControl: boolean;
+}
+
+/**
+ * Cuerpo de PATCH /api/users/:username: sólo lo que cambió. El supervisor
+ * nada más puede mandar `canControl`; el resto es del admin.
+ */
+export type CambiosDeUsuario = Partial<Pick<UserView, 'fullName' | 'dni' | 'active' | 'canControl'>> & {
+  role?: RolAsignable;
+};
 
 /** Ficha de dron que devuelve GET /api/drones y los mensajes drone_online/offline/updated. */
 export interface Drone {

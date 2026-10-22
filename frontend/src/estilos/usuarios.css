@@ -1,0 +1,96 @@
+/* ============================================================================
+   Usuarios — los diálogos de alta y edición y la columna del DNI.
+   Todo sale de los tokens: nada de colores sueltos, así anda igual en el tema
+   claro y en el oscuro.
+   ========================================================================= */
+
+/* El <form> envuelve cuerpo y pie para que "Crear"/"Guardar" sea un submit de
+   verdad (y Enter en cualquier campo lo dispare). Tiene que repetir el flex de
+   la caja: si no, el cuerpo deja de ser el que scrollea y en una pantalla baja
+   el pie con los botones queda afuera. */
+.dialogo-usuario {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Dos columnas: los campos van de a pares (usuario y nombre, DNI y rol) y las
+   casillas ocupan el ancho entero debajo. */
+.form-usuario {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--e-4) var(--e-5);
+  align-items: start;
+}
+@media (max-width: 640px) {
+  .form-usuario { grid-template-columns: 1fr; }
+}
+
+.form-usuario-campo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-1);
+}
+
+/* Rótulo en versalitas arriba del control, como en el resto de los formularios. */
+.form-usuario label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-1);
+  color: var(--tinta-media);
+  font-size: var(--txt-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  font-weight: 600;
+}
+.form-usuario input,
+.form-usuario select {
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+  font-size: var(--txt-base);
+}
+
+.form-usuario-casillas {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-2);
+  padding-top: var(--e-3);
+  border-top: 1px solid var(--veta);
+}
+.form-usuario label.form-usuario-casilla {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--e-2);
+  color: var(--tinta);
+  font-size: var(--txt-sm);
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+}
+
+/* El campo con error se marca en el borde, y el texto del error lo dice: el
+   color solo no alcanza para quien no distingue el rojo. */
+.form-usuario input[aria-invalid='true'] {
+  border-color: var(--peligro);
+  box-shadow: var(--sombra-hundida), 0 0 0 3px var(--peligro-velo);
+}
+.form-usuario-error {
+  margin: 0;
+  font-size: var(--txt-xs);
+  color: var(--peligro);
+}
+.form-usuario-nota {
+  margin: 0;
+  font-size: var(--txt-xs);
+  color: var(--tinta-media);
+}
+
+/* El DNI se compara de un vistazo entre filas: cifras de ancho fijo y sin
+   cortarse en el punto. */
+.tabla td.dni {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

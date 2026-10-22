@@ -1,5 +1,6 @@
 import { time } from '../format';
 import type { EventRow } from '../types';
+import { EsqueletoDeTabla, EstadoVacio } from './EstadosDeVista';
 
 // Tipos de evento que ameritan resaltarse en el log del operador
 const HIGHLIGHT: Record<string, string> = {
@@ -10,7 +11,10 @@ const HIGHLIGHT: Record<string, string> = {
   RTH_SIGNAL_LOSS: 'warn',
 };
 
-export default function EventLog({ events }: { events: EventRow[] }) {
+export default function EventLog({ events, cargando = false }: { events: EventRow[]; cargando?: boolean }) {
+  // Lo que llega en vivo se muestra aunque el historial todavía viaje: el
+  // esqueleto es sólo para la tarjeta vacía, no tapa eventos que ya están.
+  const esperando = cargando && events.length === 0;
   return (
     <div className="card log-card">
       <h2>Registro de eventos</h2>
@@ -25,7 +29,12 @@ export default function EventLog({ events }: { events: EventRow[] }) {
         </div>
       )}
       <div className="log">
-        {events.length === 0 && <p className="vacio">Sin eventos registrados.</p>}
+        {esperando && <EsqueletoDeTabla texto="Trayendo los eventos del dron…" filas={2} />}
+        {!cargando && events.length === 0 && (
+          <EstadoVacio titulo="Sin eventos registrados.">
+            Las alertas, las órdenes y los cambios de estado de este dron van a quedar anotados acá.
+          </EstadoVacio>
+        )}
         {events.map((e) => (
           <div key={e.id} className="log-row">
             <time className="muted mono" dateTime={e.ts}>

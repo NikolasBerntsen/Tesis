@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import DronesMap, { type MapItem } from './DronesMap';
+import { OPACIDAD_TRAZO, TRAZO } from '../mapa';
 import type { DroneStatus, ObjetivoEnSeguimiento, PatrolRoute } from '../types';
 
 /*
@@ -449,6 +450,94 @@ describe('DronesMap — drones y bases', () => {
     caja.innerHTML = globo;
     expect(caja.querySelector('img')).toBeNull();
   });
+
+  // El globo de la base nombra a su dron en la fila "Dron". El escape vive en
+  // ficha(), compartido con el resto: este test es el que avisa si alguna vez
+  // ese escape se pierde, porque el nombre del dron lo escribe una persona.
+  it('el nombre del dron en el globo de su base también va como texto', () => {
+    const malicioso = '<img src=x onerror="alert(1)">';
+    render(<DronesMap items={[item({ displayName: malicioso })]} />);
+
+    const caja = document.createElement('div');
+    caja.innerHTML = todas('marker')[0].htmlGlobo as string;
+    expect(caja.querySelector('img')).toBeNull();
+    const filas = [...caja.querySelectorAll('dt')];
+    const dron = filas.find((dt) => dt.textContent === 'Dron')!;
+    expect(dron.nextElementSibling!.textContent).toBe(malicioso);
+  });
+
+  it('el nombre de la base tampoco se inyecta en su globo', () => {
+    const malicioso = '<img src=x onerror="alert(1)">';
+    render(<DronesMap items={[item({ base: { ...BASE, name: malicioso } })]} />);
+
+    const caja = document.createElement('div');
+    caja.innerHTML = todas('marker')[0].htmlGlobo as string;
+    expect(caja.querySelector('img')).toBeNull();
+    expect(caja.querySelector('h4')!.textContent).toBe(malicioso);
+  });
+
+  /*
+   * El status lo arma el celular y el hub lo reenvía tal cual (sólo revisa la
+   * posición y el gimbal): que el tipo diga `number` no impide que llegue un
+   * texto. La señal se interpolaba cruda en los globos del dron y de su base, y
+   * un `<img onerror>` ahí corría en la consola de quien los abriera.
+   */
+  describe('los números del status que no son números', () => {
+    const MALICIOSO = '<img src=x onerror=alert(1)>' as unknown as number;
+    const globos = () => todas('marker').map((m) => {
+      const caja = document.createElement('div');
+      caja.innerHTML = m.htmlGlobo as string;
+      return caja;
+    });
+    /** Las filas de la ficha del globo, como [rótulo, valor]. */
+    const filas = (caja: HTMLElement) =>
+      Array.from(caja.querySelectorAll('dt')).map((dt) => [dt.textContent, dt.nextElementSibling?.textContent]);
+
+    it('una señal que no es un número no se inyecta: el globo dice "sin datos"', () => {
+      render(<DronesMap items={[item({ status: status({ signalPct: MALICIOSO }) })]} />);
+
+      const [base, dron] = globos();
+      for (const caja of [base, dron]) {
+        expect(caja.querySelector('img')).toBeNull();
+        expect(filas(caja)).toContainEqual(['Señal', 'sin datos']);
+      }
+    });
+
+    it('una batería que no es un número tampoco, y no tira abajo el mapa', () => {
+      // `toFixed` sobre un texto tiraba un TypeError en pleno efecto.
+      render(<DronesMap items={[item({ status: status({ battery: MALICIOSO }) })]} />);
+
+      const [base, dron] = globos();
+      for (const caja of [base, dron]) {
+        expect(caja.querySelector('img')).toBeNull();
+        expect(filas(caja)).toContainEqual(['Batería', 'sin datos']);
+      }
+    });
+
+    it('el nodo del patrullaje con un índice que no es un número muestra la raya', () => {
+      render(
+        <DronesMap items={[item({ status: status({ waypointIndex: MALICIOSO, waypointTotal: 4 }) })]} />,
+      );
+
+      const [base, dron] = globos();
+      for (const caja of [base, dron]) {
+        expect(caja.querySelector('img')).toBeNull();
+        expect(filas(caja)).toContainEqual(['Nodo', '—']);
+      }
+    });
+
+    it('con números de verdad, los datos se ven como siempre', () => {
+      render(
+        <DronesMap items={[item({ status: status({ battery: 73.6, signalPct: 88, waypointIndex: 1, waypointTotal: 4 }) })]} />,
+      );
+
+      expect(filas(globos()[1])).toEqual([
+        ['Batería', '74\u202F%'],
+        ['Señal', '88\u202F%'],
+        ['Nodo', '2 de 4'],
+      ]);
+    });
+  });
 });
 
 describe('DronesMap — nodos de la ruta', () => {
@@ -502,6 +591,18 @@ describe('DronesMap — nodos de la ruta', () => {
     render(<DronesMap items={[]} waypoints={capaDeNodos()} />);
     const etiquetas = todas('circleMarker').map((m) => m.tooltip as string);
     expect(etiquetas[1]).toContain('Cerrito');
+  });
+
+  it('un apodo con HTML adentro queda como texto en la etiqueta del nodo', () => {
+    const malicioso = '<img src=x onerror=alert(1)>';
+    const r = ruta();
+    r.waypoints[1] = { ...r.waypoints[1], label: malicioso };
+    render(<DronesMap items={[]} waypoints={capaDeNodos({ route: r })} />);
+
+    const caja = document.createElement('div');
+    caja.innerHTML = todas('circleMarker')[1].tooltip as string;
+    expect(caja.children).toHaveLength(0);
+    expect(caja.textContent).toBe(malicioso);
   });
 
   describe('formulario de apodo del globo', () => {
@@ -704,14 +805,49 @@ describe('DronesMap — objetivo', () => {
   it('rojo mientras la alerta espera, oro una vez validada (sin crear otra mira)', () => {
     const { rerender } = render(<DronesMap items={[conObjetivo()]} />);
     const mira = miras()[0];
-    expect(htmlIcono(mira)).toContain('#9C3B30');
-    expect(hilos()[0].estilo.color).toBe('#9C3B30');
+    expect(htmlIcono(mira)).toContain('#8E3328');
+    expect(hilos()[0].estilo.color).toBe('#8E3328');
 
     rerender(<DronesMap items={[conObjetivo({ decision: 'VALIDATED' })]} />);
     expect(miras()).toHaveLength(1);
     expect(htmlIcono(mira)).toContain('#B8912F');
-    expect(htmlIcono(mira)).not.toContain('#9C3B30');
-    expect(hilos()[0].estilo.color).toBe('#B8912F');
+    expect(htmlIcono(mira)).not.toContain('#8E3328');
+    expect(hilos().filter((c) => c.enMapa).map((c) => c.estilo.color)).toEqual(['#B8912F']);
+  });
+
+  it('el hilo y el rastro llevan la clase que el tema tiñe, y la cambian al decidirse la alerta', () => {
+    // Leaflet pone la clase sólo al crear el path (setStyle no la toca): si el
+    // trazo no se rehiciera, el CSS lo seguiría pintando de óxido ya validado.
+    const rastro: [number, number][] = [
+      [-34.604, -58.382],
+      [-34.60412, -58.3817],
+    ];
+    const trazos = () => [...hilos(), ...rastros()].filter((c) => c.enMapa);
+    const { rerender } = render(<DronesMap items={[conObjetivo({}, { rastroObjetivo: rastro })]} />);
+    expect(trazos()).toHaveLength(2);
+    for (const t of trazos()) expect(t.estilo.className).toBe(TRAZO.objetivoPendiente);
+    // Con la misma decisión se actualizan en el lugar: no se rehacen en cada status.
+    const [hilo, rastroDibujado] = trazos();
+    rerender(<DronesMap items={[conObjetivo({ lat: -34.6042 }, { rastroObjetivo: rastro })]} />);
+    expect(trazos()).toEqual([hilo, rastroDibujado]);
+
+    rerender(<DronesMap items={[conObjetivo({ decision: 'VALIDATED' }, { rastroObjetivo: rastro })]} />);
+    expect(hilo.enMapa).toBe(false);
+    expect(rastroDibujado.enMapa).toBe(false);
+    expect(trazos()).toHaveLength(2);
+    for (const t of trazos()) expect(t.estilo.className).toBe(TRAZO.objetivoValidado);
+  });
+
+  it('el hilo a la base, el del objetivo y el rastro van con la opacidad que mide el contraste', () => {
+    const rastro: [number, number][] = [
+      [-34.604, -58.382],
+      [-34.60412, -58.3817],
+    ];
+    render(<DronesMap items={[conObjetivo({}, { rastroObjetivo: rastro })]} />);
+    const aLaBase = todas('polyline').find((c) => c.estilo.className === TRAZO.hilo)!;
+    expect(aLaBase.estilo.opacity).toBe(OPACIDAD_TRAZO.hilo);
+    expect(hilos()[0].estilo.opacity).toBe(OPACIDAD_TRAZO.hiloObjetivo);
+    expect(rastros()[0].estilo.opacity).toBe(OPACIDAD_TRAZO.rastroObjetivo);
   });
 
   it('perdido: la mira y el rastro van apagados y punteados', () => {

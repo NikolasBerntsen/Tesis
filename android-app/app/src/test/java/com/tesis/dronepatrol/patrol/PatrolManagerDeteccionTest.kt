@@ -31,10 +31,11 @@ import org.robolectric.annotation.Config
  * confirme, y entonces SIEMPRE se avisa al Comando Central (salvo despegando o
  * volviendo a base). En el aire, a la altura de trabajo y con GPS, el dron
  * orbita ALREDEDOR DEL OBJETIVO —la caja proyectada al terreno, no la posición
- * del dron—; en el suelo, a baja altura o sin GPS, la alerta sale sin
- * seguimiento y con techo de una por minuto. La alerta lleva la captura anotada
- * que disparó la detección, la posición del objetivo y la pose del dron. Las
- * cajas quedan para dibujarlas sobre el video mientras están vigentes.
+ * del dron—; en el suelo, a baja altura, sin GPS o fuera de un patrullaje, la
+ * alerta sale sin seguimiento y con techo de una por minuto. La alerta lleva la
+ * captura anotada que disparó la detección, la posición del objetivo y la pose
+ * del dron. Las cajas quedan para dibujarlas sobre el video mientras están
+ * vigentes.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -252,6 +253,33 @@ class PatrolManagerDeteccionTest {
         assertFalse(patrulla.state.value == PatrolState.ORBITING)
         assertTrue(dron.ultimaOrbita == null)
         assertTrue(patrulla.objetivo == null)
+        // A ras del suelo no hay proyección: el objetivo va sin posición, en vez
+        // de con la del dron, y la del dron va aparte, en su pose.
+        val alerta = comandoCentral.alertas.single()
+        assertTrue("sin posición del objetivo: $alerta", alerta.isNull("lat"))
+        assertEquals(LAT, alerta.getDouble("droneLat"), 1e-9)
+    }
+
+    /**
+     * En el aire sin patrullar (la app abierta con el dron ya volando) no se
+     * sigue al objetivo, pero se lo ubica, y el registro dice por qué no se lo
+     * sigue en vez de hablar de una "baja altura" a 45 m.
+     */
+    @Test
+    fun enElAireSinPatrullarSeAlertaSinSeguimientoYConElObjetivoUbicado() = runBlocking {
+        patrulla.start()
+        dron.emitirTelemetria(LAT, LON, alt = ALT, rumbo = 90.0, gimbal = -70.0)
+        delay(100)
+
+        detectarDosVeces(deteccionEnElCentro())
+        esperarA("la alerta") { comandoCentral.alertas.size == 1 }
+        esperarA("el registro de la detección") { comandoCentral.eventos("DETECTION").isNotEmpty() }
+
+        assertTrue(comandoCentral.eventos("DETECTION").single().getString("message").contains("fuera de un patrullaje"))
+        val metrosEste = (comandoCentral.alertas.single().getDouble("lon") - LON) * Geo.metrosPorGradoLon(LAT)
+        assertEquals(ALT / tan(Math.toRadians(70.0)), metrosEste, 0.5)
+        assertEquals(PatrolState.IDLE, patrulla.state.value)
+        assertTrue(dron.ultimaOrbita == null)
     }
 
     /** Sin seguimiento no hay "objetivo en curso": el techo de una por minuto evita la inundación. */

@@ -1,0 +1,141 @@
+/* ============================================================================
+   ALERTAS — el carrusel de las pendientes (AlertaEnCurso), en la vista del dron
+   y en el tablero. La tarjeta en sí (.alerta-en-curso, su filo óxido) está en
+   vistas.css; acá van las piezas para recorrerla y la variante apaisada.
+   ========================================================================= */
+
+/* El título ya no es hijo directo de la tarjeta (comparte renglón con los
+   pasos), así que la línea grabada de `.card > h2` se repite en la cabecera:
+   la tarjeta tiene que leerse igual con una alerta que con cinco. */
+.carrusel-cabecera {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--e-2) var(--e-3);
+  padding-bottom: var(--e-2);
+  border-bottom: 1px solid var(--veta);
+}
+.carrusel-cabecera::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: 38px;
+  height: 1px;
+  background: linear-gradient(90deg, var(--oro-oscuro) 0%, var(--oro-claro) 100%);
+}
+.carrusel-cabecera h2 {
+  margin: 0;
+  font-size: var(--txt-md);
+}
+
+/* Los pasos van a la derecha del título, juntos: flecha, cuenta, flecha. */
+.carrusel-pasos {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--e-2);
+  margin-left: auto;
+}
+.carrusel-cuenta {
+  min-width: 4.5em;
+  text-align: center;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+/* Lo que la cuenta le dice al lector de pantalla y no hace falta ver: "Alerta"
+   delante del "2 de 5" y las nuevas sin ver, que en pantalla ya las nombra el
+   botón de abrirlas. Fuera de la vista pero no `display: none`, que lo sacaría
+   también del árbol de accesibilidad y la región no tendría qué anunciar. */
+.carrusel-solo-lector {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Paso apagado en una punta. Va con aria-disabled para no soltar el foco, así
+   que se le pone a mano la cara de `button:disabled` y se le saca el hover. */
+.carrusel-paso[aria-disabled='true'],
+.carrusel-paso[aria-disabled='true']:hover {
+  color: var(--tinta-suave);
+  border-color: var(--veta);
+  background-image: none;
+  background-color: var(--marmol-2);
+  box-shadow: none;
+  cursor: default;
+}
+.carrusel-paso[aria-disabled='true']:active { transform: none; box-shadow: none; }
+
+/* Llegó una alerta nueva mientras se miraba otra: la cuenta late una vez, en
+   el óxido de las alertas. Una sola vez: si siguiera latiendo competiría con
+   la captura, que es lo que el operador tiene que estar mirando. */
+.carrusel-cuenta.llego {
+  animation: carrusel-llegada 900ms cubic-bezier(.2, .7, .3, 1) 1;
+}
+@keyframes carrusel-llegada {
+  0% {
+    transform: scale(1);
+    border-color: var(--peligro);
+    color: var(--peligro);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--peligro) 45%, transparent);
+  }
+  35% {
+    transform: scale(1.12);
+    border-color: var(--peligro);
+    color: var(--peligro);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 10px color-mix(in srgb, var(--peligro) 0%, transparent);
+  }
+}
+/* Sin movimiento no hay latido: el aviso de "Ver la alerta nueva" queda quieto
+   y es el que avisa. base.css ya acorta las animaciones, pero acá se apaga
+   del todo para que no quede ni un cuadro del escalado. */
+@media (prefers-reduced-motion: reduce) {
+  .carrusel-cuenta.llego { animation: none; }
+}
+
+/* El nombre del dron y "Ver la alerta nueva" son `.enlace` (nuevos.css), que
+   ya se saca de encima la sombra y la cara de `button` en todos sus estados. */
+.carrusel-nuevas {
+  align-self: flex-start;
+  font-size: var(--txt-sm);
+}
+
+/* La alerta en pantalla: misma columna que la tarjeta tenía antes del carrusel. */
+.carrusel-diapositiva,
+.alerta-cuerpo,
+.alerta-detalle {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-3);
+  min-width: 0;
+}
+.alerta-detalle > p { margin: 0; }
+
+/* "Validar" no lleva arreglo propio acá: su cara sale de --cara-afirmativa
+   (primitivos.css), que tiene valor por tema, igual en la campana que en el
+   carrusel o en el detalle del dron. */
+.carrusel-dron { font-weight: 600; }
+
+/* --- Variante apaisada: el tablero ------------------------------------------
+   Arriba de la grilla de cámaras, la tarjeta cruza todo el ancho: la captura
+   a la izquierda y lo que se decide a la derecha, para no empujar las cámaras
+   media pantalla hacia abajo. */
+.alerta-en-curso.apaisada .alerta-cuerpo {
+  display: grid;
+  grid-template-columns: minmax(200px, 340px) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--e-4);
+}
+.alerta-en-curso.apaisada .alert-actions { max-width: 420px; }
+@media (max-width: 700px) {
+  .alerta-en-curso.apaisada .alerta-cuerpo { grid-template-columns: 1fr; }
+}

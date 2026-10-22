@@ -89,7 +89,7 @@ describe('integración — migración desde el esquema original', () => {
 
   it('agrega las columnas nuevas a users, incluidas las del borrado lógico', () => {
     const cols = columnas(db, 'users');
-    for (const col of ['display_name', 'active', 'can_control', 'deleted', 'deleted_at', 'deleted_by']) {
+    for (const col of ['display_name', 'active', 'can_control', 'deleted', 'deleted_at', 'deleted_by', 'dni']) {
       expect(cols).toContain(col);
     }
   });
@@ -122,6 +122,10 @@ describe('integración — migración desde el esquema original', () => {
     expect(oldop.role).toBe('operator');
     expect(oldop.active).toBe(1);
     expect(oldop.can_control).toBe(1);
+    // la cuenta vieja no tiene de dónde sacar el DNI: queda vacío, a completar
+    expect(oldop.dni).toBe('');
+    const indices = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='users'").all();
+    expect(indices.map((i) => i.name)).toContain('idx_users_dni_vivo');
     // las tablas que faltaban se crearon
     const tablas = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((t) => t.name as string);
     expect(tablas).toContain('patrol_routes');
@@ -530,6 +534,122 @@ describe('integración — la baja lógica pasa a ser una marca propia', () => {
     db.close();
     const otra = await abrirConMigraciones(tmpFile);
     expect(otra.prepare('SELECT hash, deleted FROM drones ORDER BY hash').all()).toEqual(antes);
+    db = otra;
+  });
+});
+
+describe('integración — los DNI guardados pasan a su forma canónica', () => {
+  /*
+   * Hasta que la regla sacó los ceros a la izquierda, "5123456" y "05123456"
+   * (el mismo número, como figura adentro del CUIL) entraban como DNI
+   * distintos, y el índice único —que compara texto— dejaba a la misma persona
+   * con dos cuentas vivas. La base de este test ya tiene ese índice puesto,
+   * como cualquier instalación en uso: la migración tiene que poder ordenar los
+   * datos debajo de él sin violarlo y sin frenar el arranque.
+   */
+  let tmpFile = '';
+  let db: DbLike;
+  let avisos: string[] = [];
+
+  const dniDe = (username: string) =>
+    (db.prepare('SELECT dni FROM users WHERE username = ?').get(username) as { dni: string }).dni;
+
+  beforeAll(async () => {
+    tmpFile = archivoTemporal('migracion-dni');
+    const old = new Database(tmpFile);
+    old.exec(`
+      CREATE TABLE users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL,
+        role TEXT NOT NULL, display_name TEXT, full_name TEXT NOT NULL DEFAULT '', dni TEXT NOT NULL DEFAULT '',
+        active INTEGER NOT NULL DEFAULT 1, can_control INTEGER NOT NULL DEFAULT 1,
+        deleted INTEGER NOT NULL DEFAULT 0, deleted_at TEXT, deleted_by TEXT
+      );
+      CREATE UNIQUE INDEX idx_users_dni_vivo ON users(dni) WHERE deleted = 0 AND dni != '';
+    `);
+    const insertar = old.prepare(
+      "INSERT INTO users (username, password_hash, role, dni, deleted, deleted_at) VALUES (?, 'h', 'operator', ?, ?, ?)",
+    );
+    // El que se lo queda tiene la forma con cero y el que lo pierde la canónica:
+    // reescribir a alfa antes de vaciar a beto violaría el índice.
+    insertar.run('alfa', '05123456', 0, null);
+    insertar.run('beto', '5123456', 0, null);
+    // Al revés: el que se lo queda ya está en forma y el que lo pierde no.
+    insertar.run('hugo', '7654321', 0, null);
+    insertar.run('ines', '07654321', 0, null);
+    // Sin choque: sólo se le sacan los ceros.
+    insertar.run('eli', '01234567', 0, null);
+    // Eliminada: se normaliza, pero no le compite el DNI a nadie.
+    insertar.run('exop', '05123456', 1, '2024-01-01T00:00:00.000Z');
+    // Puros ceros no es un DNI.
+    insertar.run('ceros', '00000000', 0, null);
+    // Las que ya estaban bien, o sin DNI, no se tocan.
+    insertar.run('fede', '30123456', 0, null);
+    insertar.run('gabi', '', 0, null);
+    old.close();
+
+    const espia = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    db = await abrirConMigraciones(tmpFile);
+    avisos = espia.mock.calls.map((c) => c.join(' '));
+    espia.mockRestore();
+  });
+
+  afterAll(() => {
+    try {
+      db.close();
+    } catch {
+      /* ignorar */
+    }
+    borrarBase(tmpFile);
+  });
+
+  it('saca los ceros a la izquierda', () => {
+    expect(dniDe('alfa')).toBe('5123456');
+    expect(dniDe('eli')).toBe('1234567');
+    expect(dniDe('exop')).toBe('5123456');
+  });
+
+  it('si dos cuentas vivas quedan con el mismo DNI, se lo queda la de id más bajo y a la otra se le vacía', () => {
+    expect(dniDe('alfa')).toBe('5123456');
+    expect(dniDe('beto')).toBe('');
+    expect(dniDe('hugo')).toBe('7654321');
+    expect(dniDe('ines')).toBe('');
+  });
+
+  it('un DNI sin forma canónica se vacía', () => {
+    expect(dniDe('ceros')).toBe('');
+  });
+
+  it('lo que ya estaba en forma queda igual', () => {
+    expect(dniDe('fede')).toBe('30123456');
+    expect(dniDe('gabi')).toBe('');
+  });
+
+  it('avisa en el log a quién se le vació, sin escribir el DNI', () => {
+    expect(avisos.some((a) => a.includes('beto') && a.includes('alfa'))).toBe(true);
+    expect(avisos.some((a) => a.includes('ines') && a.includes('hugo'))).toBe(true);
+    expect(avisos.some((a) => a.includes('la cuenta ceros'))).toBe(true);
+    expect(avisos).toHaveLength(3);
+    // Ni a las que se normalizaron sin choque ni a las eliminadas: no hay nada que corregir.
+    expect(avisos.some((a) => /\b(eli|exop)\b/.test(a))).toBe(false);
+    for (const a of avisos) expect(a).not.toMatch(/\d{7}/);
+  });
+
+  it('el índice único sigue en pie y ahora sí frena el mismo número con ceros', () => {
+    const indices = db.prepare('PRAGMA index_list(users)').all().map((i) => i.name);
+    expect(indices).toContain('idx_users_dni_vivo');
+    expect(() =>
+      db.prepare("INSERT INTO users (username, password_hash, role, dni) VALUES ('otra', 'h', 'operator', '5123456')").run(),
+    ).toThrow(/UNIQUE/);
+  });
+
+  it('correr las migraciones de nuevo no cambia nada ni vuelve a avisar', async () => {
+    const antes = db.prepare('SELECT username, dni FROM users ORDER BY id').all();
+    db.close();
+    const espia = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const otra = await abrirConMigraciones(tmpFile);
+    expect(espia).not.toHaveBeenCalled();
+    espia.mockRestore();
+    expect(otra.prepare('SELECT username, dni FROM users ORDER BY id').all()).toEqual(antes);
     db = otra;
   });
 });

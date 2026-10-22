@@ -93,16 +93,10 @@
 }
 
 /* --- Alertas -------------------------------------------------------------- */
-.alert.pending {
-  display: flex;
-  flex-direction: column;
-  gap: var(--e-3);
-  padding: var(--e-4);
-  margin-bottom: var(--e-3);
-  border: 1px solid rgba(156, 59, 48, .5);
-  border-radius: var(--radio-chico);
-  background: linear-gradient(180deg, #FFFDFC 0%, var(--peligro-velo) 100%);
-}
+/* La alerta pendiente suelta (.alert.pending), la decidida (.alert.decided) y
+   la franja de pendientes del tablero (.alert-strip / .alert-chip) se fueron
+   con la campana y el carrusel: ningún componente las usa ya. Se borraron
+   porque eran justamente las que arrancaban en un blanco escrito a mano. */
 .alert-head {
   display: flex;
   gap: var(--e-3);
@@ -115,55 +109,17 @@
 }
 .alert-actions button { flex: 1; }
 
-.alert.decided {
-  display: flex;
-  gap: var(--e-3);
-  align-items: center;
-  padding: var(--e-2) 0;
-  border-bottom: 1px solid var(--veta);
-  font-size: var(--txt-sm);
-}
-.alert.decided:last-child { border-bottom: none; }
-
-/* Alerta en curso, al lado del video en la vista del dron. Lleva el mismo filo
-   óxido que la alerta pendiente de la campana: es la misma alerta. */
+/* Alerta en curso, al lado del video en la vista del dron. Lleva el filo
+   óxido de las alertas, mezclado desde el token para que siga al tema. */
 .alerta-en-curso {
   display: flex;
   flex-direction: column;
   gap: var(--e-3);
-  border-color: rgba(156, 59, 48, .5);
+  border-color: color-mix(in srgb, var(--peligro) 50%, transparent);
 }
 .alerta-en-curso h2 { margin: 0; }
 .alerta-en-curso .alert-head time { margin-left: auto; }
 .alerta-consecuencias { font-size: var(--txt-xs); }
-
-/* Franja de alertas pendientes, visible desde cualquier vista */
-.alert-strip {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--e-3);
-  padding: var(--e-3) var(--e-4);
-  border: 1px solid rgba(156, 59, 48, .45);
-  border-radius: var(--radio-chico);
-  background: linear-gradient(180deg, #FFFCFB 0%, var(--peligro-velo) 100%);
-  box-shadow: var(--sombra-suave);
-}
-.alert-strip > strong {
-  color: var(--peligro);
-  font-family: var(--fuente-serif);
-  font-weight: 400;
-  font-size: var(--txt-md);
-}
-.alert-chip {
-  padding: 3px 11px;
-  font-size: var(--txt-sm);
-  border-radius: 999px;
-  border-color: rgba(156, 59, 48, .4);
-  background: rgba(255, 255, 255, .75);
-  background-image: none;
-  box-shadow: none;
-}
 
 /* --- Registro de eventos --------------------------------------------------- */
 .log-card .log {
@@ -191,6 +147,9 @@
 .log-row:last-child { border-bottom: none; }
 .log-row:hover { background: var(--realce-70); }
 .log-row-general { grid-template-columns: 150px 88px 180px 1fr; }
+/* La categoría es una pastilla: en la celda de la grilla se estiraba a los
+   88 px de la columna y se leía como una barra gris, no como un sello. */
+.log-row > .cat-badge { justify-self: start; }
 .event-type {
   font-weight: 600;
   color: var(--tinta-media);
@@ -207,9 +166,11 @@
 }
 /* Fila del registro que se puede abrir en el pop-up */
 .log-row.cliqueable { cursor: pointer; }
-.log-row.cliqueable:hover { background: var(--oro-velo); }
+/* El velo propio de la fila (tokens.css): con el de lo seleccionado, en
+   obsidiana las pastillas de categoría bajaban de AA bajo el mouse. */
+.log-row.cliqueable:hover { background: var(--oro-velo-fila); }
 .log-row.cliqueable:focus-visible {
-  outline: var(--filo) solid var(--oro);
+  outline: var(--filo) solid var(--anillo-foco);
   outline-offset: -2px;
 }
 
@@ -272,9 +233,18 @@ details.meta pre {
   border-radius: inherit;
   background: none;
   cursor: pointer; }
+/* Es un <button>, así que la regla general le ponía la cara de hover y la
+   sombra de la tecla: con el mouse encima, el mosaico entero quedaba tapado
+   por una lámina opaca. Sin cara en ningún estado: el mosaico ya marca el
+   hover con su propio filo de oro. */
+.tile-abrir:hover:not(:disabled),
+.tile-abrir:active:not(:disabled) {
+  background: none;
+  box-shadow: none;
+  transform: none; }
 /* El foco se dibuja sobre el mosaico entero, que es lo que el botón representa. */
 .tile-abrir:focus-visible {
-  outline: 2px solid var(--oro);
+  outline: 2px solid var(--anillo-foco);
   outline-offset: 2px; }
 .tile-info {
   display: flex;
@@ -303,16 +273,23 @@ details.meta pre {
   text-align: right;
 }
 .tile-video { position: relative; }
+/* El velo apaga la imagen —el cuadro que se ve es viejo— y el aviso va en su
+   propio sello de piedra: sobre un velo translúcido el óxido dependía de lo
+   que hubiera en el video, y con cielo claro detrás no se leía. */
 .tile-overlay {
   position: absolute;
   inset: 0;
   display: grid;
   place-items: center;
   border-radius: var(--radio-chico);
-  background: rgba(227, 220, 206, .72);
+  background: color-mix(in srgb, var(--marmol-2) 72%, transparent);
   backdrop-filter: blur(1px);
 }
 .tile-overlay span {
+  padding: var(--e-1) var(--e-3);
+  border: 1px solid var(--peligro);
+  border-radius: var(--radio-sello);
+  background: var(--marmol-0);
   color: var(--peligro);
   font-family: var(--fuente-serif);
   font-weight: 400;
@@ -320,6 +297,8 @@ details.meta pre {
   letter-spacing: var(--versalita);
   text-transform: uppercase;
 }
+/* La esquina va en mármol macizo del tema: era un blanco al 88 % escrito a
+   mano, que en obsidiana dejaba "PATRULLANDO" en marfil sobre casi blanco. */
 .tile-esquina {
   position: absolute;
   right: 10px;
@@ -330,13 +309,13 @@ details.meta pre {
   text-transform: uppercase;
   padding: 2px 8px;
   border-radius: var(--radio-sello);
-  background: rgba(251, 250, 247, .88);
+  background: var(--marmol-0);
   border: 1px solid var(--veta);
 }
-.esquina-verde { color: var(--ok); }
+.esquina-verde { color: var(--ok-texto); }
 .esquina-gris { color: var(--tinta-media); }
 /* Sobre un objetivo: el mismo oro que el estado resaltado de la ficha. */
-.esquina-oro { color: var(--oro-oscuro); border-color: var(--oro); }
+.esquina-oro { color: var(--oro-texto); border-color: var(--oro); }
 
 /* --- Mapa ------------------------------------------------------------------ */
 /* Leyenda: los cuatro símbolos en versalitas, cada uno del color de su marca */
@@ -361,6 +340,71 @@ details.meta pre {
   box-shadow: var(--sombra-hundida);
 }
 .leaflet-container { font: inherit; }
+
+/* --- Teselas de noche --------------------------------------------------------
+   El filtro va a la capa de calles y a nada más (mapa.ts le pone la clase al
+   crearla): los marcadores, los trazos y los globos viven en otros panes de
+   Leaflet y se quedan con sus colores. El satélite tampoco se toca: es una
+   foto, y darla vuelta la vuelve irreconocible. Como sale de un token del
+   tema, cambiar de tema con el mapa abierto lo oscurece en el acto; antes el
+   filtro se escribía una sola vez al crear el mapa y quedaba a medio cambiar. */
+.leaflet-layer.teselas-calles { filter: var(--filtro-calles); }
+
+/* El mobiliario de fábrica de Leaflet trae grises y blancos propios: el fondo
+   del mapa mientras cargan las teselas (#ddd), las etiquetas permanentes de
+   los nodos del editor de rutas y el enlace azul de la atribución. En
+   obsidiana eran lo único claro de la pantalla. leaflet.css se carga antes
+   que estas hojas, así que a igual especificidad ganan los tokens. */
+.leaflet-container { background: var(--marmol-2); }
+.leaflet-container a { color: var(--oro-texto); }
+.leaflet-tooltip {
+  background-color: var(--marmol-0);
+  border-color: var(--veta);
+  color: var(--tinta);
+  box-shadow: var(--sombra-suave);
+}
+.leaflet-tooltip-top::before { border-top-color: var(--veta); }
+.leaflet-tooltip-bottom::before { border-bottom-color: var(--veta); }
+.leaflet-tooltip-left::before { border-left-color: var(--veta); }
+.leaflet-tooltip-right::before { border-right-color: var(--veta); }
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+  background: var(--marmol-0);
+  color: var(--tinta);
+}
+.leaflet-container a.leaflet-popup-close-button { color: var(--tinta-media); }
+/* El +/− de fábrica (bases, rutas y el editor de rutas lo usan; el mapa de
+   la flota tiene el suyo): teclas blancas con borde gris, que en obsidiana
+   eran dos fichas encendidas en la esquina del mapa. */
+.leaflet-bar,
+.leaflet-touch .leaflet-bar {
+  border-color: var(--veta-fuerte);
+  box-shadow: var(--sombra-suave);
+}
+.leaflet-bar a {
+  background-color: var(--marmol-0);
+  border-bottom-color: var(--veta);
+  color: var(--tinta);
+}
+.leaflet-bar a:hover,
+.leaflet-bar a:focus {
+  background-color: var(--marmol-1);
+  color: var(--oro-texto);
+}
+.leaflet-bar a.leaflet-disabled {
+  background-color: var(--marmol-2);
+  color: var(--tinta-suave);
+}
+
+/* Los trazos que Leaflet dibuja en SVG con un color pasado por JS. El color
+   del JS queda de respaldo; el CSS le gana al atributo y sigue al tema, que es
+   lo que hace falta sobre el callejero oscurecido. */
+.mapa-hilo { stroke: var(--mapa-hilo); }
+.mapa-recorrido { stroke: var(--mapa-recorrido); }
+.mapa-nodo { stroke: var(--mapa-filo-nodo); }
+.mapa-objetivo-pendiente { stroke: var(--mapa-objetivo-pendiente); }
+.mapa-objetivo-validado { stroke: var(--mapa-objetivo-validado); }
+
 .mapa-head {
   position: relative;
   display: flex;
@@ -441,8 +485,16 @@ details.meta pre {
   line-height: 1;
   cursor: pointer;
 }
-.wp-edit:hover { color: var(--oro-oscuro); }
-.wp-popup.editando .wp-edit { color: var(--oro-oscuro); }
+/* El lápiz es un ícono suelto: sin la cara de hover de los botones, que le
+   dibujaba una tecla alrededor. */
+.wp-edit:hover:not(:disabled),
+.wp-edit:active:not(:disabled) {
+  background: none;
+  box-shadow: none;
+  transform: none;
+  color: var(--oro-texto);
+}
+.wp-popup.editando .wp-edit { color: var(--oro-texto); }
 .wp-acciones {
   display: flex;
   flex-direction: column;
@@ -451,7 +503,7 @@ details.meta pre {
 }
 .wp-acciones button { padding: 4px 11px; font-size: var(--txt-sm); }
 .wp-acciones .wp-force { border-color: var(--peligro); color: var(--peligro); }
-.wp-acciones .wp-continue { border-color: var(--ok); color: var(--ok); }
+.wp-acciones .wp-continue { border-color: var(--ok); color: var(--ok-texto); }
 
 /* --- Patrullaje y control manual ------------------------------------------- */
 .ruta-controles {
@@ -632,8 +684,10 @@ details.meta pre {
   background: transparent;
   box-shadow: inset 0 -1px 0 var(--veta-fuerte);
 }
+/* Es el único indicador de foco del campo (los campos apagan el anillo
+   global), así que va en el oro del anillo. */
 .editable-name input:focus {
-  box-shadow: inset 0 -2px 0 var(--oro);
+  box-shadow: inset 0 -2px 0 var(--anillo-foco);
 }
 
 /* --- Conmutador de fondo del mapa -------------------------------------------
@@ -667,12 +721,14 @@ details.meta pre {
   line-height: var(--interlinea-titulo);
 }
 .status-segundo-nivel { margin-top: var(--e-3); }
+/* "Modo y posición" es un control, no un adorno: va en tinta media. En
+   --tinta-suave quedaba en 4,2 en los dos temas. */
 .status-segundo-nivel > summary {
   cursor: pointer;
   font-size: var(--txt-xs);
   text-transform: uppercase;
   letter-spacing: var(--versalita);
-  color: var(--tinta-suave);
+  color: var(--tinta-media);
 }
-.status-segundo-nivel > summary:hover { color: var(--oro-oscuro); }
+.status-segundo-nivel > summary:hover { color: var(--oro-texto); }
 .status-segundo-nivel .status-grid { margin-top: var(--e-3); }

@@ -14,11 +14,13 @@ import {
   velocidad,
   waypointLabel,
 } from '../format';
+import { esc } from '../html';
 import {
   CENTRO_POR_DEFECTO,
+  OPACIDAD_TRAZO,
+  TRAZO,
   aplicarFondo,
   crearFondos,
-  filtroDeTeselas,
   iconoBase,
   vestir,
   type Fondo,
@@ -62,9 +64,16 @@ export interface WaypointsLayer {
 }
 
 /* Leaflet pinta sus capas con colores pasados por JS, no con CSS: por eso la
-   paleta se repite acá. Son los mismos valores que los tokens de tokens.css. */
+   paleta se repite acá. Los que llevan un token al lado son los valores de
+   mármol de ese token, y teselas.test.ts los compara con tokens.css: el óxido
+   y el azul se habían quedado en los de antes de que el tema los ajustara.
+   Los trazos que van sobre las teselas, además, llevan una clase de TRAZO
+   (mapa.ts) para que el CSS les ponga el color del tema; el de acá queda de
+   respaldo. */
 const PALETA = {
-  marfil: '#FBFAF7', // --marmol-0
+  // El halo de los marcadores: un marfil casi blanco, más claro que la piedra
+  // de la página, para que el marcador se despegue de cualquier tesela.
+  marfil: '#FBFAF7',
   tinta: '#2B2620', // --tinta
   tintaMedia: '#5C544A', // --tinta-media
   oroClaro: '#F0E3B8',
@@ -72,8 +81,8 @@ const PALETA = {
   oro: '#B8912F', // --oro
   oroOscuro: '#8A6A1C', // --oro-oscuro
   oliva: '#4F7A46', // --ok
-  oxido: '#9C3B30', // --peligro
-  info: '#3D6076', // --info
+  oxido: '#8E3328', // --peligro
+  info: '#375870', // --info
   negro: '#14120F',
   ambar: '#F2C230', // el par negro/ámbar es el de mayor contraste posible
 } as const;
@@ -97,6 +106,8 @@ interface Layers {
   objetivoIcono?: string;
   lineaObjetivo?: L.Polyline;
   rastro?: L.Polyline;
+  /** La clase con que se crearon el hilo y el rastro (ver dibujarObjetivo). */
+  trazoObjetivo?: string;
   /** Lo que copia el botón del globo: se lee al clickear, no al abrir. */
   coordenadasObjetivo?: string;
 }
@@ -132,12 +143,16 @@ const EN_TIERRA = ['IDLE', 'LANDED'];
 
 // Hilo grabado entre el dron y su base: es una referencia, no un dato de vuelo,
 // así que va en tinta apagada y no compite con los nodos ni con el medallón.
+// La clase deja que el CSS lo aclare en obsidiana: pardo sobre el callejero
+// oscurecido no se veía. Lo apagado lo dan el punteado y el grosor, no la
+// transparencia: al 0,55 no se distinguía de los edificios (OPACIDAD_TRAZO).
 const LINE_STYLE: L.PolylineOptions = {
   color: PALETA.tintaMedia,
   weight: 1.5,
-  opacity: 0.55,
+  opacity: OPACIDAD_TRAZO.hilo,
   dashArray: '2 7',
   interactive: false,
+  className: TRAZO.hilo,
 };
 
 /* --- Objetivo ---------------------------------------------------------------
@@ -148,25 +163,43 @@ const LINE_STYLE: L.PolylineOptions = {
 
 interface AspectoObjetivo {
   color: string;
+  /** La clase de TRAZO con que el CSS tiñe el hilo y el rastro según el tema. */
+  trazo: string;
   perdido: boolean;
   /** Identifica el ícono: sólo se rehace cuando cambia. */
   clave: string;
 }
 
 function aspectoDelObjetivo(o: ObjetivoEnSeguimiento): AspectoObjetivo {
-  const color = o.decision === 'VALIDATED' ? PALETA.oro : PALETA.oxido;
-  return { color, perdido: o.lost, clave: `${o.decision}-${o.lost}` };
+  const validado = o.decision === 'VALIDATED';
+  return {
+    color: validado ? PALETA.oro : PALETA.oxido,
+    trazo: validado ? TRAZO.objetivoValidado : TRAZO.objetivoPendiente,
+    perdido: o.lost,
+    clave: `${o.decision}-${o.lost}`,
+  };
 }
 
+// Perdido, el hilo y el rastro se apagan a propósito: lo que se ve es la
+// última posición conocida, no una presencia. Esas dos opacidades quedan fuera
+// de la medición de contraste de teselas.test.ts por eso mismo.
 function estiloLineaObjetivo(a: AspectoObjetivo): L.PolylineOptions {
-  return { color: a.color, weight: 1.5, opacity: a.perdido ? 0.45 : 0.85, dashArray: '4 6', interactive: false };
+  return {
+    color: a.color,
+    weight: 1.5,
+    opacity: a.perdido ? 0.45 : OPACIDAD_TRAZO.hiloObjetivo,
+    dashArray: '4 6',
+    interactive: false,
+    className: a.trazo,
+  };
 }
 
 function estiloRastro(a: AspectoObjetivo): L.PolylineOptions {
   return {
     color: a.color,
     weight: 2.5,
-    opacity: a.perdido ? 0.35 : 0.6,
+    opacity: a.perdido ? 0.35 : OPACIDAD_TRAZO.rastroObjetivo,
+    className: a.trazo,
     dashArray: a.perdido ? '2 6' : undefined,
     lineCap: 'round',
     lineJoin: 'round',
@@ -188,10 +221,6 @@ function iconoObjetivo(a: AspectoObjetivo): L.DivIcon {
     iconAnchor: [14, 14],
     popupAnchor: [0, -14],
   });
-}
-
-function esc(text: string): string {
-  return text.replace(/[<>&"]/g, (c) => `&#${c.charCodeAt(0)};`);
 }
 
 /* --- Marcadores: SVG inline, sin depender de hojas de estilo ------------- */
@@ -228,9 +257,33 @@ function droneIcon(name: string): L.DivIcon {
 
 /* --- Globos y etiquetas --------------------------------------------------- */
 
-function ficha(filas: [string, string][]): string {
-  const cuerpo = filas.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+const SIN_DATOS = '<span class="muted">sin datos</span>';
+
+/**
+ * Las filas de datos de un globo. Los valores entran como TEXTO y se escapan
+ * acá, todos y sin excepción: varios salen del status que manda el celular, que
+ * el hub reenvía tal cual (sólo revisa la posición y el gimbal), y con la señal
+ * interpolada cruda un `<img onerror>` en `signalPct` corría en la consola de
+ * quien abriera el globo. Escapar en un solo lugar es lo que evita que el
+ * próximo dato que se agregue se olvide. Un valor null es un dato que no vino o
+ * que no es lo que dice ser, y se dice así.
+ */
+function ficha(filas: [string, string | null][]): string {
+  const cuerpo = filas.map(([k, v]) => `<dt>${k}</dt><dd>${v === null ? SIN_DATOS : esc(v)}</dd>`).join('');
   return `<hr class="regla" style="margin:var(--e-3) 0"><dl class="datos">${cuerpo}</dl>`;
+}
+
+/**
+ * Un porcentaje del status (batería, señal), sólo si es un número de verdad.
+ * El tipo dice `number`, pero el JSON llega del celular sin que nadie lo
+ * revise: un texto ahí no es una señal, y `toFixed` sobre algo que no es un
+ * número tiraba abajo el dibujo del mapa entero. `Number.isFinite` y no
+ * `Number(...)`, como en el hub: `Number(null)` es 0 y "sin señal" no es lo
+ * mismo que "no sé". Entre la cifra y el % va el espacio fino que no se corta
+ * (U+202F), el `&#8239;` de antes, ahora como carácter porque ficha escapa.
+ */
+function porcentaje(valor: unknown): string | null {
+  return Number.isFinite(valor) ? `${(valor as number).toFixed(0)}\u202F%` : null;
 }
 
 function titulo(etiqueta: string, nombre: string): string {
@@ -243,8 +296,8 @@ function dronePopup(item: MapItem): string {
   return (
     titulo('Dron', item.displayName) +
     ficha([
-      ['Batería', `${s.battery.toFixed(0)}&#8239;%`],
-      ['Señal', `${s.signalPct}&#8239;%`],
+      ['Batería', porcentaje(s.battery)],
+      ['Señal', porcentaje(s.signalPct)],
       ['Nodo', waypointLabel(s)],
     ])
   );
@@ -252,14 +305,13 @@ function dronePopup(item: MapItem): string {
 
 function basePopup(item: MapItem): string {
   const s = item.status;
-  const sinDatos = '<span class="muted">sin datos</span>';
   return (
     titulo('Base', item.base!.name) +
     ficha([
-      ['Dron', esc(item.displayName)],
-      ['Batería', s ? `${s.battery.toFixed(0)}&#8239;%` : sinDatos],
-      ['Señal', s ? `${s.signalPct}&#8239;%` : sinDatos],
-      ['Nodo', s ? waypointLabel(s) : sinDatos],
+      ['Dron', item.displayName],
+      ['Batería', s ? porcentaje(s.battery) : null],
+      ['Señal', s ? porcentaje(s.signalPct) : null],
+      ['Nodo', s ? waypointLabel(s) : null],
     ])
   );
 }
@@ -514,9 +566,9 @@ export default function DronesMap({
     // hace falta al decidir dónde poner un nodo de patrullaje.
     const capas = crearFondos();
     capasRef.current = capas;
+    // El oscurecido de noche lo pone el CSS sobre la capa de calles (mapa.ts).
     capas[fondoRef.current].addTo(map);
     mapaRef.current = map;
-    vestir(map.getPane('tilePane'), { filter: filtroDeTeselas() });
     // Sin la banderita de fábrica: es lo único de color frío que quedaba
     map.attributionControl.setPrefix('Leaflet');
     vestir(map.attributionControl.getContainer(), {
@@ -628,6 +680,7 @@ export default function DronesMap({
     l.objetivoIcono = undefined;
     l.lineaObjetivo = undefined;
     l.rastro = undefined;
+    l.trazoObjetivo = undefined;
     l.coordenadasObjetivo = undefined;
   }
 
@@ -703,6 +756,18 @@ export default function DronesMap({
     }
     if (l.objetivo.isPopupOpen()) refrescarPopupObjetivo(l.objetivo, objetivo);
     else setPopup(l.objetivo, objetivoPopup(objetivo));
+
+    // Leaflet le pone la clase a un trazo una sola vez, al crear su path:
+    // `setStyle` cambia el color del atributo pero no la clase, que es lo que
+    // el CSS tiñe por tema. Si la alerta se decidió, el hilo y el rastro se
+    // rehacen con la clase nueva; si no, quedaba el óxido sobre el oro.
+    if (l.trazoObjetivo !== aspecto.trazo) {
+      l.lineaObjetivo?.remove();
+      l.rastro?.remove();
+      l.lineaObjetivo = undefined;
+      l.rastro = undefined;
+      l.trazoObjetivo = aspecto.trazo;
+    }
 
     // El hilo dice qué dron está sobre qué objetivo: con dos drones sobre dos
     // objetivos en el mapa de la flota, sin él no se sabe cuál es de cuál.

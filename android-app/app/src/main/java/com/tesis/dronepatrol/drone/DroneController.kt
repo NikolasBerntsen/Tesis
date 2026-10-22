@@ -21,7 +21,15 @@ interface DroneController {
      */
     val estado: StateFlow<EstadoDelDron>
 
-    /** Telemetría a ~2 Hz. Si el enlace RC se corta, este flujo se silencia. */
+    /**
+     * Telemetría a ~2 Hz. Si el enlace RC se corta, este flujo se silencia.
+     *
+     * [Telemetry.gimbalPitch] viene en NaN mientras el dron todavía no informó
+     * su gimbal (el real, recién enlazado), igual que la posición sin fix: así el
+     * status no le muestra a la consola una inclinación que nadie midió. Quien
+     * la use tiene que mirarlo; PatrolManager proyecta las detecciones con la de
+     * patrulla mientras tanto.
+     */
     val telemetry: SharedFlow<Telemetry>
 
     /**
@@ -98,6 +106,43 @@ interface DroneController {
      * PatrolManager tiene un watchdog que manda ceros si se corta.
      */
     fun manualStick(pitch: Double, roll: Double, yaw: Double, throttle: Double)
+
+    /**
+     * Inclina la cámara a [pitchGrados] en ángulo ABSOLUTO: 0 es el horizonte y
+     * los negativos miran hacia abajo, hasta −90 (derecho al suelo). Es la orden
+     * `manual_gimbal` de la consola (docs/PROTOCOLS.md §2), que PatrolManager
+     * solo deja pasar con el control manual tomado y ya recortada al rango del
+     * contrato.
+     *
+     * Vale en el suelo y en el aire, porque mover la cámara no mueve al dron, y
+     * no cambia lo que el dron está haciendo. Los modos que apuntan la cámara por
+     * su cuenta (la ruta, la órbita, el seguimiento) la vuelven a apuntar cuando
+     * arrancan, y esa orden le llega al gimbal DESPUÉS de cualquier inclinación
+     * de la consola que el controlador ya hubiera aceptado (ver
+     * [cancelarInclinacionManual]). La inclinación en la que queda se lee en
+     * [Telemetry.gimbalPitch]. Un rechazo del gimbal se avisa como
+     * [FlightEvent.Problema]; no tira nada.
+     *
+     * El controlador puede no pasársela al gimbal en el acto: el real espera a
+     * que el gimbal termine la anterior y, mientras tanto, se queda con la última.
+     */
+    fun inclinarCamara(pitchGrados: Double)
+
+    /**
+     * Tira la inclinación de la consola ([inclinarCamara]) que todavía no le
+     * llegó al gimbal. La llama PatrolManager al salir de MANUAL, ANTES de darle
+     * al dron la orden del estado siguiente: fuera de MANUAL la cámara no es del
+     * operador, y una inclinación que llegara después pisaría la que pone la
+     * ruta, la órbita o el seguimiento —en la ruta, para siempre: apunta una sola
+     * vez—, o movería la cámara sin nadie al control.
+     *
+     * La que el gimbal ya está cumpliendo no se puede retirar, pero lo que se le
+     * pida a la cámara después sale detrás de ella, nunca antes. No toca el vuelo
+     * ni la cámara que apuntan los modos autónomos. Sin una inclinación esperando
+     * no hace nada; un controlador que la aplica en el acto (el simulado) no
+     * tiene nada que tirar.
+     */
+    fun cancelarInclinacionManual()
 
     /** Regreso a base del propio dron; al aterrizar emite [FlightEvent.ArrivedHome]. */
     fun returnHome()

@@ -1,8 +1,82 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 const FOCUSABLES =
   'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/** Lo que cuenta como "campo" para arrancar un formulario con el foco adentro. */
+const CAMPOS = 'input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled])';
+
+/**
+ * Lo que dura la salida del diálogo. Es el mismo valor que `--transicion` en
+ * tokens.css, que es lo que usan las animaciones de `.modal-saliendo` en
+ * modales.css: si uno cambia sin el otro, el eco se corta a mitad de camino o
+ * se queda flotando invisible un rato.
+ */
+export const SALIDA_MS = 160;
+
+/**
+ * Sólo se anima la salida cuando el sistema dice explícitamente que el
+ * movimiento no molesta. Se pregunta por `no-preference` y no por la ausencia
+ * de `reduce`: un navegador sin `matchMedia` (o un doble de prueba que contesta
+ * `false` a todo) se queda sin animación, que es el lado seguro.
+ */
+function animarSalida(): boolean {
+  return window.matchMedia?.('(prefers-reduced-motion: no-preference)').matches === true;
+}
+
+/**
+ * El diálogo lo desmonta su dueño, así que React lo saca del DOM de un saque y
+ * no queda nada que animar. Para que cerrar no sea un corte seco, se deja en
+ * su lugar una copia muda (sin ids, inerte y oculta a los lectores) que se
+ * desvanece y se borra sola. Se arma antes de que React quite el original
+ * —después ya no hay nada que copiar— y se inserta recién cuando el commit
+ * terminó, para poder distinguir un cierre real de un desmontaje de prueba.
+ *
+ * `contenedor` es donde vivía el diálogo (ver `elegirContenedor`), y es ahí
+ * donde va el eco: en pantalla completa el navegador sólo pinta ese elemento,
+ * y un eco colgado del body se desvanecía detrás, sin que nadie lo viera.
+ */
+function dejarEco(fondo: HTMLElement, contenedor: Element) {
+  if (!animarSalida()) return;
+  const eco = fondo.cloneNode(true) as HTMLElement;
+  eco.classList.add('modal-saliendo');
+  eco.setAttribute('aria-hidden', 'true');
+  eco.setAttribute('inert', '');
+  // Un id repetido haría que un diálogo que se abre enseguida tome su título
+  // del eco que se está yendo.
+  eco.querySelectorAll('[id]').forEach((n) => n.removeAttribute('id'));
+  // Se anotan los hijos de los dos lugares adonde puede ir el eco: hasta la
+  // microtarea no se sabe si el contenedor sigue en la página.
+  const yaEstaban = new Set([...contenedor.children, ...document.body.children]);
+  queueMicrotask(() => {
+    // StrictMode desmonta y vuelve a montar en desarrollo sin sacar el nodo:
+    // si sigue en la página no hubo cierre de verdad y no hay nada que despedir.
+    if (fondo.isConnected) return;
+    // Si el contenedor se fue junto con el diálogo (la vista de pilotaje que se
+    // cierra con una confirmación abierta), el eco no tiene dónde verse ahí.
+    const destino = contenedor.isConnected ? contenedor : document.body;
+    // Si en el mismo gesto se abrió otro diálogo (el alta de un dron que deja
+    // paso a su sticker), el eco va debajo: el nuevo no puede quedar tapado
+    // por el que se está yendo.
+    const nuevo = [...destino.children].find((n) => !yaEstaban.has(n)) ?? null;
+    destino.insertBefore(eco, nuevo);
+    setTimeout(() => eco.remove(), SALIDA_MS);
+  });
+}
+
+/**
+ * Dónde se cuelga el diálogo. Con algo en pantalla completa (la vista de
+ * pilotaje), el navegador sólo pinta ese elemento y lo que tiene adentro: un
+ * diálogo colgado del body quedaría abierto, atrapando el teclado, pero
+ * invisible. Un elemento que ya salió de la página no sirve: el navegador
+ * todavía lo puede nombrar como el de pantalla completa en el instante en que
+ * se lo saca, antes de avisar con `fullscreenchange`.
+ */
+function elegirContenedor(): Element {
+  const completa = document.fullscreenElement;
+  return completa?.isConnected ? completa : document.body;
+}
 
 /**
  * Pila de diálogos abiertos. Hay pantallas que abren un diálogo arriba de otro
@@ -26,6 +100,7 @@ export default function Modal({
   etiquetadoPor,
   descritoPor,
   ancho,
+  enfocarPrimerCampo,
   onCerrar,
   children,
 }: {
@@ -34,10 +109,18 @@ export default function Modal({
   descritoPor?: string;
   /** Caja ancha, para los diálogos que llevan un mapa al lado de una lista. */
   ancho?: boolean;
+  /**
+   * En los formularios el foco arranca en el primer campo y no en la caja:
+   * quien abre "Nuevo dron" viene a escribir, y obligarlo a tabular hasta el
+   * nombre es un paso de más. Sin campos, cae en la caja como siempre.
+   */
+  enfocarPrimerCampo?: boolean;
   onCerrar: () => void;
   children: ReactNode;
 }) {
   const caja = useRef<HTMLDivElement>(null);
+  // Se lee una sola vez, al montar: es una decisión de cómo se abre el diálogo.
+  const primerCampo = useRef(enfocarPrimerCampo);
   // En una ref para que el listener del teclado no se resuscriba en cada render
   // sólo porque el padre le pasa una función nueva.
   const cerrar = useRef(onCerrar);
@@ -46,16 +129,87 @@ export default function Modal({
   // `click` en el ancestro común, que es el velo: sin recordar dónde empezó,
   // soltar el botón un poco afuera cerraba el diálogo y se perdía la lectura.
   const arrancoEnElVelo = useRef(false);
+  // Se elige UNA vez, al montar. Antes se miraba en cada render, y cambiar de
+  // contenedor con el diálogo abierto es, para React, otro portal: lo vuelve a
+  // montar entero en el lugar nuevo. Al cerrarse la vista de pilotaje con una
+  // confirmación abierta adentro, la caja se iba con la vista pero el diálogo
+  // seguía montado (invisible, en la pila, comiéndose el tabulador) y en el
+  // render siguiente reaparecía en el body, viejo. Si la pantalla completa
+  // cambia con el diálogo abierto, el diálogo se queda donde nació, con UNA
+  // excepción, la de abajo: la entrada a pantalla completa.
+  const [contenedor, setContenedor] = useState(elegirContenedor);
+  // Lo último que se sabe del diálogo en la página, para el eco del cierre: el
+  // contenedor de ahora y el velo que de verdad estuvo puesto. La ref del velo
+  // no alcanza porque React la pone en null al desmontar; esta se queda con el
+  // último nodo, que es justo el que hay que copiar.
+  const contenedorActual = useRef(contenedor);
+  contenedorActual.current = contenedor;
+  const ultimoVelo = useRef<HTMLDivElement | null>(null);
+  const primerContenedor = useRef(true);
+
+  /** Pone el foco donde arranca el diálogo: lo pedido, el primer campo o la caja. */
+  function enfocarElInicio() {
+    // Un diálogo puede marcar dónde arranca el foco con `data-autofoco`. Lo usa
+    // la confirmación de lo destructivo, que arranca en "Cancelar": un Enter
+    // apurado o un Espacio de más tienen que caer en el gesto que no rompe
+    // nada. No alcanza con enfocarlo desde el hijo: los efectos del hijo corren
+    // antes que este, y acá el foco se iría a la caja.
+    const pedido = caja.current?.querySelector<HTMLElement>('[data-autofoco]');
+    const campo = primerCampo.current ? caja.current?.querySelector<HTMLElement>(CAMPOS) : null;
+    (pedido ?? campo ?? caja.current)?.focus();
+  }
 
   useEffect(() => {
     const previo = document.activeElement;
-    caja.current?.focus();
+    enfocarElInicio();
     // El foco vuelve a lo que abrió el diálogo: con el teclado, cerrar no puede
     // dejarte de nuevo arriba de todo.
     return () => {
       if (previo instanceof HTMLElement) previo.focus();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // La excepción: un diálogo que se abrió en el body mientras la vista de
+  // pilotaje todavía estaba ENTRANDO en pantalla completa (requestFullscreen
+  // tarda hasta que el navegador avisa con `fullscreenchange`, en algunos
+  // sistemas casi un segundo, y en ese rato "Salir del control manual" ya se
+  // puede apretar). Cuando la pantalla completa entra, el navegador sólo pinta
+  // ese elemento: el diálogo quedaba abierto, atrapando el tabulador, pero
+  // invisible y sin forma de volver. Se muda una sola vez, al entrar; salir de
+  // la pantalla completa no lo mueve (la vista sigue tapando todo, y lo que
+  // se desmonta con ella cierra antes sus diálogos).
+  useEffect(() => {
+    function alCambiarLaPantalla() {
+      const completa = document.fullscreenElement;
+      if (!completa?.isConnected) return;
+      setContenedor((actual) => (actual === document.body ? completa : actual));
+    }
+    document.addEventListener('fullscreenchange', alCambiarLaPantalla);
+    return () => document.removeEventListener('fullscreenchange', alCambiarLaPantalla);
+  }, []);
+
+  // Mudarse es, para React, otro portal: la caja se arma de nuevo en el lugar
+  // nuevo y el foco que tenía se pierde con la vieja. Se vuelve a poner donde
+  // arranca el diálogo; al montar ya lo hizo el efecto de arriba.
+  useEffect(() => {
+    if (primerContenedor.current) {
+      primerContenedor.current = false;
+      return;
+    }
+    enfocarElInicio();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contenedor]);
+
+  // De layout y no pasivo: la limpieza de un efecto pasivo corre cuando React
+  // ya sacó el nodo. Sin dependencias: corre solo al cerrarse de verdad, y no
+  // cuando el diálogo se muda a la pantalla completa (eso no es un cierre).
+  useLayoutEffect(
+    () => () => {
+      if (ultimoVelo.current) dejarEco(ultimoVelo.current, contenedorActual.current);
+    },
+    [],
+  );
 
   // Entrada y salida de la pila. La ref de la caja hace de identidad: es
   // estable entre renders y única por diálogo.
@@ -78,8 +232,16 @@ export default function Modal({
         return;
       }
       if (ev.key !== 'Tab' || !caja.current) return;
-      // Siempre hay al menos una forma de cerrar, así que la lista no va vacía.
       const dentro = [...caja.current.querySelectorAll<HTMLElement>(FOCUSABLES)];
+      // Casi siempre hay al menos una forma de cerrar. La excepción es una
+      // confirmación esperando al backend, con sus tres botones apagados: ahí
+      // el tabulador no tiene adónde ir, y el foco se queda en la caja en vez
+      // de escaparse a la página de atrás.
+      if (dentro.length === 0) {
+        ev.preventDefault();
+        caja.current.focus();
+        return;
+      }
       const primero = dentro[0];
       const ultimo = dentro[dentro.length - 1];
       const foco = document.activeElement;
@@ -110,6 +272,9 @@ export default function Modal({
       // agregaría un segundo control "Cerrar" al árbol de accesibilidad, al
       // lado del que ya tiene la cabecera. El rol es la respuesta correcta acá.
       role="presentation"
+      ref={(nodo) => {
+        if (nodo) ultimoVelo.current = nodo;
+      }}
       onMouseDown={(ev) => {
         arrancoEnElVelo.current = ev.target === ev.currentTarget;
       }}
@@ -129,6 +294,6 @@ export default function Modal({
         {children}
       </div>
     </div>,
-    document.body,
+    contenedor,
   );
 }

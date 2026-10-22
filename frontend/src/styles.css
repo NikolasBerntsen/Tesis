@@ -10,4 +10,9 @@
 @import './estilos/layout.css';
 @import './estilos/vistas.css';
 @import './estilos/nuevos.css';
+@import './estilos/usuarios.css';
+@import './estilos/modales.css';
+@import './estilos/alertas.css';
+@import './estilos/pilotaje.css';
+@import './estilos/pulido.css';
 @import './estilos/impresion.css';

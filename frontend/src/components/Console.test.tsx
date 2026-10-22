@@ -21,6 +21,10 @@ vi.mock('./DronesMap', () => ({
   },
 }));
 
+// El minimapa de la vista de pilotaje es Leaflet puro y acá no se prueba nada
+// de él: con un recuadro vacío alcanza.
+vi.mock('./Minimapa', () => ({ default: () => <div data-testid="minimapa-mock" /> }));
+
 // Captura el handler de mensajes que Console le pasa a useWebSocket y anota todo
 // lo que la consola manda por el canal, para poder empujar mensajes desde los
 // tests y leer los que salen. Devuelve siempre "conectado".
@@ -135,6 +139,11 @@ describe('Console', () => {
     expect(screen.getByRole('button', { name: 'Operación' })).toHaveClass('active');
     expect(screen.getByRole('button', { name: 'Drones' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Bases' })).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: 'Secciones de la consola' })).toBeInTheDocument();
+    // El nombre se recorta en una tableta: el title lo deja leer entero.
+    expect(screen.getByText('oper1', { selector: '.username' })).toHaveAttribute('title', 'oper1');
+    // La región de los avisos de "guardado" está desde el arranque, vacía.
+    expect(document.querySelector('.avisos-flotantes')).toBeEmptyDOMElement();
     expect(screen.queryByRole('button', { name: 'Usuarios' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Registro' })).not.toBeInTheDocument();
   });
@@ -145,7 +154,7 @@ describe('Console', () => {
     await screen.findByText('Alfa');
 
     await userEvent.click(await screen.findByRole('button', { name: 'Drones' }));
-    expect(await screen.findByRole('heading', { name: 'Dar de alta un dron' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Nuevo dron' })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Usuarios' }));
     expect(await screen.findByRole('heading', { name: 'Usuarios' })).toBeInTheDocument();
@@ -173,7 +182,7 @@ describe('Console', () => {
     meFix = makeMe({ username: 'campo1', role: 'field_operator', canControl: false });
     render(<Console onLogout={() => {}} />);
 
-    expect(await screen.findByRole('heading', { name: 'Dar de alta un dron' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Nuevo dron' })).toBeInTheDocument();
     expect(screen.getByText('Sesión de campo')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Drones' })).toHaveClass('active');
     expect(screen.queryByRole('button', { name: 'Operación' })).not.toBeInTheDocument();
@@ -208,7 +217,8 @@ describe('Console', () => {
     expect(await screen.findByText('Bravo')).toBeInTheDocument();
 
     fire({ type: 'drone_renamed', droneId: 'd1', displayName: 'AlfaNuevo' });
-    expect(await screen.findByText('AlfaNuevo')).toBeInTheDocument();
+    // Dos veces: en su cámara y en la alerta pendiente, que dice de qué dron es.
+    expect(await screen.findAllByText('AlfaNuevo')).toHaveLength(2);
 
     // Estos ramales del switch se cubren empujando cada tipo de mensaje.
     fire({ type: 'alert_updated', alert: { id: 1, type: 'PERSON', status: 'VALIDATED', drone_id: 'd1', created_at: '2024-01-01T12:00:00.000Z' } });
@@ -227,7 +237,7 @@ describe('Console', () => {
     render(<Console onLogout={() => {}} />);
     await screen.findByText('Alfa');
     await userEvent.click(screen.getByRole('button', { name: 'Drones' }));
-    await screen.findByRole('heading', { name: 'Dar de alta un dron' });
+    await screen.findByRole('button', { name: 'Nuevo dron' });
     const pedidosPrevios = rutas().filter((r) => r.startsWith('GET /drones')).length;
 
     fire({ type: 'drone_updated', drone: makeDrone({ hash: 'd3', droneId: 'd3', displayName: 'Charlie' }) });
@@ -240,7 +250,7 @@ describe('Console', () => {
     dronesFix = [makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true, baseId: 4, base: { name: 'Base Vieja', lat: -34.6, lon: -58.4 } })];
     render(<Console onLogout={() => {}} />);
     await abrirDetalleDelPrimerDron();
-    await screen.findByRole('button', { name: /Volver a Drones/ });
+    await screen.findByRole('button', { name: /Volver a Operación/ });
     // La tarjeta de estado sólo se dibuja con telemetría: el buffer se vuelca
     // en el próximo tick.
     fire({ type: 'status', ...makeStatus({ droneId: 'd1' }) });
@@ -263,7 +273,7 @@ describe('Console', () => {
     dronesFix = [makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true, baseId: 4, base: { name: 'Base Vieja', lat: -34.6, lon: -58.4 } })];
     render(<Console onLogout={() => {}} />);
     await abrirDetalleDelPrimerDron();
-    await screen.findByRole('button', { name: /Volver a Drones/ });
+    await screen.findByRole('button', { name: /Volver a Operación/ });
     fire({ type: 'status', ...makeStatus({ droneId: 'd1' }) });
     const estado = (await screen.findByText('Modo y posición', undefined, { timeout: 3000 })).closest(
       '.status-segundo-nivel',
@@ -322,7 +332,7 @@ describe('Console', () => {
     render(<Console onLogout={() => {}} />);
     await abrirDetalleDelPrimerDron();
 
-    const volver = await screen.findByRole('button', { name: /Volver a Drones/ });
+    const volver = await screen.findByRole('button', { name: /Volver a Operación/ });
     expect(volver).toBeInTheDocument();
 
     // Renombrar desde el detalle dispara el PATCH del dron.
@@ -346,7 +356,7 @@ describe('Console', () => {
     routesFix = [makeRoute({ id: 7 })];
     render(<Console onLogout={() => {}} />);
     await abrirDetalleDelPrimerDron();
-    await screen.findByRole('button', { name: /Volver a Drones/ });
+    await screen.findByRole('button', { name: /Volver a Operación/ });
     // El mapa sólo dibuja los nodos de la ruta elegida en el selector.
     await userEvent.selectOptions(screen.getByLabelText('Ruta de patrullaje'), '7');
 
@@ -367,7 +377,7 @@ describe('Console', () => {
     render(<Console onLogout={() => {}} />);
     await abrirDetalleDelPrimerDron();
 
-    const volver = await screen.findByRole('button', { name: /Volver a Drones/ });
+    const volver = await screen.findByRole('button', { name: /Volver a Operación/ });
     const header = volver.closest('.detail-main') as HTMLElement;
     await userEvent.click(within(header).getByTitle('Renombrar dron'));
     await userEvent.clear(within(header).getByDisplayValue('Alfa'));
@@ -379,11 +389,11 @@ describe('Console', () => {
     enConsola.mockRestore();
   });
 
-  it('el mando virtual manda los ejes por el WebSocket con el droneId del dron abierto', async () => {
-    // El mando comanda con el control manual tomado por uno mismo. El status
-    // viene como lo reenvía el Comando Central —con el dueño del lock estampado—
-    // y con el dron ya en MANUAL, que es el estado en el que la app aplica los
-    // ejes: la telemetría entra por `lastStatus` y se vuelca en el tick.
+  it('la vista de pilotaje manda los ejes y la cámara por el WebSocket con el droneId del dron abierto', async () => {
+    // Se comanda con el control manual tomado por uno mismo. El status viene
+    // como lo reenvía el Comando Central —con el dueño del lock estampado— y con
+    // el dron ya en MANUAL, que es el estado en el que la app aplica los ejes:
+    // la telemetría entra por `lastStatus` y se vuelca en el tick.
     dronesFix = [
       makeDrone({
         droneId: 'd1',
@@ -395,21 +405,26 @@ describe('Console', () => {
     ];
     render(<Console onLogout={() => {}} />);
     await abrirDetalleDelPrimerDron();
-    const mando = await screen.findByRole('group', { name: 'Mando virtual de vuelo continuo' });
-    expect(mando).toHaveAttribute('aria-disabled', 'false');
+    await userEvent.click(await screen.findByRole('button', { name: 'Volver a la vista de pilotaje' }));
+    await screen.findByRole('dialog', { name: 'Pilotaje de Alfa' });
 
     // Los ejes van por el socket y NO por REST: a 10 Hz, un POST por mensaje
     // sería absurdo. Se cuentan los pedidos HTTP antes y después de la ráfaga:
     // si alguien mandara los ejes por REST —con cualquier path— este total se
     // movería, que es lo que se quiere afirmar.
     const pedidosAntes = pedidos.length;
-    fireEvent.keyDown(mando, { key: 'ArrowUp' });
-    expect(enviados[0]).toEqual({ type: 'manual_stick', droneId: 'd1', pitch: 1, roll: 0, yaw: 0, throttle: 0 });
+    fireEvent.keyDown(window, { code: 'KeyW' });
+    expect(enviados[0]).toEqual({ type: 'manual_stick', droneId: 'd1', pitch: 0.5, roll: 0, yaw: 0, throttle: 0 });
 
     // Al soltar, el último mensaje va en cero: el dron queda estacionario.
-    fireEvent.keyUp(mando, { key: 'ArrowUp' });
+    fireEvent.keyUp(window, { code: 'KeyW' });
     expect(enviados.at(-1)).toEqual({ type: 'manual_stick', droneId: 'd1', pitch: 0, roll: 0, yaw: 0, throttle: 0 });
     expect(enviados).toHaveLength(2);
+
+    // La rueda inclina la cámara: `manual_gimbal` con la inclinación absoluta,
+    // por el mismo socket (una app vieja no informa la cámara: se parte de -30°).
+    fireEvent.wheel(screen.getByTestId('pilotaje-video'), { deltaY: -100, deltaMode: 0 });
+    expect(enviados.at(-1)).toEqual({ type: 'manual_gimbal', droneId: 'd1', pitch: -25 });
     expect(pedidos).toHaveLength(pedidosAntes);
   });
 
@@ -432,21 +447,21 @@ describe('Console', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Tomar control manual' }));
     expect(rutas()).toContain('POST /drones/d1/control');
 
-    // El backend broadcastea el lock EN EL ACTO, así que el panel de vuelo
-    // continuo aparece al instante; el estado MANUAL, en cambio, tarda hasta un
-    // segundo de la app (su `statusTicker`) más otro del volcado de la consola.
-    // Se espera a que se vuelque el status del patrullaje para estar parados
-    // justo en esa ventana: control tomado y el dron todavía sin confirmar.
+    // Tomar el control abre la vista de pilotaje. El backend broadcastea el
+    // lock EN EL ACTO; el estado MANUAL, en cambio, tarda hasta un segundo de la
+    // app (su `statusTicker`) más otro del volcado de la consola. Se espera a
+    // que se vuelque el status del patrullaje para estar parados justo en esa
+    // ventana: control tomado y el dron todavía sin confirmar.
+    await screen.findByRole('dialog', { name: 'Pilotaje de Alfa' });
     fire({ type: 'control_changed', droneId: 'd1', controlledBy: 'oper1' });
-    const mando = await screen.findByRole('group', { name: 'Mando virtual de vuelo continuo' });
     await waitFor(() => expect(screen.getByText('Patrullando')).toBeInTheDocument(), { timeout: 3000 });
-    expect(screen.getByTestId('mando-esperando')).toBeInTheDocument();
-    expect(mando).toHaveAttribute('aria-disabled', 'false');
+    expect(await screen.findByTestId('pilotaje-esperando')).toBeInTheDocument();
+    expect(screen.queryByTestId('pilotaje-impedimento')).not.toBeInTheDocument();
 
-    // Y la palanca comanda: el gesto del operador no se traga ni un segundo.
-    fireEvent.keyDown(mando, { key: 'ArrowUp' });
-    expect(enviados).toContainEqual({ type: 'manual_stick', droneId: 'd1', pitch: 1, roll: 0, yaw: 0, throttle: 0 });
-    fireEvent.keyUp(mando, { key: 'ArrowUp' });
+    // Y el teclado comanda: el gesto del operador no se traga ni un segundo.
+    fireEvent.keyDown(window, { code: 'KeyW' });
+    expect(enviados).toContainEqual({ type: 'manual_stick', droneId: 'd1', pitch: 0.5, roll: 0, yaw: 0, throttle: 0 });
+    fireEvent.keyUp(window, { code: 'KeyW' });
     expect(enviados.at(-1)).toEqual({ type: 'manual_stick', droneId: 'd1', pitch: 0, roll: 0, yaw: 0, throttle: 0 });
   });
 

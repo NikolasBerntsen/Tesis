@@ -13,20 +13,25 @@
 }
 
 /* --- Barra superior: una cornisa de mármol -------------------------------- */
+/* En una pantalla ancha va todo en una línea: la marca, las secciones al medio
+   y la sesión a la derecha. Por debajo de 1280 px las secciones del admin ya
+   no entran entre las otras dos: con el flex de antes se partían en dos
+   renglones apretados en el medio de la barra. Ahora bajan a su propia fila,
+   a todo el ancho (ver la consulta de abajo). */
 .topbar {
   position: relative;
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: 'marca secciones sesion';
   align-items: center;
-  gap: var(--e-5);
-  flex-wrap: wrap;
+  gap: var(--e-3) var(--e-5);
   padding: var(--e-4) var(--e-6);
   border-bottom: 1px solid var(--veta);
   background-color: var(--marmol-0);
   background-image:
     var(--grano-textura),
     linear-gradient(180deg, var(--realce-cara) 0%, var(--marmol-0) 62%, var(--marmol-1) 100%);
-  box-shadow: 0 1px 0 var(--realce-70), 0 14px 30px -22px rgba(43, 38, 32, .55);
+  box-shadow: var(--sombra-cornisa);
 }
 /* Hilo dorado al pie de la cornisa: el único oro permanente de la pantalla */
 .topbar::after {
@@ -40,18 +45,58 @@
   opacity: .7;
 }
 .topbar h1 {
+  grid-area: marca;
   margin: 0;
   font-family: var(--fuente-serif);
   font-size: var(--txt-lg);
   letter-spacing: .01em;
+  white-space: nowrap;
+}
+.topbar > .topnav {
+  grid-area: secciones;
+  justify-content: center;
 }
 .topbar-right {
+  grid-area: sesion;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: var(--e-4);
   font-size: var(--txt-sm);
 }
+@media (max-width: 1279px) {
+  .topbar {
+    /* El título conserva su ancho y la que se encoge (partiéndose en
+       renglones) es la sesión. Al revés, con la marca en `minmax(0, 1fr)`,
+       en un teléfono la sesión se quedaba con todo el ancho y "Comando
+       Central" caía en una columna de 0 px, encimado sobre la campana. */
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      'marca sesion'
+      'secciones secciones';
+  }
+  .topbar > .topnav { justify-content: flex-start; }
+}
+/* En un teléfono la marca y la sesión ya no entran en una fila: se apilan, y
+   la sesión arranca a la izquierda, debajo del título. Es el ancho en que más
+   se usa la sesión de campo. */
+@media (max-width: 640px) {
+  .topbar {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'marca'
+      'sesion'
+      'secciones';
+  }
+  .topbar-right { justify-content: flex-start; }
+}
+/* Un nombre largo no empuja la barra: se recorta, y el title lo deja leer. */
 .username {
+  max-width: 16ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--tinta-media);
   font-size: var(--txt-xs);
   text-transform: uppercase;
@@ -60,7 +105,7 @@
 }
 /* Sin letter-spacing propio: comparte el de las versalitas de al lado */
 .conn { font-size: var(--txt-xs); }
-.conn.ok { color: var(--ok); }
+.conn.ok { color: var(--ok-texto); }
 .conn.bad { color: var(--peligro); }
 
 /* --- Navegación por secciones y conmutadores de vista --------------------- */
@@ -93,7 +138,7 @@
 .topnav button.active,
 .view-switch button.active {
   color: var(--tinta);
-  background-image: linear-gradient(180deg, var(--realce-cara) 0%, var(--oro-velo) 100%);
+  background-image: var(--cara-activa);
 }
 
 /* --- Cuerpo de la página -------------------------------------------------- */
@@ -114,6 +159,14 @@
   gap: var(--e-5);
   align-items: start;
 }
+/* Entre la tableta y el escritorio el margen de la página se achica un
+   escalón: son los píxeles que le faltaban a la tabla de usuarios. */
+@media (max-width: 1100px) {
+  .page-main,
+  .dashboard-main,
+  .detail-main { padding: var(--e-5); }
+  .topbar { padding-inline: var(--e-5); }
+}
 @media (max-width: 900px) {
   .grid { grid-template-columns: 1fr; }
   .page-main,
@@ -128,11 +181,25 @@
   min-width: 0;
 }
 
+/* La cabecera del detalle lleva la misma línea grabada que la de las demás
+   vistas (.vista-cabecera), con su tramo de oro donde arranca. */
 .detail-head {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--e-4);
   flex-wrap: wrap;
+  padding-bottom: var(--e-3);
+  border-bottom: 1px solid var(--veta);
+}
+.detail-head::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: 38px;
+  height: 1px;
+  background: linear-gradient(90deg, var(--oro-oscuro) 0%, var(--oro-claro) 100%);
 }
 .detail-head h2 {
   margin: 0;
@@ -224,9 +291,10 @@ td.barra-acciones > * + * { margin-left: var(--e-2); }
   padding: 10px 12px;
 }
 .login-card button { margin-top: var(--e-2); }
+/* El color y el recuadro los pone .aviso.malo, como en el resto de la consola:
+   acá sólo va lo que es de la placa (centrado y sin margen propio). */
 .login-error {
-  color: var(--peligro);
-  font-size: var(--txt-sm);
+  margin: 0;
   text-align: center;
 }
 
@@ -274,7 +342,6 @@ td.barra-acciones > * + * { margin-left: var(--e-2); }
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: var(--e-4);
   align-items: start;
-  margin-top: var(--e-4);
 }
 
 /* El mapa de la flota ocupa el alto útil que sobra: antes quedaba angosto y
@@ -294,15 +361,18 @@ td.barra-acciones > * + * { margin-left: var(--e-2); }
 /* Video y ubicación cruzan toda la pantalla, a la misma altura: son las dos
    ventanas de lo que está pasando y se miran juntas. Patrullaje y control
    quedan justo debajo, y el registro al pie. */
+/* Las columnas van en `minmax(0, 1fr)` y no en `1fr` pelado: el video tiene
+   alto fijo y proporción 16:9, así que su ancho mínimo "natural" son 747 px.
+   Con `1fr` ese mínimo mandaba, la columna no achicaba y en una tableta la
+   vista entera se salía de la pantalla con scroll de costado. */
 .par-video-mapa {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: var(--e-4);
   align-items: stretch;
-  margin-top: var(--e-4);
 }
 @media (max-width: 900px) {
-  .par-video-mapa { grid-template-columns: 1fr; }
+  .par-video-mapa { grid-template-columns: minmax(0, 1fr); }
 }
 /* Con el ancho completo disponible, las dos ventanas pueden ser más altas sin
    empujar los controles fuera de la pantalla. */
@@ -312,17 +382,19 @@ td.barra-acciones > * + * { margin-left: var(--e-2); }
   .par-video-mapa .video,
   .par-video-mapa .map { height: 340px; min-height: 340px; }
 }
-.detail-main > .card + .par-video-mapa { margin-top: var(--e-4); }
+/* Sin margen propio: el detalle es una columna con `gap`, y el margen que
+   tenían el par video/mapa y la grilla de operación se sumaba a ese hueco
+   (38 px acá, 22 en el resto de la consola). */
 
 /* Con una alerta pendiente, la captura se mete entre el video y el mapa: la
    decisión es comparar la captura con lo que el dron ve ahora, y las dos
    imágenes tienen que quedar a un golpe de vista. En una pantalla mediana el
    mapa baja a su propia fila, a todo el ancho; en una angosta, todo apila. */
-.par-video-mapa.con-alerta { grid-template-columns: 1fr minmax(260px, .7fr) 1fr; }
+.par-video-mapa.con-alerta { grid-template-columns: minmax(0, 1fr) minmax(260px, .7fr) minmax(0, 1fr); }
 @media (max-width: 1280px) {
-  .par-video-mapa.con-alerta { grid-template-columns: 1fr 1fr; }
+  .par-video-mapa.con-alerta { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .par-video-mapa.con-alerta > :last-child { grid-column: 1 / -1; }
 }
 @media (max-width: 900px) {
-  .par-video-mapa.con-alerta { grid-template-columns: 1fr; }
+  .par-video-mapa.con-alerta { grid-template-columns: minmax(0, 1fr); }
 }

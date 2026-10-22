@@ -1,7 +1,7 @@
 import { renderHook, waitFor } from '@testing-library/react';
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { useWebSocket } from './useWebSocket';
+import { CIERRE_SESION_TERMINADA, useWebSocket } from './useWebSocket';
 
 class FakeWebSocket {
   // Los estados del socket real: el hook mira `readyState` antes de mandar.
@@ -13,7 +13,7 @@ class FakeWebSocket {
   readyState = FakeWebSocket.CONNECTING;
   onopen: (() => void) | null = null;
   onmessage: ((ev: { data: string }) => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((ev: { code: number }) => void) | null = null;
   close = vi.fn();
   send = vi.fn();
 
@@ -28,9 +28,10 @@ class FakeWebSocket {
     this.onopen?.();
   }
 
-  cerrar() {
+  /** 1006 es el cierre sin aviso del otro lado: un corte de red, un backend que se reinicia. */
+  cerrar(code = 1006) {
     this.readyState = FakeWebSocket.CLOSED;
-    this.onclose?.();
+    this.onclose?.({ code });
   }
 }
 
@@ -86,6 +87,42 @@ describe('useWebSocket', () => {
 
     act(() => vi.advanceTimersByTime(3000));
     expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
+  it('se reconecta también cuando el backend le cierra la consola (4403), que no es lo mismo que terminar la sesión', () => {
+    vi.useFakeTimers();
+    renderHook(() => useWebSocket(() => {}));
+    act(() => FakeWebSocket.instances[0].abrir());
+    act(() => FakeWebSocket.instances[0].cerrar(4403));
+    act(() => vi.advanceTimersByTime(3000));
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(localStorage.getItem('cc_token')).toBe('tok');
+  });
+
+  it('si la sesión terminó (4401) borra la sesión y recarga hacia el login en vez de reconectar', () => {
+    // El caso de verdad: un admin le cambió el rol a la cuenta. El token viejo
+    // ya no abre la consola, y reconectar con él rebotaría cada 3 s para siempre.
+    vi.useFakeTimers();
+    const original = window.location;
+    const reload = vi.fn();
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...original, reload } });
+    localStorage.setItem('cc_user', 'oper');
+    localStorage.setItem('cc_role', 'operator');
+    try {
+      const { result } = renderHook(() => useWebSocket(() => {}));
+      act(() => FakeWebSocket.instances[0].abrir());
+      act(() => FakeWebSocket.instances[0].cerrar(CIERRE_SESION_TERMINADA));
+
+      expect(result.current.conectado).toBe(false);
+      expect(reload).toHaveBeenCalledTimes(1);
+      expect(localStorage.getItem('cc_token')).toBeNull();
+      expect(localStorage.getItem('cc_user')).toBeNull();
+      expect(localStorage.getItem('cc_role')).toBeNull();
+      act(() => vi.advanceTimersByTime(5000));
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: original });
+    }
   });
 
   it('al desmontar cierra el socket y no reconecta', () => {

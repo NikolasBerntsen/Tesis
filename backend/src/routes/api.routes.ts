@@ -1,11 +1,12 @@
 import bcrypt from 'bcryptjs';
 import { Router, type Response } from 'express';
-import { ROLE_RANK, requireAuth, requireRoles, signDroneToken, type AuthedRequest } from '../auth';
+import { ROLE_RANK, SESION_DE_OTRO_ROL, requireAuth, requireRoles, signDroneToken, type AuthedRequest } from '../auth';
 import {
   asignarRutas, contarDronesEnBase, createBase, createDrone, createLog, createRoute, createUser, generarContrasenia, getBase, restoreRoute, rutasDeBase, softDeleteRoute, updateRoute, listBases, restoreBase, softDeleteBase, updateBase, decideAlert, getAlert, getDrone, getDroneIdentity, getRoute, getRoutes,
-  getUser, listAlerts, listEvents, listLogs, listUsers, restoreDrone, restoreUser, setWaypointLabel,
-  softDeleteDrone, softDeleteUser, updateDrone, updateUser,
+  getUser, listAlerts, listEvents, listLogs, listUsers, normalizarDni, restoreDrone, restoreUser, setWaypointLabel,
+  softDeleteDrone, softDeleteUser, updateDrone, updateUser, usuarioConDni,
   type BasePatch, type BaseView, type DroneAssetView, type DronePatch, type PatrolRoute, type RoutePatch, type Waypoint, type LogCategory, type Role,
+  type UserPatch,
 } from '../store';
 import {
   broadcastDroneUpdated, broadcastOperators, droneCard, getController, kickDrone, kickUser, listDroneCards,
@@ -849,6 +850,20 @@ apiRouter.get('/logs', requireAuth('admin'), (req, res) => {
 
 // ---- Usuarios ----
 
+/** Los roles que el admin puede dar, al alta o después: un admin no se crea ni se fabrica desde acá. */
+const ROLES_ASIGNABLES: readonly Role[] = ['operator', 'supervisor', 'field_operator'];
+
+function esRolAsignable(valor: unknown): valor is Role {
+  return ROLES_ASIGNABLES.includes(valor as Role);
+}
+
+const ERROR_DNI = 'El DNI tiene que tener 7 u 8 dígitos (con o sin puntos)';
+
+/** El 409 de un DNI repetido nombra la cuenta que ya lo tiene, para que el admin sepa dónde mirar. */
+function errorDniOcupado(otro: { username: string }): string {
+  return `Ese DNI ya está registrado a nombre de ${otro.username}`;
+}
+
 // Supervisor: ve operadores. Admin: ve todos los usuarios humanos.
 apiRouter.get('/users', requireAuth('supervisor'), (req: AuthedRequest, res) => {
   const roles: Role[] =
@@ -869,16 +884,22 @@ apiRouter.post('/users', requireAuth('admin'), (req: AuthedRequest, res) => {
   if (!/^[a-z0-9_.-]{3,30}$/i.test(username)) return res.status(400).json({ error: 'username inválido (3-30 caracteres alfanuméricos)' });
   if (fullName.length < 3) return res.status(400).json({ error: 'El nombre completo es requerido' });
   if (fullName.length > 60) return res.status(400).json({ error: 'El nombre completo no puede superar 60 caracteres' });
-  if (role !== 'operator' && role !== 'supervisor' && role !== 'field_operator') {
+  if (!esRolAsignable(role)) {
     return res.status(400).json({ error: 'role debe ser operator, supervisor o field_operator' });
   }
+  // Toda cuenta nueva identifica a una persona: sin DNI no hay alta. Las
+  // cuentas viejas que no lo tienen se completan editándolas.
+  const dni = normalizarDni(req.body?.dni);
+  if (!dni) return res.status(400).json({ error: ERROR_DNI });
   // El username sigue ocupado aunque el usuario esté borrado lógicamente
   if (getUser(username)) return res.status(409).json({ error: 'Ya existe un usuario con ese nombre' });
+  const conEseDni = usuarioConDni(dni);
+  if (conEseDni) return res.status(409).json({ error: errorDniOcupado(conEseDni) });
 
   // El operador de campo despliega drones, no los pilotea: nunca lleva canControl
   const canControl = role === 'field_operator' ? false : Boolean(req.body?.canControl ?? true);
   const password = generarContrasenia();
-  const user = createUser({ username, fullName, passwordHash: bcrypt.hashSync(password, 10), role, canControl });
+  const user = createUser({ username, fullName, dni, passwordHash: bcrypt.hashSync(password, 10), role, canControl });
   const ev = createLog('usuarios', 'USER_CREATED', req.user!.sub, `${req.user!.sub} creó el usuario ${username} (${role})`, {
     meta: { despues: user },
   });
@@ -910,7 +931,20 @@ apiRouter.post('/users/:username/regenerate-password', requireAuth('admin'), (re
   res.json({ ...result.after, password });
 });
 
-// Supervisor: solo el flag canControl de operadores. Admin: todo.
+/**
+ * Por qué se le suelta el control manual a quien se modifica, o null si el
+ * cambio no se lo toca. La desactivación va primero porque es la más amplia;
+ * el pase a operador de campo implica canControl:false y se nombra aparte para
+ * que el registro diga la causa de verdad.
+ */
+function motivoParaSoltar(patch: UserPatch): string | null {
+  if (patch.active === false) return 'cuenta desactivada';
+  if (patch.role === 'field_operator') return 'pasó a ser operador de campo';
+  if (patch.canControl === false) return 'control suspendido';
+  return null;
+}
+
+// Supervisor: solo el flag canControl de operadores. Admin: todo, rol incluido.
 apiRouter.patch('/users/:username', requireAuth('supervisor'), (req: AuthedRequest, res) => {
   const { username } = req.params;
   const target = getUser(username);
@@ -921,21 +955,48 @@ apiRouter.patch('/users/:username', requireAuth('supervisor'), (req: AuthedReque
   const esAdmin = req.user!.role === 'admin';
   if (!esAdmin && target.role !== 'operator') return res.status(403).json({ error: 'Un supervisor solo administra operadores' });
 
-  const patch: { canControl?: boolean; active?: boolean; fullName?: string } = {};
+  const patch: UserPatch = {};
+  // El rol va primero porque cambia las reglas del resto: el canControl que se
+  // pida en el mismo cambio se juzga contra el rol NUEVO, no contra el viejo.
+  if (req.body?.role !== undefined) {
+    // A diferencia del nombre o el DNI, que el supervisor simplemente no ve, un
+    // pedido de rol suyo se rechaza en voz alta: es una escalada de permisos.
+    if (!esAdmin) return res.status(403).json({ error: 'Solo un administrador cambia el rol' });
+    if (!esRolAsignable(req.body.role)) {
+      return res.status(400).json({ error: 'role debe ser operator, supervisor o field_operator' });
+    }
+    if (target.role === 'admin') return res.status(403).json({ error: 'El rol de un administrador no se cambia' });
+    // Pedir el rol que ya tiene no es un cambio: no lo saca de la consola.
+    if (req.body.role !== target.role) patch.role = req.body.role;
+  }
+  const rolFinal = patch.role ?? target.role;
+
   if (req.body?.canControl !== undefined) {
     // El mismo invariante que impone el alta: el operador de campo despliega
     // drones, no los pilotea, y por PATCH tampoco puede pasar a hacerlo.
-    if (target.role === 'field_operator' && Boolean(req.body.canControl)) {
+    if (rolFinal === 'field_operator' && Boolean(req.body.canControl)) {
       return res.status(400).json({ error: 'El operador de campo no controla drones' });
     }
     patch.canControl = Boolean(req.body.canControl);
   }
+  // Y quien pasa a ser operador de campo pierde el permiso aunque no se lo pidan.
+  if (patch.role === 'field_operator') patch.canControl = false;
+
   if (esAdmin && req.body?.active !== undefined) patch.active = Boolean(req.body.active);
   if (esAdmin && req.body?.fullName !== undefined) {
     const fullName = String(req.body.fullName).trim();
     if (fullName.length < 3) return res.status(400).json({ error: 'El nombre completo es requerido' });
     if (fullName.length > 60) return res.status(400).json({ error: 'El nombre completo no puede superar 60 caracteres' });
     patch.fullName = fullName;
+  }
+  if (esAdmin && req.body?.dni !== undefined) {
+    // Un DNI cargado no se puede vaciar: la cuenta dejaría de identificar a
+    // una persona, que es para lo que se agregó.
+    const dni = normalizarDni(req.body.dni);
+    if (!dni) return res.status(400).json({ error: ERROR_DNI });
+    const otro = usuarioConDni(dni, username);
+    if (otro) return res.status(409).json({ error: errorDniOcupado(otro) });
+    patch.dni = dni;
   }
   // La contraseña no se fija a mano: se regenera con su propio endpoint, que
   // la muestra una sola vez y deja rastro de quién lo hizo.
@@ -945,13 +1006,17 @@ apiRouter.patch('/users/:username', requireAuth('supervisor'), (req: AuthedReque
   if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'Nada para modificar' });
 
   const result = updateUser(username, patch)!;
-  // La suspensión del control o la desactivación cortan el control manual en el acto
-  if (patch.canControl === false || patch.active === false) {
-    releaseAllControlledBy(username, req.user!.sub, patch.active === false ? 'cuenta desactivada' : 'control suspendido');
-  }
-  // Y la desactivación además le cierra la consola: el token que tiene en el
-  // navegador sigue siendo válido, así que el corte va explícito.
+  // La suspensión del control, la desactivación y el pase a operador de campo
+  // cortan el control manual en el acto.
+  const motivo = motivoParaSoltar(patch);
+  if (motivo) releaseAllControlledBy(username, req.user!.sub, motivo);
+  // La desactivación y el cambio de rol además le cierran la consola: el
+  // socket abierto no vuelve a mirar la base, así que el corte va explícito.
+  // Con el rol nuevo, lo que puede ver y hacer cambia entero: el token de antes
+  // deja de valer (ver esDeOtroRol en auth.ts), la reconexión de la consola
+  // rebota y tiene que volver a iniciar sesión para que la consola lo sepa.
   if (patch.active === false) kickUser(username, 'Cuenta desactivada');
+  else if (patch.role) kickUser(username, SESION_DE_OTRO_ROL);
   const cambios = Object.keys(patch);
   const ev = createLog(
     'usuarios',
@@ -988,6 +1053,10 @@ apiRouter.post('/users/:username/restore', requireAuth('admin'), (req: AuthedReq
   const { username } = req.params;
   const target = getUser(username);
   if (!target) return res.status(404).json({ error: 'Usuario inexistente' });
+  // La baja liberó el DNI y pudo haberlo tomado una cuenta nueva de la misma
+  // persona: restaurar la vieja dejaría dos cuentas vivas con un solo DNI.
+  const otro = target.deleted && target.dni ? usuarioConDni(target.dni, username) : undefined;
+  if (otro) return res.status(409).json({ error: `${errorDniOcupado(otro)}: no se puede restaurar` });
   const result = restoreUser(username);
   if (!result) return res.status(409).json({ error: 'El usuario no estaba eliminado' });
 

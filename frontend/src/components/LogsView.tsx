@@ -2,6 +2,8 @@ import { useEffect, useState, type KeyboardEvent } from 'react';
 import { TAMANIOS_PAGINA, TAMANIO_PAGINA_POR_DEFECTO, traerLogs, type ParametrosLogs } from '../api';
 import { fechaYHora } from '../format';
 import type { EventRow, PaginaLogs, TamanioPagina } from '../types';
+import EncabezadoDeVista from './EncabezadoDeVista';
+import { EsqueletoDeTabla, EstadoVacio } from './EstadosDeVista';
 import LogDetailModal from './LogDetailModal';
 
 type Categoria = NonNullable<ParametrosLogs['category']>;
@@ -106,12 +108,12 @@ export default function LogsView() {
        vista crecía y scrolleaba la página entera. Con la base en 0px el main se
        queda con el alto sobrante exacto y el que scrollea es .vista-alta-cuerpo. */
     <main className="page-main" style={{ flexBasis: 0 }}>
-      <section className="card vista-alta">
-        <div className="log-head">
-          <h2>Registro del sistema</h2>
-          <div className="barra-acciones">
-            <label className="etiqueta">
-              Por página{' '}
+      <EncabezadoDeVista
+        titulo="Registro del sistema"
+        opciones={
+          <>
+            <label className="etiqueta selector-en-linea">
+              <span>Por página</span>
               <select value={tamanio} onChange={(e) => cambiarTamanio(e.target.value)}>
                 {TAMANIOS_PAGINA.map((t) => (
                   <option key={t} value={t}>
@@ -129,10 +131,12 @@ export default function LogsView() {
             >
               {FLECHA_CIRCULAR}
             </button>
-          </div>
-        </div>
+          </>
+        }
+      />
 
-        <div className="tabs" role="tablist">
+      <section className="card vista-alta">
+        <div className="tabs" role="tablist" aria-label="Categorías del registro">
           {PESTANIAS.map((p) => (
             <button
               key={p.clave}
@@ -148,9 +152,26 @@ export default function LogsView() {
           ))}
         </div>
 
-        <div className="vista-alta-cuerpo" role="tabpanel" aria-labelledby={`pestania-${categoria || 'todos'}`}>
-          {error && <p className="aviso malo">No se pudo traer el registro: {error}</p>}
-          {!error && datos.items.length === 0 && !cargando && <p className="vacio">Sin registros.</p>}
+        {/* Al cambiar de pestaña o de página la lista de antes se queda, apagada,
+            hasta que llega la nueva: vaciarla en el medio era un parpadeo de
+            "sin registros" en cada clic. */}
+        <div
+          className="vista-alta-cuerpo"
+          role="tabpanel"
+          aria-labelledby={`pestania-${categoria || 'todos'}`}
+          aria-busy={cargando || undefined}
+        >
+          {error && (
+            <p className="aviso malo" role="alert">
+              No se pudo traer el registro: {error}
+            </p>
+          )}
+          {cargando && !error && datos.items.length === 0 && <EsqueletoDeTabla texto="Trayendo el registro…" filas={5} />}
+          {!error && datos.items.length === 0 && !cargando && (
+            <EstadoVacio titulo="Sin registros.">
+              Lo que pase en esta categoría (altas, decisiones, inicios de sesión) va a quedar anotado acá.
+            </EstadoVacio>
+          )}
           {datos.items.length > 0 && (
             <div className="log">
               {datos.items.map((l) => (

@@ -1,20 +1,38 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import AlertaEnCurso from './AlertaEnCurso';
-import { makeAlert } from '../test/fixtures';
+import { makeAlert, makeDrone } from '../test/fixtures';
+import { ESPERA_DEL_RELEVO_MS } from '../useCarruselDeAlertas';
 
-function montar(props: Partial<Parameters<typeof AlertaEnCurso>[0]> = {}) {
-  const todas = {
-    alerta: makeAlert({ id: 7, type: 'VEHICLE', snapshot: 'QUFB' }),
-    otrasPendientes: 0,
-    siguiendo: false,
+type Props = Parameters<typeof AlertaEnCurso>[0];
+
+function montar(props: Partial<Props> = {}) {
+  const todas: Props = {
+    alertas: [makeAlert({ id: 7, type: 'VEHICLE', snapshot: 'QUFB' })],
     onDecidir: vi.fn(),
     ...props,
   };
-  render(<AlertaEnCurso {...todas} />);
-  return todas;
+  const { rerender } = render(<AlertaEnCurso {...todas} />);
+  // La lista de pendientes cambia sola (llegan, se deciden en otra consola):
+  // se la cambia sobre el mismo componente, que es donde vive la selección.
+  const conAlertas = (alertas: Props['alertas']) => rerender(<AlertaEnCurso {...todas} alertas={alertas} />);
+  return { ...todas, conAlertas };
 }
+
+/** Tres pendientes que llegan desordenadas: la 9 es la más nueva. */
+const TRES = [
+  makeAlert({ id: 3, type: 'PERSON' }),
+  makeAlert({ id: 9, type: 'VEHICLE' }),
+  makeAlert({ id: 5, type: 'PERSON', snapshot: 'QkJC' }),
+];
+
+const tarjeta = () => screen.getByRole('region', { name: 'Alerta en curso' });
+const cuenta = () => screen.getByTestId('carrusel-cuenta');
+const anterior = () => screen.getByRole('button', { name: 'Alerta anterior, más nueva' });
+const siguiente = () => screen.getByRole('button', { name: 'Alerta siguiente, más vieja' });
+/** La región viva de la cuenta: lo que oye quien usa lector de pantalla. */
+const anuncio = () => within(tarjeta()).getByRole('status');
 
 describe('AlertaEnCurso', () => {
   it('muestra la captura, el tipo y la hora de la alerta', () => {
@@ -25,12 +43,22 @@ describe('AlertaEnCurso', () => {
       'src',
       'data:image/jpeg;base64,QUFB',
     );
-    expect(screen.getByRole('region', { name: 'Alerta en curso' })).toBeInTheDocument();
+    expect(tarjeta()).toBeInTheDocument();
+  });
+
+  it('un tipo que la consola no conoce se muestra tal cual, y no en blanco', () => {
+    montar({ alertas: [makeAlert({ type: 'ANIMAL' as never })] });
+    expect(screen.getByText('ANIMAL')).toHaveClass('badge', 'animal');
   });
 
   it('sin captura lo dice en lugar de dejar un hueco', () => {
-    montar({ alerta: makeAlert({ snapshot: null }) });
+    montar({ alertas: [makeAlert({ snapshot: null })] });
     expect(screen.getByText('La alerta llegó sin captura')).toBeInTheDocument();
+  });
+
+  it('sin alertas no dibuja nada', () => {
+    const { container } = render(<AlertaEnCurso alertas={[]} onDecidir={vi.fn()} />);
+    expect(container).toBeEmptyDOMElement();
   });
 
   it('valida y descarta con el id de la alerta', async () => {
@@ -82,18 +110,311 @@ describe('AlertaEnCurso', () => {
     expect(onDecidir).toHaveBeenCalledTimes(1);
   });
 
-  it('con el dron sobre este objetivo, lo dice', () => {
-    montar({ siguiendo: true });
+  it('con un dron sobre el objetivo de esta alerta, lo dice', () => {
+    montar({ seguidas: [null, 7] });
     expect(screen.getByText(/El dron está sobre este objetivo/)).toBeInTheDocument();
   });
 
-  it('avisa si el dron tiene más alertas sin decidir, en singular y en plural', () => {
-    const { rerender } = render(
-      <AlertaEnCurso alerta={makeAlert({ id: 1 })} otrasPendientes={1} siguiendo={false} onDecidir={vi.fn()} />,
-    );
-    expect(screen.getByText('Este dron tiene otra alerta sin decidir: está en la campana.')).toBeInTheDocument();
+  it('con una sola alerta no hay nada que recorrer: ni flechas ni cuenta', () => {
+    montar();
+    expect(screen.queryByRole('button', { name: /Alerta anterior/ })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('carrusel-cuenta')).not.toBeInTheDocument();
+    // Sigue siendo enfocable por código: es adonde vuelve el foco al decidir.
+    expect(tarjeta()).toHaveAttribute('tabindex', '-1');
+  });
 
-    rerender(<AlertaEnCurso alerta={makeAlert({ id: 1 })} otrasPendientes={3} siguiendo={false} onDecidir={vi.fn()} />);
-    expect(screen.getByText('Este dron tiene otras 3 alertas sin decidir: están en la campana.')).toBeInTheDocument();
+  it('acepta otro título y la variante apaisada del tablero', () => {
+    montar({ titulo: '2 alertas sin atender', apaisada: true });
+    expect(screen.getByRole('region', { name: '2 alertas sin atender' })).toHaveClass('alerta-en-curso', 'apaisada');
+  });
+});
+
+describe('AlertaEnCurso — carrusel', () => {
+  it('arranca en la más nueva y dice cuál es de cuántas', () => {
+    montar({ alertas: TRES });
+    expect(cuenta()).toHaveTextContent('1 de 3');
+    expect(within(tarjeta()).getByText('VEHÍCULO')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: '1 de 3' })).toBeInTheDocument();
+    expect(tarjeta()).toHaveAttribute('aria-roledescription', 'carrusel');
+  });
+
+  it('las flechas recorren de la más nueva a la más vieja', async () => {
+    const { onDecidir } = montar({ alertas: TRES });
+    await userEvent.click(siguiente());
+    expect(cuenta()).toHaveTextContent('2 de 3');
+    expect(screen.getByAltText('Captura que disparó la detección')).toHaveAttribute('src', 'data:image/jpeg;base64,QkJC');
+
+    await userEvent.click(siguiente());
+    expect(cuenta()).toHaveTextContent('3 de 3');
+    await userEvent.click(screen.getByRole('button', { name: 'Validar' }));
+    expect(onDecidir).toHaveBeenCalledWith(3, 'VALIDATED');
+
+    await userEvent.click(anterior());
+    expect(cuenta()).toHaveTextContent('2 de 3');
+  });
+
+  it('en las puntas la flecha se apaga y no da la vuelta', async () => {
+    montar({ alertas: TRES });
+    expect(anterior()).toHaveAttribute('aria-disabled', 'true');
+    expect(siguiente()).toHaveAttribute('aria-disabled', 'false');
+    await userEvent.click(anterior());
+    expect(cuenta()).toHaveTextContent('1 de 3');
+
+    await userEvent.click(siguiente());
+    await userEvent.click(siguiente());
+    expect(siguiente()).toHaveAttribute('aria-disabled', 'true');
+    expect(anterior()).toHaveAttribute('aria-disabled', 'false');
+    await userEvent.click(siguiente());
+    expect(cuenta()).toHaveTextContent('3 de 3');
+  });
+
+  it('con el foco en el carrusel, las flechas del teclado lo recorren', async () => {
+    montar({ alertas: TRES });
+    expect(tarjeta()).toHaveAttribute('tabindex', '0');
+    tarjeta().focus();
+    await userEvent.keyboard('{ArrowRight}');
+    expect(cuenta()).toHaveTextContent('2 de 3');
+    await userEvent.keyboard('{ArrowRight}{ArrowRight}');
+    expect(cuenta()).toHaveTextContent('3 de 3');
+    await userEvent.keyboard('{ArrowLeft}');
+    expect(cuenta()).toHaveTextContent('2 de 3');
+  });
+
+  it('desde un botón de adentro las flechas también andan', async () => {
+    montar({ alertas: TRES });
+    siguiente().focus();
+    await userEvent.keyboard('{ArrowRight}');
+    expect(cuenta()).toHaveTextContent('2 de 3');
+    // El paso sigue enfocado aunque llegue a la punta: está con aria-disabled.
+    await userEvent.keyboard('{Enter}');
+    expect(cuenta()).toHaveTextContent('3 de 3');
+    expect(siguiente()).toHaveFocus();
+  });
+
+  it('no se mete con los atajos del navegador ni con otras teclas', () => {
+    montar({ alertas: TRES });
+    fireEvent.keyDown(tarjeta(), { key: 'ArrowRight', altKey: true });
+    fireEvent.keyDown(tarjeta(), { key: 'ArrowRight', ctrlKey: true });
+    fireEvent.keyDown(tarjeta(), { key: 'ArrowRight', shiftKey: true });
+    fireEvent.keyDown(tarjeta(), { key: 'ArrowRight', metaKey: true });
+    expect(cuenta()).toHaveTextContent('1 de 3');
+
+    const tecla = fireEvent.keyDown(tarjeta(), { key: 'Enter' });
+    // `fireEvent` devuelve false sólo si alguien llamó a preventDefault.
+    expect(tecla).toBe(true);
+    expect(fireEvent.keyDown(tarjeta(), { key: 'ArrowRight' })).toBe(false);
+  });
+
+  it('al decidirse la que se mira, queda la vecina que le seguía y no la primera', async () => {
+    const { conAlertas } = montar({ alertas: TRES });
+    await userEvent.click(siguiente());
+    expect(cuenta()).toHaveTextContent('2 de 3');
+
+    // La 5 se decidió: el backend la saca de las pendientes.
+    conAlertas([TRES[0], TRES[1]]);
+    expect(cuenta()).toHaveTextContent('2 de 2');
+    expect(screen.queryByAltText('Captura que disparó la detección')).not.toBeInTheDocument();
+    expect(within(tarjeta()).getByText('PERSONA')).toBeInTheDocument();
+  });
+
+  it('si la decidida era la última, queda la anterior', async () => {
+    const { conAlertas } = montar({ alertas: TRES });
+    await userEvent.click(siguiente());
+    await userEvent.click(siguiente());
+    conAlertas([TRES[1], TRES[2]]);
+    expect(cuenta()).toHaveTextContent('2 de 2');
+    expect(screen.getByAltText('Captura que disparó la detección')).toHaveAttribute('src', 'data:image/jpeg;base64,QkJC');
+  });
+
+  it('el foco que estaba en Validar vuelve al carrusel y no pasa a la vecina', async () => {
+    const { conAlertas } = montar({ alertas: TRES });
+    const validar = screen.getByRole('button', { name: 'Validar' });
+    validar.focus();
+    conAlertas([TRES[0], TRES[2]]);
+    // Un segundo Enter no puede validar una alerta que el operador no miró.
+    expect(screen.getByRole('button', { name: 'Validar' })).not.toHaveFocus();
+    expect(tarjeta()).toHaveFocus();
+  });
+
+  it('al quedar una sola, el foco igual vuelve a la tarjeta', () => {
+    const { conAlertas } = montar({ alertas: [TRES[0], TRES[1]] });
+    screen.getByRole('button', { name: 'Descartar' }).focus();
+    conAlertas([TRES[0]]);
+    expect(tarjeta()).toHaveFocus();
+    expect(screen.queryByTestId('carrusel-cuenta')).not.toBeInTheDocument();
+  });
+
+  it('si el navegador suelta el foco del botón deshabilitado mientras se decide, vuelve al carrusel', async () => {
+    let terminar: () => void = () => {};
+    const onDecidir = vi.fn(() => new Promise<void>((r) => (terminar = r)));
+    montar({ alertas: TRES, onDecidir });
+    const validar = screen.getByRole('button', { name: 'Validar' });
+    await userEvent.click(validar);
+    expect(validar).toBeDisabled();
+    // Así lo hace Chrome con un botón enfocado que se deshabilita: avisa con un
+    // focusout sin destino y deja el foco en ningún lado. jsdom no lo hace solo.
+    fireEvent.focusOut(validar, { relatedTarget: null });
+    const enNingunLado = vi.spyOn(document, 'activeElement', 'get').mockReturnValue(document.body);
+
+    // Si el backend la rechaza, la alerta sigue ahí: el foco vuelve igual.
+    await act(async () => terminar());
+    enNingunLado.mockRestore();
+    expect(tarjeta()).toHaveFocus();
+  });
+
+  it('si el operador sacó el foco del carrusel, irse una alerta no lo trae de vuelta', () => {
+    const { conAlertas } = montar({ alertas: TRES });
+    const validar = screen.getByRole('button', { name: 'Validar' });
+    validar.focus();
+    // Un click en una parte de la página que no se enfoca: el foco va a ningún lado.
+    act(() => validar.blur());
+    conAlertas([TRES[0], TRES[2]]);
+    expect(tarjeta()).not.toHaveFocus();
+  });
+
+  it('si el foco estaba en otra parte, irse una alerta no se lo roba', async () => {
+    render(<button type="button">Afuera</button>);
+    const { conAlertas } = montar({ alertas: TRES });
+    // Pasa por el carrusel y sale: el carrusel tiene que enterarse de que el foco se fue.
+    await userEvent.click(siguiente());
+    await userEvent.click(screen.getByRole('button', { name: 'Afuera' }));
+    conAlertas([TRES[1], TRES[0]]);
+    expect(screen.getByRole('button', { name: 'Afuera' })).toHaveFocus();
+  });
+
+  it('una alerta nueva no saca al operador de la que mira: cambia la cuenta y la cuenta late', async () => {
+    const { conAlertas } = montar({ alertas: TRES });
+    await userEvent.click(siguiente());
+    expect(cuenta()).not.toHaveClass('llego');
+
+    conAlertas([...TRES, makeAlert({ id: 12, type: 'VEHICLE', snapshot: 'Q0ND' })]);
+    // Sigue en la 5 (la de la captura QkJC), que ahora es la tercera de cuatro.
+    expect(cuenta()).toHaveTextContent('3 de 4');
+    expect(cuenta()).toHaveClass('llego');
+    expect(screen.getByAltText('Captura que disparó la detección')).toHaveAttribute('src', 'data:image/jpeg;base64,QkJC');
+
+    // Y queda un aviso quieto para quien no ve el latido.
+    await userEvent.click(screen.getByRole('button', { name: 'Ver la alerta nueva' }));
+    expect(cuenta()).toHaveTextContent('1 de 4');
+    expect(screen.getByAltText('Captura que disparó la detección')).toHaveAttribute('src', 'data:image/jpeg;base64,Q0ND');
+    expect(screen.queryByRole('button', { name: /alerta nueva/ })).not.toBeInTheDocument();
+  });
+
+  it('con varias nuevas sin ver, el aviso las cuenta', async () => {
+    const { conAlertas } = montar({ alertas: TRES });
+    conAlertas([...TRES, makeAlert({ id: 12 }), makeAlert({ id: 14 })]);
+    expect(cuenta()).toHaveTextContent('3 de 5');
+    expect(anuncio()).toHaveTextContent('Alerta 3 de 5, 2 alertas nuevas sin ver');
+    await userEvent.click(screen.getByRole('button', { name: 'Ver las 2 alertas nuevas' }));
+    expect(cuenta()).toHaveTextContent('1 de 5');
+    expect(screen.getByRole('button', { name: 'Ver la alerta nueva' })).toBeInTheDocument();
+    expect(anuncio()).toHaveTextContent('Alerta 1 de 5, una alerta nueva sin ver');
+  });
+
+  it('la región que anuncia la cuenta ya está con una sola alerta, y la segunda se anuncia al llegar', async () => {
+    // La vista del dron no le pasa título: el encabezado no cambia y no avisa.
+    const { conAlertas } = montar();
+    const region = anuncio();
+    expect(region).toHaveAttribute('aria-live', 'polite');
+    expect(region).toBeEmptyDOMElement();
+
+    conAlertas([makeAlert({ id: 7, type: 'VEHICLE', snapshot: 'QUFB' }), makeAlert({ id: 12 })]);
+    // Es la misma región, ahora con texto: un cambio, que es lo que se anuncia.
+    // Una región que naciera con la segunda alerta ya traería el texto puesto.
+    expect(anuncio()).toBe(region);
+    expect(region).toHaveTextContent('Alerta 2 de 2, una alerta nueva sin ver');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Ver la alerta nueva' }));
+    expect(region).toHaveTextContent(/^Alerta 1 de 2$/);
+  });
+
+  it('el error de una alerta queda con esa alerta al recorrer', async () => {
+    const onDecidir = vi.fn().mockRejectedValue(new Error('falló la 9'));
+    montar({ alertas: TRES, onDecidir });
+    await userEvent.click(screen.getByRole('button', { name: 'Validar' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('falló la 9');
+
+    await userEvent.click(siguiente());
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    await userEvent.click(anterior());
+    expect(screen.getByRole('alert')).toHaveTextContent('falló la 9');
+  });
+});
+
+describe('AlertaEnCurso — en el tablero', () => {
+  const drones = [makeDrone({ droneId: 'd1', displayName: 'Alfa' }), makeDrone({ droneId: 'd2', displayName: 'Bravo' })];
+
+  it('dice de qué dron es cada alerta y lleva a su vista', async () => {
+    const onVerDron = vi.fn();
+    montar({
+      alertas: [makeAlert({ id: 1, drone_id: 'd1' }), makeAlert({ id: 2, drone_id: 'd2' })],
+      drones,
+      onVerDron,
+    });
+    const bravo = screen.getByRole('button', { name: 'Bravo' });
+    expect(bravo).toHaveAttribute('title', 'Abrir la vista de Bravo');
+    await userEvent.click(bravo);
+    expect(onVerDron).toHaveBeenCalledWith('d2');
+
+    await userEvent.click(siguiente());
+    await userEvent.click(screen.getByRole('button', { name: 'Alfa' }));
+    expect(onVerDron).toHaveBeenLastCalledWith('d1');
+  });
+
+  it('el segundo click de un doble click en Validar no decide la alerta de otro dron que entra en su lugar', () => {
+    vi.useFakeTimers();
+    try {
+      // El pedido queda en viaje: el backend avisa por el WebSocket antes de contestarlo.
+      const onDecidir = vi.fn(() => new Promise<void>(() => {}));
+      const { conAlertas } = montar({
+        alertas: [makeAlert({ id: 9, drone_id: 'd1' }), makeAlert({ id: 5, drone_id: 'd2' })],
+        drones,
+        onVerDron: vi.fn(),
+        onDecidir,
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Validar' }));
+      expect(onDecidir).toHaveBeenCalledWith(9, 'VALIDATED');
+
+      // La 9 (de Alfa) se va y en su lugar queda la 5, de Bravo, que nadie miró.
+      conAlertas([makeAlert({ id: 5, drone_id: 'd2' })]);
+      expect(screen.getByRole('button', { name: 'Bravo' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Validar' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Descartar' })).toBeDisabled();
+      fireEvent.click(screen.getByRole('button', { name: 'Validar' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Descartar' }));
+      expect(onDecidir).toHaveBeenCalledTimes(1);
+
+      // Pasada la espera ya es una decisión sobre algo que el operador tuvo a la vista.
+      act(() => vi.advanceTimersByTime(ESPERA_DEL_RELEVO_MS));
+      expect(screen.getByRole('button', { name: 'Validar' })).toBeEnabled();
+      fireEvent.click(screen.getByRole('button', { name: 'Validar' }));
+      expect(onDecidir).toHaveBeenLastCalledWith(5, 'VALIDATED');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('si el operador elige la vecina con las flechas, la puede decidir enseguida', async () => {
+    const onDecidir = vi.fn();
+    const { conAlertas } = montar({ alertas: TRES, onDecidir });
+    conAlertas([TRES[0], TRES[2]]);
+    expect(screen.getByRole('button', { name: 'Validar' })).toBeDisabled();
+
+    await userEvent.click(siguiente());
+    await userEvent.click(anterior());
+    await userEvent.click(screen.getByRole('button', { name: 'Validar' }));
+    expect(onDecidir).toHaveBeenCalledWith(5, 'VALIDATED');
+  });
+
+  it('una alerta de un dron que ya no está no lleva a ningún lado', () => {
+    montar({ alertas: [makeAlert({ id: 1, drone_id: 'd9' })], drones, onVerDron: vi.fn() });
+    const desconocido = screen.getByRole('button', { name: 'Dron desconocido' });
+    expect(desconocido).toBeDisabled();
+    expect(desconocido).not.toHaveAttribute('title');
+  });
+
+  it('sin `onVerDron` (vista del dron) no repite el nombre del dron', () => {
+    montar({ alertas: [makeAlert({ id: 1, drone_id: 'd1' })], drones });
+    expect(screen.queryByRole('button', { name: 'Alfa' })).not.toBeInTheDocument();
   });
 });

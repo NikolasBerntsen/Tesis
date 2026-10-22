@@ -13,6 +13,8 @@ import {
   updateUser,
   softDeleteUser,
   restoreUser,
+  normalizarDni,
+  usuarioConDni,
   createDrone,
   getDrone,
   listDrones,
@@ -72,6 +74,7 @@ describe('store — usuarios', () => {
       password_hash: 'secreto',
       role: 'supervisor',
       full_name: 'Ana Pérez',
+      dni: '30123456',
       display_name: null,
       active: 1,
       can_control: 0,
@@ -80,7 +83,7 @@ describe('store — usuarios', () => {
       deleted_by: null,
     });
     expect(view).toEqual({
-      username: 'ana', fullName: 'Ana Pérez', role: 'supervisor',
+      username: 'ana', fullName: 'Ana Pérez', dni: '30123456', role: 'supervisor',
       active: true, canControl: false, deleted: false, deletedAt: null,
     });
     expect(view).not.toHaveProperty('password_hash');
@@ -117,7 +120,7 @@ describe('store — usuarios', () => {
   it('createUser inserta y devuelve la vista con canControl', () => {
     const conControl = createUser({ username: 'c1', fullName: 'Persona c1', passwordHash: 'h', role: 'operator', canControl: true });
     expect(conControl).toEqual({
-      username: 'c1', fullName: 'Persona c1', role: 'operator',
+      username: 'c1', fullName: 'Persona c1', dni: '', role: 'operator',
       active: true, canControl: true, deleted: false, deletedAt: null,
     });
     const sinControl = createUser({ username: 'c2', fullName: 'Persona c2', passwordHash: 'h', role: 'field_operator', canControl: false });
@@ -170,6 +173,111 @@ describe('store — usuarios', () => {
     expect(r?.after.deletedAt).toBeNull();
     expect(getUser('vuelve')?.deleted_by).toBeNull();
     expect(restoreUser('fantasma')).toBeUndefined();
+  });
+});
+
+describe('store — DNI y rol de los usuarios', () => {
+  it('normalizarDni acepta puntos y espacios y exige 7 u 8 dígitos', () => {
+    expect(normalizarDni('30.123.456')).toBe('30123456');
+    expect(normalizarDni(' 30 123 456 ')).toBe('30123456');
+    expect(normalizarDni('1234567')).toBe('1234567');
+    for (const malo of ['123456', '123456789', '30-123-456', '30123a56', '', '...']) {
+      expect(normalizarDni(malo), malo).toBeNull();
+    }
+    // Solo texto: un número de JSON con decimales no puede volverse un DNI.
+    expect(normalizarDni(3012345.6)).toBeNull();
+    expect(normalizarDni(undefined)).toBeNull();
+    expect(normalizarDni(null)).toBeNull();
+  });
+
+  it('createUser guarda el DNI y la vista lo devuelve', () => {
+    const u = createUser({ username: 'd1', fullName: 'Persona d1', dni: '30123456', passwordHash: 'h', role: 'operator', canControl: true });
+    expect(u.dni).toBe('30123456');
+    expect(getUser('d1')?.dni).toBe('30123456');
+  });
+
+  it('usuarioConDni encuentra la otra cuenta viva, sin contarse a sí misma ni a las eliminadas', () => {
+    createUser({ username: 'd1', fullName: 'Persona d1', dni: '30123456', passwordHash: 'h', role: 'operator', canControl: true });
+    expect(usuarioConDni('30123456')?.username).toBe('d1');
+    expect(usuarioConDni('30123456', 'd1')).toBeUndefined();
+    expect(usuarioConDni('99999999')).toBeUndefined();
+
+    softDeleteUser('d1', 'admin');
+    expect(usuarioConDni('30123456')).toBeUndefined();
+  });
+
+  it('el índice único no deja dos cuentas vivas con el mismo DNI, pero sí con el DNI vacío', () => {
+    createUser({ username: 'd1', fullName: 'Persona d1', dni: '30123456', passwordHash: 'h', role: 'operator', canControl: true });
+    expect(() =>
+      createUser({ username: 'd2', fullName: 'Persona d2', dni: '30123456', passwordHash: 'h', role: 'operator', canControl: true }),
+    ).toThrow(/UNIQUE/);
+    // Las cuentas viejas sin DNI conviven sin chocar.
+    createUser({ username: 'v1', fullName: 'Persona v1', passwordHash: 'h', role: 'operator', canControl: true });
+    createUser({ username: 'v2', fullName: 'Persona v2', passwordHash: 'h', role: 'operator', canControl: true });
+    // Y la baja lógica libera el número.
+    softDeleteUser('d1', 'admin');
+    expect(
+      createUser({ username: 'd3', fullName: 'Persona d3', dni: '30123456', passwordHash: 'h', role: 'operator', canControl: true }).dni,
+    ).toBe('30123456');
+  });
+
+  it('updateUser cambia el DNI y el rol, y sin pedirlos no los toca', () => {
+    createUser({ username: 'u', fullName: 'Persona u', dni: '30123456', passwordHash: 'h', role: 'operator', canControl: true });
+    const r = updateUser('u', { dni: '1234567', role: 'supervisor' });
+    expect(r?.before).toMatchObject({ dni: '30123456', role: 'operator' });
+    expect(r?.after).toMatchObject({ dni: '1234567', role: 'supervisor' });
+    expect(updateUser('u', { fullName: 'Otro Nombre' })?.after).toMatchObject({ dni: '1234567', role: 'supervisor' });
+  });
+
+  it('listUsers busca por DNI con o sin puntos, y un texto sin dígitos no matchea a todos', () => {
+    createUser({ username: 'ana', fullName: 'Ana Pérez', dni: '30123456', passwordHash: 'h', role: 'operator', canControl: true });
+    createUser({ username: 'beto', fullName: 'Beto Gómez', dni: '28999111', passwordHash: 'h', role: 'operator', canControl: true });
+    const buscar = (q: string) => listUsers(['operator'], { q }).map((u) => u.username);
+
+    expect(buscar('30123456')).toEqual(['ana']);
+    expect(buscar('30.123')).toEqual(['ana']);
+    expect(buscar('999 111')).toEqual(['beto']);
+    // Un punto suelto queda vacío al sacarle los puntos: no puede traer a todos.
+    expect(buscar('.')).toEqual([]);
+  });
+
+  it('listUsers encuentra un DNI de 7 dígitos aunque se lo busque con el cero del CUIL', () => {
+    createUser({ username: 'mayor', fullName: 'Persona Mayor', dni: '5123456', passwordHash: 'h', role: 'operator', canControl: true });
+    createUser({ username: 'otra', fullName: 'Otra Persona', dni: '30999888', passwordHash: 'h', role: 'operator', canControl: true });
+    const buscar = (q: string) => listUsers(['operator'], { q }).map((u) => u.username);
+
+    // Antes "05123456" no estaba adentro de "5123456" y la búsqueda volvía vacía.
+    expect(buscar('05123456')).toEqual(['mayor']);
+    expect(buscar('05.123.456')).toEqual(['mayor']);
+    expect(buscar('05.123')).toEqual(['mayor']);
+    // Puros ceros no son un DNI que buscar: no pueden traer a todos.
+    expect(buscar('000')).toEqual([]);
+  });
+});
+
+describe('store — forma canónica del DNI', () => {
+  it('los ceros a la izquierda no cambian el número: se sacan', () => {
+    expect(normalizarDni('05123456')).toBe('5123456');
+    expect(normalizarDni('05.123.456')).toBe('5123456');
+    expect(normalizarDni(' 0 5 123 456 ')).toBe('5123456');
+    // Uno de 8 que no empieza con cero queda como estaba.
+    expect(normalizarDni('30123456')).toBe('30123456');
+  });
+
+  it('los 7 u 8 dígitos se cuentan ya sin los ceros', () => {
+    // "0612345" tiene 7 caracteres pero es el 612.345: no es un DNI válido.
+    for (const malo of ['00000000', '0000000', '0', '0612345', '000123456']) {
+      expect(normalizarDni(malo), malo).toBeNull();
+    }
+    // Y al revés: con los ceros sacados, un 8 de CUIL rellenado vale.
+    expect(normalizarDni('0001234567')).toBe('1234567');
+  });
+
+  it('un DNI con el cero del CUIL choca con el mismo número sin el cero', () => {
+    createUser({
+      username: 'd1', fullName: 'Persona d1', dni: normalizarDni('5.123.456')!, passwordHash: 'h', role: 'operator', canControl: true,
+    });
+    expect(usuarioConDni(normalizarDni('05123456')!)?.username).toBe('d1');
   });
 });
 

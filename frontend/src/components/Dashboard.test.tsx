@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import Dashboard from './Dashboard';
@@ -22,6 +22,7 @@ function renderDashboard(props: Partial<Parameters<typeof Dashboard>[0]> = {}) {
     frames: {},
     alerts: [],
     pendingAlerts: {},
+    onDecidir: vi.fn(),
     onOpenDrone: vi.fn(),
     onRename: vi.fn(),
   };
@@ -43,9 +44,25 @@ describe('Dashboard', () => {
     expect(screen.getByText('1 en vuelo · 2 registrados')).toBeInTheDocument();
   });
 
-  it('muestra el vacío cuando no hay drones activos', () => {
+  it('muestra el vacío cuando no hay drones activos, con qué esperar', () => {
     renderDashboard({ drones: [makeDrone({ online: false })] });
     expect(screen.getByText('No hay drones activos.')).toBeInTheDocument();
+    expect(screen.getByText(/Cuando un dron se conecte al Comando Central, su cámara aparece acá/)).toBeInTheDocument();
+  });
+
+  it('la cabecera es la de todas las vistas: título, la flota al lado y cómo mirarla a la derecha', () => {
+    renderDashboard();
+    expect(screen.getByRole('heading', { level: 2, name: 'Operación' })).toBeInTheDocument();
+    const como = screen.getByRole('group', { name: 'Cómo ver la flota' });
+    expect(within(como).getByRole('button', { name: 'Cámaras' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(como).getByRole('button', { name: 'Mapa' })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('la alerta sin atender va debajo de la cabecera y arriba de las cámaras', () => {
+    renderDashboard({ alerts: [makeAlert({ id: 5, status: 'PENDING', drone_id: 'd1' })] });
+    const cabecera = screen.getByRole('heading', { name: 'Operación' }).closest('header') as HTMLElement;
+    const alerta = screen.getByRole('region', { name: '1 alerta sin atender' });
+    expect(cabecera.compareDocumentPosition(alerta) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('cambia entre la vista de cámaras y la de mapa', async () => {
@@ -59,30 +76,77 @@ describe('Dashboard', () => {
     expect(screen.queryByTestId('mapa-mock')).not.toBeInTheDocument();
   });
 
-  it('muestra la franja de alertas sin atender y abre el dron al tocar un chip', async () => {
+  it('muestra la alerta sin atender con su dron, y el nombre abre la vista del dron', async () => {
     const props = renderDashboard({
-      alerts: [makeAlert({ id: 5, type: 'PERSON', status: 'PENDING', drone_id: 'd1' })],
+      alerts: [makeAlert({ id: 5, type: 'PERSON', status: 'PENDING', drone_id: 'd1', snapshot: 'QUFB' })],
     });
-    expect(screen.getByText('1 alerta sin atender')).toBeInTheDocument();
+    const tarjeta = screen.getByRole('region', { name: '1 alerta sin atender' });
+    expect(tarjeta).toHaveClass('apaisada');
+    expect(within(tarjeta).getByText('PERSONA')).toBeInTheDocument();
+    expect(within(tarjeta).getByAltText('Captura que disparó la detección')).toBeInTheDocument();
+    // Una sola: no hay nada que recorrer.
+    expect(within(tarjeta).queryByTestId('carrusel-cuenta')).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: /PERSONA/ }));
+    await userEvent.click(within(tarjeta).getByRole('button', { name: 'Alfa' }));
     expect(props.onOpenDrone).toHaveBeenCalledWith('d1');
   });
 
-  it('condensa la franja cuando hay más alertas que chips', () => {
+  it('recorre todas las pendientes de la flota, la más nueva primero', async () => {
     renderDashboard({
-      alerts: Array.from({ length: 6 }, (_, i) =>
-        makeAlert({ id: i + 1, type: 'PERSON', status: 'PENDING', drone_id: 'd1' }),
-      ),
+      drones: [
+        makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true }),
+        makeDrone({ droneId: 'd2', displayName: 'Bravo', online: true }),
+      ],
+      alerts: [
+        ...Array.from({ length: 5 }, (_, i) => makeAlert({ id: i + 1, status: 'PENDING', drone_id: 'd1' })),
+        makeAlert({ id: 6, type: 'VEHICLE', status: 'PENDING', drone_id: 'd2' }),
+        makeAlert({ id: 7, status: 'DISMISSED', drone_id: 'd2' }),
+      ],
     });
-    expect(screen.getByText('6 alertas sin atender')).toBeInTheDocument();
-    expect(screen.getAllByRole('button', { name: /PERSONA/ })).toHaveLength(4);
-    expect(screen.getByText('+2 más')).toBeInTheDocument();
+    const tarjeta = screen.getByRole('region', { name: '6 alertas sin atender' });
+    expect(screen.getByTestId('carrusel-cuenta')).toHaveTextContent('1 de 6');
+    expect(within(tarjeta).getByRole('button', { name: 'Bravo' })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Alerta siguiente, más vieja' }));
+    expect(screen.getByTestId('carrusel-cuenta')).toHaveTextContent('2 de 6');
+    expect(within(tarjeta).getByRole('button', { name: 'Alfa' })).toBeInTheDocument();
   });
 
-  it('no muestra la franja cuando no hay alertas pendientes', () => {
+  it('valida desde el tablero con el id de la alerta en pantalla', async () => {
+    const props = renderDashboard({ alerts: [makeAlert({ id: 5, status: 'PENDING', drone_id: 'd1' })] });
+    await userEvent.click(screen.getByRole('button', { name: 'Validar' }));
+    expect(props.onDecidir).toHaveBeenCalledWith(5, 'VALIDATED');
+  });
+
+  it('avisa si algún dron está sobre el objetivo de la alerta', () => {
+    renderDashboard({
+      alerts: [makeAlert({ id: 12, status: 'PENDING', drone_id: 'd1' })],
+      statuses: {
+        d1: makeStatus({
+          droneId: 'd1',
+          state: 'ORBITING',
+          target: {
+            alertId: 12,
+            type: 'PERSON',
+            lat: -34.6,
+            lon: -58.4,
+            speedMs: null,
+            courseDeg: null,
+            moving: false,
+            lost: false,
+            lastSeenMs: 300,
+            decision: 'PENDING',
+          },
+        }),
+      },
+    });
+    expect(screen.getByText(/El dron está sobre este objetivo/)).toBeInTheDocument();
+  });
+
+  it('no muestra alertas cuando no hay pendientes', () => {
     renderDashboard({ alerts: [makeAlert({ status: 'VALIDATED' })] });
     expect(screen.queryByText(/sin atender/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Validar' })).not.toBeInTheDocument();
   });
 
   it('"en vuelo" cuenta sólo los que están en el aire: uno apoyado tiene cámara pero no vuela', () => {

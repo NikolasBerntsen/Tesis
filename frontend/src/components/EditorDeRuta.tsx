@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import L from 'leaflet';
-import { CENTRO_POR_DEFECTO, iconoBase, useFondo, vestirAtribucion } from '../mapa';
+import { esc } from '../html';
+import { CENTRO_POR_DEFECTO, TRAZO, etiquetaDeNodo, iconoBase, useFondo, vestirAtribucion } from '../mapa';
 import type { PatrolRoute, Waypoint } from '../types';
 import ConmutadorDeFondo from './ConmutadorDeFondo';
+import IconoCerrar from './IconoCerrar';
 import Modal from './Modal';
 
 /** Un nodo con identidad estable, para poder arrastrarlo sin que se confunda. */
@@ -12,6 +14,20 @@ interface Nodo extends Waypoint {
 
 let contador = 0;
 const nuevoNodo = (lat: number, lon: number): Nodo => ({ lat, lon, alt: 40, clave: ++contador });
+
+/**
+ * Por qué "Guardar ruta" sigue apagado. Sin esto el editor sólo mostraba un
+ * botón gris, y el mínimo de dos nodos no estaba escrito en ningún lado.
+ */
+function queFalta(hayNombre: boolean, cantidadDeNodos: number): string {
+  if (cantidadDeNodos >= 2) return hayNombre ? '' : 'Falta el nombre de la ruta.';
+  if (cantidadDeNodos === 1) {
+    return hayNombre ? 'Falta un nodo más: una ruta necesita al menos dos.' : 'Faltan el nombre y un nodo más en el mapa.';
+  }
+  return hayNombre
+    ? 'Faltan los nodos: marcá al menos dos en el mapa.'
+    : 'Faltan el nombre y los nodos: marcá al menos dos en el mapa.';
+}
 
 const NODO_NORMAL = '#9C3B30';
 const NODO_ILUMINADO = '#F2C230';
@@ -65,9 +81,11 @@ export default function EditorDeRuta({
     vestirAtribucion(m);
     m.on('click', (e: L.LeafletMouseEvent) => alClic.current(e.latlng.lat, e.latlng.lng));
     // La base va en su propia capa: no se borra con cada redibujo de los nodos.
+    // Su nombre lo escribe un operador de campo y Leaflet pinta la etiqueta con
+    // innerHTML: va escapado (ver html.ts).
     if (base) {
       L.marker([base.lat, base.lon], { icon: iconoBase() })
-        .bindTooltip(base.name, { direction: 'top' })
+        .bindTooltip(esc(base.name), { direction: 'top' })
         .addTo(m);
     }
     capa.current = L.layerGroup().addTo(m);
@@ -87,11 +105,14 @@ export default function EditorDeRuta({
     const grupo = capa.current;
     if (!grupo) return;
     grupo.clearLayers();
+    // Recorrido y filo de los nodos llevan su clase para que el CSS los aclare
+    // en obsidiana, sobre el callejero oscurecido (ver TRAZO en mapa.ts).
     if (nodos.length > 1) {
       L.polyline(nodos.map((n) => [n.lat, n.lon] as [number, number]), {
         color: '#8A6A1C',
         weight: 2,
         dashArray: '5 6',
+        className: TRAZO.recorrido,
       }).addTo(grupo);
     }
     nodos.forEach((n, i) => {
@@ -99,11 +120,12 @@ export default function EditorDeRuta({
       L.circleMarker([n.lat, n.lon], {
         radius: i === encendido ? 12 : 8,
         color: '#14120F',
+        className: TRAZO.nodo,
         weight: 1.5,
         fillColor: color,
         fillOpacity: 1,
       })
-        .bindTooltip(`${i + 1}${n.label ? ` · ${n.label}` : ''}`, { permanent: true, direction: 'top' })
+        .bindTooltip(etiquetaDeNodo(i, n.label), { permanent: true, direction: 'top' })
         .addTo(grupo);
     });
   }, [nodos, repasando, encendido]);
@@ -140,7 +162,11 @@ export default function EditorDeRuta({
     );
   }
 
-  async function guardar() {
+  async function guardar(e: FormEvent) {
+    e.preventDefault();
+    // Con el botón apagado esto no debería pasar; cubre el Enter de un
+    // navegador que igual intente mandar el formulario a medio completar.
+    if (!completa) return;
     setError('');
     setGuardando(true);
     try {
@@ -155,133 +181,157 @@ export default function EditorDeRuta({
     }
   }
 
-  const completa = nombre.trim().length > 0 && nodos.length >= 2;
+  const hayNombre = nombre.trim().length > 0;
+  const completa = hayNombre && nodos.length >= 2;
+  const faltante = queFalta(hayNombre, nodos.length);
+
+  /**
+   * Con la ruta en viaje, cerrar ya no es "salir sin guardar": se guarda igual,
+   * y al volver el padre cerraría el editor que esté abierto en ese momento
+   * —otra ruta a medio dibujar— y se perderían sus nodos. Hasta que el backend
+   * conteste, Cancelar y la cruz se apagan, y Escape y el velo no cierran.
+   */
+  function cerrar() {
+    if (!guardando) onCerrar();
+  }
 
   return (
-    <Modal etiquetadoPor="titulo-editor-ruta" ancho onCerrar={onCerrar}>
+    <Modal etiquetadoPor="titulo-editor-ruta" ancho enfocarPrimerCampo onCerrar={cerrar}>
       <header className="modal-cabecera">
-        <h2 className="modal-titulo" id="titulo-editor-ruta">
-          {ruta ? `Editar ${ruta.name}` : 'Nueva ruta de patrullaje'}
-        </h2>
-        <button type="button" className="modal-cerrar" aria-label="Cerrar" onClick={onCerrar}>
-          ×
+        <div>
+          <h2 className="modal-titulo" id="titulo-editor-ruta">
+            {ruta ? 'Editar ruta' : 'Nueva ruta de patrullaje'}
+          </h2>
+          <p className="modal-subtitulo">{ruta ? ruta.name : base ? `Desde ${base.name}` : 'Nodos en el orden del recorrido'}</p>
+        </div>
+        <button type="button" className="modal-cerrar" aria-label="Cerrar" onClick={cerrar} disabled={guardando}>
+          <IconoCerrar />
         </button>
       </header>
 
-      <div className="modal-cuerpo editor-ruta">
-        {error && <p className="aviso malo">{error}</p>}
+      {/* Un formulario de verdad para que Enter guarde desde cualquier campo,
+          como en el resto de los diálogos de alta y edición. */}
+      <form className="modal-formulario" onSubmit={guardar} noValidate>
+        <div className="modal-cuerpo editor-ruta">
+          {error && (
+            <p className="aviso malo" role="alert">
+              {error}
+            </p>
+          )}
 
-        <div className="fila-coords">
-          <label>
-            Nombre
-            <input value={nombre} onChange={(e) => setNombre(e.target.value)} maxLength={60} />
-          </label>
-          <label>
-            Descripción
-            <input value={descripcion} onChange={(e) => setDescripcion(e.target.value)} maxLength={200} />
-          </label>
-        </div>
-
-        <p className="muted">
-          {repasando
-            ? `Repasando el recorrido: nodo ${Math.min(encendido + 1, nodos.length)} de ${nodos.length}.`
-            : 'Hacé clic en el mapa para agregar nodos. Arrastrá las filas para cambiar el orden.'}
-        </p>
-
-        <div className="editor-ruta-cuerpo">
-          <div className="mapa-caja">
-            <ConmutadorDeFondo fondo={fondo} onCambiar={setFondo} />
-            <div className="mapa-elector" ref={caja} />
+          <div className="campos campos-ruta">
+            <label className="campo">
+              <span className="campo-rotulo">Nombre</span>
+              <input value={nombre} onChange={(e) => setNombre(e.target.value)} maxLength={60} aria-required="true" autoComplete="off" />
+            </label>
+            <label className="campo">
+              <span className="campo-rotulo">Descripción</span>
+              <input value={descripcion} onChange={(e) => setDescripcion(e.target.value)} maxLength={200} autoComplete="off" />
+            </label>
           </div>
 
-          <div className="nodos-columna">
-            {/* Encabezados: sin esto la altura era un 40 suelto que nadie tiene
-                por qué saber qué significa. */}
-            <div className="nodos-encabezado" aria-hidden="true">
-              <span className="nodo-orden">#</span>
-              <span>Apodo</span>
-              <span>Altura (m)</span>
-              <span className="nodo-coord">Coordenadas</span>
-              <span className="nodos-encabezado-acciones">Orden</span>
+          <p className="muted">
+            {repasando
+              ? `Repasando el recorrido: nodo ${Math.min(encendido + 1, nodos.length)} de ${nodos.length}.`
+              : 'Hacé clic en el mapa para agregar nodos. Arrastrá las filas para cambiar el orden.'}
+          </p>
+
+          <div className="editor-ruta-cuerpo">
+            <div className="mapa-caja">
+              <ConmutadorDeFondo fondo={fondo} onCambiar={setFondo} />
+              <div className="mapa-elector" ref={caja} />
             </div>
-            <ol className="lista-nodos">
-            {nodos.length === 0 && <li className="muted">Todavía no hay nodos.</li>}
-            {nodos.map((n, i) => (
-              <li
-                key={n.clave}
-                className={repasando && i === encendido ? 'nodo-encendido' : undefined}
-                draggable
-                onDragStart={() => setArrastrado(i)}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={() => {
-                  if (arrastrado !== null) mover(arrastrado, i);
-                  setArrastrado(null);
-                }}
-              >
-                <span className="nodo-orden mono">{i + 1}</span>
-                <input
-                  className="nodo-apodo"
-                  value={n.label ?? ''}
-                  onChange={(e) => editarNodo(i, 'label', e.target.value)}
-                  placeholder="Sin apodo"
-                  aria-label={`Apodo del nodo ${i + 1}`}
-                  maxLength={40}
-                />
-                <input
-                  className="nodo-alt"
-                  value={String(n.alt)}
-                  onChange={(e) => editarNodo(i, 'alt', e.target.value)}
-                  aria-label={`Altura del nodo ${i + 1}`}
-                  inputMode="numeric"
-                />
-                <span className="muted mono nodo-coord">
-                  {n.lat.toFixed(4)}, {n.lon.toFixed(4)}
-                </span>
-                <button type="button" className="chico" disabled={i === 0} onClick={() => mover(i, i - 1)} aria-label={`Subir el nodo ${i + 1}`}>
-                  ↑
-                </button>
-                <button
-                  type="button"
-                  className="chico"
-                  disabled={i === nodos.length - 1}
-                  onClick={() => mover(i, i + 1)}
-                  aria-label={`Bajar el nodo ${i + 1}`}
+
+            <div className="nodos-columna">
+              {/* Encabezados: sin esto la altura era un 40 suelto que nadie tiene
+                  por qué saber qué significa. */}
+              <div className="nodos-encabezado" aria-hidden="true">
+                <span className="nodo-orden">#</span>
+                <span>Apodo</span>
+                <span>Altura (m)</span>
+                <span className="nodo-coord">Coordenadas</span>
+                <span className="nodos-encabezado-acciones">Orden</span>
+              </div>
+              <ol className="lista-nodos">
+              {nodos.length === 0 && <li className="muted">Todavía no hay nodos.</li>}
+              {nodos.map((n, i) => (
+                <li
+                  key={n.clave}
+                  className={repasando && i === encendido ? 'nodo-encendido' : undefined}
+                  draggable
+                  onDragStart={() => setArrastrado(i)}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={() => {
+                    if (arrastrado !== null) mover(arrastrado, i);
+                    setArrastrado(null);
+                  }}
                 >
-                  ↓
-                </button>
-                <button
-                  type="button"
-                  className="chico dismiss"
-                  onClick={() => setNodos((ns) => ns.filter((_, j) => j !== i))}
-                  aria-label={`Quitar el nodo ${i + 1}`}
-                >
-                  Quitar
-                </button>
-              </li>
-            ))}
-            </ol>
+                  <span className="nodo-orden mono">{i + 1}</span>
+                  <input
+                    className="nodo-apodo"
+                    value={n.label ?? ''}
+                    onChange={(e) => editarNodo(i, 'label', e.target.value)}
+                    placeholder="Sin apodo"
+                    aria-label={`Apodo del nodo ${i + 1}`}
+                    maxLength={40}
+                  />
+                  <input
+                    className="nodo-alt"
+                    value={String(n.alt)}
+                    onChange={(e) => editarNodo(i, 'alt', e.target.value)}
+                    aria-label={`Altura del nodo ${i + 1}`}
+                    inputMode="numeric"
+                  />
+                  <span className="muted mono nodo-coord">
+                    {n.lat.toFixed(4)}, {n.lon.toFixed(4)}
+                  </span>
+                  <button type="button" className="chico" disabled={i === 0} onClick={() => mover(i, i - 1)} aria-label={`Subir el nodo ${i + 1}`}>
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    className="chico"
+                    disabled={i === nodos.length - 1}
+                    onClick={() => mover(i, i + 1)}
+                    aria-label={`Bajar el nodo ${i + 1}`}
+                  >
+                    ↓
+                  </button>
+                  <button
+                    type="button"
+                    className="chico dismiss"
+                    onClick={() => setNodos((ns) => ns.filter((_, j) => j !== i))}
+                    aria-label={`Quitar el nodo ${i + 1}`}
+                  >
+                    Quitar
+                  </button>
+                </li>
+              ))}
+              </ol>
+            </div>
           </div>
         </div>
-      </div>
 
-      <footer className="modal-pie">
-        <button type="button" className="ghost" onClick={onCerrar}>
-          Cancelar
-        </button>
-        <button
-          type="button"
-          disabled={nodos.length < 2 || repasando}
-          onClick={() => {
-            setEncendido(0);
-            setRepasando(true);
-          }}
-        >
-          Repasar el recorrido
-        </button>
-        <button type="button" className="primario" disabled={!completa || guardando} onClick={guardar}>
-          {guardando ? 'Guardando…' : 'Guardar ruta'}
-        </button>
-      </footer>
+        <footer className="modal-pie">
+          {faltante && <p className="pie-nota">{faltante}</p>}
+          <button type="button" className="ghost" onClick={cerrar} disabled={guardando}>
+            Cancelar
+          </button>
+          <button
+            type="button"
+            disabled={nodos.length < 2 || repasando}
+            onClick={() => {
+              setEncendido(0);
+              setRepasando(true);
+            }}
+          >
+            Repasar el recorrido
+          </button>
+          <button type="submit" className="primario" disabled={!completa || guardando}>
+            {guardando ? 'Guardando…' : 'Guardar ruta'}
+          </button>
+        </footer>
+      </form>
     </Modal>
   );
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { time } from '../format';
 import type { Alert, Drone } from '../types';
 import { useDecisionDeAlerta, type DecidirAlerta } from '../useDecisionDeAlerta';
@@ -10,9 +10,9 @@ const TIPO = { PERSON: 'PERSONA', VEHICLE: 'VEHÍCULO' } as const;
  * mirar: llegan solas y hay que decidirlas. Por eso viven en una campana del
  * encabezado y no en una tarjeta al pie de una vista —ahí sólo las veía quien
  * ya estaba mirando ese dron—, y desde el desplegable se validan o se descartan
- * sin salir de donde uno esté. La vista del dron las repite al lado del video
- * (AlertaEnCurso), y las dos deciden con el mismo hook: un rechazo del backend
- * se ve igual en las dos, al lado de los botones.
+ * sin salir de donde uno esté. El tablero y la vista del dron las repiten en un
+ * carrusel con la captura grande (AlertaEnCurso), y todos deciden con el mismo
+ * hook: un rechazo del backend se ve igual en cada uno, al lado de los botones.
  */
 export default function CampanaDeAlertas({
   alerts,
@@ -27,6 +27,8 @@ export default function CampanaDeAlertas({
 }) {
   const [abierta, setAbierta] = useState(false);
   const caja = useRef<HTMLDivElement>(null);
+  const boton = useRef<HTMLButtonElement>(null);
+  const idPanel = useId();
   const { decidir, errorDe, decidiendo } = useDecisionDeAlerta(onDecidir);
 
   const pendientes = alerts.filter((a) => a.status === 'PENDING');
@@ -40,7 +42,13 @@ export default function CampanaDeAlertas({
       if (!caja.current?.contains(ev.target as Node)) setAbierta(false);
     }
     function escape(ev: KeyboardEvent) {
-      if (ev.key === 'Escape') setAbierta(false);
+      if (ev.key !== 'Escape') return;
+      // Si el foco estaba adentro (en "Validar", por ejemplo), cerrar lo dejaba
+      // caer en <body> y el teclado tenía que volver a recorrer toda la barra.
+      // Vuelve a la campana, que es lo que abrió el panel.
+      const estabaAdentro = caja.current?.contains(document.activeElement) ?? false;
+      setAbierta(false);
+      if (estabaAdentro) boton.current?.focus();
     }
     document.addEventListener('mousedown', afuera);
     document.addEventListener('keydown', escape);
@@ -58,9 +66,11 @@ export default function CampanaDeAlertas({
   return (
     <div className="campana" ref={caja}>
       <button
+        ref={boton}
         type="button"
         className={pendientes.length > 0 ? 'campana-boton con-pendientes' : 'campana-boton'}
         aria-expanded={abierta}
+        aria-controls={abierta ? idPanel : undefined}
         aria-label={
           pendientes.length === 0
             ? 'Alertas: ninguna pendiente'
@@ -76,7 +86,7 @@ export default function CampanaDeAlertas({
       </button>
 
       {abierta && (
-        <div className="campana-panel" role="region" aria-label="Alertas de detección">
+        <div id={idPanel} className="campana-panel" role="region" aria-label="Alertas de detección">
           <div className="campana-cabecera">
             <span className="etiqueta">Alertas de detección</span>
           </div>
