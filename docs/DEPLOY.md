@@ -132,8 +132,10 @@ La red compartida `proxy` ya existe en la VM (si faltara, la crea `deploy/deploy
 
 ### 3. Puertos de Oracle
 
-**No hay que abrir nada nuevo.** La tesis no publica puertos: entra por el 80/443
-del Caddy general, que ya están abiertos en la Security List.
+**No hay que abrir nada nuevo.** La tesis no publica puertos: entra por el Caddy
+general, que ya tiene abiertos en la Security List 80/tcp, 443/tcp y 443/udp. El
+UDP 443 es el de HTTP/3: Caddy lo anuncia, y si esa regla falta Safari no conecta
+(ver Diagnóstico).
 
 ## `DEV_WIPE_DB`: borrar la base en cada despliegue
 
@@ -191,6 +193,7 @@ curl -s https://<APP_DOMAIN>/api/health
 | `port is already allocated` | Alguien le agregó `ports:` al compose: la tesis no debe publicar puertos |
 | `no space left on device` al construir | Imágenes acumuladas de los proyectos: `docker builder prune -f` y `docker image prune -f` en la VM (nunca `--volumes`) |
 | Se cerraron todas las sesiones | Se regeneró el `.env` y cambió `JWT_SECRET` |
+| Safari (iPhone/Mac) dice que no puede conectarse al servidor, y Chrome anda | HTTP/3: Caddy lo anuncia (`alt-svc: h3=…`) y el UDP 443 tiene que llegar a la VM. Mirar que siga la regla **UDP 443** en la Security List de Oracle; si no se puede abrir, apagar HTTP/3 en `~/caddy/conf/Caddyfile` con `servers { protocols h1 h2 }` y recargar Caddy |
 
 ## Límites conocidos
 
