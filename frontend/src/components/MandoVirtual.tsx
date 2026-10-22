@@ -138,6 +138,29 @@ function textoDeEje(valor: number, mas: string, menos: string): string {
 }
 
 /**
+ * Por dónde salen los ejes: o el mando los emite él mismo (`onMando`), o los
+ * informa a quien lo contiene (`onEjes`). Nunca las dos cosas: son excluyentes
+ * a propósito, para que nadie termine con dos emisores sobre el mismo dron.
+ */
+type Salida =
+  | {
+      /** Emite los ejes a 10 Hz y devuelve si el mensaje llegó a salir de la consola. */
+      onMando: (ejes: Ejes) => boolean;
+      onEjes?: undefined;
+    }
+  | {
+      /**
+       * En vez de emitir, informa sus ejes cada vez que cambian (y el cero al
+       * desmontarse). Es para cuando el mando convive con otra forma de volar
+       * que ya emite —la vista de pilotaje, con su teclado y su mouse—: el que
+       * lo contiene combina los ejes y los manda por UN solo temporizador. Con
+       * dos, el dron recibiría los dos vectores intercalados, uno sí y otro no.
+       */
+      onEjes: (ejes: Ejes) => void;
+      onMando?: undefined;
+    };
+
+/**
  * Las dos palancas del control, para volar el dron desde el navegador.
  *
  * Es vuelo CONTINUO: mientras el operador sostiene la palanca se emiten los
@@ -147,10 +170,10 @@ function textoDeEje(valor: number, mas: string, menos: string): string {
  */
 export default function MandoVirtual({
   onMando,
+  onEjes,
   impedimento = null,
-}: {
-  /** Emite los ejes y devuelve si el mensaje llegó a salir de la consola. */
-  onMando: (ejes: Ejes) => boolean;
+  teclado = true,
+}: Salida & {
   /**
    * Por qué el mando no puede comandar ahora mismo, o `null` si puede. Con un
    * impedimento puesto las palancas quedan inertes y el motivo se muestra
@@ -158,6 +181,13 @@ export default function MandoVirtual({
    * sacaron el control, y dejarlo vivo le haría creer que el dron le obedece.
    */
   impedimento?: string | null;
+  /**
+   * Si el bloque atiende el teclado (W/A/S/D y las flechas, con el mando
+   * enfocado). La vista de pilotaje lo apaga porque ahí el teclado vuela con su
+   * propio esquema, el de un juego (W avanza), y con los dos prendidos la misma
+   * tecla mandaría el dron para dos lados a la vez.
+   */
+  teclado?: boolean;
 }) {
   // Arrastre en curso de cada palanca: `null` es "nadie la está tocando", y
   // entonces manda el teclado. No es lo mismo que "está en el centro".
@@ -194,8 +224,22 @@ export default function MandoVirtual({
   ejesRef.current = ejes;
   const onMandoRef = useRef(onMando);
   onMandoRef.current = onMando;
+  const onEjesRef = useRef(onEjes);
+  onEjesRef.current = onEjes;
+  /** El mando informa y no emite (ver `Salida`). */
+  const informa = onEjes !== undefined;
 
   const comandando = hayComando(ejes);
+
+  // Informar sale con cada cambio y no al ritmo del temporizador: el que emite
+  // ya tiene el suyo, y esperar a un tick acá sumaría hasta 100 ms de demora
+  // entre la palanca y el dron.
+  useEffect(() => {
+    onEjesRef.current?.(ejes);
+  }, [ejes]);
+  // Lo mismo que el cero de cierre del emisor: un mando que se esconde con la
+  // palanca agarrada no puede dejar su último eje sumado al vuelo.
+  useEffect(() => () => onEjesRef.current?.(EJES_EN_CERO), []);
 
   // Levantado el impedimento, el aviso de "no salió" dejó de describir algo: el
   // watchdog de la app (1,5 s) ya frenó al dron mucho antes de que el socket
@@ -206,8 +250,9 @@ export default function MandoVirtual({
   }, [inerte]);
 
   useEffect(() => {
-    if (!comandando) return;
-    const emitir = (ejesAEmitir: Ejes) => setUltimoSalio(onMandoRef.current(ejesAEmitir));
+    if (!comandando || informa) return;
+    // Sin `onEjes`, `onMando` está: lo garantiza el tipo `Salida`.
+    const emitir = (ejesAEmitir: Ejes) => setUltimoSalio(onMandoRef.current!(ejesAEmitir));
     // El primero sale apenas se mueve la palanca: esperar al tick haría que el
     // dron arranque hasta 100 ms tarde, y eso se nota en el video.
     emitir(ejesRef.current);
@@ -220,7 +265,7 @@ export default function MandoVirtual({
       // porque salir de la vista no puede dejar al dron yéndose de largo.
       emitir(EJES_EN_CERO);
     };
-  }, [comandando]);
+  }, [comandando, informa]);
 
   /**
    * Cómo desengancharse del arrastre con mouse de cada palanca. Va por palanca
@@ -424,7 +469,7 @@ export default function MandoVirtual({
             }}
           />
         </div>
-        <span className="muted mando-teclas">{teclas}</span>
+        {teclado && <span className="muted mando-teclas">{teclas}</span>}
       </div>
     );
   }
@@ -433,13 +478,15 @@ export default function MandoVirtual({
     <div
       className={`mando${inerte ? ' mando-impedido' : ''}`}
       role="group"
-      tabIndex={0}
+      // Sin teclado no hay nada que hacer con el foco: enfocable sería una
+      // parada más del tabulador que no responde a ninguna tecla.
+      tabIndex={teclado ? 0 : undefined}
       aria-label="Mando virtual de vuelo continuo"
       aria-describedby={idAyuda}
       aria-disabled={inerte}
-      onKeyDown={alApretarTecla}
-      onKeyUp={alSoltarTecla}
-      onBlur={alPerderFoco}
+      onKeyDown={teclado ? alApretarTecla : undefined}
+      onKeyUp={teclado ? alSoltarTecla : undefined}
+      onBlur={teclado ? alPerderFoco : undefined}
     >
       {/* El motivo va arriba de todo: es lo primero que hay que leer antes de
           empujar una palanca que no va a mover nada. */}
@@ -486,9 +533,10 @@ export default function MandoVirtual({
       </dl>
 
       <p className="muted mando-ayuda" id={idAyuda}>
-        Arrastrá las palancas con el mouse o el dedo, o manejalas con el teclado (W, A, S, D y las
-        flechas) después de enfocar el mando. Mientras sostengas, el dron se mueve; al soltar queda
-        en vuelo estacionario.
+        {teclado
+          ? 'Arrastrá las palancas con el mouse o el dedo, o manejalas con el teclado (W, A, S, D y las flechas) después de enfocar el mando.'
+          : 'Arrastrá las palancas con el mouse o el dedo.'}{' '}
+        Mientras sostengas, el dron se mueve; al soltar queda en vuelo estacionario.
       </p>
     </div>
   );

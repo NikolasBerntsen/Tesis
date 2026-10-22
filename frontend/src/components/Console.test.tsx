@@ -21,6 +21,10 @@ vi.mock('./DronesMap', () => ({
   },
 }));
 
+// El minimapa de la vista de pilotaje es Leaflet puro y acá no se prueba nada
+// de él: con un recuadro vacío alcanza.
+vi.mock('./Minimapa', () => ({ default: () => <div data-testid="minimapa-mock" /> }));
+
 // Captura el handler de mensajes que Console le pasa a useWebSocket y anota todo
 // lo que la consola manda por el canal, para poder empujar mensajes desde los
 // tests y leer los que salen. Devuelve siempre "conectado".
@@ -380,11 +384,11 @@ describe('Console', () => {
     enConsola.mockRestore();
   });
 
-  it('el mando virtual manda los ejes por el WebSocket con el droneId del dron abierto', async () => {
-    // El mando comanda con el control manual tomado por uno mismo. El status
-    // viene como lo reenvía el Comando Central —con el dueño del lock estampado—
-    // y con el dron ya en MANUAL, que es el estado en el que la app aplica los
-    // ejes: la telemetría entra por `lastStatus` y se vuelca en el tick.
+  it('la vista de pilotaje manda los ejes y la cámara por el WebSocket con el droneId del dron abierto', async () => {
+    // Se comanda con el control manual tomado por uno mismo. El status viene
+    // como lo reenvía el Comando Central —con el dueño del lock estampado— y con
+    // el dron ya en MANUAL, que es el estado en el que la app aplica los ejes:
+    // la telemetría entra por `lastStatus` y se vuelca en el tick.
     dronesFix = [
       makeDrone({
         droneId: 'd1',
@@ -396,21 +400,26 @@ describe('Console', () => {
     ];
     render(<Console onLogout={() => {}} />);
     await abrirDetalleDelPrimerDron();
-    const mando = await screen.findByRole('group', { name: 'Mando virtual de vuelo continuo' });
-    expect(mando).toHaveAttribute('aria-disabled', 'false');
+    await userEvent.click(await screen.findByRole('button', { name: 'Volver a la vista de pilotaje' }));
+    await screen.findByRole('dialog', { name: 'Pilotaje de Alfa' });
 
     // Los ejes van por el socket y NO por REST: a 10 Hz, un POST por mensaje
     // sería absurdo. Se cuentan los pedidos HTTP antes y después de la ráfaga:
     // si alguien mandara los ejes por REST —con cualquier path— este total se
     // movería, que es lo que se quiere afirmar.
     const pedidosAntes = pedidos.length;
-    fireEvent.keyDown(mando, { key: 'ArrowUp' });
-    expect(enviados[0]).toEqual({ type: 'manual_stick', droneId: 'd1', pitch: 1, roll: 0, yaw: 0, throttle: 0 });
+    fireEvent.keyDown(window, { code: 'KeyW' });
+    expect(enviados[0]).toEqual({ type: 'manual_stick', droneId: 'd1', pitch: 0.5, roll: 0, yaw: 0, throttle: 0 });
 
     // Al soltar, el último mensaje va en cero: el dron queda estacionario.
-    fireEvent.keyUp(mando, { key: 'ArrowUp' });
+    fireEvent.keyUp(window, { code: 'KeyW' });
     expect(enviados.at(-1)).toEqual({ type: 'manual_stick', droneId: 'd1', pitch: 0, roll: 0, yaw: 0, throttle: 0 });
     expect(enviados).toHaveLength(2);
+
+    // La rueda inclina la cámara: `manual_gimbal` con la inclinación absoluta,
+    // por el mismo socket (una app vieja no informa la cámara: se parte de -30°).
+    fireEvent.wheel(screen.getByTestId('pilotaje-video'), { deltaY: -100, deltaMode: 0 });
+    expect(enviados.at(-1)).toEqual({ type: 'manual_gimbal', droneId: 'd1', pitch: -25 });
     expect(pedidos).toHaveLength(pedidosAntes);
   });
 
@@ -433,21 +442,21 @@ describe('Console', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Tomar control manual' }));
     expect(rutas()).toContain('POST /drones/d1/control');
 
-    // El backend broadcastea el lock EN EL ACTO, así que el panel de vuelo
-    // continuo aparece al instante; el estado MANUAL, en cambio, tarda hasta un
-    // segundo de la app (su `statusTicker`) más otro del volcado de la consola.
-    // Se espera a que se vuelque el status del patrullaje para estar parados
-    // justo en esa ventana: control tomado y el dron todavía sin confirmar.
+    // Tomar el control abre la vista de pilotaje. El backend broadcastea el
+    // lock EN EL ACTO; el estado MANUAL, en cambio, tarda hasta un segundo de la
+    // app (su `statusTicker`) más otro del volcado de la consola. Se espera a
+    // que se vuelque el status del patrullaje para estar parados justo en esa
+    // ventana: control tomado y el dron todavía sin confirmar.
+    await screen.findByRole('dialog', { name: 'Pilotaje de Alfa' });
     fire({ type: 'control_changed', droneId: 'd1', controlledBy: 'oper1' });
-    const mando = await screen.findByRole('group', { name: 'Mando virtual de vuelo continuo' });
     await waitFor(() => expect(screen.getByText('Patrullando')).toBeInTheDocument(), { timeout: 3000 });
-    expect(screen.getByTestId('mando-esperando')).toBeInTheDocument();
-    expect(mando).toHaveAttribute('aria-disabled', 'false');
+    expect(await screen.findByTestId('pilotaje-esperando')).toBeInTheDocument();
+    expect(screen.queryByTestId('pilotaje-impedimento')).not.toBeInTheDocument();
 
-    // Y la palanca comanda: el gesto del operador no se traga ni un segundo.
-    fireEvent.keyDown(mando, { key: 'ArrowUp' });
-    expect(enviados).toContainEqual({ type: 'manual_stick', droneId: 'd1', pitch: 1, roll: 0, yaw: 0, throttle: 0 });
-    fireEvent.keyUp(mando, { key: 'ArrowUp' });
+    // Y el teclado comanda: el gesto del operador no se traga ni un segundo.
+    fireEvent.keyDown(window, { code: 'KeyW' });
+    expect(enviados).toContainEqual({ type: 'manual_stick', droneId: 'd1', pitch: 0.5, roll: 0, yaw: 0, throttle: 0 });
+    fireEvent.keyUp(window, { code: 'KeyW' });
     expect(enviados.at(-1)).toEqual({ type: 'manual_stick', droneId: 'd1', pitch: 0, roll: 0, yaw: 0, throttle: 0 });
   });
 

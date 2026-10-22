@@ -86,6 +86,12 @@ export interface DroneStatus {
   flightMode?: string;
   /** El objetivo que está orbitando o siguiendo; `null` si no hay ninguno. */
   target?: ObjetivoEnSeguimiento | null;
+  /**
+   * Inclinación actual de la cámara, en grados: 0 es el horizonte y negativo
+   * es mirar hacia abajo (de -90 a 30, ver `manual_gimbal`). Sin este dato la
+   * vista de pilotaje supone -30°.
+   */
+  gimbalPitch?: number;
 }
 
 /**

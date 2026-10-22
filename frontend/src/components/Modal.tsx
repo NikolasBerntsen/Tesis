@@ -201,6 +201,9 @@ export default function Modal({
         {children}
       </div>
     </div>,
-    document.body,
+    // Con algo en pantalla completa (la vista de pilotaje), el navegador sólo
+    // pinta ese elemento y lo que tiene adentro: un diálogo colgado del body
+    // quedaría abierto, atrapando el teclado, pero invisible.
+    document.fullscreenElement ?? document.body,
   );
 }

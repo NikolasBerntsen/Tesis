@@ -204,5 +204,22 @@ describe('Modal — salida animada', () => {
     // el diálogo sigue abierto y no hay ninguna copia saliendo encima
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(ecos()).toHaveLength(0);
+describe('Modal con algo en pantalla completa', () => {
+  it('se monta adentro del elemento en pantalla completa, que es lo único que el navegador pinta', () => {
+    const pantalla = document.createElement('section');
+    document.body.appendChild(pantalla);
+    Object.defineProperty(document, 'fullscreenElement', { value: pantalla, configurable: true });
+    try {
+      render(
+        <Modal etiquetadoPor="t-completa" onCerrar={vi.fn()}>
+          <h2 id="t-completa">Despegar</h2>
+        </Modal>,
+      );
+      expect(pantalla.contains(screen.getByRole('dialog', { name: 'Despegar' }))).toBe(true);
+    } finally {
+      // jsdom no implementa la pantalla completa: se saca para no ensuciar el resto.
+      delete (document as { fullscreenElement?: Element | null }).fullscreenElement;
+      pantalla.remove();
+    }
   });
 });

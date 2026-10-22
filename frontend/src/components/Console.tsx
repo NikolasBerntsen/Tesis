@@ -322,6 +322,7 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
           onRename={(name) => rename(selected.droneId, name)}
           onWaypointLabel={setWaypointLabel}
           onMando={(ejes) => enviar({ type: 'manual_stick', droneId: selected.droneId, ...ejes })}
+          onCamara={(pitch) => enviar({ type: 'manual_gimbal', droneId: selected.droneId, pitch })}
         />
       ) : (
         <Dashboard
