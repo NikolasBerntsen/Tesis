@@ -302,6 +302,14 @@ class SimulatedDroneController(private val arrancaEnElAire: Boolean = false) : D
         gimbalPitch = pitchGrados.coerceIn(INCLINACION_MINIMA, INCLINACION_MAXIMA)
     }
 
+    /**
+     * Nada que tirar: acá la inclinación se aplica en el acto ([inclinarCamara]),
+     * así que nunca queda una esperando que pueda llegar después de la orden
+     * del modo siguiente. Tampoco se deshace la ya aplicada, igual que en el
+     * real con la que el gimbal está cumpliendo.
+     */
+    override fun cancelarInclinacionManual() = Unit
+
     override fun returnHome() {
         if (enElSuelo) return
         alturaObjetivo = ALTURA_CRUCERO_M

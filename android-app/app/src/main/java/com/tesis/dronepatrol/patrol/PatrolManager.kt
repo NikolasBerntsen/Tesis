@@ -765,9 +765,17 @@ class PatrolManager(
      *
      * Va adentro de [cerrojoDelMando] por lo mismo que [onManualStick]: mirar el
      * estado y darle la orden al dron son un solo paso contra las transiciones,
-     * así que una inclinación que pasó la puerta le llega al controlador ANTES
-     * que la orden del estado siguiente (la ruta, la órbita), que vuelve a
-     * apuntar la cámara, y nunca después.
+     * así que una inclinación que pasó la puerta le llega al CONTROLADOR antes de
+     * que el estado salga de MANUAL, nunca después.
+     *
+     * Eso no alcanza para el gimbal: el controlador real no se la pasa en el
+     * acto, la deja esperando hasta que el gimbal termine la anterior (hasta
+     * 300 ms, o 2 s con el SDK lento). Por eso [pasarA], al salir de MANUAL y en
+     * el mismo paso que cierra la puerta, le pide que la tire
+     * ([DroneController.cancelarInclinacionManual]). Lo que queda garantizado:
+     * fuera de MANUAL, al gimbal solo puede llegarle la inclinación de la consola
+     * que ya estaba cumpliendo, y la cámara que apunta el estado siguiente (la
+     * ruta, la órbita, el seguimiento) sale después de esa, nunca antes.
      */
     private fun onManualGimbal(pitch: Double) {
         if (!pitch.isFinite()) return
@@ -801,6 +809,12 @@ class PatrolManager(
      * dejaba la ruta corriendo mientras el Comando Central mostraba "volviendo a
      * base", y el dron retomaba la marcha en cuanto el enlace se reenganchaba.
      *
+     * Salir de MANUAL también suelta la cámara: la inclinación de la consola que
+     * el controlador tenía esperando se tira (ver [onManualGimbal]). Va adentro
+     * del cerrojo, en el mismo paso que cierra la puerta: así toda inclinación
+     * que la pasó ya está en el controlador cuando se la tira, y el descarte sale
+     * antes que la orden del estado siguiente, que quien llama da después.
+     *
      * El estado y las marcas se pisan adentro de [cerrojoDelMando]; el freno se
      * manda con el cerrojo ya soltado, porque para eso alcanza con que la puerta
      * del estado esté cerrada.
@@ -813,6 +827,7 @@ class PatrolManager(
                 ultimoMandoMs = 0L
                 ultimoMandoEstacionario = true
                 saltoManualEnCurso = false
+                controller.cancelarInclinacionManual()
             }
         }
         if (frenar) controller.hold()
