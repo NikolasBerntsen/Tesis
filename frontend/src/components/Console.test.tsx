@@ -145,7 +145,7 @@ describe('Console', () => {
     await screen.findByText('Alfa');
 
     await userEvent.click(await screen.findByRole('button', { name: 'Drones' }));
-    expect(await screen.findByRole('heading', { name: 'Dar de alta un dron' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Nuevo dron' })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Usuarios' }));
     expect(await screen.findByRole('heading', { name: 'Usuarios' })).toBeInTheDocument();
@@ -173,7 +173,7 @@ describe('Console', () => {
     meFix = makeMe({ username: 'campo1', role: 'field_operator', canControl: false });
     render(<Console onLogout={() => {}} />);
 
-    expect(await screen.findByRole('heading', { name: 'Dar de alta un dron' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Nuevo dron' })).toBeInTheDocument();
     expect(screen.getByText('Sesión de campo')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Drones' })).toHaveClass('active');
     expect(screen.queryByRole('button', { name: 'Operación' })).not.toBeInTheDocument();
@@ -227,7 +227,7 @@ describe('Console', () => {
     render(<Console onLogout={() => {}} />);
     await screen.findByText('Alfa');
     await userEvent.click(screen.getByRole('button', { name: 'Drones' }));
-    await screen.findByRole('heading', { name: 'Dar de alta un dron' });
+    await screen.findByRole('button', { name: 'Nuevo dron' });
     const pedidosPrevios = rutas().filter((r) => r.startsWith('GET /drones')).length;
 
     fire({ type: 'drone_updated', drone: makeDrone({ hash: 'd3', droneId: 'd3', displayName: 'Charlie' }) });

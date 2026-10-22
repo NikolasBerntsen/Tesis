@@ -1,8 +1,8 @@
-import { describe, it, expect, vi } from 'vitest';
-import { useState } from 'react';
-import { render, screen } from '@testing-library/react';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { StrictMode, useState } from 'react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import Modal from './Modal';
+import Modal, { SALIDA_MS } from './Modal';
 
 /**
  * Hay pantallas que abren un diálogo arriba de otro: elegir las rutas de una
@@ -65,5 +65,144 @@ describe('Modal apilado', () => {
     await userEvent.tab();
     // no se escapa al diálogo de abajo: vuelve al único foco que hay arriba
     expect(guardar).toHaveFocus();
+  });
+});
+
+describe('Modal con formulario', () => {
+  it('con enfocarPrimerCampo, el foco arranca en el primer campo y no en la cruz', () => {
+    render(
+      <Modal etiquetadoPor="t-form" enfocarPrimerCampo onCerrar={vi.fn()}>
+        <h2 id="t-form">Nuevo dron</h2>
+        <button type="button">Cerrar</button>
+        <input aria-label="Desactivado" disabled />
+        <input aria-label="Nombre" />
+        <input aria-label="Modelo" />
+      </Modal>,
+    );
+    expect(screen.getByLabelText('Nombre')).toHaveFocus();
+  });
+
+  it('sin campos que enfocar, el foco cae en la caja como siempre', () => {
+    render(
+      <Modal etiquetadoPor="t-sin" enfocarPrimerCampo onCerrar={vi.fn()}>
+        <h2 id="t-sin">Aviso</h2>
+        <button type="button">Entendido</button>
+      </Modal>,
+    );
+    expect(screen.getByRole('dialog')).toHaveFocus();
+  });
+
+  it('sin la opción, el foco sigue yendo a la caja aunque haya campos', () => {
+    render(
+      <Modal etiquetadoPor="t-caja" onCerrar={vi.fn()}>
+        <h2 id="t-caja">Sticker</h2>
+        <input aria-label="Nombre" />
+      </Modal>,
+    );
+    expect(screen.getByRole('dialog')).toHaveFocus();
+  });
+});
+
+/**
+ * Cerrar deja un eco que se desvanece. Los tests de todas las vistas corren
+ * sin `matchMedia` (jsdom no lo trae), así que ahí el eco no existe y nadie
+ * encuentra un diálogo de más: estos lo encienden a propósito.
+ */
+describe('Modal — salida animada', () => {
+  function conMovimiento(permitido: boolean) {
+    vi.stubGlobal('matchMedia', (q: string) => ({ matches: permitido && q.includes('no-preference') }));
+  }
+
+  function ecos(): HTMLElement[] {
+    return [...document.body.querySelectorAll<HTMLElement>('.modal-saliendo')];
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    ecos().forEach((n) => n.remove());
+  });
+
+  function Alternable({ conOtro = false }: { conOtro?: boolean }) {
+    const [cual, setCual] = useState<'uno' | 'otro' | null>('uno');
+    return (
+      <>
+        <button type="button" onClick={() => setCual('otro')}>
+          Pasar al otro
+        </button>
+        {cual === 'uno' && (
+          <Modal etiquetadoPor="t-uno" onCerrar={() => setCual(null)}>
+            <h2 id="t-uno">Nuevo dron</h2>
+            <input id="campo-uno" aria-label="Nombre" defaultValue="Delta" />
+          </Modal>
+        )}
+        {conOtro && cual === 'otro' && (
+          <Modal etiquetadoPor="t-otro" onCerrar={() => setCual(null)}>
+            <h2 id="t-otro">Sticker</h2>
+          </Modal>
+        )}
+      </>
+    );
+  }
+
+  it('al cerrar deja una copia muda que se desvanece y se borra sola', async () => {
+    conMovimiento(true);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<Alternable />);
+
+    await userEvent.keyboard('{Escape}');
+    await act(async () => {}); // el eco se inserta en una microtarea, después del commit
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    const [eco] = ecos();
+    expect(eco).toBeDefined();
+    expect(eco).toHaveClass('modal-fondo', 'modal-saliendo');
+    // invisible para los lectores, sin foco posible y sin ids repetidos
+    expect(eco).toHaveAttribute('aria-hidden', 'true');
+    expect(eco).toHaveAttribute('inert');
+    expect(eco.querySelector('[id]')).toBeNull();
+
+    await act(async () => {
+      vi.advanceTimersByTime(SALIDA_MS);
+    });
+    expect(ecos()).toHaveLength(0);
+  });
+
+  it('si en el mismo gesto se abre otro diálogo, el eco queda debajo del nuevo', async () => {
+    conMovimiento(true);
+    render(<Alternable conOtro />);
+
+    // El botón está detrás del velo: se lo acciona directo para cerrar uno y
+    // abrir otro en un mismo render, como el alta de un dron y su sticker.
+    act(() => screen.getByRole('button', { name: 'Pasar al otro', hidden: true }).click());
+    await act(async () => {});
+
+    const nuevo = screen.getByRole('dialog', { name: 'Sticker' }).parentElement!;
+    const [eco] = ecos();
+    expect(eco.compareDocumentPosition(nuevo) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('con movimiento reducido no hay eco: el diálogo se va de una', async () => {
+    conMovimiento(false);
+    render(<Alternable />);
+
+    await userEvent.keyboard('{Escape}');
+    await act(async () => {});
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(ecos()).toHaveLength(0);
+  });
+
+  it('el desmontaje de prueba de StrictMode no deja ecos al abrir', async () => {
+    conMovimiento(true);
+    render(
+      <StrictMode>
+        <Alternable />
+      </StrictMode>,
+    );
+    await act(async () => {});
+
+    // el diálogo sigue abierto y no hay ninguna copia saliendo encima
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(ecos()).toHaveLength(0);
   });
 });
