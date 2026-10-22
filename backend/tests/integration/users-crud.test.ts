@@ -487,6 +487,64 @@ describe('integración — DNI de los usuarios', () => {
     expect(r.body.dni).toBe('');
   });
 
+  // "05123456" es el 5.123.456 escrito como figura adentro del CUIL. Si se
+  // guardaba tal cual, la misma persona podía tener una segunda cuenta viva
+  // con sólo agregarle el cero: el índice y el chequeo comparaban texto.
+  describe('el cero del CUIL no hace de un DNI otro distinto', () => {
+    it('el alta guarda la forma canónica y rechaza con 409 el mismo número con ceros adelante', async () => {
+      const primera = await alta({ username: 'mayor', fullName: 'Persona Mayor', dni: '05.123.456', role: 'operator' });
+      expect(primera.status).toBe(201);
+      expect(primera.body.dni).toBe('5123456');
+
+      for (const dni of ['5123456', '05123456', '005123456']) {
+        const r = await alta({ username: 'segunda', fullName: 'Persona segunda', dni, role: 'operator' });
+        expect(r.status, dni).toBe(409);
+        expect(r.body.error).toBe('Ese DNI ya está registrado a nombre de mayor');
+      }
+    });
+
+    it('al revés también: con el número sin ceros cargado, el de ceros adelante choca', async () => {
+      await crearUsuario(srv.base, adm, { username: 'mayor', dni: '5123456' });
+      const r = await alta({ username: 'segunda', fullName: 'Persona segunda', dni: '05123456', role: 'operator' });
+      expect(r.status).toBe(409);
+    });
+
+    it('un DNI de puros ceros no es un DNI', async () => {
+      const r = await alta({ username: 'ceros', fullName: 'Persona ceros', dni: '00.000.000', role: 'operator' });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/DNI/);
+    });
+
+    it('la edición rechaza con 409 el DNI de otra cuenta escrito con el cero adelante', async () => {
+      await crearUsuario(srv.base, adm, { username: 'mayor', dni: '5123456' });
+      await crearUsuario(srv.base, adm, { username: 'ana', dni: '30123456' });
+
+      const r = await editar('ana', { dni: '05.123.456' });
+      expect(r.status).toBe(409);
+      expect(r.body.error).toMatch(/a nombre de mayor/);
+      // Y el propio, escrito con el cero, no choca consigo mismo ni cambia nada.
+      const propio = await editar('mayor', { dni: '05123456' });
+      expect(propio.status).toBe(200);
+      expect(propio.body.dni).toBe('5123456');
+    });
+
+    it('no se restaura una cuenta cuyo DNI tomó otra con el cero adelante', async () => {
+      await crearUsuario(srv.base, adm, { username: 'vieja', dni: '05123456' });
+      await api(srv.base, '/api/users/vieja', adm, { method: 'DELETE' });
+      await crearUsuario(srv.base, adm, { username: 'nueva', dni: '5123456' });
+
+      const r = await api(srv.base, '/api/users/vieja/restore', adm, { method: 'POST' });
+      expect(r.status).toBe(409);
+      expect(r.body.error).toMatch(/a nombre de nueva: no se puede restaurar/);
+    });
+
+    it('el buscador encuentra el DNI escrito con el cero adelante', async () => {
+      await crearUsuario(srv.base, adm, { username: 'mayor', fullName: 'Persona Mayor', dni: '5123456' });
+      const r = await api(srv.base, `/api/users?q=${encodeURIComponent('05.123.456')}`, adm);
+      expect(r.body.map((u: { username: string }) => u.username)).toEqual(['mayor']);
+    });
+  });
+
   it('el cambio de DNI queda registrado con antes y después', async () => {
     await crearUsuario(srv.base, adm, { username: 'ana', dni: '30123456' });
     await editar('ana', { dni: '30123457' });

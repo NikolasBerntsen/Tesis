@@ -240,6 +240,45 @@ describe('store — DNI y rol de los usuarios', () => {
     // Un punto suelto queda vacío al sacarle los puntos: no puede traer a todos.
     expect(buscar('.')).toEqual([]);
   });
+
+  it('listUsers encuentra un DNI de 7 dígitos aunque se lo busque con el cero del CUIL', () => {
+    createUser({ username: 'mayor', fullName: 'Persona Mayor', dni: '5123456', passwordHash: 'h', role: 'operator', canControl: true });
+    createUser({ username: 'otra', fullName: 'Otra Persona', dni: '30999888', passwordHash: 'h', role: 'operator', canControl: true });
+    const buscar = (q: string) => listUsers(['operator'], { q }).map((u) => u.username);
+
+    // Antes "05123456" no estaba adentro de "5123456" y la búsqueda volvía vacía.
+    expect(buscar('05123456')).toEqual(['mayor']);
+    expect(buscar('05.123.456')).toEqual(['mayor']);
+    expect(buscar('05.123')).toEqual(['mayor']);
+    // Puros ceros no son un DNI que buscar: no pueden traer a todos.
+    expect(buscar('000')).toEqual([]);
+  });
+});
+
+describe('store — forma canónica del DNI', () => {
+  it('los ceros a la izquierda no cambian el número: se sacan', () => {
+    expect(normalizarDni('05123456')).toBe('5123456');
+    expect(normalizarDni('05.123.456')).toBe('5123456');
+    expect(normalizarDni(' 0 5 123 456 ')).toBe('5123456');
+    // Uno de 8 que no empieza con cero queda como estaba.
+    expect(normalizarDni('30123456')).toBe('30123456');
+  });
+
+  it('los 7 u 8 dígitos se cuentan ya sin los ceros', () => {
+    // "0612345" tiene 7 caracteres pero es el 612.345: no es un DNI válido.
+    for (const malo of ['00000000', '0000000', '0', '0612345', '000123456']) {
+      expect(normalizarDni(malo), malo).toBeNull();
+    }
+    // Y al revés: con los ceros sacados, un 8 de CUIL rellenado vale.
+    expect(normalizarDni('0001234567')).toBe('1234567');
+  });
+
+  it('un DNI con el cero del CUIL choca con el mismo número sin el cero', () => {
+    createUser({
+      username: 'd1', fullName: 'Persona d1', dni: normalizarDni('5.123.456')!, passwordHash: 'h', role: 'operator', canControl: true,
+    });
+    expect(usuarioConDni(normalizarDni('05123456')!)?.username).toBe('d1');
+  });
 });
 
 describe('store — drones como activos', () => {

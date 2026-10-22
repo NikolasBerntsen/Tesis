@@ -459,6 +459,19 @@ describe('UsersView', () => {
       await waitFor(() => expect(cuerpoDe('/users', 'POST')).toMatchObject({ dni: '1234567' }));
     });
 
+    it('un DNI con el cero del CUIL viaja sin el cero, y uno de puros ceros no viaja', async () => {
+      const dialogo = await abrirAlta();
+      await completar(dialogo, { usuario: 'mayor1', nombre: 'Persona Mayor', dni: '00.000.000' });
+      await userEvent.click(within(dialogo).getByRole('button', { name: 'Crear' }));
+      expect(within(dialogo).getByLabelText('DNI')).toHaveAttribute('aria-invalid', 'true');
+      expect(apiMock).not.toHaveBeenCalled();
+
+      await userEvent.clear(within(dialogo).getByLabelText('DNI'));
+      await userEvent.type(within(dialogo).getByLabelText('DNI'), '05.123.456');
+      await userEvent.click(within(dialogo).getByRole('button', { name: 'Crear' }));
+      await waitFor(() => expect(cuerpoDe('/users', 'POST')).toMatchObject({ dni: '5123456' }));
+    });
+
     it('sin DNI tampoco se crea', async () => {
       const dialogo = await abrirAlta();
       await completar(dialogo, { usuario: 'nuevo1', nombre: 'Persona Nueva' });

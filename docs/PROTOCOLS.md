@@ -736,8 +736,8 @@ tampoco**, por lo mismo.
 
 | Método | Ruta | Auth | Descripción |
 |---|---|---|---|
-| GET | `/api/users` | supervisor+ | **`?includeDeleted=1`**, `?q=` (usuario, nombre, DNI con o sin puntos, o rol). Supervisor ve operadores; admin ve todos |
-| POST | `/api/users` | admin | `{username, fullName, dni, role, canControl}`. **`dni` es obligatorio**: texto, con o sin puntos/espacios, se guarda en dígitos y vale con 7 u 8. Repetido entre cuentas no eliminadas → 409. **`role` acepta `field_operator`**, al que se le fuerza `canControl:false`. La contraseña la genera el sistema y viaja una sola vez en la respuesta |
+| GET | `/api/users` | supervisor+ | **`?includeDeleted=1`**, `?q=` (usuario, nombre, DNI con o sin puntos o ceros adelante, o rol). Supervisor ve operadores; admin ve todos |
+| POST | `/api/users` | admin | `{username, fullName, dni, role, canControl}`. **`dni` es obligatorio**: texto, con o sin puntos/espacios, se guarda en dígitos **sin ceros a la izquierda** (`"05.123.456"` → `"5123456"`, como figura adentro del CUIL) y vale con 7 u 8 dígitos ya sin esos ceros (`"00000000"` → 400). Repetido entre cuentas no eliminadas → 409, también si se lo escribe con otros ceros adelante. **`role` acepta `field_operator`**, al que se le fuerza `canControl:false`. La contraseña la genera el sistema y viaja una sola vez en la respuesta |
 | PATCH | `/api/users/:username` | supervisor+ (solo `canControl` de operadores) / admin (todo) | `{canControl?, active?, fullName?, dni?, role?}`. `role` solo entre `operator`, `supervisor` y `field_operator`, nunca desde ni hacia `admin`; el cambio de rol **cierra la consola** del usuario (4403) y **termina su sesión**: el token de antes ya no vale (401 en la API, 4401 al reconectar el WebSocket), así que vuelve a entrar con el rol nuevo; y pasar a `field_operator` apaga `canControl` y suelta los drones que controlara. Registra antes y después |
 | **DELETE** | **`/api/users/:username`** | admin | **Borrado lógico**. Cierra sus sockets y libera los drones que controlara. Libera el DNI |
 | **POST** | **`/api/users/:username/restore`** | admin | Restaura un usuario eliminado. 409 si otra cuenta viva tomó su DNI |
@@ -781,7 +781,7 @@ del protocolo.
 Piezas que se repiten: `Dron = {hash, displayName, model}` ·
 `EstadoDron = {displayName, model, activo, eliminado, base, baseLat, baseLon}`
 (plano a propósito, para que la comparación del pop-up sea campo a campo) ·
-`UserView = {username, fullName, dni, role, active, canControl, deleted, deletedAt}` (`dni` en dígitos; vacío en las cuentas anteriores al DNI).
+`UserView = {username, fullName, dni, role, active, canControl, deleted, deletedAt}` (`dni` en dígitos y sin ceros a la izquierda; vacío en las cuentas anteriores al DNI).
 
 | Categoría | Tipo | `meta` |
 |---|---|---|
