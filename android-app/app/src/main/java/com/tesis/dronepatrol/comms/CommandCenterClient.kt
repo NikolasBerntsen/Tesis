@@ -35,7 +35,25 @@ import org.json.JSONObject
  * los dos destinos del video es un defecto que CI no veía— y para eso hereda y
  * pisa el envío.
  */
-open class CommandCenterClient(private val scope: CoroutineScope) {
+open class CommandCenterClient(
+    private val scope: CoroutineScope,
+    /**
+     * El cliente del REST y, salvo que se pase otro, el del WebSocket. Es
+     * parámetro solo para las pruebas: con un interceptor que contesta en lugar
+     * del servidor se ve el pedido exacto (ruta, JWT, cuerpo) sin salir a la
+     * red. La app usa siempre el de por defecto.
+     */
+    private val http: OkHttpClient = OkHttpClient.Builder()
+        .pingInterval(15, TimeUnit.SECONDS)
+        .build(),
+    /**
+     * Quién abre el WebSocket; por defecto, [http]. Parámetro por lo mismo: un
+     * interceptor no alcanza para abrir un socket sin servidor del otro lado, y
+     * las pruebas necesitan hacerle llegar a mano la apertura, los mensajes y
+     * las caídas para ver la reconexión.
+     */
+    private val abrirSocket: WebSocket.Factory = http,
+) {
 
     /**
      * Decisión del operador sobre una alerta. [alertId] es null solo si el
@@ -77,9 +95,6 @@ open class CommandCenterClient(private val scope: CoroutineScope) {
     var onRenamed: ((displayName: String) -> Unit)? = null
     val connected = MutableStateFlow(false)
 
-    private val http = OkHttpClient.Builder()
-        .pingInterval(15, TimeUnit.SECONDS)
-        .build()
     private val json = "application/json".toMediaType()
 
     private var baseUrl = ""
@@ -286,7 +301,7 @@ open class CommandCenterClient(private val scope: CoroutineScope) {
     }
 
     private fun openWebSocket() {
-        ws = http.newWebSocket(
+        ws = abrirSocket.newWebSocket(
             Request.Builder().url(urlDelWebSocket()).build(),
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {

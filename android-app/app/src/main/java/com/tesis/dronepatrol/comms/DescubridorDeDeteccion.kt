@@ -40,6 +40,21 @@ class DescubridorDeDeteccion(
      * de detección abierto los tomaba por un teléfono.
      */
     private val anunciarse: Boolean = true,
+    /**
+     * De dónde sale el socket UDP, todavía sin atar. Es parámetro solo para las
+     * pruebas: con uno de mentira se ve el "hola" que se manda y se le hacen
+     * llegar anuncios, timeouts y cortes sin tocar la red (el broadcast de
+     * verdad sale a la LAN, ver [anunciarse]). La app usa siempre el de la JDK.
+     */
+    private val crearSocket: () -> DatagramSocket = { DatagramSocket(null) },
+    /**
+     * La hora con la que se marca el ritmo del "hola" y se fecha cada anuncio.
+     * Es parámetro solo para las pruebas, como el reloj de PatrolManager: con
+     * uno de mentira se ven los límites exactos de [INTERVALO_HOLA_MS] y
+     * [SIN_ANUNCIOS_MS] sin esperarlos de verdad. La app usa siempre la del
+     * sistema.
+     */
+    private val reloj: () -> Long = System::currentTimeMillis,
 ) {
 
     /** Un anuncio de la laptop, con la dirección de la que llegó. */
@@ -80,7 +95,7 @@ class DescubridorDeDeteccion(
 
     private fun escuchar() {
         val s = try {
-            DatagramSocket(null).apply {
+            crearSocket().apply {
                 // Varias apps (o dos arranques seguidos) pueden escuchar el mismo
                 // puerto; sin esto el segundo falla con "Address already in use".
                 reuseAddress = true
@@ -99,7 +114,7 @@ class DescubridorDeDeteccion(
         var ultimoHolaMs = 0L
         try {
             while (vivo) {
-                val ahora = System.currentTimeMillis()
+                val ahora = reloj()
                 // Mientras no se oye a la PC, la app se anuncia ella.
                 if (anunciarse && ahora - ultimoAnuncioMs > SIN_ANUNCIOS_MS && ahora - ultimoHolaMs > INTERVALO_HOLA_MS) {
                     ultimoHolaMs = ahora
@@ -113,7 +128,7 @@ class DescubridorDeDeteccion(
                 }
                 val texto = String(paquete.data, paquete.offset, paquete.length, Charsets.UTF_8)
                 val host = paquete.address?.hostAddress ?: continue
-                interpretar(texto, host, System.currentTimeMillis())?.let {
+                interpretar(texto, host, reloj())?.let {
                     ultimoAnuncioMs = it.recibidoMs
                     _anuncio.value = it
                 }

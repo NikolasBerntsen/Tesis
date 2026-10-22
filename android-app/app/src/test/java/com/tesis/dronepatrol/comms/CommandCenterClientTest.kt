@@ -170,4 +170,162 @@ class CommandCenterClientTest {
         cliente.onManualGimbal = null
         cliente.manejarMensaje("""{"type":"manual_gimbal","pitch":-30,"by":"operador1"}""")
     }
+
+    /** Un mensaje de cada tipo del contrato §2, con el nombre del oyente que le corresponde. */
+    private val unaOrdenDeCadaTipo = listOf(
+        """{"type":"alert_decision","alertId":4,"decision":"VALIDATED","decidedBy":"ana"}""" to "alert_decision",
+        """{"type":"alert_ack","ref":"r-1","alertId":4}""" to "alert_ack",
+        """{"type":"takeoff","by":"ana"}""" to "takeoff",
+        """{"type":"land","by":"ana"}""" to "land",
+        """{"type":"resume_patrol","orderedBy":"ana"}""" to "resume_patrol",
+        """{"type":"start_route","routeId":1,"fromIndex":0,"orderedBy":"ana"}""" to "start_route",
+        """{"type":"stop_patrol","orderedBy":"ana"}""" to "stop_patrol",
+        """{"type":"force_goto","routeId":1,"index":2,"orderedBy":"ana"}""" to "force_goto",
+        """{"type":"control_taken","by":"ana"}""" to "control_taken",
+        """{"type":"manual_move","bearing":90,"distanceM":25,"by":"ana"}""" to "manual_move",
+        """{"type":"manual_stick","pitch":0.5,"roll":0,"yaw":0,"throttle":0,"by":"ana"}""" to "manual_stick",
+        """{"type":"manual_gimbal","pitch":-30,"by":"ana"}""" to "manual_gimbal",
+        """{"type":"control_released","by":"ana"}""" to "control_released",
+        """{"type":"renamed","displayName":"Beta"}""" to "renamed",
+    )
+
+    /** Engancha un oyente en cada orden y devuelve la lista donde cada una anota su nombre. */
+    private fun oirTodo(): MutableList<String> {
+        val oidas = mutableListOf<String>()
+        cliente.onAlertDecision = { _, _, _, _ -> oidas += "alert_decision" }
+        cliente.onAlertAck = { _, _ -> oidas += "alert_ack" }
+        cliente.onTakeoff = { oidas += "takeoff" }
+        cliente.onLand = { oidas += "land" }
+        cliente.onResumePatrol = { oidas += "resume_patrol" }
+        cliente.onStartRoute = { _, _, _ -> oidas += "start_route" }
+        cliente.onStopPatrol = { oidas += "stop_patrol" }
+        cliente.onForceGoto = { _, _, _ -> oidas += "force_goto" }
+        cliente.onControlTaken = { oidas += "control_taken" }
+        cliente.onManualMove = { _, _, _ -> oidas += "manual_move" }
+        cliente.onManualStick = { _, _, _, _, _ -> oidas += "manual_stick" }
+        cliente.onManualGimbal = { _, _ -> oidas += "manual_gimbal" }
+        cliente.onControlReleased = { oidas += "control_released" }
+        cliente.onRenamed = { oidas += "renamed" }
+        return oidas
+    }
+
+    /**
+     * Cada tipo del contrato llega a su oyente y a ningún otro: una orden que
+     * cae en el oyente equivocado (un `land` tomado por `takeoff`) mueve el dron
+     * sin que nada se queje.
+     */
+    @Test
+    fun cadaOrdenCaeEnSuOyenteYEnNingunOtro() {
+        val oidas = oirTodo()
+
+        for ((mensaje, oyente) in unaOrdenDeCadaTipo) {
+            oidas.clear()
+            cliente.manejarMensaje(mensaje)
+            assertEquals(mensaje, listOf(oyente), oidas)
+        }
+    }
+
+    /**
+     * Lo que el hub manda a las consolas (§3) o un tipo que la app no conoce
+     * no es una orden para el dron.
+     */
+    @Test
+    fun unTipoQueNoEsUnaOrdenNoLlegaANingunOyente() {
+        val oidas = oirTodo()
+
+        cliente.manejarMensaje("""{"type":"status","state":"IDLE"}""")
+        cliente.manejarMensaje("""{"type":"drone_online","drone":{}}""")
+        cliente.manejarMensaje("""{"type":"TAKEOFF","by":"ana"}""")
+        cliente.manejarMensaje("""["takeoff"]""")
+
+        assertEquals(emptyList<String>(), oidas)
+    }
+
+    /**
+     * Una orden que llega antes de que haya quién la atienda (la app todavía
+     * no armó el patrullaje) se pierde: no queda encolada para ejecutarse
+     * cuando aparezca el oyente, que sería un despegue fuera de tiempo.
+     */
+    @Test
+    fun sinOyentesLasOrdenesSePierdenYNoQuedanPendientes() {
+        for ((mensaje, _) in unaOrdenDeCadaTipo) cliente.manejarMensaje(mensaje)
+
+        val oidas = oirTodo()
+        assertEquals("nada quedó pendiente", emptyList<String>(), oidas)
+
+        cliente.manejarMensaje("""{"type":"land","by":"ana"}""")
+        assertEquals(listOf("land"), oidas)
+    }
+
+    /** `resume_patrol` con `fromIndex` va a ese nodo; sin él (ausente o null), desde el último alcanzado. */
+    @Test
+    fun reanudarSinIndiceEsDesdeElUltimoNodo() {
+        val desde = mutableListOf<Int?>()
+        cliente.onResumePatrol = { desde += it }
+
+        cliente.manejarMensaje("""{"type":"resume_patrol","orderedBy":"ana","fromIndex":2}""")
+        cliente.manejarMensaje("""{"type":"resume_patrol","orderedBy":"ana"}""")
+        cliente.manejarMensaje("""{"type":"resume_patrol","orderedBy":"ana","fromIndex":null}""")
+        // El nodo 0 es un nodo, no "sin índice"
+        cliente.manejarMensaje("""{"type":"resume_patrol","orderedBy":"ana","fromIndex":0}""")
+
+        assertEquals(listOf(2, null, null, 0), desde)
+    }
+
+    /**
+     * `start_route` lee `fromIndex` y `force_goto` lee `index`: los dos llevan
+     * ruta y nodo, y cruzar los nombres manda el dron a otro lado.
+     */
+    @Test
+    fun comenzarRutaYDesvioLeenCadaUnoSuIndice() {
+        var ruta: List<Any>? = null
+        var desvio: List<Any>? = null
+        cliente.onStartRoute = { routeId, fromIndex, por -> ruta = listOf(routeId, fromIndex, por) }
+        cliente.onForceGoto = { routeId, index, por -> desvio = listOf(routeId, index, por) }
+
+        cliente.manejarMensaje("""{"type":"start_route","routeId":3,"fromIndex":1,"index":9,"orderedBy":"ana"}""")
+        cliente.manejarMensaje("""{"type":"force_goto","routeId":5,"index":2,"fromIndex":9,"orderedBy":"supervisor"}""")
+
+        assertEquals(listOf(3, 1, "ana"), ruta)
+        assertEquals(listOf(5, 2, "supervisor"), desvio)
+    }
+
+    /** Las órdenes que solo dicen quién las dio llegan con ese nombre, de su campo. */
+    @Test
+    fun cadaOrdenLlegaConQuienLaDio() {
+        val oidas = mutableListOf<String>()
+        cliente.onStopPatrol = { oidas += "stop:$it" }
+        cliente.onControlTaken = { oidas += "taken:$it" }
+        cliente.onControlReleased = { oidas += "released:$it" }
+        cliente.onRenamed = { oidas += "renamed:$it" }
+
+        cliente.manejarMensaje("""{"type":"stop_patrol","orderedBy":"ana","by":"otro"}""")
+        cliente.manejarMensaje("""{"type":"control_taken","by":"beto"}""")
+        cliente.manejarMensaje("""{"type":"control_released","by":"carla"}""")
+        cliente.manejarMensaje("""{"type":"renamed","displayName":"Alfa 2"}""")
+
+        assertEquals(listOf("stop:ana", "taken:beto", "released:carla", "renamed:Alfa 2"), oidas)
+    }
+
+    /** `manual_move`: el rumbo absoluto y la distancia en metros, cada uno en su lugar (§2). */
+    @Test
+    fun elDesplazamientoPuntualLlegaConRumboYDistancia() {
+        var recibido: List<Any>? = null
+        cliente.onManualMove = { rumbo, metros, por -> recibido = listOf(rumbo, metros, por) }
+
+        cliente.manejarMensaje("""{"type":"manual_move","bearing":270,"distanceM":25.5,"by":"ana"}""")
+
+        assertEquals(listOf(270.0, 25.5, "ana"), recibido)
+    }
+
+    /** Un `alertId` en null es lo mismo que ausente: la decisión no trae id. */
+    @Test
+    fun unaDecisionConAlertIdNullNoTraeId() {
+        var recibido: List<Any?>? = null
+        cliente.onAlertDecision = { id, decision, por, reenvio -> recibido = listOf(id, decision, por, reenvio) }
+
+        cliente.manejarMensaje("""{"type":"alert_decision","alertId":null,"decision":"DISMISSED","decidedBy":"ana"}""")
+
+        assertEquals(listOf(null, "DISMISSED", "ana", false), recibido)
+    }
 }
