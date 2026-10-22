@@ -208,7 +208,8 @@ describe('Console', () => {
     expect(await screen.findByText('Bravo')).toBeInTheDocument();
 
     fire({ type: 'drone_renamed', droneId: 'd1', displayName: 'AlfaNuevo' });
-    expect(await screen.findByText('AlfaNuevo')).toBeInTheDocument();
+    // Dos veces: en su cámara y en la alerta pendiente, que dice de qué dron es.
+    expect(await screen.findAllByText('AlfaNuevo')).toHaveLength(2);
 
     // Estos ramales del switch se cubren empujando cada tipo de mensaje.
     fire({ type: 'alert_updated', alert: { id: 1, type: 'PERSON', status: 'VALIDATED', drone_id: 'd1', created_at: '2024-01-01T12:00:00.000Z' } });

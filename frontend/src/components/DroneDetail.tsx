@@ -185,17 +185,13 @@ export default function DroneDetail({
   const enElAire = status?.flying === true;
   const sinGps = !!status && posicionDelDron(status) === null;
 
-  // La alerta que se decide al lado del video: la pendiente más nueva de ESTE
-  // dron. Los ids crecen con cada alerta, así que la más nueva es la de id más
-  // alto, llegue en el orden que llegue la lista.
+  // Las alertas que se deciden al lado del video: las pendientes de ESTE dron.
+  // El carrusel las ordena (la más nueva primero) y recuerda cuál se mira.
   const pendientes = useMemo(
-    () =>
-      alertas
-        .filter((a) => a.drone_id === drone.droneId && a.status === 'PENDING')
-        .sort((a, b) => b.id - a.id),
+    () => alertas.filter((a) => a.drone_id === drone.droneId && a.status === 'PENDING'),
     [alertas, drone.droneId],
   );
-  const alertaEnCurso = pendientes[0] ?? null;
+  const hayAlerta = pendientes.length > 0;
 
   // El aviso de "orden en curso" se va solo cuando el dron confirma: en el aire
   // para el despegue, en el suelo para el aterrizaje. También si se suelta el
@@ -379,13 +375,15 @@ export default function DroneDetail({
           que está pasando y se miran juntas. Con una alerta pendiente se mete
           la captura ENTRE las dos, pegada al video: decidir es comparar lo que
           vio la detección con lo que el dron está viendo ahora. */}
-      <div className={alertaEnCurso ? 'par-video-mapa con-alerta' : 'par-video-mapa'}>
+      <div className={hayAlerta ? 'par-video-mapa con-alerta' : 'par-video-mapa'}>
         <LiveVideo frame={frame} />
-        {alertaEnCurso && (
+        {/* Con `key` por dron: al saltar de un dron a otro desde la campana, las
+            alertas del nuevo no son "nuevas" para el carrusel del anterior. */}
+        {hayAlerta && (
           <AlertaEnCurso
-            alerta={alertaEnCurso}
-            otrasPendientes={pendientes.length - 1}
-            siguiendo={objetivo?.alertId === alertaEnCurso.id}
+            key={drone.droneId}
+            alertas={pendientes}
+            seguidas={objetivo ? [objetivo.alertId] : []}
             onDecidir={onDecidir}
           />
         )}
