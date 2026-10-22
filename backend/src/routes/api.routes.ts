@@ -59,11 +59,11 @@ function leerBaseId(raw: unknown): LecturaBaseId {
  * negar el permiso de ubicación) y eso no invalida el emparejamiento.
  */
 function leerUbicacion(body: Record<string, unknown>): { lat: number; lon: number; accuracyM: number | null } | null {
-  const lat = typeof body.lat === 'number' ? body.lat : NaN;
-  const lon = typeof body.lon === 'number' ? body.lon : NaN;
+  const lat = typeof body.lat === 'number' ? body.lat : Number.NaN;
+  const lon = typeof body.lon === 'number' ? body.lon : Number.NaN;
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
   if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
-  const accuracyM = typeof body.accuracyM === 'number' ? body.accuracyM : NaN;
+  const accuracyM = typeof body.accuracyM === 'number' ? body.accuracyM : Number.NaN;
   return { lat, lon, accuracyM: Number.isFinite(accuracyM) ? accuracyM : null };
 }
 
@@ -115,8 +115,8 @@ function leerNodos(raw: unknown): { ok: true; waypoints: Waypoint[] } | { ok: fa
   const waypoints: Waypoint[] = [];
   for (const w of raw) {
     const o = (w ?? {}) as Record<string, unknown>;
-    const lat = typeof o.lat === 'number' ? o.lat : NaN;
-    const lon = typeof o.lon === 'number' ? o.lon : NaN;
+    const lat = typeof o.lat === 'number' ? o.lat : Number.NaN;
+    const lon = typeof o.lon === 'number' ? o.lon : Number.NaN;
     const alt = typeof o.alt === 'number' ? o.alt : 40;
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) return { ok: false, error: 'Cada nodo necesita lat y lon numéricos' };
     if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return { ok: false, error: 'Nodo con coordenadas fuera de rango' };
@@ -679,8 +679,8 @@ function leerDatosDeBase(body: Record<string, unknown>, parcial: boolean) {
 
   const tieneCoord = body.lat !== undefined || body.lon !== undefined;
   if (!parcial || tieneCoord) {
-    const lat = typeof body.lat === 'number' ? body.lat : NaN;
-    const lon = typeof body.lon === 'number' ? body.lon : NaN;
+    const lat = typeof body.lat === 'number' ? body.lat : Number.NaN;
+    const lon = typeof body.lon === 'number' ? body.lon : Number.NaN;
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) return { ok: false as const, error: 'lat y lon son requeridos y numéricos' };
     if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return { ok: false as const, error: 'Coordenadas fuera de rango' };
     return { ok: true as const, name, lat, lon };

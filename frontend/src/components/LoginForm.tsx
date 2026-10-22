@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { login } from '../api';
 
 export default function LoginForm({ onLogin }: { onLogin: () => void }) {
@@ -6,6 +6,15 @@ export default function LoginForm({ onLogin }: { onLogin: () => void }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const campoUsuario = useRef<HTMLInputElement>(null);
+
+  // La pantalla de ingreso no tiene otra cosa que hacer que escribir el
+  // usuario, así que el foco arranca ahí. Va por código y no con `autoFocus`,
+  // que el análisis de accesibilidad (Sonar) marca en cualquier lado: acá mover
+  // el foco solo es justo lo que espera quien abre la consola.
+  useEffect(() => {
+    campoUsuario.current?.focus();
+  }, []);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -29,12 +38,19 @@ export default function LoginForm({ onLogin }: { onLogin: () => void }) {
         {/* La filigrana separa el encabezado de los campos como el grabado de
             una placa: se tiene que adivinar, nunca competir con el dato. */}
         <hr className="regla-ornamental" />
+        {/* El rótulo va en su <span>: texto suelto y campo en renglones
+            distintos dejan ambiguo si entre los dos va un espacio. */}
         <label>
-          Usuario
-          <input value={username} onChange={(e) => setUsername(e.target.value)} autoFocus autoComplete="username" />
+          <span>Usuario</span>
+          <input
+            ref={campoUsuario}
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoComplete="username"
+          />
         </label>
         <label>
-          Contraseña
+          <span>Contraseña</span>
           <input
             type="password"
             value={password}

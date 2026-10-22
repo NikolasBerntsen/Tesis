@@ -34,8 +34,32 @@ import org.json.JSONObject
  * distinguir lo que va al Comando Central de lo que va a la detección —dar vuelta
  * los dos destinos del video es un defecto que CI no veía— y para eso hereda y
  * pisa el envío.
+ *
+ * Por lo mismo son `open` [connect] y [fetchRoutes]: la pantalla de operación
+ * abre el socket y baja las rutas apenas se crea, y su banco de pruebas los
+ * reemplaza para no salir a la red (ver MainActivity.crearComandoCentral).
  */
-open class CommandCenterClient(private val scope: CoroutineScope) {
+open class CommandCenterClient(
+    private val scope: CoroutineScope,
+    /**
+     * El cliente del REST y, salvo que se pase otro, el del WebSocket. Es
+     * parámetro solo para las pruebas: con un interceptor que contesta en lugar
+     * del servidor se ve el pedido exacto (ruta, JWT, cuerpo) sin salir a la
+     * red, y las pantallas de login y del menú de campo recorren su flujo
+     * entero —incluido el texto de error que interpretan—. La app usa siempre
+     * el de por defecto.
+     */
+    private val http: OkHttpClient = OkHttpClient.Builder()
+        .pingInterval(15, TimeUnit.SECONDS)
+        .build(),
+    /**
+     * Quién abre el WebSocket; por defecto, [http]. Parámetro por lo mismo: un
+     * interceptor no alcanza para abrir un socket sin servidor del otro lado, y
+     * las pruebas necesitan hacerle llegar a mano la apertura, los mensajes y
+     * las caídas para ver la reconexión.
+     */
+    private val abrirSocket: WebSocket.Factory = http,
+) {
 
     /**
      * Decisión del operador sobre una alerta. [alertId] es null solo si el
@@ -77,9 +101,6 @@ open class CommandCenterClient(private val scope: CoroutineScope) {
     var onRenamed: ((displayName: String) -> Unit)? = null
     val connected = MutableStateFlow(false)
 
-    private val http = OkHttpClient.Builder()
-        .pingInterval(15, TimeUnit.SECONDS)
-        .build()
     private val json = "application/json".toMediaType()
 
     private var baseUrl = ""
@@ -198,7 +219,7 @@ open class CommandCenterClient(private val scope: CoroutineScope) {
         token = ""
     }
 
-    fun connect() {
+    open fun connect() {
         if (wantConnected) return
         wantConnected = true
         openWebSocket()
@@ -227,7 +248,14 @@ open class CommandCenterClient(private val scope: CoroutineScope) {
         }
     }
 
-    suspend fun fetchRoutes(): List<PatrolRoute> = withContext(Dispatchers.IO) {
+    /**
+     * Rutas del dron autenticado. `open` por lo mismo que [send]: PatrolManager
+     * la vuelve a consultar cuando la consola ordena una ruta que la app no
+     * tiene descargada (una que se creó después de abrir la sesión), y sin un
+     * Comando Central de verdad el banco de pruebas no tiene otra forma de
+     * contestarle esa segunda consulta.
+     */
+    open suspend fun fetchRoutes(): List<PatrolRoute> = withContext(Dispatchers.IO) {
         val res = http.newCall(
             Request.Builder()
                 .url("$baseUrl/api/routes")
@@ -279,7 +307,7 @@ open class CommandCenterClient(private val scope: CoroutineScope) {
     }
 
     private fun openWebSocket() {
-        ws = http.newWebSocket(
+        ws = abrirSocket.newWebSocket(
             Request.Builder().url(urlDelWebSocket()).build(),
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {

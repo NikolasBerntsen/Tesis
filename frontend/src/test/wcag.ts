@@ -121,12 +121,12 @@ const NOMBRADOS: Record<string, Rgba> = {
 
 function hexa(h: string): Rgba {
   const d = h.length <= 4 ? [...h].map((c) => c + c).join('') : h;
-  const n = (k: number) => parseInt(d.slice(k, k + 2), 16);
+  const n = (k: number) => Number.parseInt(d.slice(k, k + 2), 16);
   return { r: n(0), g: n(2), b: n(4), a: d.length === 8 ? n(6) / 255 : 1 };
 }
 
 function porcentaje(texto: string | undefined): number | undefined {
-  return texto === undefined ? undefined : parseFloat(texto) / 100;
+  return texto === undefined ? undefined : Number.parseFloat(texto) / 100;
 }
 
 /**
@@ -253,7 +253,7 @@ export function aplicarFiltro(color: Rgba, filtro: string): Rgba {
     // Una función nueva en el token tiene que entrar acá antes que en el mapa:
     // si no, el test mediría el callejero sin ella.
     if (!funcion) throw new Error(`función de filtro que no se sabe aplicar: ${nombre}`);
-    const n = parseFloat(argumento);
+    const n = Number.parseFloat(argumento);
     c = funcion(c, argumento.trim().endsWith('%') ? n / 100 : n);
   }
   return { r: c[0] * 255, g: c[1] * 255, b: c[2] * 255, a: color.a };

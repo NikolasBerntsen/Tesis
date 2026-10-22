@@ -46,7 +46,15 @@ object SesionDeCampo {
     // regresiva no se desmadra.
     private var venceEnMs = 0L
 
-    fun nuevoCliente(): CommandCenterClient = CommandCenterClient(alcance)
+    /**
+     * De dónde sale el cliente de cada login. Es `internal` y reemplazable solo
+     * para las pruebas: el login pide su cliente acá, y es la única forma de que
+     * un test le conteste en lugar del Comando Central sin salir a la red. La app
+     * nunca lo cambia.
+     */
+    internal var fabricaDeClientes: (CoroutineScope) -> CommandCenterClient = { CommandCenterClient(it) }
+
+    fun nuevoCliente(): CommandCenterClient = fabricaDeClientes(alcance)
 
     fun abrir(cliente: CommandCenterClient, sesion: SesionOperador) {
         this.cliente = cliente
