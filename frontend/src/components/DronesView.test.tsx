@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import DronesView from './DronesView';
@@ -256,6 +256,43 @@ describe('DronesView', () => {
     expect(apiMock).not.toHaveBeenCalled();
     // y reabrirlo arranca de cero
     expect(within(await abrirAlta()).getByLabelText('Nombre')).toHaveValue('');
+  });
+
+  it('con el alta en viaje el diálogo no se deja cancelar, así no se pisa con otro que se abra después', async () => {
+    let contestar: (d: Drone) => void = () => {};
+    apiMock.mockReturnValue(new Promise((r) => (contestar = r as (d: Drone) => void)));
+    montar();
+    await screen.findByText('Alfa', { selector: 'div' });
+
+    const alta = await abrirAlta();
+    await userEvent.type(within(alta).getByLabelText('Nombre'), 'Delta');
+    await userEvent.click(within(alta).getByRole('button', { name: 'Dar de alta' }));
+
+    // el pedido ya salió: cancelar no podría deshacerlo
+    expect(within(alta).getByRole('button', { name: 'Cancelar' })).toBeDisabled();
+    await userEvent.keyboard('{Escape}');
+    expect(dialogo('Nuevo dron')).toBeInTheDocument();
+
+    await act(async () => contestar(makeDrone({ hash: 'nuevo', droneId: 'nuevo', displayName: 'Delta' })));
+    expect(await screen.findByRole('dialog', { name: 'Sticker del dron Delta' })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Nuevo dron' })).not.toBeInTheDocument();
+  });
+
+  it('con la edición en viaje Escape no la cierra, y al volver se cierra sola con la ficha nueva', async () => {
+    let contestar: (d: Drone) => void = () => {};
+    apiMock.mockReturnValue(new Promise((r) => (contestar = r as (d: Drone) => void)));
+    montar('supervisor');
+    await screen.findByText('Alfa', { selector: 'div' });
+
+    const edicion = await abrirEdicion('Alfa');
+    await userEvent.type(within(edicion).getByLabelText('Modelo'), ' Pro');
+    await userEvent.click(within(edicion).getByRole('button', { name: 'Guardar cambios' }));
+    await userEvent.keyboard('{Escape}');
+    expect(dialogo('Editar dron')).toBeInTheDocument();
+
+    await act(async () => contestar(alfa({ model: 'DJI Mini 3 Pro' })));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(within(fila('Alfa')).getByText('DJI Mini 3 Pro')).toBeInTheDocument();
   });
 
   it('el supervisor desactiva un dron con el interruptor', async () => {

@@ -62,9 +62,15 @@ function SelectorDeBase({
   // "Cambiar" reemplaza la base elegida por el buscador, que recién existe en
   // el render siguiente: el pedido de foco queda anotado hasta que aparezca.
   const pedirFoco = useRef(false);
+  // Y al revés: elegir una base saca el buscador (o la opción clickeada) del
+  // DOM, y sin esto el foco caía en <body>, fuera del diálogo, donde el
+  // siguiente Enter o Tab ya no hacía nada. Va a "Cambiar", que es lo que
+  // ocupa su lugar.
+  const enfocarCambiar = useRef(false);
   const idRotulo = useId();
   const idAyuda = useId();
   const elegida = bases.find((b) => b.id === valor) ?? null;
+  const hayBusqueda = texto.trim() !== '';
 
   const filtradas = useMemo(() => {
     const q = texto.trim().toLowerCase();
@@ -75,16 +81,22 @@ function SelectorDeBase({
     onElegir(id);
     setAbierto(false);
     setTexto('');
+    enfocarCambiar.current = true;
   }
 
   /**
    * Adentro del buscador, Enter elige la primera base que coincide en vez de
    * mandar el formulario a medio hacer, y Escape cierra la lista en vez del
    * diálogo entero: con la lista abierta, eso es lo que la persona quiso decir.
+   *
+   * Pero sólo si escribió algo. La lista se abre con sólo enfocar el buscador,
+   * que es el último campo: quien llega tabulando y aprieta Enter quiere mandar
+   * el formulario, no que se le asigne en silencio la primera base de la lista.
    */
   function alTeclear(e: KeyboardEvent<HTMLInputElement>) {
     if (!abierto) return;
     if (e.key === 'Enter') {
+      if (!hayBusqueda) return;
       e.preventDefault();
       if (filtradas.length > 0) elegir(filtradas[0].id);
     } else if (e.key === 'Escape') {
@@ -110,6 +122,12 @@ function SelectorDeBase({
             <button
               type="button"
               className="chico"
+              ref={(nodo) => {
+                if (nodo && enfocarCambiar.current) {
+                  enfocarCambiar.current = false;
+                  nodo.focus();
+                }
+              }}
               onClick={() => {
                 pedirFoco.current = true;
                 setAbierto(true);
@@ -199,6 +217,17 @@ export default function DialogoDron({
   const nombreValido = form.displayName.trim().length > 0;
   const mostrarErrorNombre = nombreTocado && !nombreValido;
 
+  /**
+   * Con el pedido en viaje, cerrar ya no es "salir sin guardar": el backend lo
+   * va a procesar igual, y cuando conteste el padre cerraría lo que esté
+   * abierto en ese momento (otro alta a medio escribir, por ejemplo) y abriría
+   * el sticker de un dron que se creyó cancelado. Por eso Cancelar y la cruz
+   * se apagan, y Escape y el clic en el velo no hacen nada hasta que conteste.
+   */
+  function cerrar() {
+    if (!guardando) onCerrar();
+  }
+
   async function enviar(e: FormEvent) {
     e.preventDefault();
     // Con el nombre vacío el botón está apagado; esto cubre el Enter de un
@@ -223,7 +252,7 @@ export default function DialogoDron({
   }
 
   return (
-    <Modal etiquetadoPor={idTitulo} enfocarPrimerCampo onCerrar={onCerrar}>
+    <Modal etiquetadoPor={idTitulo} enfocarPrimerCampo onCerrar={cerrar}>
       <header className="modal-cabecera">
         <div>
           <h2 className="modal-titulo" id={idTitulo}>
@@ -231,7 +260,7 @@ export default function DialogoDron({
           </h2>
           <p className="modal-subtitulo">{dron ? dron.displayName : 'Después del alta se abre su sticker con el QR'}</p>
         </div>
-        <button type="button" className="modal-cerrar" aria-label="Cerrar" onClick={onCerrar}>
+        <button type="button" className="modal-cerrar" aria-label="Cerrar" onClick={cerrar} disabled={guardando}>
           ×
         </button>
       </header>
@@ -291,7 +320,7 @@ export default function DialogoDron({
 
         <footer className="modal-pie">
           {!nombreValido && <p className="pie-nota">Falta el nombre del dron.</p>}
-          <button type="button" className="ghost" onClick={onCerrar}>
+          <button type="button" className="ghost" onClick={cerrar} disabled={guardando}>
             Cancelar
           </button>
           <button type="submit" className="primario" disabled={!nombreValido || guardando}>

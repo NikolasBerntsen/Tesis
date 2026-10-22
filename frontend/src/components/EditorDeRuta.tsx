@@ -177,8 +177,18 @@ export default function EditorDeRuta({
   const completa = hayNombre && nodos.length >= 2;
   const faltante = queFalta(hayNombre, nodos.length);
 
+  /**
+   * Con la ruta en viaje, cerrar ya no es "salir sin guardar": se guarda igual,
+   * y al volver el padre cerraría el editor que esté abierto en ese momento
+   * —otra ruta a medio dibujar— y se perderían sus nodos. Hasta que el backend
+   * conteste, Cancelar y la cruz se apagan, y Escape y el velo no cierran.
+   */
+  function cerrar() {
+    if (!guardando) onCerrar();
+  }
+
   return (
-    <Modal etiquetadoPor="titulo-editor-ruta" ancho enfocarPrimerCampo onCerrar={onCerrar}>
+    <Modal etiquetadoPor="titulo-editor-ruta" ancho enfocarPrimerCampo onCerrar={cerrar}>
       <header className="modal-cabecera">
         <div>
           <h2 className="modal-titulo" id="titulo-editor-ruta">
@@ -186,7 +196,7 @@ export default function EditorDeRuta({
           </h2>
           <p className="modal-subtitulo">{ruta ? ruta.name : base ? `Desde ${base.name}` : 'Nodos en el orden del recorrido'}</p>
         </div>
-        <button type="button" className="modal-cerrar" aria-label="Cerrar" onClick={onCerrar}>
+        <button type="button" className="modal-cerrar" aria-label="Cerrar" onClick={cerrar} disabled={guardando}>
           ×
         </button>
       </header>
@@ -296,7 +306,7 @@ export default function EditorDeRuta({
 
         <footer className="modal-pie">
           {faltante && <p className="pie-nota">{faltante}</p>}
-          <button type="button" className="ghost" onClick={onCerrar}>
+          <button type="button" className="ghost" onClick={cerrar} disabled={guardando}>
             Cancelar
           </button>
           <button

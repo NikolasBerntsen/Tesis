@@ -223,6 +223,36 @@ describe('EditorDeRuta — repaso, edición de nodos y arrastre', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(apiMock).not.toHaveBeenCalled();
   });
+
+  it('con la ruta en viaje el editor no se deja cerrar, y al volver se cierra solo', async () => {
+    const dialogo = await abrirEditor();
+    let contestar: (r: unknown) => void = () => {};
+    apiMock.mockReturnValue(new Promise((r) => (contestar = r)));
+
+    await userEvent.click(within(dialogo).getByRole('button', { name: /guardar ruta/i }));
+    // el pedido ya salió: cancelar no lo deshace, y cerrar dejaría que su
+    // respuesta cierre otro editor que se abra en el medio
+    expect(within(dialogo).getByRole('button', { name: 'Cancelar' })).toBeDisabled();
+    expect(within(dialogo).getByRole('button', { name: 'Cerrar' })).toBeDisabled();
+    await userEvent.keyboard('{Escape}');
+    expect(screen.getByRole('dialog', { name: 'Editar ruta' })).toBeInTheDocument();
+
+    await act(async () => contestar(conTres()));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('si la ruta en viaje falla, se vuelve a poder cancelar', async () => {
+    const dialogo = await abrirEditor();
+    let fallar: (e: Error) => void = () => {};
+    apiMock.mockReturnValue(new Promise((_, rechazar) => (fallar = rechazar)));
+
+    await userEvent.click(within(dialogo).getByRole('button', { name: /guardar ruta/i }));
+    await act(async () => fallar(new Error('nombre duplicado')));
+
+    expect(within(dialogo).getByRole('button', { name: 'Cancelar' })).toBeEnabled();
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
 });
 
 describe('RutasView — el editor es un formulario y la lista, más prolija', () => {

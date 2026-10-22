@@ -238,6 +238,17 @@ export default function BasesView({ me }: { me: Me }) {
     );
   }
 
+  /**
+   * Con el pedido en viaje, cerrar ya no es "salir sin guardar": la base se
+   * guarda igual, y al volver esto cerraría el diálogo que esté abierto en ese
+   * momento —otro alta a medio escribir— y abriría las rutas de la primera.
+   * Por eso Cancelar y la cruz se apagan, y Escape y el velo no cierran, hasta
+   * que el backend conteste.
+   */
+  function cerrarFormulario() {
+    if (!guardando) setAbierto(false);
+  }
+
   async function guardar(e: FormEvent) {
     e.preventDefault();
     // Con el botón apagado esto no debería pasar; cubre el Enter de un
@@ -246,27 +257,30 @@ export default function BasesView({ me }: { me: Me }) {
     const cuerpo = JSON.stringify({ name: form.name.trim(), lat, lon });
     setErrorForm('');
     setGuardando(true);
+    let creada: BaseAsset | null = null;
     try {
-      if (editando) {
-        await api(`/bases/${editando.id}`, { method: 'PATCH', body: cuerpo });
-        setAbierto(false);
-      } else {
-        // Alta: se guarda la base y recién ahí se eligen sus rutas, que es el
-        // orden en que se piensa el problema (primero dónde está, después qué
-        // patrulla).
-        const creada = await api<BaseAsset>('/bases', { method: 'POST', body: cuerpo });
-        setAbierto(false);
-        setElegidas([]);
-        setReciencreada(true);
-        setAsignando(creada);
-        setRutas(await traerRutas().catch(() => []));
-      }
-      await cargar();
+      if (editando) await api(`/bases/${editando.id}`, { method: 'PATCH', body: cuerpo });
+      else creada = await api<BaseAsset>('/bases', { method: 'POST', body: cuerpo });
     } catch (err) {
       setErrorForm(textoError(err));
-    } finally {
       setGuardando(false);
+      return;
     }
+    // "Guardando" termina con el pedido, no con la recarga de la lista que
+    // viene después: si no, un diálogo que se abra mientras la lista viaja
+    // nacería con el botón apagado diciendo "Guardando…".
+    setGuardando(false);
+    setAbierto(false);
+    if (creada) {
+      // Alta: se guarda la base y recién ahí se eligen sus rutas, que es el
+      // orden en que se piensa el problema (primero dónde está, después qué
+      // patrulla).
+      setElegidas([]);
+      setReciencreada(true);
+      setAsignando(creada);
+      setRutas(await traerRutas().catch(() => []));
+    }
+    await cargar();
   }
 
   const visibles = useMemo(() => bases, [bases]);
@@ -392,7 +406,7 @@ export default function BasesView({ me }: { me: Me }) {
       </section>
 
       {abierto && (
-        <Modal etiquetadoPor="titulo-base" enfocarPrimerCampo onCerrar={() => setAbierto(false)}>
+        <Modal etiquetadoPor="titulo-base" enfocarPrimerCampo onCerrar={cerrarFormulario}>
           <header className="modal-cabecera">
             <div>
               <h2 className="modal-titulo" id="titulo-base">
@@ -402,7 +416,13 @@ export default function BasesView({ me }: { me: Me }) {
                 {editando ? editando.name : 'Después del alta elegís qué rutas patrulla'}
               </p>
             </div>
-            <button type="button" className="modal-cerrar" aria-label="Cerrar" onClick={() => setAbierto(false)}>
+            <button
+              type="button"
+              className="modal-cerrar"
+              aria-label="Cerrar"
+              onClick={cerrarFormulario}
+              disabled={guardando}
+            >
               ×
             </button>
           </header>
@@ -467,7 +487,7 @@ export default function BasesView({ me }: { me: Me }) {
 
             <footer className="modal-pie">
               {faltante && <p className="pie-nota">{faltante}</p>}
-              <button type="button" className="ghost" onClick={() => setAbierto(false)}>
+              <button type="button" className="ghost" onClick={cerrarFormulario} disabled={guardando}>
                 Cancelar
               </button>
               <button type="submit" className="primario" disabled={!completo || guardando}>

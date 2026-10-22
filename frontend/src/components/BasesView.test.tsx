@@ -426,6 +426,62 @@ describe('BasesView — el alta y la edición son un diálogo de formulario', ()
     expect(within(dialogo).getByRole('button', { name: 'Guardando…' })).toBeDisabled();
   });
 
+  it('con el alta en viaje el diálogo no se deja cerrar, y al volver pasa a las rutas de esa base', async () => {
+    let contestar: (b: ReturnType<typeof base>) => void = () => {};
+    apiMock.mockReturnValue(new Promise((r) => (contestar = r as typeof contestar)));
+    const dialogo = await abrirAlta();
+
+    await userEvent.type(within(dialogo).getByLabelText('Nombre'), 'Base Río');
+    await userEvent.type(within(dialogo).getByLabelText('Latitud'), '-34.9');
+    await userEvent.type(within(dialogo).getByLabelText('Longitud'), '-56.15');
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Dar de alta' }));
+
+    // el pedido ya salió: cancelar no lo deshace, así que no se ofrece
+    expect(within(dialogo).getByRole('button', { name: 'Cancelar' })).toBeDisabled();
+    expect(within(dialogo).getByRole('button', { name: 'Cerrar' })).toBeDisabled();
+    await userEvent.keyboard('{Escape}');
+    const velo = dialogo.parentElement!;
+    fireEvent.mouseDown(velo);
+    fireEvent.click(velo);
+    expect(screen.getByRole('dialog', { name: 'Nueva base' })).toBeInTheDocument();
+
+    await act(async () => contestar(base({ id: 9, name: 'Base Río' })));
+    expect(await screen.findByRole('dialog', { name: 'Rutas de Base Río' })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Nueva base' })).not.toBeInTheDocument();
+  });
+
+  it('si el alta en viaje falla, se vuelve a poder cancelar', async () => {
+    let fallar: (e: Error) => void = () => {};
+    apiMock.mockReturnValue(new Promise((_, rechazar) => (fallar = rechazar)));
+    const dialogo = await abrirAlta();
+
+    await userEvent.type(within(dialogo).getByLabelText('Nombre'), 'Base Río');
+    await userEvent.type(within(dialogo).getByLabelText('Latitud'), '-34.9');
+    await userEvent.type(within(dialogo).getByLabelText('Longitud'), '-56.15');
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Dar de alta' }));
+    await act(async () => fallar(new Error('Ya existe una base con ese nombre')));
+
+    expect(within(dialogo).getByRole('button', { name: 'Cancelar' })).toBeEnabled();
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('un diálogo que se abre mientras la lista se recarga no nace "Guardando…"', async () => {
+    apiMock.mockResolvedValue(base({ name: 'Base Norte II' }));
+    const dialogo = await abrirEdicion();
+    // la recarga que sigue al guardado queda en viaje
+    basesMock.mockReturnValue(new Promise(() => {}));
+
+    await userEvent.type(within(dialogo).getByLabelText('Nombre'), ' II');
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Guardar cambios' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Editar' }));
+    const otra = screen.getByRole('dialog', { name: 'Editar base' });
+    expect(within(otra).getByRole('button', { name: 'Guardar cambios' })).toBeEnabled();
+    expect(within(otra).getByRole('button', { name: 'Cancelar' })).toBeEnabled();
+  });
+
   it('reabrir el alta después de un error arranca limpio', async () => {
     apiMock.mockRejectedValue(new Error('Ya existe una base con ese nombre'));
     let dialogo = await abrirAlta();

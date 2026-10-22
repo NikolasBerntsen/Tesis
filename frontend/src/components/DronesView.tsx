@@ -125,6 +125,10 @@ export default function DronesView({ me, novedad = null }: PropsDronesView) {
    * Lo que guarda el diálogo. Si el backend rechaza, el error sube al diálogo
    * —que lo muestra adentro y no se cierra— en vez de quedar en la página,
    * tapado por el velo.
+   *
+   * Cerrar sin preguntar cuál está abierto es seguro porque el diálogo no se
+   * deja cerrar mientras este pedido viaja: el que se cierra al volver es el
+   * mismo que lo mandó, y no otro que se haya abierto en el medio.
    */
   async function guardarDron(cuerpo: CuerpoDron) {
     const body = JSON.stringify(cuerpo);

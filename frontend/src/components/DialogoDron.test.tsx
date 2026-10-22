@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import DialogoDron from './DialogoDron';
@@ -136,6 +136,29 @@ describe('DialogoDron — alta', () => {
     expect(onCerrar).toHaveBeenCalledTimes(3);
     expect(onGuardar).not.toHaveBeenCalled();
   });
+
+  it('con el alta en viaje no se puede cerrar: ni Cancelar, ni la cruz, ni Escape, ni el velo', async () => {
+    let fallar: (e: Error) => void = () => {};
+    const onGuardar = vi.fn(() => new Promise<void>((_, rechazar) => (fallar = rechazar)));
+    const { dialogo, onCerrar } = montar({ onGuardar });
+
+    await userEvent.type(within(dialogo).getByLabelText('Nombre'), 'Delta');
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Dar de alta' }));
+
+    expect(within(dialogo).getByRole('button', { name: 'Cancelar' })).toBeDisabled();
+    expect(within(dialogo).getByRole('button', { name: 'Cerrar' })).toBeDisabled();
+    await userEvent.keyboard('{Escape}');
+    const velo = dialogo.parentElement!;
+    fireEvent.mouseDown(velo);
+    fireEvent.click(velo);
+    expect(onCerrar).not.toHaveBeenCalled();
+
+    // si el backend rechaza, nada quedó guardado y salir vuelve a ser posible
+    await act(async () => fallar(new Error('sin conexión')));
+    expect(within(dialogo).getByRole('button', { name: 'Cancelar' })).toBeEnabled();
+    await userEvent.keyboard('{Escape}');
+    expect(onCerrar).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('DialogoDron — edición', () => {
@@ -219,6 +242,55 @@ describe('DialogoDron — selector de base', () => {
 
     await userEvent.click(within(dialogo).getByRole('button', { name: 'Dar de alta' }));
     expect(onGuardar).toHaveBeenCalledWith(expect.objectContaining({ baseId: 8 }));
+  });
+
+  it('Enter en el buscador sin haber escrito nada manda el formulario, sin asignar ninguna base', async () => {
+    const { dialogo, onGuardar } = montar();
+    await userEvent.type(within(dialogo).getByLabelText('Nombre'), 'Delta');
+
+    // llegar tabulando al último campo abre la lista, pero nadie eligió nada
+    await userEvent.tab();
+    await userEvent.tab();
+    await userEvent.tab();
+    expect(within(dialogo).getByLabelText('Buscar base')).toHaveFocus();
+    expect(within(dialogo).getByRole('listbox')).toBeInTheDocument();
+    await userEvent.keyboard('{Enter}');
+
+    expect(onGuardar).toHaveBeenCalledTimes(1);
+    expect(onGuardar).toHaveBeenCalledWith({ displayName: 'Delta', model: '', inventoryCode: '' });
+  });
+
+  it('un buscador con sólo espacios tampoco elige: Enter manda el formulario', async () => {
+    const { dialogo, onGuardar } = montar();
+    await userEvent.type(within(dialogo).getByLabelText('Nombre'), 'Delta');
+
+    await userEvent.type(within(dialogo).getByLabelText('Buscar base'), '   {Enter}');
+
+    expect(onGuardar).toHaveBeenCalledWith({ displayName: 'Delta', model: '', inventoryCode: '' });
+  });
+
+  it('elegir una base con Enter deja el foco en "Cambiar", no perdido fuera del diálogo', async () => {
+    const { dialogo } = montar();
+
+    await userEvent.type(within(dialogo).getByLabelText('Buscar base'), 'sur{Enter}');
+
+    expect(within(dialogo).getByRole('button', { name: 'Cambiar' })).toHaveFocus();
+  });
+
+  it('elegir una base con un clic también deja el foco en "Cambiar"', async () => {
+    const { dialogo } = montar({ dron: alfa() });
+
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Cambiar' }));
+    await userEvent.click(within(dialogo).getByRole('option', { name: /Base Sur/ }));
+
+    expect(within(dialogo).getByText('Base Sur')).toBeInTheDocument();
+    expect(within(dialogo).getByRole('button', { name: 'Cambiar' })).toHaveFocus();
+  });
+
+  it('abrir con una base ya puesta no le roba el foco al nombre', () => {
+    const { dialogo } = montar({ dron: alfa() });
+
+    expect(within(dialogo).getByLabelText('Nombre')).toHaveFocus();
   });
 
   it('Enter sin coincidencias no elige nada ni manda el formulario', async () => {
