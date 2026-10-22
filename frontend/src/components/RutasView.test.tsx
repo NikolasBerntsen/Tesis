@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event';
 import { api, traerRutas } from '../api';
 import { makeMe, makeRoute } from '../test/fixtures';
-import { estadoMapa, fondosPuestos, limpiarEstadoMapa } from '../test/dobleLeaflet';
+import { estadoMapa, fondosPuestos, limpiarEstadoMapa, pintarComoLeaflet } from '../test/dobleLeaflet';
 import { ProveedorDeAvisos } from './AvisosFlotantes';
 import RutasView from './RutasView';
 
@@ -457,6 +457,54 @@ describe('RutasView y su editor — mapa doble y lista de nodos rotulada', () =>
     await screen.findByRole('dialog', { name: /editar/i });
 
     expect(estadoMapa.puestas.filter((c) => c.clase === 'marker')).toHaveLength(0);
+  });
+});
+
+/*
+ * El apodo de un nodo lo escribe un operador (hasta 40 caracteres) y Leaflet
+ * pinta las etiquetas con innerHTML. Pasado crudo, un `<img onerror>` corría en
+ * la consola de cualquiera que abriera la ruta, admins incluidos.
+ */
+describe('RutasView y su editor — el apodo de un nodo se pinta como texto', () => {
+  const MALICIOSO = '<img src=x onerror=alert(1)>';
+  const conApodoMalicioso = () =>
+    ruta({
+      waypoints: [
+        { lat: 1, lon: 1, alt: 40, label: MALICIOSO },
+        { lat: 2, lon: 2, alt: 40 },
+      ],
+    });
+  const etiquetasDeNodos = () =>
+    estadoMapa.puestas.filter((c) => c.clase === 'circleMarker').map((c) => pintarComoLeaflet(c.etiqueta));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    limpiarEstadoMapa();
+  });
+
+  it('en el mapa del recorrido', async () => {
+    rutasMock.mockResolvedValue([conApodoMalicioso()]);
+    render(<RutasView me={ADMIN} />);
+    await screen.findAllByText('Perímetro Norte');
+
+    const [primera, segunda] = etiquetasDeNodos();
+    expect(primera.querySelector('img')).toBeNull();
+    expect(primera.textContent).toBe(`1 · ${MALICIOSO}`);
+    expect(segunda.textContent).toBe('2');
+  });
+
+  it('en el editor', async () => {
+    rutasMock.mockResolvedValue([conApodoMalicioso()]);
+    render(<RutasView me={ADMIN} />);
+    await screen.findAllByText('Perímetro Norte');
+    limpiarEstadoMapa();
+    await userEvent.click(screen.getByRole('button', { name: 'Editar' }));
+    await screen.findByRole('dialog', { name: 'Editar ruta' });
+
+    const etiquetas = etiquetasDeNodos();
+    expect(etiquetas.length).toBeGreaterThanOrEqual(2);
+    for (const e of etiquetas) expect(e.children).toHaveLength(0);
+    expect(etiquetas.map((e) => e.textContent)).toContain(`1 · ${MALICIOSO}`);
   });
 });
 

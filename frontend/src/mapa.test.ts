@@ -8,6 +8,7 @@ import {
   TRAZO,
   aplicarFondo,
   crearFondos,
+  etiquetaDeNodo,
   iconoBase,
   nombreDeFondo,
   vestir,
@@ -88,6 +89,20 @@ describe('mapa: lo que comparten todas las vistas', () => {
 
   it('reusa el mismo ícono en vez de fabricar uno por marcador', () => {
     expect(iconoBase()).toBe(iconoBase());
+  });
+
+  it('la etiqueta de un nodo lleva su número y su apodo, si tiene', () => {
+    expect(etiquetaDeNodo(0)).toBe('1');
+    expect(etiquetaDeNodo(2, '')).toBe('3');
+    expect(etiquetaDeNodo(1, 'Portón')).toBe('2 · Portón');
+  });
+
+  it('un apodo con HTML sale escapado: Leaflet pinta la etiqueta con innerHTML', () => {
+    const malicioso = '<img src=x onerror=alert(1)>';
+    const caja = document.createElement('div');
+    caja.innerHTML = etiquetaDeNodo(0, malicioso);
+    expect(caja.children).toHaveLength(0);
+    expect(caja.textContent).toBe(`1 · ${malicioso}`);
   });
 
   it('vestir no explota con un nodo que Leaflet todavía no creó', () => {

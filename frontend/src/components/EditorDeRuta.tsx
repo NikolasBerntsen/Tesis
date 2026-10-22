@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import L from 'leaflet';
-import { CENTRO_POR_DEFECTO, TRAZO, iconoBase, useFondo, vestirAtribucion } from '../mapa';
+import { esc } from '../html';
+import { CENTRO_POR_DEFECTO, TRAZO, etiquetaDeNodo, iconoBase, useFondo, vestirAtribucion } from '../mapa';
 import type { PatrolRoute, Waypoint } from '../types';
 import ConmutadorDeFondo from './ConmutadorDeFondo';
 import IconoCerrar from './IconoCerrar';
@@ -80,9 +81,11 @@ export default function EditorDeRuta({
     vestirAtribucion(m);
     m.on('click', (e: L.LeafletMouseEvent) => alClic.current(e.latlng.lat, e.latlng.lng));
     // La base va en su propia capa: no se borra con cada redibujo de los nodos.
+    // Su nombre lo escribe un operador de campo y Leaflet pinta la etiqueta con
+    // innerHTML: va escapado (ver html.ts).
     if (base) {
       L.marker([base.lat, base.lon], { icon: iconoBase() })
-        .bindTooltip(base.name, { direction: 'top' })
+        .bindTooltip(esc(base.name), { direction: 'top' })
         .addTo(m);
     }
     capa.current = L.layerGroup().addTo(m);
@@ -122,7 +125,7 @@ export default function EditorDeRuta({
         fillColor: color,
         fillOpacity: 1,
       })
-        .bindTooltip(`${i + 1}${n.label ? ` · ${n.label}` : ''}`, { permanent: true, direction: 'top' })
+        .bindTooltip(etiquetaDeNodo(i, n.label), { permanent: true, direction: 'top' })
         .addTo(grupo);
     });
   }, [nodos, repasando, encendido]);

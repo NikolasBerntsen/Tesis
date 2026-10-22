@@ -450,6 +450,79 @@ describe('DronesMap — drones y bases', () => {
     caja.innerHTML = globo;
     expect(caja.querySelector('img')).toBeNull();
   });
+
+  it('el nombre de la base tampoco se inyecta en su globo', () => {
+    const malicioso = '<img src=x onerror="alert(1)">';
+    render(<DronesMap items={[item({ base: { ...BASE, name: malicioso } })]} />);
+
+    const caja = document.createElement('div');
+    caja.innerHTML = todas('marker')[0].htmlGlobo as string;
+    expect(caja.querySelector('img')).toBeNull();
+    expect(caja.querySelector('h4')!.textContent).toBe(malicioso);
+  });
+
+  /*
+   * El status lo arma el celular y el hub lo reenvía tal cual (sólo revisa la
+   * posición y el gimbal): que el tipo diga `number` no impide que llegue un
+   * texto. La señal se interpolaba cruda en los globos del dron y de su base, y
+   * un `<img onerror>` ahí corría en la consola de quien los abriera.
+   */
+  describe('los números del status que no son números', () => {
+    const MALICIOSO = '<img src=x onerror=alert(1)>' as unknown as number;
+    const globos = () => todas('marker').map((m) => {
+      const caja = document.createElement('div');
+      caja.innerHTML = m.htmlGlobo as string;
+      return caja;
+    });
+    /** Las filas de la ficha del globo, como [rótulo, valor]. */
+    const filas = (caja: HTMLElement) =>
+      Array.from(caja.querySelectorAll('dt')).map((dt) => [dt.textContent, dt.nextElementSibling?.textContent]);
+
+    it('una señal que no es un número no se inyecta: el globo dice "sin datos"', () => {
+      render(<DronesMap items={[item({ status: status({ signalPct: MALICIOSO }) })]} />);
+
+      const [base, dron] = globos();
+      for (const caja of [base, dron]) {
+        expect(caja.querySelector('img')).toBeNull();
+        expect(filas(caja)).toContainEqual(['Señal', 'sin datos']);
+      }
+    });
+
+    it('una batería que no es un número tampoco, y no tira abajo el mapa', () => {
+      // `toFixed` sobre un texto tiraba un TypeError en pleno efecto.
+      render(<DronesMap items={[item({ status: status({ battery: MALICIOSO }) })]} />);
+
+      const [base, dron] = globos();
+      for (const caja of [base, dron]) {
+        expect(caja.querySelector('img')).toBeNull();
+        expect(filas(caja)).toContainEqual(['Batería', 'sin datos']);
+      }
+    });
+
+    it('el nodo del patrullaje con un índice que no es un número muestra la raya', () => {
+      render(
+        <DronesMap items={[item({ status: status({ waypointIndex: MALICIOSO, waypointTotal: 4 }) })]} />,
+      );
+
+      const [base, dron] = globos();
+      for (const caja of [base, dron]) {
+        expect(caja.querySelector('img')).toBeNull();
+        expect(filas(caja)).toContainEqual(['Nodo', '—']);
+      }
+    });
+
+    it('con números de verdad, los datos se ven como siempre', () => {
+      render(
+        <DronesMap items={[item({ status: status({ battery: 73.6, signalPct: 88, waypointIndex: 1, waypointTotal: 4 }) })]} />,
+      );
+
+      expect(filas(globos()[1])).toEqual([
+        ['Batería', '74\u202F%'],
+        ['Señal', '88\u202F%'],
+        ['Nodo', '2 de 4'],
+      ]);
+    });
+  });
 });
 
 describe('DronesMap — nodos de la ruta', () => {
@@ -503,6 +576,18 @@ describe('DronesMap — nodos de la ruta', () => {
     render(<DronesMap items={[]} waypoints={capaDeNodos()} />);
     const etiquetas = todas('circleMarker').map((m) => m.tooltip as string);
     expect(etiquetas[1]).toContain('Cerrito');
+  });
+
+  it('un apodo con HTML adentro queda como texto en la etiqueta del nodo', () => {
+    const malicioso = '<img src=x onerror=alert(1)>';
+    const r = ruta();
+    r.waypoints[1] = { ...r.waypoints[1], label: malicioso };
+    render(<DronesMap items={[]} waypoints={capaDeNodos({ route: r })} />);
+
+    const caja = document.createElement('div');
+    caja.innerHTML = todas('circleMarker')[1].tooltip as string;
+    expect(caja.children).toHaveLength(0);
+    expect(caja.textContent).toBe(malicioso);
   });
 
   describe('formulario de apodo del globo', () => {
