@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getToken } from './api';
+import { clearSession, getToken } from './api';
+
+/**
+ * Código con que el backend cierra el socket cuando la sesión terminó: el token
+ * venció, o es de antes de que le cambiaran el rol a la cuenta. Reconectar con
+ * ese mismo token rebotaría cada 3 s para siempre.
+ */
+export const CIERRE_SESION_TERMINADA = 4401;
 
 /**
  * El canal con el Comando Central visto desde la consola: si está vivo y cómo
@@ -42,9 +49,19 @@ export function useWebSocket(onMessage: (msg: any) => void): CanalWebSocket {
           /* mensaje no-JSON: ignorar */
         }
       };
-      ws.onclose = () => {
+      ws.onclose = (ev) => {
         setConectado(false);
-        if (!closed) retry = setTimeout(connect, 3000);
+        if (closed) return;
+        // Sin esto la consola quedaba abierta y muerta, mostrando el rol viejo,
+        // hasta que algún pedido a la API se topara con el 401. Se hace lo mismo
+        // que hace `api` con ese 401: borrar la sesión y recargar, que lleva al
+        // inicio de sesión.
+        if (ev.code === CIERRE_SESION_TERMINADA) {
+          clearSession();
+          window.location.reload();
+          return;
+        }
+        retry = setTimeout(connect, 3000);
       };
     };
 

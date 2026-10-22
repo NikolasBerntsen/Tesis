@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs';
 import { Router, type Response } from 'express';
-import { ROLE_RANK, requireAuth, requireRoles, signDroneToken, type AuthedRequest } from '../auth';
+import { ROLE_RANK, SESION_DE_OTRO_ROL, requireAuth, requireRoles, signDroneToken, type AuthedRequest } from '../auth';
 import {
   asignarRutas, contarDronesEnBase, createBase, createDrone, createLog, createRoute, createUser, generarContrasenia, getBase, restoreRoute, rutasDeBase, softDeleteRoute, updateRoute, listBases, restoreBase, softDeleteBase, updateBase, decideAlert, getAlert, getDrone, getDroneIdentity, getRoute, getRoutes,
   getUser, listAlerts, listEvents, listLogs, listUsers, normalizarDni, restoreDrone, restoreUser, setWaypointLabel,
@@ -1010,12 +1010,13 @@ apiRouter.patch('/users/:username', requireAuth('supervisor'), (req: AuthedReque
   // cortan el control manual en el acto.
   const motivo = motivoParaSoltar(patch);
   if (motivo) releaseAllControlledBy(username, req.user!.sub, motivo);
-  // La desactivación y el cambio de rol además le cierran la consola: el token
-  // que tiene en el navegador sigue siendo válido, así que el corte va
-  // explícito. Con el rol nuevo, lo que puede ver y hacer cambia entero, y el
-  // que lo tenía abierto tiene que volver a entrar para que la consola lo sepa.
+  // La desactivación y el cambio de rol además le cierran la consola: el
+  // socket abierto no vuelve a mirar la base, así que el corte va explícito.
+  // Con el rol nuevo, lo que puede ver y hacer cambia entero: el token de antes
+  // deja de valer (ver esDeOtroRol en auth.ts), la reconexión de la consola
+  // rebota y tiene que volver a iniciar sesión para que la consola lo sepa.
   if (patch.active === false) kickUser(username, 'Cuenta desactivada');
-  else if (patch.role) kickUser(username, 'Cambió tu rol: volvé a iniciar sesión');
+  else if (patch.role) kickUser(username, SESION_DE_OTRO_ROL);
   const cambios = Object.keys(patch);
   const ev = createLog(
     'usuarios',

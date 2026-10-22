@@ -2,8 +2,10 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import bcrypt from 'bcryptjs';
 import { db } from '../../src/db';
 import {
-  crearUsuario, seed, startServer, login, api, connectWs, limpiarBase, CREDS, DRON, type TestServer, type WsClient,
+  crearUsuario, seed, startServer, login, api, connectWs, limpiarBase, wsCloseCode, CREDS, DRON, type TestServer, type WsClient,
 } from '../helpers';
+import { SESION_DE_OTRO_ROL, ttlEnSegundos } from '../../src/auth';
+import { config } from '../../src/config';
 
 // ABM de usuarios: alta/baja lógica por admin, alcance del supervisor (solo
 // canControl de operadores), auto-protección y el registro con antes/después.
@@ -550,7 +552,7 @@ describe('integración — cambio de rol', () => {
     const r = await editar('ascenso', { role: 'supervisor' });
     expect(r.status).toBe(200);
     expect(r.body).toMatchObject({ role: 'supervisor', canControl: true });
-    expect(await cierre).toEqual({ code: 4403, motivo: 'Cambió tu rol: volvé a iniciar sesión' });
+    expect(await cierre).toEqual({ code: 4403, motivo: SESION_DE_OTRO_ROL });
 
     const logs = (await api(srv.base, '/api/logs?category=usuarios&pageSize=100', adm)).body.items;
     const upd = JSON.parse(logs.find((l: any) => l.type === 'USER_UPDATED').meta);
@@ -574,6 +576,47 @@ describe('integración — cambio de rol', () => {
     const logs = (await api(srv.base, '/api/logs?category=drone&pageSize=100', adm)).body.items;
     const soltado = logs.find((l: any) => l.type === 'CONTROL_RELEASED');
     expect(JSON.parse(soltado.meta).detalle.motivo).toBe('pasó a ser operador de campo');
+  });
+
+  it('la sesión de antes del cambio de rol deja de valer: hay que volver a iniciar sesión', async () => {
+    // Cerrarle el socket no alcanzaba: la consola se reconecta sola a los 3 s
+    // con el MISMO token, y la cuenta sigue activa. Lo que obliga a volver a
+    // entrar es que ese token ya no sirva, ni en el canal en vivo ni en la API.
+    const creada = await crearUsuario(srv.base, adm, { username: 'rotado', role: 'operator', canControl: true });
+    const viejo = (await login(srv.base, 'rotado', creada.password))!;
+    expect((await api(srv.base, '/api/me', viejo)).body.role).toBe('operator');
+
+    expect((await editar('rotado', { role: 'supervisor' })).status).toBe(200);
+
+    expect(await wsCloseCode(srv.wsUrl, viejo)).toBe(4401);
+    const me = await api(srv.base, '/api/me', viejo);
+    // El 401 es lo que la consola entiende como "volvé a iniciar sesión".
+    expect(me.status).toBe(401);
+    expect(me.body.error).toBe(SESION_DE_OTRO_ROL);
+
+    // Con la sesión nueva entra, y ya con el rol nuevo.
+    const nuevo = (await login(srv.base, 'rotado', creada.password))!;
+    expect((await api(srv.base, '/api/me', nuevo)).body).toMatchObject({ username: 'rotado', role: 'supervisor' });
+    const consola = await connectWs(srv.wsUrl, nuevo);
+    abiertos.push(consola);
+    expect(consola.ws.readyState).toBe(consola.ws.OPEN);
+  });
+
+  it('el operador que pasa a ser de campo vuelve a entrar con el token corto del celular', async () => {
+    const creada = await crearUsuario(srv.base, adm, { username: 'acampo', role: 'operator', canControl: true });
+    const viejo = (await login(srv.base, 'acampo', creada.password))!;
+    expect((await editar('acampo', { role: 'field_operator' })).status).toBe(200);
+
+    // El token de la consola duraba 12 h: con el rol de campo ya no le sirve.
+    expect((await api(srv.base, '/api/me', viejo)).status).toBe(401);
+    const r = await fetch(`${srv.base}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'acampo', password: creada.password }),
+    });
+    const sesion = await r.json();
+    expect(sesion.user.role).toBe('field_operator');
+    expect(sesion.expiresIn).toBe(ttlEnSegundos(config.tokenTtlField));
   });
 
   it('el canControl que viene con el rol se juzga contra el rol nuevo', async () => {
@@ -600,6 +643,8 @@ describe('integración — cambio de rol', () => {
     const logs = (await api(srv.base, '/api/logs?category=usuarios&pageSize=100', adm)).body.items;
     expect(logs.find((l: any) => l.type === 'USER_UPDATED').message).toMatch(/\(fullName\)$/);
     expect(c.ws.readyState).toBe(c.ws.OPEN);
+    // y su sesión sigue valiendo: el rol del token es el que la cuenta tiene
+    expect((await api(srv.base, '/api/me', tok)).status).toBe(200);
   });
 
   it('desactivar y cambiar el rol a la vez cierra la consola como desactivación', async () => {

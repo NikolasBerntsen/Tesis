@@ -298,6 +298,11 @@ export function DialogoEditarUsuario({
   const [guardando, setGuardando] = useState(false);
 
   const esAdminElEditado = usuario.role === 'admin';
+  // Igual que con el DNI: una cuenta vieja sin nombre puede seguir sin él, y
+  // exigirlo trabaría cualquier otro cambio (cargarle el DNI, por ejemplo) hasta
+  // inventarle uno. El nombre que ya está, o el que se empieza a tipear, sí se
+  // valida: vaciarlo o dejarlo a medias lo rechazaría el backend igual.
+  const nombreObligatorio = usuario.fullName !== '' || ficha.fullName !== '';
   const rol: RolConsola = rolNuevo ?? usuario.role;
   const esOperadorDeCampo = rol === 'field_operator';
   const opcionesDeRol: readonly RolConsola[] = esAdminElEditado ? ['admin'] : ROLES_ASIGNABLES;
@@ -377,7 +382,7 @@ export function DialogoEditarUsuario({
                 onChange={(e) => setFicha({ ...ficha, fullName: e.target.value })}
                 minLength={3}
                 maxLength={60}
-                required
+                required={nombreObligatorio}
                 disabled={!esAdmin}
               />
             </label>

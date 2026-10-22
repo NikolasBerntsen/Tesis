@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
-import { crearUsuario, seed, startServer, login, api, connectWs, tokenDeDron, CREDS, DRON, type TestServer, type WsClient } from '../helpers';
+import { crearUsuario, seed, startServer, login, api, connectWs, tokenDeDron, tokenHumano, CREDS, DRON, type TestServer, type WsClient } from '../helpers';
 import { db } from '../../src/db';
+import type { Role } from '../../src/store';
 
 // Control manual exclusivo: toma, movimiento, liberación (titular y forzada por
 // supervisor), y cómo la suspensión/desactivación cortan el control en el acto.
@@ -341,8 +342,12 @@ describe('integración — control manual exclusivo', () => {
     alfa.got.length = 0;
 
     db.prepare('UPDATE users SET role = ? WHERE username = ?').run('operador_viejo', 'rolviejo');
+    // Con el token de antes el pedido rebotaría por sesión vieja (otro rol, 401)
+    // sin llegar al rango. El token con el rol raro es el que tendría quien
+    // inicie sesión después de que una migración dejó la fila así.
+    const tokViejo = tokenHumano('rolviejo', 'operador_viejo' as Role);
     try {
-      const mover = await api(srv.base, `/api/drones/${DRON.alfa}/manual_move`, tok, {
+      const mover = await api(srv.base, `/api/drones/${DRON.alfa}/manual_move`, tokViejo, {
         method: 'POST',
         body: JSON.stringify({ bearing: 90, distanceM: 25 }),
       });
@@ -353,9 +358,9 @@ describe('integración — control manual exclusivo', () => {
       expect(alfa.got.filter((m: any) => m.type === 'manual_move')).toHaveLength(0);
 
       // Tampoco puede tomar el lock de otro dron con ese rol.
-      expect((await api(srv.base, `/api/drones/${DRON.charlie}/control`, tok, { method: 'POST' })).status).toBe(403);
+      expect((await api(srv.base, `/api/drones/${DRON.charlie}/control`, tokViejo, { method: 'POST' })).status).toBe(403);
       // Ni leer el tablero, que también pide operator o más.
-      expect((await api(srv.base, '/api/events', tok)).status).toBe(403);
+      expect((await api(srv.base, '/api/events', tokViejo)).status).toBe(403);
     } finally {
       // El rol se devuelve a mano: la fila sobrevive al test y los que siguen no
       // tienen por qué heredar una cuenta con el rol roto.

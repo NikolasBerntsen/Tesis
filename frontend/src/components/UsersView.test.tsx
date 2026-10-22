@@ -669,6 +669,49 @@ describe('UsersView', () => {
       await waitFor(() => expect(cuerpoDe('/users/antiguo1', 'PATCH')).toEqual({ dni: '25777888' }));
     });
 
+    it('a una cuenta vieja sin nombre se le carga el DNI sin tener que inventarle un nombre', async () => {
+      // Las cuentas anteriores al nombre completo lo tienen vacío (la tabla
+      // muestra una raya). Exigirlo trababa cualquier otro cambio de la ficha.
+      const sinNombre = makeUser({ username: 'viejo2', fullName: '', dni: '' });
+      const dialogo = await abrirEdicion(sinNombre);
+      const d = within(dialogo);
+      expect(d.getByLabelText('Nombre y apellido')).toHaveValue('');
+      expect(d.getByLabelText('Nombre y apellido')).not.toBeRequired();
+
+      await userEvent.type(d.getByLabelText('DNI'), '30123456');
+      await userEvent.click(d.getByRole('button', { name: 'Guardar' }));
+      await waitFor(() => expect(cuerpoDe('/users/viejo2', 'PATCH')).toEqual({ dni: '30123456' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    });
+
+    it('el nombre que se le empieza a tipear a esa cuenta sí se exige, y se manda', async () => {
+      const sinNombre = makeUser({ username: 'viejo3', fullName: '', dni: '' });
+      const dialogo = await abrirEdicion(sinNombre);
+      const nombre = within(dialogo).getByLabelText('Nombre y apellido');
+
+      await userEvent.type(nombre, 'Vera');
+      expect(nombre).toBeRequired();
+      // borrarlo de nuevo la deja como estaba: sin nombre y sin exigírselo
+      await userEvent.clear(nombre);
+      expect(nombre).not.toBeRequired();
+
+      await userEvent.type(nombre, 'Vera Vieja');
+      await userEvent.click(within(dialogo).getByRole('button', { name: 'Guardar' }));
+      await waitFor(() => expect(cuerpoDe('/users/viejo3', 'PATCH')).toEqual({ fullName: 'Vera Vieja' }));
+    });
+
+    it('a una cuenta que ya tiene nombre no se le puede vaciar', async () => {
+      const dialogo = await abrirEdicion(OPER1);
+      const nombre = within(dialogo).getByLabelText('Nombre y apellido');
+      expect(nombre).toBeRequired();
+
+      await userEvent.clear(nombre);
+      expect(nombre).toBeRequired();
+      await userEvent.click(within(dialogo).getByRole('button', { name: 'Guardar' }));
+      expect(apiMock).not.toHaveBeenCalled();
+      expect(screen.getByRole('dialog', { name: 'Editar a oper1' })).toBeInTheDocument();
+    });
+
     it('el rechazo del backend queda adentro del diálogo, que sigue abierto', async () => {
       const espera = pendiente<unknown>();
       apiMock.mockReturnValue(espera.promesa as Promise<never>);
