@@ -10,7 +10,10 @@ import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
+import com.google.android.gms.location.Priority
 import com.tesis.dronepatrol.drone.DronEnCurso
 import com.tesis.dronepatrol.drone.DroneController
 import com.tesis.dronepatrol.drone.Geo
@@ -66,6 +69,7 @@ class ConexionDronActivityTest {
     }
 
     private val dron = DronEspia()
+    private val gps = GpsDelTelefonoFalso()
     private var simulador: SimulatedDroneController? = null
 
     @After
@@ -96,8 +100,13 @@ class ConexionDronActivityTest {
         if (conUbicacion != null) intent.putExtra(ConexionDronActivity.EXTRA_CON_UBICACION, conUbicacion)
         if (baseLat != null) intent.putExtra(MainActivity.EXTRA_BASE_LAT, baseLat)
         if (baseLon != null) intent.putExtra(MainActivity.EXTRA_BASE_LON, baseLon)
-        return Robolectric.buildActivity(ConexionDronActivity::class.java, intent).setup()
+        val pantalla = Robolectric.buildActivity(ConexionDronActivity::class.java, intent)
+        // Antes de onCreate, que es donde la pantalla empieza a seguir al teléfono
+        gps.instalarEn(pantalla.get())
+        return pantalla.setup()
     }
+
+    private fun permitir(vararg permisos: String) = shadowOf(RuntimeEnvironment.getApplication()).grantPermissions(*permisos)
 
     private fun abrir(): ConexionDronActivity = construir().get()
 
@@ -116,15 +125,6 @@ class ConexionDronActivityTest {
         findViewById<View>(fila).findViewById<View>(R.id.punto).backgroundTintList?.defaultColor
 
     private fun ConexionDronActivity.color(id: Int): Int = ContextCompat.getColor(this, id)
-
-    /** El GPS del teléfono, como lo entregaría el proveedor de ubicación de Google. */
-    private fun ConexionDronActivity.telefonoEn(lat: Double, lon: Double) {
-        val donde = Location("prueba").apply {
-            latitude = lat
-            longitude = lon
-        }
-        alCambiarUbicacion.onLocationResult(LocationResult.create(listOf(donde)))
-    }
 
     @Test
     fun sinElDronConectadoNoSePuedeDesplegar() {
@@ -401,19 +401,16 @@ class ConexionDronActivityTest {
     /** Teléfono y dron a unos pasos: la distancia se muestra normal. */
     @Test
     fun conElDronCercaMuestraLaDistanciaSinAlarma() {
-        shadowOf(RuntimeEnvironment.getApplication()).grantPermissions(Manifest.permission.ACCESS_FINE_LOCATION)
-        val pantalla = construir()
-        val actividad = pantalla.get()
+        permitir(Manifest.permission.ACCESS_FINE_LOCATION)
+        val actividad = abrir()
         ponerEstado(LISTO)
         runBlocking { dron.emitirTelemetria(lat = BASE_LAT, lon = BASE_LON) }
         shadowOf(getMainLooper()).idle()
 
-        actividad.telefonoEn(BASE_LAT + 30.0 / Geo.METROS_POR_GRADO_LAT, BASE_LON)
+        gps.moverA(BASE_LAT + 30.0 / Geo.METROS_POR_GRADO_LAT, BASE_LON)
 
         assertEquals("30 m", actividad.texto(R.id.txtDistancia))
         assertEquals(actividad.color(R.color.texto), actividad.findViewById<TextView>(R.id.txtDistancia).currentTextColor)
-        // Al cerrarse deja de seguir al teléfono sin romper
-        pantalla.pause().stop().destroy()
     }
 
     /**
@@ -422,12 +419,13 @@ class ConexionDronActivityTest {
      */
     @Test
     fun conElDronLejosLaDistanciaQuedaEnAlerta() {
+        permitir(Manifest.permission.ACCESS_FINE_LOCATION)
         val actividad = abrir()
         ponerEstado(LISTO)
         runBlocking { dron.emitirTelemetria(lat = BASE_LAT, lon = BASE_LON) }
         shadowOf(getMainLooper()).idle()
 
-        actividad.telefonoEn(BASE_LAT + 200.0 / Geo.METROS_POR_GRADO_LAT, BASE_LON)
+        gps.moverA(BASE_LAT + 200.0 / Geo.METROS_POR_GRADO_LAT, BASE_LON)
 
         assertEquals("200 m", actividad.texto(R.id.txtDistancia))
         assertEquals(actividad.color(R.color.estado_alerta), actividad.findViewById<TextView>(R.id.txtDistancia).currentTextColor)
@@ -436,12 +434,13 @@ class ConexionDronActivityTest {
     /** En interior el dron no tiene posición: una distancia calculada con NaN sería basura. */
     @Test
     fun sinGpsEnElDronNoHayDistancia() {
+        permitir(Manifest.permission.ACCESS_FINE_LOCATION)
         val actividad = abrir()
         ponerEstado(LISTO)
         runBlocking { dron.emitirTelemetria(lat = Double.NaN, lon = Double.NaN) }
         shadowOf(getMainLooper()).idle()
 
-        actividad.telefonoEn(BASE_LAT, BASE_LON)
+        gps.moverA(BASE_LAT, BASE_LON)
 
         assertEquals(actividad.getString(R.string.conexion_distancia_sin_dato), actividad.texto(R.id.txtDistancia))
     }
@@ -449,16 +448,104 @@ class ConexionDronActivityTest {
     /** La última posición que dejó el dron no vale si se cortó el enlace. */
     @Test
     fun alPerderElEnlaceLaDistanciaDejaDeMostrarse() {
+        permitir(Manifest.permission.ACCESS_FINE_LOCATION)
         val actividad = abrir()
         ponerEstado(LISTO)
         runBlocking { dron.emitirTelemetria(lat = BASE_LAT, lon = BASE_LON) }
         shadowOf(getMainLooper()).idle()
-        actividad.telefonoEn(BASE_LAT + 30.0 / Geo.METROS_POR_GRADO_LAT, BASE_LON)
+        gps.moverA(BASE_LAT + 30.0 / Geo.METROS_POR_GRADO_LAT, BASE_LON)
         assertEquals("30 m", actividad.texto(R.id.txtDistancia))
 
         ponerEstado(SIN_ENLACE)
 
         assertEquals(actividad.getString(R.string.conexion_distancia_sin_dato), actividad.texto(R.id.txtDistancia))
+    }
+
+    /**
+     * Con permiso, la pantalla sigue al teléfono por GPS (alta precisión) y cada
+     * 2 s: el aviso salta a los 100 m y una ubicación por antenas puede errar
+     * por más que eso, y la distancia tiene que acompañar al operador mientras
+     * camina hacia el dron.
+     */
+    @Test
+    fun conPermisoSigueAlTelefonoPorGpsCadaDosSegundos() {
+        permitir(Manifest.permission.ACCESS_FINE_LOCATION)
+        abrir()
+
+        val pedido = gps.pedidos.single()
+        assertEquals(Priority.PRIORITY_HIGH_ACCURACY, pedido.priority)
+        assertEquals(2_000L, pedido.intervalMillis)
+        assertEquals(1, gps.suscriptos.size)
+    }
+
+    /** Sin permiso de ubicación no se le pide nada al proveedor: la distancia queda sin dato. */
+    @Test
+    fun sinPermisoDeUbicacionNoSigueAlTelefono() {
+        val actividad = abrir()
+        ponerEstado(LISTO)
+        runBlocking { dron.emitirTelemetria(lat = BASE_LAT, lon = BASE_LON) }
+        shadowOf(getMainLooper()).idle()
+
+        assertTrue(gps.pedidos.isEmpty())
+        assertTrue(gps.suscriptos.isEmpty())
+        assertEquals(actividad.getString(R.string.conexion_distancia_sin_dato), actividad.texto(R.id.txtDistancia))
+    }
+
+    /**
+     * Desde Android 12 el operador puede conceder solo la ubicación aproximada:
+     * igual se sigue al teléfono (el sistema entrega la que puede) en lugar de
+     * quedarse sin distancia.
+     */
+    @Test
+    fun conSoloLaUbicacionAproximadaIgualSigueAlTelefono() {
+        permitir(Manifest.permission.ACCESS_COARSE_LOCATION)
+        val actividad = abrir()
+        ponerEstado(LISTO)
+        runBlocking { dron.emitirTelemetria(lat = BASE_LAT, lon = BASE_LON) }
+        shadowOf(getMainLooper()).idle()
+
+        gps.moverA(BASE_LAT + 30.0 / Geo.METROS_POR_GRADO_LAT, BASE_LON)
+
+        assertEquals(1, gps.pedidos.size)
+        assertEquals("30 m", actividad.texto(R.id.txtDistancia))
+    }
+
+    /**
+     * Al cerrarse suelta la ubicación que pidió: si no, el GPS del teléfono
+     * seguiría encendido, gastando batería en el campo y avisándole a una
+     * pantalla que ya no existe.
+     */
+    @Test
+    fun alCerrarseDejaDeSeguirAlTelefono() {
+        permitir(Manifest.permission.ACCESS_FINE_LOCATION)
+        val pantalla = construir()
+        assertEquals(1, gps.suscriptos.size)
+
+        pantalla.pause().stop().destroy()
+
+        assertTrue("la pantalla cerrada sigue suscripta a la ubicación", gps.suscriptos.isEmpty())
+    }
+
+    /**
+     * La ubicación del teléfono es una ayuda, no un requisito para volar: si el
+     * proveedor falla al pedirla o al soltarla, la pantalla se usa igual —solo
+     * que sin distancia— y cerrarla no la tira abajo.
+     */
+    @Test
+    fun siElProveedorDeUbicacionFallaLaPantallaSigueAndandoSinDistancia() {
+        permitir(Manifest.permission.ACCESS_FINE_LOCATION)
+        gps.roto = true
+        val pantalla = construir()
+        val actividad = pantalla.get()
+        ponerEstado(LISTO)
+        runBlocking { dron.emitirTelemetria(lat = BASE_LAT, lon = BASE_LON) }
+        shadowOf(getMainLooper()).idle()
+
+        assertEquals(actividad.getString(R.string.conexion_distancia_sin_dato), actividad.texto(R.id.txtDistancia))
+        assertTrue(actividad.findViewById<Button>(R.id.btnDesplegar).isEnabled)
+
+        pantalla.pause().stop().destroy()
+        assertTrue(actividad.isDestroyed)
     }
 
     /** "Atrás" es lo mismo que "Volver": el controlador no puede quedar encendido. */
@@ -511,5 +598,42 @@ class ConexionDronActivityTest {
         assertEquals(BASE_LON, donde.lon, 1e-9)
         assertTrue(actividad.findViewById<Button>(R.id.btnDesplegar).isEnabled)
         assertEquals(View.GONE, actividad.findViewById<View>(R.id.txtAvisoModelo).visibility)
+    }
+}
+
+/**
+ * El proveedor de ubicación del teléfono, del lado de las pruebas. Anota lo que
+ * la pantalla le pide y, como el de Google, le entrega posiciones solo a quien
+ * sigue suscripto: la distancia se prueba pasando por la suscripción de verdad,
+ * así que si la pantalla dejara de pedir la ubicación —o de soltarla— las
+ * pruebas lo ven.
+ */
+private class GpsDelTelefonoFalso {
+    val pedidos = mutableListOf<LocationRequest>()
+    val suscriptos = mutableListOf<LocationCallback>()
+
+    /** Un proveedor que falla tanto al pedir como al soltar la ubicación. */
+    var roto = false
+
+    fun instalarEn(actividad: ConexionDronActivity) {
+        actividad.pedirUbicacion = { pedido, alCambiar ->
+            check(!roto) { "el proveedor de ubicación falló" }
+            pedidos += pedido
+            suscriptos += alCambiar
+        }
+        actividad.soltarUbicacion = { alCambiar ->
+            check(!roto) { "el proveedor de ubicación falló" }
+            suscriptos.remove(alCambiar)
+        }
+    }
+
+    /** El teléfono está en otro lado: se les avisa a los suscriptos, como lo haría Google. */
+    fun moverA(lat: Double, lon: Double) {
+        assertTrue("la pantalla no está siguiendo al teléfono", suscriptos.isNotEmpty())
+        val donde = Location("prueba").apply {
+            latitude = lat
+            longitude = lon
+        }
+        suscriptos.toList().forEach { it.onLocationResult(LocationResult.create(listOf(donde))) }
     }
 }
