@@ -176,11 +176,11 @@ class PatrolManager(
         )
 
         /**
-         * En LANDED (aterrizó por batería baja), una lectura en el suelo desde
-         * acá es una batería cambiada: una nueva marca casi 100 %, y la que se
-         * descargó no se recupera sola del 25 % al 50 % por estar quieta. En el
-         * dron real es la única forma de enterarse del cambio: el botón
-         * "Recargar" es del simulador.
+         * Con la batería por cambiar (aterrizó por batería baja), una lectura
+         * en el suelo desde acá es una batería cambiada: una nueva marca casi
+         * 100 %, y la que se descargó no se recupera sola del 25 % al 50 % por
+         * estar quieta. En el dron real es la única forma de enterarse del
+         * cambio: el botón "Recargar" es del simulador.
          */
         const val BATERIA_CAMBIADA_PCT = 50.0
 
@@ -369,6 +369,31 @@ class PatrolManager(
     private var despegueEnElLugar = false
 
     /**
+     * El dron aterrizó con la batería baja y todavía no se la cambiaron: hasta
+     * entonces no despega por ningún camino (la app, la consola, una ruta). Va
+     * aparte del estado a propósito. LANDED se perdía con solo tomar el
+     * control —pasa a MANUAL— y un aterrizaje por batería con el control
+     * tomado ni siquiera pasa por LANDED; atado al estado, una lectura que
+     * rebotó por encima del 25 % volvía a dejar despegar la batería
+     * descargada, y soltar el control en el suelo la daba por cambiada. Lo
+     * baja la batería nueva (ver verSiSeCambioLaBateria()) o el "Recargar" del
+     * simulador (onBatteryRecharged()).
+     */
+    @Volatile
+    private var bateriaPorCambiar = false
+
+    /**
+     * Hay un patrullaje en curso: arrancó (o se retomó) una ruta y el dron
+     * todavía no volvió a reposo. `route` no alcanza para saberlo: queda
+     * cargada después de que el patrullaje terminó (para el status), y al
+     * volver la señal retomarla mandaba al dron a volar una ruta vieja que
+     * nadie le pidió en ese vuelo —el de un "Despegar aquí", por ejemplo— (ver
+     * alRecuperarLaSenial()).
+     */
+    @Volatile
+    private var patrullaEnCurso = false
+
+    /**
      * Momento del último `manual_stick`; 0 = ninguno desde que se tomó el
      * control. Lo escribe el hilo del WebSocket y lo lee el watchdog del mando,
      * que corre en otra corrutina: de ahí el volátil. Ojo: el volátil solo evita
@@ -554,6 +579,7 @@ class PatrolManager(
         if (!puedeArrancarUnaRuta()) return
         terminarSeguimiento("empezó otro patrullaje")
         this.route = route
+        patrullaEnCurso = true
         lastReachedWaypoint = 0
         proximoWaypoint = 0
         resumeWaypoint = 0
@@ -613,13 +639,7 @@ class PatrolManager(
             report("DRONE_PROBLEM", "No se puede despegar: ${dron.detalle.ifBlank { "sin enlace con la aeronave" }}")
             return
         }
-        // Aterrizó por batería baja: hasta que la cambien no se vuela, aunque
-        // la lectura haya rebotado por encima del umbral. Con la batería nueva
-        // el estado sale solo de LANDED (ver verSiSeCambioLaBateria()).
-        if (_state.value == PatrolState.LANDED) {
-            report("DRONE_PROBLEM", "No se despega: el dron aterrizó con la batería baja y hay que cambiarla")
-            return
-        }
+        if (laBateriaSiguePorCambiar()) return
         bateriaParaDespegar()?.let { pct ->
             report("DRONE_PROBLEM", "No se despega con la batería al ${pct.toInt()}%: hace falta más del ${LOW_BATTERY_PCT.toInt()}%")
             return
@@ -668,6 +688,7 @@ class PatrolManager(
         val desde = fromIndex.coerceIn(0, r.waypoints.size - 1)
         terminarSeguimiento("se ordenó patrullar otra ruta")
         route = r
+        patrullaEnCurso = true
         lastReachedWaypoint = desde
         proximoWaypoint = desde
         resumeWaypoint = desde
@@ -836,8 +857,19 @@ class PatrolManager(
                 saltoManualEnCurso = false
             }
         }
+        // Volver a reposo termina el patrullaje: la ruta sigue cargada, pero ya
+        // no es una que el dron esté volando (ver [patrullaEnCurso]).
+        if (nuevo == PatrolState.IDLE || nuevo == PatrolState.LANDED) patrullaEnCurso = false
         if (frenar) controller.hold()
     }
+
+    /**
+     * Cómo queda el dron al tocar tierra sin el control tomado, cuando no venía
+     * volviendo por batería baja: en reposo, salvo que la batería siga por
+     * cambiar —lo despegaron con las palancas sin cambiarla—, que entonces la
+     * sigue esperando.
+     */
+    private fun enReposo(): PatrolState = if (bateriaPorCambiar) PatrolState.LANDED else PatrolState.IDLE
 
     /**
      * Watchdog del mando manual. El dron sostiene la última velocidad que le
@@ -912,11 +944,14 @@ class PatrolManager(
         // ya quedó soltado ahí y hay otra orden en curso que no se pisa.
         if (_state.value != PatrolState.MANUAL) return
         // En el suelo (aterrizó con el control tomado) no hay órbita posible.
-        // Con la batería baja queda en LANDED, como si hubiera aterrizado sin
-        // el control tomado: hay que cambiarla antes de volver a volar.
+        // Con la batería baja o por cambiar queda en LANDED, como si hubiera
+        // aterrizado sin el control tomado: hay que cambiarla antes de volver a
+        // volar. Mirar solo la lectura daba por cambiada una batería que rebotó
+        // por encima del 25 %.
         if (!controller.estado.value.enVuelo) {
             terminarSeguimiento("el dron está en el suelo")
-            pasarA(if (bateriaParaDespegar() != null) PatrolState.LANDED else PatrolState.IDLE)
+            if (bateriaParaDespegar() != null) bateriaPorCambiar = true
+            pasarA(enReposo())
             return
         }
         val s = seguimiento
@@ -953,6 +988,9 @@ class PatrolManager(
             report("DRONE_PROBLEM", "No se puede despegar: ${dron.detalle.ifBlank { "sin enlace con la aeronave" }}")
             return
         }
+        // Tomar el control de un dron en LANDED lo pasa a MANUAL: la batería
+        // por cambiar se mira aparte, o el "Despegar" de la consola la volaba.
+        if (laBateriaSiguePorCambiar()) return
         bateriaParaDespegar()?.let { pct ->
             report("DRONE_PROBLEM", "No se despega con la batería al ${pct.toInt()}%: hace falta más del ${LOW_BATTERY_PCT.toInt()}%")
             return
@@ -1012,16 +1050,13 @@ class PatrolManager(
      * DroneController.startRoute), y eso pide un dron en condiciones: sin GPS
      * o sin punto de retorno es un dron que no sabe volver, y con la batería
      * en el umbral el regreso a base salta apenas despega; después de aterrizar
-     * por batería baja (LANDED), hasta que la cambien. En el aire no hay nada
-     * que revisar. Si no se puede, avisa por qué y devuelve false.
+     * por batería baja, hasta que la cambien. En el aire no hay nada que
+     * revisar. Si no se puede, avisa por qué y devuelve false.
      */
     private fun puedeArrancarUnaRuta(): Boolean {
         val dron = controller.estado.value
         if (dron.enVuelo) return true
-        if (_state.value == PatrolState.LANDED) {
-            report("DRONE_PROBLEM", "No se despega: el dron aterrizó con la batería baja y hay que cambiarla")
-            return false
-        }
+        if (laBateriaSiguePorCambiar()) return false
         if (!dron.listoParaDespegar) {
             report("DRONE_PROBLEM", "No se puede despegar: ${dron.detalle.ifBlank { "el dron no está listo" }}")
             return false
@@ -1051,6 +1086,17 @@ class PatrolManager(
      */
     private fun bateriaParaDespegar(): Double? =
         lastTelemetry?.batteryPct?.takeIf { it <= LOW_BATTERY_PCT }
+
+    /**
+     * Si la batería sigue por cambiar (ver [bateriaPorCambiar]) lo avisa y
+     * devuelve true: así no sale ningún despegue, aunque la lectura haya
+     * rebotado por encima del umbral.
+     */
+    private fun laBateriaSiguePorCambiar(): Boolean {
+        if (!bateriaPorCambiar) return false
+        report("DRONE_PROBLEM", "No se despega: el dron aterrizó con la batería baja y hay que cambiarla")
+        return true
+    }
 
     private suspend fun signalWatchdog() {
         while (true) {
@@ -1092,15 +1138,18 @@ class PatrolManager(
     }
 
     /**
-     * En LANDED el dron espera una batería nueva. En el dron real nadie aprieta
-     * "Recargar": se la cambia, se lo prende y la telemetría vuelve con la carga
-     * nueva. Con esa lectura, en el suelo, queda listo para volar.
+     * Con la batería por cambiar el dron espera una nueva. En el dron real
+     * nadie aprieta "Recargar": se la cambia, se lo prende y la telemetría
+     * vuelve con la carga nueva. Con esa lectura, en el suelo, queda listo para
+     * volar. Vale también con el control tomado (MANUAL en el suelo): el
+     * estado no cambia, sigue siendo del operador, pero ya puede despegar.
      */
     private fun verSiSeCambioLaBateria(t: Telemetry) {
-        if (_state.value != PatrolState.LANDED || controller.estado.value.enVuelo) return
-        // Sin dato de batería (NaN) no hay cambio que confirmar: sigue en LANDED
+        if (!bateriaPorCambiar || controller.estado.value.enVuelo) return
+        // Sin dato de batería (NaN) no hay cambio que confirmar: sigue por cambiar
         if (t.batteryPct.isNaN() || t.batteryPct < BATERIA_CAMBIADA_PCT) return
-        pasarA(PatrolState.IDLE)
+        bateriaPorCambiar = false
+        if (_state.value == PatrolState.LANDED) pasarA(PatrolState.IDLE)
         report("BATTERY_RECHARGED", "Batería al ${t.batteryPct.toInt()}%: se cambió la batería y el dron queda listo para volar")
     }
 
@@ -1111,6 +1160,13 @@ class PatrolManager(
      * —el caso normal de "lo quiero volar a mano", que se toma desde IDLE—,
      * [resumePatrol] se iba en el primer renglón y el estado quedaba clavado en
      * RETURNING_HOME_SIGNAL para siempre, sin un solo camino de vuelta.
+     *
+     * La ruta se retoma solo si había un patrullaje en curso
+     * ([patrullaEnCurso]), no con que haya una cargada: después de un
+     * patrullaje que terminó la ruta queda, y la señal también se pierde desde
+     * IDLE en el aire —un "Despegar aquí"— o desde LANDED. Retomarla ahí era
+     * mandar al dron, que estaba suspendido al lado del operador, a volar una
+     * ruta vieja que nadie le pidió.
      */
     private suspend fun alRecuperarLaSenial() {
         when {
@@ -1122,13 +1178,13 @@ class PatrolManager(
                 report("CONTROL_RESUMED", "Vuelve la señal con el control manual todavía tomado: el dron espera órdenes del operador")
             }
             // Requisito: al recuperar la señal, el patrullaje continúa donde quedó
-            route != null -> resumePatrol("señal recuperada")
-            // Sin ruta y sin control tomado no hay nada que reanudar: queda en
-            // vuelo estacionario y disponible, en vez de clavado.
+            route != null && patrullaEnCurso -> resumePatrol("señal recuperada")
+            // Sin patrullaje y sin control tomado no hay nada que reanudar:
+            // queda en vuelo estacionario y disponible, en vez de clavado.
             else -> {
                 pasarA(PatrolState.PAUSED)
                 controller.hold()
-                report("PATROL_STOPPED", "Señal recuperada sin ruta cargada: el dron queda en vuelo estacionario")
+                report("PATROL_STOPPED", "Señal recuperada sin un patrullaje en curso: el dron queda en vuelo estacionario")
             }
         }
     }
@@ -1150,22 +1206,18 @@ class PatrolManager(
     }
 
     /**
-     * Se cambió/recargó la batería. Si el dron había aterrizado por batería baja,
-     * vuelve a quedar disponible para arrancar un patrullaje.
-     */
-    /**
      * Tocó tierra con el control manual tomado: sigue siendo del operador, en
      * el suelo, y puede volver a despegar sin soltarlo (lo que la consola
      * espera, porque el Comando Central no suelta el control por un aterrizaje).
      * Si venía volviendo por batería baja, el aviso de cambiarla no se pierde, y
-     * despegar queda frenado por la batería hasta que la cambien.
+     * despegar queda frenado hasta que la cambien (ver [bateriaPorCambiar]).
      */
     private fun aterrizoConElControlTomado() {
-        val porBateria = _state.value == PatrolState.RETURNING_HOME_BATTERY
+        if (_state.value == PatrolState.RETURNING_HOME_BATTERY) bateriaPorCambiar = true
         if (_state.value != PatrolState.MANUAL) pasarA(PatrolState.MANUAL)
         report(
             "LANDED",
-            if (porBateria) {
+            if (bateriaPorCambiar) {
                 "Dron aterrizado con la batería baja: hay que cambiarla antes de volver a volar " +
                     "(el control manual sigue tomado)"
             } else {
@@ -1174,7 +1226,12 @@ class PatrolManager(
         )
     }
 
+    /**
+     * Se cambió/recargó la batería. Si el dron había aterrizado por batería baja,
+     * vuelve a quedar disponible para arrancar un patrullaje.
+     */
     fun onBatteryRecharged() {
+        bateriaPorCambiar = false
         if (_state.value == PatrolState.LANDED) pasarA(PatrolState.IDLE)
         report("BATTERY_RECHARGED", "Batería recargada al 100%: el dron queda listo para volar")
     }
@@ -1190,11 +1247,12 @@ class PatrolManager(
                 // termina acá (returnHome() → ArrivedHome), no en Aterrizado.
                 controlTomado -> aterrizoConElControlTomado()
                 _state.value == PatrolState.RETURNING_HOME_BATTERY -> {
+                    bateriaPorCambiar = true
                     pasarA(PatrolState.LANDED)
                     report("LANDED", "Dron aterrizado en base (batería baja)")
                 }
                 _state.value == PatrolState.RETURNING_HOME || _state.value == PatrolState.RETURNING_HOME_SIGNAL -> {
-                    pasarA(PatrolState.IDLE)
+                    pasarA(enReposo())
                     report("LANDED", "Dron aterrizado en la base")
                 }
                 else -> Unit
@@ -1229,11 +1287,12 @@ class PatrolManager(
                     // Aterrizó volviendo por batería baja (el propio dron, o un
                     // regreso que terminó en otro lado): hay que cambiarla.
                     _state.value == PatrolState.RETURNING_HOME_BATTERY -> {
+                        bateriaPorCambiar = true
                         pasarA(PatrolState.LANDED)
                         report("LANDED", "Dron aterrizado con la batería baja: hay que cambiarla antes de volver a volar")
                     }
                     else -> {
-                        pasarA(PatrolState.IDLE)
+                        pasarA(enReposo())
                         report("LANDED", "Dron aterrizado")
                     }
                 }
@@ -1610,6 +1669,9 @@ class PatrolManager(
         // incluye MANUAL y el operador puede apretar "Retomar ruta" sin soltar el
         // control, así que acá también hay un mando a 10 Hz golpeando la puerta.
         pasarA(PatrolState.PATROLLING)
+        // Retomada a pedido (de una pausa, del control manual), la ruta vuelve
+        // a ser la que el dron está volando.
+        patrullaEnCurso = true
         controller.startRoute(r, desde)
         report("PATROL_RESUMED", "Patrullaje reanudado hacia el nodo ${desde + 1} ($reason)")
     }
