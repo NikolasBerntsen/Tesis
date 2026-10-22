@@ -204,6 +204,9 @@ describe('Modal — salida animada', () => {
     // el diálogo sigue abierto y no hay ninguna copia saliendo encima
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(ecos()).toHaveLength(0);
+  });
+});
+
 describe('Modal con algo en pantalla completa', () => {
   it('se monta adentro del elemento en pantalla completa, que es lo único que el navegador pinta', () => {
     const pantalla = document.createElement('section');
