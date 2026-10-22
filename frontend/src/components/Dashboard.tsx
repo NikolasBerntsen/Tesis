@@ -5,6 +5,8 @@ import type { DecidirAlerta } from '../useDecisionDeAlerta';
 import AlertaEnCurso from './AlertaEnCurso';
 import CameraTile from './CameraTile';
 import DronesMap, { type MapItem } from './DronesMap';
+import EncabezadoDeVista from './EncabezadoDeVista';
+import { EstadoVacio } from './EstadosDeVista';
 
 // Fijo y no `{}` en la firma: un objeto nuevo en cada render rehacía los
 // items del mapa en cada render, y el mapa los redibuja cuando cambian.
@@ -69,6 +71,35 @@ export default function Dashboard({
 
   return (
     <main className="dashboard-main">
+      {/* La misma cabecera que el resto de las vistas: el título, el conteo de
+          la flota al lado, y a la derecha cómo se la mira. */}
+      <EncabezadoDeVista
+        titulo="Operación"
+        subtitulo={`${enVuelo.length} en vuelo · ${drones.length} ${drones.length === 1 ? 'registrado' : 'registrados'}`}
+        opciones={
+          <div className="view-switch" role="group" aria-label="Cómo ver la flota">
+            <button
+              type="button"
+              className={view === 'cameras' ? 'active' : ''}
+              aria-pressed={view === 'cameras'}
+              onClick={() => setView('cameras')}
+            >
+              Cámaras
+            </button>
+            <button
+              type="button"
+              className={view === 'map' ? 'active' : ''}
+              aria-pressed={view === 'map'}
+              onClick={() => setView('map')}
+            >
+              Mapa
+            </button>
+          </div>
+        }
+      />
+
+      {/* La alerta va pegada debajo de la cabecera, arriba de las cámaras:
+          es lo único del tablero que no puede esperar. */}
       {pendientes.length > 0 && (
         <AlertaEnCurso
           alertas={pendientes}
@@ -81,32 +112,13 @@ export default function Dashboard({
         />
       )}
 
-      <div className="barra-acciones">
-        <span className="etiqueta">
-          {enVuelo.length} en vuelo · {drones.length} {drones.length === 1 ? 'registrado' : 'registrados'}
-        </span>
-        <div className="view-switch">
-          <button
-            className={view === 'cameras' ? 'active' : ''}
-            aria-pressed={view === 'cameras'}
-            onClick={() => setView('cameras')}
-          >
-            Cámaras
-          </button>
-          <button
-            className={view === 'map' ? 'active' : ''}
-            aria-pressed={view === 'map'}
-            onClick={() => setView('map')}
-          >
-            Mapa
-          </button>
-        </div>
-      </div>
-
       {view === 'cameras' ? (
         active.length === 0 ? (
           <div className="card con-esquina">
-            <p className="vacio">No hay drones activos.</p>
+            <EstadoVacio titulo="No hay drones activos.">
+              Cuando un dron se conecte al Comando Central, su cámara aparece acá. Los que están dados de alta se ven
+              en Drones.
+            </EstadoVacio>
           </div>
         ) : (
           <div className="camera-grid">

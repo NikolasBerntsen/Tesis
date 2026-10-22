@@ -44,10 +44,12 @@ export default function LoginForm({ onLogin }: { onLogin: () => void }) {
         </label>
         {/* role=alert: el rechazo de credenciales tiene que anunciarse solo,
             porque el foco se queda en el campo y nadie lo va a ir a buscar. */}
+        {/* El mismo aviso que el resto de los errores de la consola: el texto
+            rojo suelto de antes se perdía contra el mármol. */}
         {error && (
-          <div className="login-error" role="alert">
+          <p className="aviso malo login-error" role="alert">
             {error}
-          </div>
+          </p>
         )}
         <button type="submit" disabled={busy || !username || !password}>
           {busy ? 'Ingresando…' : 'Ingresar'}

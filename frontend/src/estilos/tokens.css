@@ -22,26 +22,70 @@
   /* --- Tinta ------------------------------------------------------------ */
   --tinta: #2B2620;        /* texto principal, negro cálido */
   --tinta-media: #5C544A;  /* texto secundario legible (AA sobre mármol) */
-  --tinta-suave: #8A8073;  /* apagado: NO llega a AA, solo adorno/placeholder */
+  /* Apagado: deshabilitados, placeholders, filas eliminadas e íconos de bajo
+     peso. Tiene que verse apagado, pero leerse: llega a 4:1 sobre el hueco de
+     un botón deshabilitado y a AA sobre los campos y las tarjetas. Antes se
+     quedaba en 2,8 y "Siguiente" deshabilitado no se distinguía de una mancha. */
+  --tinta-suave: #6F6458;
+  /* Lo que va escrito encima del oro macizo (botón primario, selección). No es
+     --tinta: en obsidiana --tinta es marfil, y marfil sobre oro no se lee. */
+  --tinta-sobre-oro: #2B2620;
 
   /* --- Oro -------------------------------------------------------------- */
   --oro: #B8912F;
   --oro-claro: #E4CE8A;
-  --oro-oscuro: #8A6A1C;   /* el único oro que llega a AA como texto */
+  --oro-oscuro: #8A6A1C;   /* filos y bordes de oro sobre el mármol */
+  /* El oro escrito: enlaces, .accent, la pastilla de "Control manual". El
+     --oro-oscuro llegaba a AA sobre el mármol casi blanco de antes; con la
+     piedra marfil de ahora se quedaba en 4,3, y en obsidiana el oro que se lee
+     es el claro, no el oscuro. Por eso es un token aparte. */
+  --oro-texto: #6E5311;
   --oro-lamina: linear-gradient(135deg, #F0E3B8 0%, #D9BE6B 28%, #B8912F 55%, #8A6A1C 100%);
   /* La lámina pura, con tinta encima, se queda corta de contraste en su
      esquina oscura; esta variante lavada con blanco sí llega a AA y es la que
-     va en los RELLENOS (botón primario). Los FILOS usan --oro-lamina. */
+     va en los RELLENOS (botón primario). Los FILOS usan --oro-lamina. El
+     lavado no baja de .24: con .16 la esquina de abajo quedaba en 4,1. */
   --oro-lamina-relleno:
-    linear-gradient(180deg, rgba(255, 255, 255, .42), rgba(255, 255, 255, .16)),
+    linear-gradient(180deg, rgba(255, 255, 255, .42), rgba(255, 255, 255, .24)),
     linear-gradient(135deg, #F0E3B8 0%, #D9BE6B 28%, #B8912F 55%, #8A6A1C 100%);
   --oro-velo: rgba(184, 145, 47, .10); /* fondo de lo seleccionado */
+  /* El velo de una fila que se abre con un clic (el Registro), bajo el mouse.
+     En mármol es el de lo seleccionado; en obsidiana va más tenue: encima
+     viven las pastillas de categoría, texto chico sobre su propio velo, y con
+     el velo entero "DRON" quedaba en 3,9. */
+  --oro-velo-fila: var(--oro-velo);
+  --sombra-oro: 0 2px 6px -1px rgba(138, 106, 28, .35);
 
   /* Cara de los controles. Estaba escrita con blancos literales dentro de
-     `button`, así que en obsidiana los botones salían plateados. */
+     `button`, así que en obsidiana los botones salían plateados. La del hover
+     también: era un #FFFEFB suelto en primitivos.css, y en obsidiana cada
+     botón bajo el mouse se volvía una tecla gris de contraste 2,8. */
   --cara-boton: linear-gradient(180deg, #F8F5EE 0%, var(--marmol-1) 100%);
+  --cara-boton-hover: linear-gradient(180deg, #FFFEFB 0%, var(--marmol-0) 100%);
+  /* Lo activo (pestaña del menú, chip elegido, botón presionado): realce
+     arriba y velo de oro abajo. El filo dorado lo pone cada regla. */
+  --cara-activa: linear-gradient(180deg, var(--realce-cara) 0%, var(--oro-velo) 100%);
+  /* El gesto afirmativo (Validar, Devolver al patrullaje): el verde entra por
+     el borde y apenas por el pie. Arrancaba en un #FDFEFC escrito a mano. */
+  --cara-afirmativa: linear-gradient(180deg, var(--realce-cara) 0%, var(--ok-velo) 100%);
   --filo-luz: rgba(255, 255, 255, .85);
   --sombra-boton: 0 1px 2px rgba(43, 38, 32, .06);
+
+  /* Borde de los campos (input, select, la pista del interruptor): es lo que
+     dice dónde está el control, así que llega a 3:1 contra el campo. La veta
+     fuerte de las tarjetas no llegaba ni a 2,2. */
+  --filo-campo: #8C806B;
+  /* El anillo de foco: un oro que llega a 3:1 sobre cualquier mármol. El
+     --oro de la lámina, sobre la piedra clara, apenas pasaba de 2,5. */
+  --anillo-foco: #8A6A1C;
+  /* La flecha del select, dibujada con la tinta media del tema. Vive acá
+     porque el color va escrito adentro del SVG: con un solo valor, en
+     obsidiana quedaba una flecha marrón oscuro sobre el campo negro. */
+  --flecha-select: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none' stroke='%235C544A' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5'/%3E%3C/svg%3E");
+  /* Máscara opaca de los filos dorados (::after enmascarado). No es un color
+     que se vea: sólo dice "toda la caja", y vive acá para que ninguna hoja
+     escriba un #000 suelto. */
+  --mascara-llena: linear-gradient(#000 0 0);
   /* Realce vítreo de las superficies. En claro es blanco; en obsidiana, un
      marfil apenas insinuado: el blanco puro sobre negro se ve sucio. */
   --realce-55: rgba(255, 255, 255, .55);
@@ -60,11 +104,15 @@
     linear-gradient(158deg, #F8F5EE 0%, var(--marmol-0) 50%, var(--marmol-1) 100%);
 
   /* --- Estados (apagados, nunca saturados) ------------------------------ */
+  /* Los valores de texto están medidos contra el peor fondo donde aparecen:
+     el velo de su propio color sobre el mármol 2 de un hueco (contraste.test.ts
+     los fija). Con la piedra marfil, los de antes quedaban en 3,6–4,3. */
   --ok: #4F7A46;
+  --ok-texto: #3A5F33; /* el oliva del token no llega a AA como texto */
   --alerta: #B07A1E;
-  --alerta-texto: #8A5D10; /* el ámbar del token no llega a AA como texto */
-  --peligro: #9C3B30;
-  --info: #3D6076;
+  --alerta-texto: #75500C; /* el ámbar del token no llega a AA como texto */
+  --peligro: #8E3328;
+  --info: #375870;
   --ok-velo: rgba(79, 122, 70, .12);
   --alerta-velo: rgba(176, 122, 30, .14);
   --peligro-velo: rgba(156, 59, 48, .12);
@@ -82,6 +130,44 @@
     0 2px 6px rgba(43, 38, 32, .07),
     0 34px 80px -34px rgba(43, 38, 32, .42);
   --sombra-hundida: inset 0 1px 2px rgba(43, 38, 32, .08);
+  /* La cornisa de la barra superior proyecta sobre la página. */
+  --sombra-cornisa: 0 1px 0 var(--realce-70), 0 14px 30px -22px rgba(43, 38, 32, .55);
+
+  /* --- Video y papel ------------------------------------------------------
+     Tres colores que NO cambian con el tema, a propósito. El recuadro del
+     video es negro en los dos: es el borde de una pantalla, y un recuadro
+     marfil alrededor de la imagen encandila y se lee como parte de ella. El
+     papel es blanco y la tinta de imprenta negra aunque la consola esté en
+     obsidiana: el sticker del QR se imprime, y el QR necesita su margen
+     blanco para que un teléfono lo lea. */
+  --recuadro-video: #000000;
+  --papel: #FFFFFF;
+  --papel-tinta: #000000;
+  --papel-tinta-media: #333333;
+
+  /* Paneles del HUD de pilotaje: piedra translúcida apoyada sobre el video.
+     Al 92 % y no menos: debajo puede haber cielo blanco o noche cerrada, y el
+     aviso grave tiene que leerse sobre los dos. */
+  --hud-panel: color-mix(in srgb, var(--marmol-0) 92%, transparent);
+
+  /* --- Mapa -------------------------------------------------------------- */
+  /* En mármol el callejero va con sus colores: un mapa es una herramienta de
+     orientación antes que una superficie decorativa. */
+  --filtro-calles: none;
+  /* Lo que Leaflet dibuja encima de las teselas con trazo propio: el hilo del
+     dron a su base, el recorrido de una ruta y el filo de sus nodos. En mármol
+     son los tonos oscuros de siempre; en obsidiana tienen que aclararse, o se
+     pierden sobre el mapa oscurecido. */
+  --mapa-hilo: #5C544A;
+  --mapa-recorrido: #8A6A1C;
+  --mapa-filo-nodo: #14120F;
+  /* El hilo del dron a su objetivo y el rastro del objetivo: óxido mientras
+     la alerta espera, oro una vez validada. Son los colores de TEXTO del tema,
+     no los de los filos: van finos y translúcidos sobre las teselas, y el
+     --oro de la lámina no llegaba a 3:1 ni sobre el callejero claro. Como
+     apuntan a tokens que cambian con el tema, en obsidiana se aclaran solos. */
+  --mapa-objetivo-pendiente: var(--peligro);
+  --mapa-objetivo-validado: var(--oro-texto);
 
   /* --- Geometría -------------------------------------------------------- */
   --radio: 10px;
@@ -124,7 +210,41 @@
   --versalita: .09em; /* letter-spacing de las etiquetas en versalitas */
 
   /* --- Movimiento ------------------------------------------------------- */
-  --transicion: 160ms cubic-bezier(.4, 0, .2, 1);
+  /* Una sola duración para todo lo que responde a la mano (hover, presión,
+     interruptores, salida de un diálogo) y otra apenas más larga para lo que
+     entra a la pantalla (un diálogo, una vista, un aviso). Si cada pieza elige
+     la suya, la consola se siente despareja aunque nadie sepa decir por qué.
+     Modal.tsx repite la de salida en SALIDA_MS: si cambia acá, cambia allá. */
+  --duracion: 160ms;
+  --duracion-entrada: 200ms;
+  --curva: cubic-bezier(.4, 0, .2, 1);
+  --curva-entrada: cubic-bezier(.2, .8, .3, 1);
+  --transicion: var(--duracion) var(--curva);
+  /* El brillo que recorre el esqueleto mientras carga una tabla: lento a
+     propósito, para que se lea como "esperando" y no como una alarma. */
+  --duracion-brillo: 1400ms;
+  /* Lo que tarda en irse solo el aviso de "guardado": alcanza para leer una
+     línea sin que quede tapando la esquina. */
+  --duracion-aviso: 4500ms;
+
+  /* --- Controles -------------------------------------------------------- */
+  /* Alto común de lo que vive en la cabecera de una vista (buscador, "Ver
+     eliminados", "Nuevo …", el ícono de actualizar): antes cada uno traía su
+     relleno y en la misma fila había tres altos distintos. Es el mismo del
+     .icono-boton redondo, que no se puede estirar. */
+  --alto-control: 34px;
+  /* Ancho mínimo del botón de la acción en el pie de un diálogo: "Guardar
+     cambios" → "Guardando…" o "Eliminar" → "Eliminando…" no cambian el ancho
+     del botón bajo el dedo mientras el pedido viaja. */
+  --ancho-accion: 9.5rem;
+  /* El alto de una fila de tabla (relleno de 11px + un renglón): el esqueleto
+     de carga usa el mismo, así la tabla que llega no empuja nada. */
+  --alto-fila: 46px;
+
+  /* El esqueleto de carga: una franja hundida con una luz que la recorre. En
+     mármol la luz es la piedra más clara; en obsidiana, la pulida. */
+  --esqueleto: var(--marmol-2);
+  --esqueleto-brillo: var(--marmol-0);
 
   /* --- Texturas y ornamento --------------------------------------------- */
   /* Veta: manchas grandes y blandas de ruido fractal (baseFrequency muy baja).
@@ -161,28 +281,44 @@
   /* Sobre negro, el texto a blanco puro vibra: se queda en un marfil apagado. */
   --tinta: #EDE6D6;
   --tinta-media: #B6AB95;
-  --tinta-suave: #857B69;
+  /* Sube un punto: con #857B69 un botón deshabilitado quedaba en 3,8 y casi
+     no se distinguía de uno habilitado borroso. Sigue bien por debajo de la
+     tinta media, que es lo que lo hace leerse apagado. */
+  --tinta-suave: #968B77;
+  /* Sobre el oro va obsidiana, no marfil: era el "Tomar control manual" y el
+     "Guardar" con letras crema sobre dorado, contraste 1,8. */
+  --tinta-sobre-oro: #14120F;
 
   /* El oro sube de luminosidad: el mismo #B8912F sobre obsidiana se apaga y
      deja de leerse como metal. */
   --oro: #D9B44F;
   --oro-claro: #F2DC9C;
   --oro-oscuro: #A8832A;
+  /* En obsidiana el oro que se lee es el claro: el oscuro, sobre el velo de
+     una pastilla, quedaba en 2,7. */
+  --oro-texto: #D9B44F;
   --oro-lamina: linear-gradient(135deg, #F6E7B4 0%, #DFC276 28%, #C39B34 55%, #8A6A1C 100%);
   /* En oscuro la lámina no necesita lavarse con blanco: el texto que va encima
-     es tinta oscura y el contraste sobra. */
-  --oro-lamina-relleno: linear-gradient(135deg, #F6E7B4 0%, #DFC276 28%, #C39B34 55%, #8A6A1C 100%);
+     es obsidiana. Lo que sí cambia es la última parada, que en el relleno
+     termina en el oro oscuro del tema y no en el bronce de los filos: con
+     obsidiana encima, el bronce daba 3,7. */
+  --oro-lamina-relleno: linear-gradient(135deg, #F6E7B4 0%, #DFC276 28%, #C39B34 55%, #A8832A 100%);
   --oro-velo: rgba(217, 180, 79, .14);
+  --oro-velo-fila: rgba(217, 180, 79, .06);
+  --sombra-oro: 0 2px 6px -1px rgba(0, 0, 0, .5);
 
   --piedra-cara:
     var(--grano-textura),
     linear-gradient(158deg, #241F19 0%, var(--marmol-1) 52%, #17140F 100%);
 
-  /* Los estados suben de luminosidad por el mismo motivo que el oro. */
+  /* Los estados suben de luminosidad por el mismo motivo que el oro. El
+     óxido sube un poco más: "PERSONA" sobre su velo quedaba en 4,1, y el
+     aviso grave del HUD tiene que leerse también con cielo blanco detrás. */
   --ok: #7FA96F;
+  --ok-texto: #8AB47A;
   --alerta: #D9A441;
   --alerta-texto: #E3B65F;
-  --peligro: #D2685A;
+  --peligro: #E27F70;
   --info: #7FA8C4;
   --ok-velo: rgba(127, 169, 111, .13);
   --alerta-velo: rgba(217, 164, 65, .13);
@@ -198,10 +334,17 @@
     0 18px 40px -24px rgba(0, 0, 0, .9);
   --sombra-flotante: 0 24px 60px -20px rgba(0, 0, 0, .85);
   --sombra-hundida: inset 0 1px 3px rgba(0, 0, 0, .55);
+  --sombra-cornisa: 0 1px 0 var(--realce-70), 0 14px 30px -22px rgba(0, 0, 0, .7);
 
   --velo-modal: rgba(8, 7, 5, .68);
 
+  /* Sobre obsidiana el mármol 0 es MÁS oscuro que el hueco: la luz del
+     esqueleto tiene que salir de la piedra pulida, que es la que se aclara. */
+  --esqueleto-brillo: var(--marmol-3);
+
   --cara-boton: linear-gradient(180deg, #2A2419 0%, var(--marmol-2) 100%);
+  /* Bajo el mouse la piedra se levanta un escalón, no se blanquea. */
+  --cara-boton-hover: linear-gradient(180deg, #342C20 0%, var(--marmol-3) 100%);
   --filo-luz: rgba(255, 246, 224, .07);
   --sombra-boton: 0 1px 2px rgba(0, 0, 0, .45);
   --realce-55: rgba(255, 246, 224, .05);
@@ -209,6 +352,22 @@
   --realce-cara: #2E2820;
   --luz-rasante: rgba(255, 246, 224, .025);
   --luz-alta: rgba(255, 240, 214, .022);
+
+  --filo-campo: #7A6C53;
+  --anillo-foco: #D9B44F;
+  --flecha-select: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none' stroke='%23B6AB95' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5'/%3E%3C/svg%3E");
+
+  /* El callejero de OpenStreetMap, de noche. Las teselas son fotos de un mapa
+     claro: a pantalla completa eran lo más brillante de la consola. Se dan
+     vuelta (el fondo crema pasa a casi negro y los rótulos negros a claros),
+     el giro de 180° devuelve cada tono a su familia (el agua sigue azul, los
+     parques verdes) y el sepia con la baja de brillo lo llevan a la obsidiana
+     cálida de la piedra, en vez del gris azulado de un mapa invertido a secas.
+     Va sólo a la capa de calles: el satélite es una foto y se queda como es. */
+  --filtro-calles: invert(1) hue-rotate(180deg) sepia(.22) saturate(.75) brightness(.86) contrast(.92);
+  --mapa-hilo: #C9BEA6;
+  --mapa-recorrido: #D9B44F;
+  --mapa-filo-nodo: #F1EDE4;
 }
 
 /* La veta de la piedra se invierte: en la negra las aguas son claras. */

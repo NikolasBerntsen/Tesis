@@ -4,6 +4,7 @@ import { api, parsearMeta } from '../api';
 import { useFondo, vestirAtribucion } from '../mapa';
 import type { Alert, CamposMeta, EventRow, MetaAlerta, MetaDron, MetaUbicacion, ValorMeta } from '../types';
 import ConmutadorDeFondo from './ConmutadorDeFondo';
+import IconoCerrar from './IconoCerrar';
 import Modal from './Modal';
 
 const CATEGORIA: Record<EventRow['category'], string> = {
@@ -358,21 +359,6 @@ function BloqueAlerta({ referencia, conFicha }: { referencia: MetaAlerta; conFic
 
 /* --- Pop-up ---------------------------------------------------------------- */
 
-const CRUZ = (
-  <svg
-    viewBox="0 0 16 16"
-    width="14"
-    height="14"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.5"
-    strokeLinecap="round"
-    aria-hidden="true"
-  >
-    <path d="M4.2 4.2 11.8 11.8M11.8 4.2 4.2 11.8" />
-  </svg>
-);
-
 /**
  * Detalle de una fila del registro. Todo lo que se pinta sale de `meta`, que
  * es JSON viejo de la base: se lee con parsearMeta(), que descarta lo que no
@@ -402,7 +388,7 @@ export default function LogDetailModal({ fila, onCerrar }: { fila: EventRow; onC
           </p>
         </div>
         <button type="button" className="modal-cerrar" aria-label="Cerrar el detalle" onClick={onCerrar}>
-          {CRUZ}
+          <IconoCerrar />
         </button>
       </header>
 

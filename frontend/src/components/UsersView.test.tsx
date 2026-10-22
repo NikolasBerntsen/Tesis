@@ -1,7 +1,9 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ProveedorDeAvisos } from './AvisosFlotantes';
 import UsersView from './UsersView';
+import { CONSECUENCIA } from './DialogosDeUsuario';
 import { api, buscarUsuarios } from '../api';
 import { AYUDA_DNI } from '../dni';
 import { makeMe, makeUser } from '../test/fixtures';
@@ -122,12 +124,17 @@ describe('UsersView', () => {
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
 
-  it('el admin suspende el control de un operador', async () => {
+  it('el admin suspende el control de un operador, después de confirmarlo', async () => {
     servir([makeUser({ username: 'admin1', role: 'admin' }), makeUser({ username: 'oper1', canControl: true })]);
     montar();
     await screen.findByText('oper1');
 
     await userEvent.click(within(fila('oper1')).getByRole('button', { name: 'Suspender' }));
+    // Suspender le corta el vuelo si está piloteando: pregunta antes.
+    const dialogo = await screen.findByRole('dialog', { name: 'Suspender el control de oper1' });
+    expect(dialogo).toHaveTextContent('lo suelta en el acto');
+    expect(apiMock).not.toHaveBeenCalled();
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Suspender' }));
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith('/users/oper1', {
         method: 'PATCH',
@@ -161,13 +168,18 @@ describe('UsersView', () => {
     await screen.findByText('oper1');
 
     await userEvent.click(within(fila('oper1')).getByRole('button', { name: 'Desactivar' }));
+    const dialogo = await screen.findByRole('dialog', { name: 'Desactivar a oper1' });
+    expect(dialogo).toHaveTextContent('se le cierra en el acto');
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Desactivar' }));
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith('/users/oper1', { method: 'PATCH', body: JSON.stringify({ active: false }) }),
     );
     const reactivar = await within(fila('oper1')).findByRole('button', { name: 'Reactivar' });
     expect(within(fila('oper1')).getByText('Desactivado')).toBeInTheDocument();
 
+    // Reactivar no le corta nada a nadie: no pregunta.
     await userEvent.click(reactivar);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith('/users/oper1', { method: 'PATCH', body: JSON.stringify({ active: true }) }),
     );
@@ -198,6 +210,11 @@ describe('UsersView', () => {
     await screen.findByText('oper1');
 
     await usuario.click(within(fila('oper1')).getByRole('button', { name: 'Regenerar contraseña' }));
+    // La anterior deja de servir en el acto: primero pregunta.
+    const pregunta = await screen.findByRole('dialog', { name: 'Regenerar la contraseña de oper1' });
+    expect(pregunta).toHaveTextContent('deja de servir en el acto');
+    expect(apiMock).not.toHaveBeenCalled();
+    await usuario.click(within(pregunta).getByRole('button', { name: 'Regenerar' }));
     const dialogo = await screen.findByRole('dialog', { name: 'Contraseña regenerada' });
     expect(apiMock).toHaveBeenCalledWith('/users/oper1/regenerate-password', { method: 'POST' });
     expect(within(dialogo).getByText('NUEVA-CLAVE')).toBeInTheDocument();
@@ -290,7 +307,8 @@ describe('UsersView', () => {
       const abrir = within(fila('oper1')).getByRole('button', { name: 'Eliminar' });
       await userEvent.click(abrir);
       const dialogo = await screen.findByRole('dialog');
-      expect(dialogo).toHaveFocus();
+      // El foco arranca en "Cancelar": un Enter apurado no borra a nadie.
+      expect(within(dialogo).getByRole('button', { name: 'Cancelar' })).toHaveFocus();
 
       const cruz = within(dialogo).getByRole('button', { name: 'Cerrar la confirmación' });
       const borrar = within(dialogo).getByRole('button', { name: 'Eliminar' });
@@ -335,8 +353,10 @@ describe('UsersView', () => {
       // a una cuenta eliminada no se la edita: primero se restaura
       expect(eliminada.queryByRole('button', { name: /^Editar/ })).not.toBeInTheDocument();
 
-      // Y el toggle vuelve a esconderlos.
-      await userEvent.click(screen.getByRole('button', { name: 'Ocultar eliminados' }));
+      // Y el toggle vuelve a esconderlos: el rótulo es el mismo, lo que cambia
+      // es aria-pressed.
+      expect(screen.getByRole('button', { name: 'Ver eliminados' })).toHaveAttribute('aria-pressed', 'true');
+      await userEvent.click(screen.getByRole('button', { name: 'Ver eliminados' }));
       await waitFor(() => expect(traerMock).toHaveBeenLastCalledWith({ incluirEliminados: false, q: '' }));
     });
 
@@ -561,7 +581,7 @@ describe('UsersView', () => {
       await userEvent.type(d.getByLabelText('DNI'), '30 123 457');
       await userEvent.click(d.getByLabelText('Puede controlar drones'));
       await userEvent.click(d.getByLabelText('Cuenta activa'));
-      await userEvent.click(d.getByRole('button', { name: 'Guardar' }));
+      await userEvent.click(d.getByRole('button', { name: 'Guardar y desactivar' }));
 
       await waitFor(() =>
         expect(cuerpoDe('/users/oper1', 'PATCH')).toEqual({
@@ -606,11 +626,58 @@ describe('UsersView', () => {
       expect(casilla).toBeDisabled();
       expect(casilla).not.toBeChecked();
       expect(casilla).toHaveAccessibleDescription(NOTA_CAMPO);
+      // Le corta el control aunque nadie haya tocado la casilla: también se avisa.
+      expect(d.getByText(/Al guardar, oper1 deja de poder tomar el control/)).toHaveAttribute('role', 'status');
 
-      await userEvent.click(d.getByRole('button', { name: 'Guardar' }));
+      await userEvent.click(d.getByRole('button', { name: 'Guardar y suspender' }));
       await waitFor(() =>
         expect(cuerpoDe('/users/oper1', 'PATCH')).toEqual({ role: 'field_operator', canControl: false }),
       );
+    });
+
+    it('destildar "Cuenta activa" dice la consecuencia y el botón dice que desactiva: no hay un "Guardar" a secas', async () => {
+      const dialogo = await abrirEdicion(OPER1);
+      const d = within(dialogo);
+
+      await userEvent.click(d.getByLabelText('Cuenta activa'));
+      expect(d.getByRole('status')).toHaveTextContent(
+        'Al guardar, oper1 deja de poder entrar a la consola: si tiene una sesión abierta, se le cierra en el acto',
+      );
+      expect(d.queryByRole('button', { name: 'Guardar' })).not.toBeInTheDocument();
+      expect(apiMock).not.toHaveBeenCalled();
+
+      // Volver a tildarla deja la ficha como estaba: sin aviso y con "Guardar".
+      await userEvent.click(d.getByLabelText('Cuenta activa'));
+      expect(d.queryByRole('status')).not.toBeInTheDocument();
+      expect(d.getByRole('button', { name: 'Guardar' })).toBeInTheDocument();
+
+      await userEvent.click(d.getByLabelText('Cuenta activa'));
+      await userEvent.click(d.getByRole('button', { name: 'Guardar y desactivar' }));
+      await waitFor(() => expect(cuerpoDe('/users/oper1', 'PATCH')).toEqual({ active: false }));
+    });
+
+    it('destildar el control dice que lo suelta en pleno vuelo, con el mismo texto que la fila', async () => {
+      const dialogo = await abrirEdicion(OPER1);
+      const d = within(dialogo);
+
+      await userEvent.click(d.getByLabelText('Puede controlar drones'));
+      expect(d.getByRole('status')).toHaveTextContent(`Al guardar, ${CONSECUENCIA.suspender('oper1')}`);
+      expect(d.queryByRole('button', { name: 'Guardar' })).not.toBeInTheDocument();
+
+      await userEvent.click(d.getByRole('button', { name: 'Guardar y suspender' }));
+      await waitFor(() => expect(cuerpoDe('/users/oper1', 'PATCH')).toEqual({ canControl: false }));
+    });
+
+    it('autorizar o reactivar desde la ficha no corta nada: guarda sin aviso', async () => {
+      const suspendido = makeUser({ username: 'oper2', canControl: false, active: false, fullName: 'Otto Opa', dni: '30999888' });
+      const dialogo = await abrirEdicion(suspendido);
+      const d = within(dialogo);
+
+      await userEvent.click(d.getByLabelText('Puede controlar drones'));
+      await userEvent.click(d.getByLabelText('Cuenta activa'));
+      expect(d.queryByRole('status')).not.toBeInTheDocument();
+      await userEvent.click(d.getByRole('button', { name: 'Guardar' }));
+      await waitFor(() => expect(cuerpoDe('/users/oper2', 'PATCH')).toEqual({ canControl: true, active: true }));
     });
 
     it('un operador de campo que pasa a operador puede quedar autorizado en el mismo cambio', async () => {
@@ -760,7 +827,7 @@ describe('UsersView', () => {
       }
 
       await userEvent.click(d.getByLabelText('Puede controlar drones'));
-      await userEvent.click(d.getByRole('button', { name: 'Guardar' }));
+      await userEvent.click(d.getByRole('button', { name: 'Guardar y suspender' }));
       await waitFor(() => expect(cuerpoDe('/users/oper1', 'PATCH')).toEqual({ canControl: false }));
     });
   });
@@ -808,6 +875,272 @@ describe('UsersView', () => {
     await screen.findByText('oper1');
 
     await userEvent.click(within(fila('oper1')).getByRole('button', { name: 'Suspender' }));
+    const dialogo = await screen.findByRole('dialog');
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Suspender' }));
+    expect(await within(dialogo).findByRole('alert')).toHaveTextContent('No autorizado');
+  });
+
+  it('el error de lo que no pregunta (autorizar) queda arriba de la tabla', async () => {
+    servir([makeUser({ username: 'admin1', role: 'admin' }), makeUser({ username: 'oper1', canControl: false })]);
+    apiMock.mockRejectedValue(new Error('No autorizado'));
+    montar();
+    await screen.findByText('oper1');
+
+    await userEvent.click(within(fila('oper1')).getByRole('button', { name: 'Autorizar' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('No autorizado');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+});
+
+describe('UsersView — avisos de lo que salió bien', () => {
+  const ADMIN = makeUser({ username: 'admin1', role: 'admin' });
+
+  function montarConAvisos() {
+    return render(
+      <ProveedorDeAvisos>
+        <UsersView me={makeMe({ username: 'admin1', role: 'admin' })} />
+      </ProveedorDeAvisos>,
+    );
+  }
+  const aviso = () => document.querySelector('.avisos-flotantes') as HTMLElement;
+
+  async function confirmar(boton: string) {
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: boton }));
+  }
+
+  it('suspender, desactivar y eliminar lo dicen', async () => {
+    servir([ADMIN, makeUser({ username: 'oper1', canControl: true, active: true })]);
+    apiMock.mockResolvedValue({});
+    montarConAvisos();
+    await screen.findByText('oper1');
+
+    await userEvent.click(within(fila('oper1')).getByRole('button', { name: 'Suspender' }));
+    await confirmar('Suspender');
+    await waitFor(() => expect(aviso()).toHaveTextContent('Control de oper1 suspendido.'));
+
+    await userEvent.click(within(fila('oper1')).getByRole('button', { name: 'Desactivar' }));
+    await confirmar('Desactivar');
+    await waitFor(() => expect(aviso()).toHaveTextContent('Cuenta de oper1 desactivada.'));
+
+    await userEvent.click(within(fila('oper1')).getByRole('button', { name: 'Eliminar' }));
+    await confirmar('Eliminar');
+    await waitFor(() => expect(aviso()).toHaveTextContent('Cuenta de oper1 eliminada.'));
+  });
+
+  it('lo que no pregunta también avisa: autorizar, reactivar y restaurar', async () => {
+    servir([ADMIN, makeUser({ username: 'oper1', canControl: false, active: false })]);
+    apiMock.mockResolvedValue({});
+    montarConAvisos();
+    await screen.findByText('oper1');
+
+    await userEvent.click(within(fila('oper1')).getByRole('button', { name: 'Autorizar' }));
+    await waitFor(() => expect(aviso()).toHaveTextContent('oper1 puede volver a controlar drones.'));
+
+    await userEvent.click(within(fila('oper1')).getByRole('button', { name: 'Reactivar' }));
+    await waitFor(() => expect(aviso()).toHaveTextContent('Cuenta de oper1 reactivada.'));
+
+    servir([ADMIN, makeUser({ username: 'oper1', deleted: true, deletedAt: BORRADO })]);
+    await userEvent.click(screen.getByRole('button', { name: 'Ver eliminados' }));
+    await userEvent.click(await within(fila('oper1')).findByRole('button', { name: 'Restaurar' }));
+    await waitFor(() => expect(aviso()).toHaveTextContent('Cuenta de oper1 restaurada.'));
+  });
+
+  it('guardar la ficha lo dice', async () => {
+    servir([ADMIN, makeUser({ username: 'oper1', fullName: 'Olga Operadora', dni: '30123456' })]);
+    apiMock.mockResolvedValue({});
+    montarConAvisos();
+    await screen.findByText('oper1');
+
+    await userEvent.click(within(fila('oper1')).getByRole('button', { name: 'Editar a oper1' }));
+    const dialogo = await screen.findByRole('dialog', { name: 'Editar a oper1' });
+    await userEvent.type(within(dialogo).getByLabelText('Nombre y apellido'), ' Pérez');
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Guardar' }));
+    await waitFor(() => expect(aviso()).toHaveTextContent('Cambios de oper1 guardados.'));
+  });
+
+  it('copiar la contraseña lo confirma, y si no se puede, lo dice al lado', async () => {
+    servir([ADMIN, makeUser({ username: 'oper1' })]);
+    apiMock.mockResolvedValue({ username: 'oper1', password: 'NUEVA-CLAVE' });
+    const usuario = userEvent.setup();
+    const escribir = vi.spyOn(navigator.clipboard, 'writeText');
+    montarConAvisos();
+    await screen.findByText('oper1');
+
+    await usuario.click(within(fila('oper1')).getByRole('button', { name: 'Regenerar contraseña' }));
+    await usuario.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Regenerar' }));
+    const dialogo = await screen.findByRole('dialog', { name: 'Contraseña regenerada' });
+
+    await usuario.click(within(dialogo).getByRole('button', { name: 'Copiar' }));
+    await waitFor(() => expect(aviso()).toHaveTextContent('Contraseña copiada.'));
+
+    escribir.mockRejectedValueOnce(new Error('denegado'));
+    await usuario.click(within(dialogo).getByRole('button', { name: 'Copiar' }));
+    expect(await within(dialogo).findByRole('alert')).toHaveTextContent('copiala a mano');
+  });
+
+  it('sin portapapeles (fuera de un contexto seguro) también lo dice', async () => {
+    servir([ADMIN, makeUser({ username: 'oper1' })]);
+    apiMock.mockResolvedValue({ username: 'oper1', password: 'NUEVA-CLAVE' });
+    montarConAvisos();
+    await screen.findByText('oper1');
+    await userEvent.click(within(fila('oper1')).getByRole('button', { name: 'Regenerar contraseña' }));
+    await confirmar('Regenerar');
+    const dialogo = await screen.findByRole('dialog', { name: 'Contraseña regenerada' });
+
+    const original = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    try {
+      fireEvent.click(within(dialogo).getByRole('button', { name: 'Copiar' }));
+      expect(await within(dialogo).findByRole('alert')).toHaveTextContent('No se pudo copiar');
+    } finally {
+      if (original) Object.defineProperty(navigator, 'clipboard', original);
+      else delete (navigator as { clipboard?: unknown }).clipboard;
+    }
+  });
+});
+
+describe('UsersView — carga, vacío y tabla', () => {
+  it('antes de la primera respuesta muestra el esqueleto, no que no hay usuarios', async () => {
+    const espera = pendiente<UserView[]>();
+    traerMock.mockReset();
+    traerMock.mockReturnValue(espera.promesa);
+    montar();
+    expect(screen.getByRole('status')).toHaveTextContent('Trayendo los usuarios…');
+    expect(screen.queryByText('No hay usuarios para mostrar.')).not.toBeInTheDocument();
+    espera.resolver([]);
+    expect(await screen.findByText('No hay usuarios para mostrar.')).toBeInTheDocument();
+  });
+
+  it('con una búsqueda sin resultados dice eso, y no que no hay usuarios', async () => {
+    servir([ADMIN1], []);
+    montar();
+    await screen.findByText('admin1');
+    await userEvent.type(screen.getByRole('searchbox', { name: 'Buscar usuarios' }), 'zzz');
+    expect(await screen.findByText('Ningún usuario coincide con la búsqueda.')).toBeInTheDocument();
+    expect(screen.queryByText('No hay usuarios para mostrar.')).not.toBeInTheDocument();
+  });
+
+  it('si la carga falla no afirma que no hay usuarios, ni que la búsqueda no coincide', async () => {
+    servir([]);
+    montar();
+    expect(await screen.findByText('No hay usuarios para mostrar.')).toBeInTheDocument();
+
+    traerMock.mockRejectedValue(new Error('El Comando Central no responde'));
+    await userEvent.type(screen.getByRole('searchbox', { name: 'Buscar usuarios' }), 'zzz');
+    expect(await screen.findByRole('alert')).toHaveTextContent('El Comando Central no responde');
+    expect(screen.queryByText('No hay usuarios para mostrar.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Ningún usuario coincide con la búsqueda.')).not.toBeInTheDocument();
+  });
+
+  it('con la primera carga caída tampoco: sólo el error', async () => {
+    traerMock.mockRejectedValue(new Error('Sin permiso'));
+    montar();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Sin permiso');
+    expect(screen.queryByText('No hay usuarios para mostrar.')).not.toBeInTheDocument();
+  });
+
+  it('una lista que llega bien se lleva el error de la carga que había fallado', async () => {
+    traerMock.mockRejectedValueOnce(new Error('Sin conexión'));
+    traerMock.mockResolvedValue([ADMIN1]);
+    montar();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Sin conexión');
+
+    await userEvent.type(screen.getByRole('searchbox', { name: 'Buscar usuarios' }), 'a');
+    expect(await screen.findByText('admin1')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('con la lista vacía, cada tecla no cambia el cartel por el esqueleto: queda, ocupado', async () => {
+    servir([ADMIN1], []);
+    const { container } = montar();
+    await screen.findByText('admin1');
+    const buscador = screen.getByRole('searchbox', { name: 'Buscar usuarios' });
+    await userEvent.type(buscador, 'zz');
+    expect(await screen.findByText('Ningún usuario coincide con la búsqueda.')).toBeInTheDocument();
+
+    const espera = pendiente<UserView[]>();
+    traerMock.mockReturnValue(espera.promesa);
+    await userEvent.type(buscador, 'z');
+    expect(screen.getByText('Ningún usuario coincide con la búsqueda.')).toBeInTheDocument();
+    expect(screen.queryByText('Trayendo los usuarios…')).not.toBeInTheDocument();
+    expect(container.querySelector('.vacio-guia')!.parentElement).toHaveAttribute('aria-busy', 'true');
+
+    espera.resolver([]);
+    await waitFor(() => expect(container.querySelector('.vacio-guia')!.parentElement).not.toHaveAttribute('aria-busy'));
+    expect(screen.getByText('Ningún usuario coincide con la búsqueda.')).toBeInTheDocument();
+  });
+
+  it('la respuesta de una búsqueda vieja que llega tarde no pisa la de la nueva', async () => {
+    servir([ADMIN1]);
+    montar();
+    await screen.findByText('admin1');
+    const vieja = pendiente<UserView[]>();
+    const nueva = pendiente<UserView[]>();
+    traerMock.mockReturnValueOnce(vieja.promesa).mockReturnValueOnce(nueva.promesa);
+    const buscador = screen.getByRole('searchbox', { name: 'Buscar usuarios' });
+    await userEvent.type(buscador, 'o');
+    await userEvent.type(buscador, 'p');
+
+    nueva.resolver([makeUser({ username: 'oper1' })]);
+    expect(await screen.findByText('oper1')).toBeInTheDocument();
+    vieja.resolver([makeUser({ username: 'otto' })]);
+    await act(async () => {});
+    expect(screen.queryByText('otto')).not.toBeInTheDocument();
+    expect(screen.getByText('oper1')).toBeInTheDocument();
+  });
+
+  it('el cartel habla de la lista que se ve, no de lo que se está tipeando', async () => {
+    servir([]);
+    montar();
+    expect(await screen.findByText('No hay usuarios para mostrar.')).toBeInTheDocument();
+
+    // La búsqueda viaja: lo que se ve sigue siendo la lista sin filtro.
+    const espera = pendiente<UserView[]>();
+    traerMock.mockReturnValue(espera.promesa);
+    await userEvent.type(screen.getByRole('searchbox', { name: 'Buscar usuarios' }), 'a');
+    expect(screen.getByText('No hay usuarios para mostrar.')).toBeInTheDocument();
+
+    espera.resolver([]);
+    expect(await screen.findByText('Ningún usuario coincide con la búsqueda.')).toBeInTheDocument();
+  });
+
+  it('una acción confirmada que sale bien se lleva el error de la anterior', async () => {
+    servir([ADMIN1, makeUser({ username: 'oper1', canControl: false }), makeUser({ username: 'oper2' })]);
+    montar();
+    await screen.findByText('oper1');
+    apiMock.mockRejectedValueOnce(new Error('No autorizado'));
+    await userEvent.click(within(fila('oper1')).getByRole('button', { name: 'Autorizar' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('No autorizado');
+
+    // La recarga que sigue no termina: el error lo tiene que limpiar la acción.
+    traerMock.mockReturnValue(new Promise<UserView[]>(() => {}));
+    apiMock.mockResolvedValueOnce({});
+    await userEvent.click(within(fila('oper2')).getByRole('button', { name: 'Suspender' }));
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Suspender' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('las acciones de cada fila van juntas en un grupo, como en las otras vistas', async () => {
+    servir([ADMIN1, makeUser({ username: 'oper1' })]);
+    montar();
+    await screen.findByText('oper1');
+    const grupo = within(fila('oper1')).getByRole('group', { name: 'Acciones de oper1' });
+    expect(within(grupo).getAllByRole('button').map((b) => b.textContent)).toEqual([
+      'Editar',
+      'Regenerar contraseña',
+      'Eliminar',
+    ]);
+    expect(screen.getByRole('columnheader', { name: 'Acciones' })).toHaveClass('columna-acciones');
+  });
+
+  it('la cabecera es la de todas las vistas: título, buscador y, al final, "Nuevo usuario"', async () => {
+    servir([ADMIN1]);
+    const { container } = montar();
+    await screen.findByText('admin1');
+    const cabecera = container.querySelector('.vista-cabecera') as HTMLElement;
+    expect(within(cabecera).getByRole('heading', { name: 'Usuarios' })).toBeInTheDocument();
+    expect(within(cabecera).getByRole('searchbox', { name: 'Buscar usuarios' })).toBeInTheDocument();
+    expect(within(cabecera).getAllByRole('button').map((b) => b.textContent)).toEqual(['Ver eliminados', 'Nuevo usuario']);
   });
 });

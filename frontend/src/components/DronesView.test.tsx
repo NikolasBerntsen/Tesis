@@ -1,6 +1,7 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ProveedorDeAvisos } from './AvisosFlotantes';
 import DronesView from './DronesView';
 import { api, traerBases, traerDrones } from '../api';
 import { makeDrone, makeMe } from '../test/fixtures';
@@ -295,12 +296,19 @@ describe('DronesView', () => {
     expect(within(fila('Alfa')).getByText('DJI Mini 3 Pro')).toBeInTheDocument();
   });
 
-  it('el supervisor desactiva un dron con el interruptor', async () => {
+  it('el supervisor desactiva un dron con el interruptor, después de confirmarlo', async () => {
     apiMock.mockResolvedValue(alfa({ active: false }));
     montar('supervisor');
     await screen.findByText('Alfa', { selector: 'div' });
 
     await userEvent.click(within(fila('Alfa')).getByRole('checkbox'));
+    // Apagarlo lo desconecta en el acto: pregunta antes, con eso dicho.
+    const dialogo = await screen.findByRole('dialog', { name: 'Marcar a Alfa como no operativo' });
+    expect(dialogo).toHaveTextContent('se desconecta del Comando Central en el acto');
+    expect(apiMock).not.toHaveBeenCalled();
+    expect(within(fila('Alfa')).getByRole('checkbox')).toBeChecked();
+
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Marcar no operativo' }));
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith(`/drones/${HASH_ALFA}`, {
         method: 'PATCH',
@@ -393,29 +401,52 @@ describe('DronesView', () => {
     expect(within(grupo).getAllByRole('button').map((b) => b.textContent)).toEqual(['Editar', 'Ver QR', 'Eliminar']);
   });
 
-  it('elimina un dron sólo si se confirma', async () => {
+  it('elimina un dron sólo si se confirma en el diálogo, no con el confirm() del navegador', async () => {
     apiMock.mockResolvedValue(alfa({ deleted: true, deletedAt: '2024-01-02T00:00:00.000Z' }));
+    const confirmDelNavegador = vi.spyOn(window, 'confirm');
     montar('supervisor');
     await screen.findByText('Alfa', { selector: 'div' });
 
-    const confirmar = vi.spyOn(window, 'confirm').mockReturnValue(false);
     await userEvent.click(within(fila('Alfa')).getByRole('button', { name: 'Eliminar' }));
+    let dialogo = await screen.findByRole('dialog', { name: 'Eliminar el dron Alfa' });
+    expect(dialogo).toHaveTextContent('La baja se puede deshacer');
+    expect(dialogo).toHaveTextContent('«Ver eliminados»');
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Cancelar' }));
     expect(apiMock).not.toHaveBeenCalled();
 
-    confirmar.mockReturnValue(true);
     await userEvent.click(within(fila('Alfa')).getByRole('button', { name: 'Eliminar' }));
+    dialogo = await screen.findByRole('dialog', { name: 'Eliminar el dron Alfa' });
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Eliminar' }));
     await waitFor(() => expect(apiMock).toHaveBeenCalledWith(`/drones/${HASH_ALFA}`, { method: 'DELETE' }));
+    expect(confirmDelNavegador).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     // Con el filtro por defecto, el dron eliminado desaparece de la tabla.
     await waitFor(() => expect(screen.queryByText('Alfa', { selector: 'div' })).not.toBeInTheDocument());
   });
 
   it('muestra el error si el backend rechaza una acción', async () => {
     apiMock.mockRejectedValue(new Error('El dron está eliminado: restauralo antes de modificarlo'));
+    traerMock.mockResolvedValue([alfa({ active: false })]);
+    montar('supervisor');
+    await screen.findByText('Alfa', { selector: 'div' });
+
+    // Volver a ponerlo operativo no pregunta: el error queda arriba de la tabla.
+    await userEvent.click(within(fila('Alfa')).getByRole('checkbox'));
+    expect(await screen.findByRole('alert')).toHaveTextContent('El dron está eliminado');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('si el backend rechaza lo confirmado, el motivo se lee en el diálogo, que queda abierto', async () => {
+    apiMock.mockRejectedValue(new Error('El dron está eliminado: restauralo antes de modificarlo'));
     montar('supervisor');
     await screen.findByText('Alfa', { selector: 'div' });
 
     await userEvent.click(within(fila('Alfa')).getByRole('checkbox'));
-    expect(await screen.findByRole('alert')).toHaveTextContent('El dron está eliminado');
+    const dialogo = await screen.findByRole('dialog');
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Marcar no operativo' }));
+    expect(await within(dialogo).findByRole('alert')).toHaveTextContent('El dron está eliminado');
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(within(fila('Alfa')).getByRole('checkbox')).toBeChecked();
   });
 
   // La marca es la que manda: la fecha quedó como dato de auditoría y sola no
@@ -452,8 +483,12 @@ describe('DronesView', () => {
     await waitFor(() => expect(apiMock).toHaveBeenCalledWith(`/drones/${HASH_BRAVO}/restore`, { method: 'POST' }));
     await waitFor(() => expect(fila('Bravo')).not.toHaveClass('fila-eliminada'));
 
-    await userEvent.click(screen.getByRole('button', { name: 'Ocultar eliminados' }));
+    // El rótulo no cambia: lo que cambia es aria-pressed.
+    const interruptor = screen.getByRole('button', { name: 'Ver eliminados' });
+    expect(interruptor).toHaveAttribute('aria-pressed', 'true');
+    await userEvent.click(interruptor);
     await waitFor(() => expect(traerMock).toHaveBeenLastCalledWith({ incluirEliminados: false }));
+    expect(interruptor).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('reabre el sticker de un dron ya dado de alta', async () => {
@@ -548,5 +583,126 @@ describe('DronesView', () => {
     expect(within(fila('Alfa')).getByRole('checkbox')).toBeInTheDocument();
     expect(within(fila('Alfa')).getByRole('button', { name: 'Editar' })).toBeInTheDocument();
     expect(within(fila('Alfa')).getByRole('button', { name: 'Eliminar' })).toBeInTheDocument();
+  });
+});
+
+/**
+ * Lo que la vista dice cuando algo sale bien. Se monta adentro del proveedor
+ * de avisos, como en la consola: sin él avisar no hace nada.
+ */
+describe('DronesView — avisos de lo que salió bien', () => {
+  function montarConAvisos(role: RolConsola = 'supervisor') {
+    return render(
+      <ProveedorDeAvisos>
+        <DronesView me={makeMe({ username: 'admin1', role })} />
+      </ProveedorDeAvisos>,
+    );
+  }
+  const aviso = () => document.querySelector('.avisos-flotantes') as HTMLElement;
+
+  it('el alta lo dice, además de abrir el sticker', async () => {
+    apiMock.mockResolvedValue(makeDrone({ hash: 'nuevo', droneId: 'nuevo', displayName: 'Delta' }));
+    montarConAvisos();
+    await screen.findByText('Alfa', { selector: 'div' });
+
+    const alta = await abrirAlta();
+    await userEvent.type(within(alta).getByLabelText('Nombre'), 'Delta');
+    await userEvent.click(within(alta).getByRole('button', { name: 'Dar de alta' }));
+
+    await waitFor(() => expect(aviso()).toHaveTextContent('Dron Delta dado de alta.'));
+    expect(aviso()).toHaveAttribute('role', 'status');
+    expect(await screen.findByRole('dialog', { name: 'Sticker del dron Delta' })).toBeInTheDocument();
+  });
+
+  it('la edición avisa que se guardó', async () => {
+    apiMock.mockResolvedValue(alfa({ model: 'DJI Mini 3 Pro' }));
+    montarConAvisos();
+    await screen.findByText('Alfa', { selector: 'div' });
+
+    const edicion = await abrirEdicion('Alfa');
+    await userEvent.type(within(edicion).getByLabelText('Modelo'), ' Pro');
+    await userEvent.click(within(edicion).getByRole('button', { name: 'Guardar cambios' }));
+    await waitFor(() => expect(aviso()).toHaveTextContent('Cambios de Alfa guardados.'));
+  });
+
+  it('eliminar, apagar y encender lo dicen', async () => {
+    montarConAvisos();
+    await screen.findByText('Alfa', { selector: 'div' });
+
+    apiMock.mockResolvedValue(alfa({ active: false }));
+    await userEvent.click(within(fila('Alfa')).getByRole('checkbox'));
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Marcar no operativo' }));
+    await waitFor(() => expect(aviso()).toHaveTextContent('Alfa quedó no operativo.'));
+
+    apiMock.mockResolvedValue(alfa({ active: true }));
+    await userEvent.click(within(fila('Alfa')).getByRole('checkbox'));
+    await waitFor(() => expect(aviso()).toHaveTextContent('Alfa quedó operativo.'));
+
+    apiMock.mockResolvedValue(alfa({ deleted: true, deletedAt: '2024-01-02T00:00:00.000Z' }));
+    await userEvent.click(within(fila('Alfa')).getByRole('button', { name: 'Eliminar' }));
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Eliminar' }));
+    await waitFor(() => expect(aviso()).toHaveTextContent('Dron Alfa eliminado.'));
+  });
+
+  it('restaurar lo dice', async () => {
+    traerMock.mockResolvedValue([alfa(), bravo({ deleted: true, deletedAt: '2024-01-02T00:00:00.000Z' })]);
+    apiMock.mockResolvedValue(bravo());
+    montarConAvisos();
+    await userEvent.click(await screen.findByRole('button', { name: 'Ver eliminados' }));
+    await userEvent.click(within(fila('Bravo')).getByRole('button', { name: 'Restaurar' }));
+    await waitFor(() => expect(aviso()).toHaveTextContent('Dron Bravo restaurado.'));
+  });
+
+  it('un error no se avisa como si hubiera salido bien', async () => {
+    apiMock.mockRejectedValue(new Error('Sin permiso'));
+    traerMock.mockResolvedValue([alfa({ active: false })]);
+    montarConAvisos();
+    await screen.findByText('Alfa', { selector: 'div' });
+
+    await userEvent.click(within(fila('Alfa')).getByRole('checkbox'));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Sin permiso');
+    expect(aviso()).toBeEmptyDOMElement();
+  });
+
+  it('una acción confirmada que sale bien se lleva el error de la anterior', async () => {
+    // Restaurar a Bravo falla y deja el error arriba de la tabla; eliminar a
+    // Alfa después sale bien: el rojo no puede quedar al lado del "eliminado".
+    traerMock.mockResolvedValue([alfa(), bravo({ deleted: true, deletedAt: '2024-01-02T00:00:00.000Z' })]);
+    montarConAvisos();
+    await userEvent.click(await screen.findByRole('button', { name: 'Ver eliminados' }));
+    apiMock.mockRejectedValueOnce(new Error('Ya hay un dron activo con ese nombre'));
+    await userEvent.click(within(fila('Bravo')).getByRole('button', { name: 'Restaurar' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Ya hay un dron activo con ese nombre');
+
+    apiMock.mockResolvedValueOnce(alfa({ deleted: true, deletedAt: '2024-01-03T00:00:00.000Z' }));
+    await userEvent.click(within(fila('Alfa')).getByRole('button', { name: 'Eliminar' }));
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Eliminar' }));
+    await waitFor(() => expect(aviso()).toHaveTextContent('Dron Alfa eliminado.'));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});
+
+describe('DronesView — carga sin saltos', () => {
+  it('la primera carga es un esqueleto con el rótulo de lo que se trae', async () => {
+    traerMock.mockReturnValue(new Promise(() => {}));
+    montar();
+    const esqueleto = await screen.findByRole('status');
+    expect(esqueleto).toHaveClass('esqueleto');
+    expect(esqueleto).toHaveTextContent('Trayendo los drones…');
+  });
+
+  it('con la lista a la vista, recargar no la saca: la marca ocupada hasta que llega la nueva', async () => {
+    montar('supervisor');
+    await screen.findByText('Alfa', { selector: 'div' });
+    let contestar: (d: Drone[]) => void = () => {};
+    traerMock.mockReturnValue(new Promise((r) => (contestar = r)));
+
+    await userEvent.click(screen.getByRole('button', { name: 'Ver eliminados' }));
+    const envoltorio = screen.getByRole('table').parentElement as HTMLElement;
+    expect(envoltorio).toHaveAttribute('aria-busy', 'true');
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+
+    await act(async () => contestar([alfa()]));
+    expect(envoltorio).not.toHaveAttribute('aria-busy');
   });
 });

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import L from 'leaflet';
-import { CENTRO_POR_DEFECTO, iconoBase, useFondo, vestirAtribucion } from '../mapa';
+import { CENTRO_POR_DEFECTO, TRAZO, iconoBase, useFondo, vestirAtribucion } from '../mapa';
 import type { PatrolRoute, Waypoint } from '../types';
 import ConmutadorDeFondo from './ConmutadorDeFondo';
+import IconoCerrar from './IconoCerrar';
 import Modal from './Modal';
 
 /** Un nodo con identidad estable, para poder arrastrarlo sin que se confunda. */
@@ -101,11 +102,14 @@ export default function EditorDeRuta({
     const grupo = capa.current;
     if (!grupo) return;
     grupo.clearLayers();
+    // Recorrido y filo de los nodos llevan su clase para que el CSS los aclare
+    // en obsidiana, sobre el callejero oscurecido (ver TRAZO en mapa.ts).
     if (nodos.length > 1) {
       L.polyline(nodos.map((n) => [n.lat, n.lon] as [number, number]), {
         color: '#8A6A1C',
         weight: 2,
         dashArray: '5 6',
+        className: TRAZO.recorrido,
       }).addTo(grupo);
     }
     nodos.forEach((n, i) => {
@@ -113,6 +117,7 @@ export default function EditorDeRuta({
       L.circleMarker([n.lat, n.lon], {
         radius: i === encendido ? 12 : 8,
         color: '#14120F',
+        className: TRAZO.nodo,
         weight: 1.5,
         fillColor: color,
         fillOpacity: 1,
@@ -197,7 +202,7 @@ export default function EditorDeRuta({
           <p className="modal-subtitulo">{ruta ? ruta.name : base ? `Desde ${base.name}` : 'Nodos en el orden del recorrido'}</p>
         </div>
         <button type="button" className="modal-cerrar" aria-label="Cerrar" onClick={cerrar} disabled={guardando}>
-          ×
+          <IconoCerrar />
         </button>
       </header>
 

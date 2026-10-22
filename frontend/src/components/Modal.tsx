@@ -111,8 +111,14 @@ export default function Modal({
 
   useEffect(() => {
     const previo = document.activeElement;
+    // Un diálogo puede marcar dónde arranca el foco con `data-autofoco`. Lo usa
+    // la confirmación de lo destructivo, que arranca en "Cancelar": un Enter
+    // apurado o un Espacio de más tienen que caer en el gesto que no rompe
+    // nada. No alcanza con enfocarlo desde el hijo: los efectos del hijo corren
+    // antes que este, y acá el foco se iría a la caja.
+    const pedido = caja.current?.querySelector<HTMLElement>('[data-autofoco]');
     const campo = primerCampo.current ? caja.current?.querySelector<HTMLElement>(CAMPOS) : null;
-    (campo ?? caja.current)?.focus();
+    (pedido ?? campo ?? caja.current)?.focus();
     // El foco vuelve a lo que abrió el diálogo: con el teclado, cerrar no puede
     // dejarte de nuevo arriba de todo.
     return () => {
@@ -149,8 +155,16 @@ export default function Modal({
         return;
       }
       if (ev.key !== 'Tab' || !caja.current) return;
-      // Siempre hay al menos una forma de cerrar, así que la lista no va vacía.
       const dentro = [...caja.current.querySelectorAll<HTMLElement>(FOCUSABLES)];
+      // Casi siempre hay al menos una forma de cerrar. La excepción es una
+      // confirmación esperando al backend, con sus tres botones apagados: ahí
+      // el tabulador no tiene adónde ir, y el foco se queda en la caja en vez
+      // de escaparse a la página de atrás.
+      if (dentro.length === 0) {
+        ev.preventDefault();
+        caja.current.focus();
+        return;
+      }
       const primero = dentro[0];
       const ultimo = dentro[dentro.length - 1];
       const foco = document.activeElement;

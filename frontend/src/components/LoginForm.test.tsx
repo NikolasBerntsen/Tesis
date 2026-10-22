@@ -68,4 +68,13 @@ describe('LoginForm', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Ingresar' }));
     expect(await screen.findByText('Error de autenticación')).toBeInTheDocument();
   });
+
+  it('el rechazo se lee con el mismo aviso que el resto de los errores de la consola', async () => {
+    loginMock.mockRejectedValue(new Error('Usuario o contraseña incorrectos'));
+    render(<LoginForm onLogin={() => {}} />);
+    await userEvent.type(screen.getByLabelText('Usuario'), 'oper');
+    await userEvent.type(screen.getByLabelText('Contraseña'), 'x');
+    await userEvent.click(screen.getByRole('button', { name: 'Ingresar' }));
+    expect(await screen.findByRole('alert')).toHaveClass('aviso', 'malo');
+  });
 });

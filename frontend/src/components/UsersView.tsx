@@ -1,64 +1,13 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, buscarUsuarios } from '../api';
 import { formatearDni } from '../dni';
 import type { Me, UserView } from '../types';
-import { DialogoEditarUsuario, DialogoNuevoUsuario, ICONO_CERRAR, ROL, textoError } from './DialogosDeUsuario';
+import { useAvisar } from './AvisosFlotantes';
+import DialogoConfirmacion, { type PedidoDeConfirmacion } from './DialogoConfirmacion';
+import { CONSECUENCIA, DialogoEditarUsuario, DialogoNuevoUsuario, ROL, textoError } from './DialogosDeUsuario';
+import EncabezadoDeVista from './EncabezadoDeVista';
+import { EsqueletoDeTabla, EstadoVacio } from './EstadosDeVista';
 import Modal from './Modal';
-
-/**
- * Confirmación de la baja. Un `confirm()` del navegador no alcanza: hay que
- * explicar que el borrado es lógico y que el nombre de usuario no se libera, y
- * eso no entra en el renglón único que da el navegador.
- */
-function ModalEliminar({
-  usuario,
-  onCancelar,
-  onConfirmar,
-}: {
-  usuario: string;
-  onCancelar: () => void;
-  onConfirmar: () => void;
-}) {
-  const idTitulo = useId();
-  const idTexto = useId();
-
-  return (
-    <Modal etiquetadoPor={idTitulo} descritoPor={idTexto} onCerrar={onCancelar}>
-      <header className="modal-cabecera">
-        <div>
-          <h2 className="modal-titulo" id={idTitulo}>
-            Eliminar a {usuario}
-          </h2>
-          <p className="modal-subtitulo">La baja se puede deshacer</p>
-        </div>
-        <button className="modal-cerrar" aria-label="Cerrar la confirmación" onClick={onCancelar}>
-          <svg {...ICONO_CERRAR}>
-            <path d="M4.2 4.2 11.8 11.8M11.8 4.2 4.2 11.8" />
-          </svg>
-        </button>
-      </header>
-
-      <div className="modal-cuerpo">
-        <p id={idTexto}>
-          La cuenta <strong>{usuario}</strong> deja de poder entrar a la consola y sale del listado.
-        </p>
-        <p className="muted">
-          El borrado es lógico: un administrador puede restaurarla más adelante desde “Ver eliminados”. Hasta
-          entonces el nombre de usuario sigue ocupado.
-        </p>
-      </div>
-
-      <footer className="modal-pie">
-        <button className="ghost" onClick={onCancelar}>
-          Cancelar
-        </button>
-        <button className="dismiss" onClick={onConfirmar}>
-          Eliminar
-        </button>
-      </footer>
-    </Modal>
-  );
-}
 
 /**
  * Gestión de usuarios. El supervisor ve a los operadores y les suspende o
@@ -69,106 +18,225 @@ function ModalEliminar({
  *
  * El alta y la edición van en diálogos y no en una fila de la tabla: son
  * fichas de cinco campos con validaciones y errores propios, y en un renglón
- * no había lugar para explicarlos.
+ * no había lugar para explicarlos. Lo que le corta algo a una cuenta (eliminar,
+ * desactivar, suspender el control, regenerar la contraseña) pregunta antes,
+ * con la consecuencia dicha: todo eso le cae encima a otra persona, a veces en
+ * pleno vuelo.
  */
 export default function UsersView({ me }: { me: Me }) {
   const [users, setUsers] = useState<UserView[]>([]);
+  // Hasta la primera respuesta no se puede afirmar que "no hay usuarios": antes
+  // el cartel salía en el primer cuadro, antes de preguntarle nada al backend.
+  const [cargando, setCargando] = useState(true);
+  // La búsqueda con que llegó la lista que se está viendo; null hasta la
+  // primera respuesta. El esqueleto es sólo para ese primer viaje: la búsqueda
+  // recarga con cada tecla, y con la lista vacía cada tecla cambiaba el cartel
+  // de "ningún usuario coincide" por el esqueleto y de vuelta. Y el cartel
+  // habla de la lista que se ve, no de lo que se está tipeando.
+  const [consultaMostrada, setConsultaMostrada] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [verEliminados, setVerEliminados] = useState(false);
   const [recarga, setRecarga] = useState(0);
-  const [aEliminar, setAEliminar] = useState<UserView | null>(null);
+  const [pedido, setPedido] = useState<PedidoDeConfirmacion | null>(null);
   const [creando, setCreando] = useState(false);
   const [editando, setEditando] = useState<UserView | null>(null);
   const [busqueda, setBusqueda] = useState('');
   // La contraseña generada se muestra UNA vez: después no se puede recuperar.
   const [credencial, setCredencial] = useState<{ username: string; password: string; nueva: boolean } | null>(null);
+  const [errorCopia, setErrorCopia] = useState('');
+  const avisar = useAvisar();
 
   const esAdmin = me.role === 'admin';
   const esSupervisor = esAdmin || me.role === 'supervisor';
 
   useEffect(() => {
     let vigente = true;
+    setCargando(true);
     buscarUsuarios({ incluirEliminados: verEliminados, q: busqueda })
-      .then((lista) => vigente && setUsers(lista))
-      .catch((e) => vigente && setError(textoError(e)));
+      .then((lista) => {
+        if (!vigente) return;
+        setUsers(lista);
+        setConsultaMostrada(busqueda);
+        // Como en Bases y Rutas: una lista que llegó bien se lleva el error de
+        // la carga que había fallado antes.
+        setError('');
+      })
+      .catch((e) => vigente && setError(textoError(e)))
+      .finally(() => {
+        if (vigente) setCargando(false);
+      });
     return () => {
       vigente = false;
     };
   }, [verEliminados, recarga, busqueda]);
 
-  async function accion(fn: () => Promise<unknown>) {
+  /** Lo que no pregunta (restaurar, autorizar, reactivar): su error va arriba de la tabla. */
+  async function accion(fn: () => Promise<unknown>, aviso: string) {
     setError('');
     try {
       await fn();
+      avisar(aviso);
       setRecarga((n) => n + 1);
     } catch (e) {
       setError(textoError(e));
     }
   }
 
-  const patch = (username: string, body: object) => () =>
-    accion(() => api(`/users/${username}`, { method: 'PATCH', body: JSON.stringify(body) }));
-
   /**
-   * Regenerar es la única forma de recuperar el acceso a una cuenta: la
-   * anterior se pisa y la nueva se muestra una sola vez, acá mismo.
+   * Lo que pasa por la confirmación: el error sube al diálogo, que queda
+   * abierto. Si sale bien se lleva el error de una acción anterior: si no,
+   * quedaba en rojo arriba de la tabla al lado del aviso de que salió bien.
    */
-  function regenerar(usuario: UserView) {
-    accion(async () => {
-      const r = await api<UserView & { password: string }>(`/users/${usuario.username}/regenerate-password`, {
-        method: 'POST',
-      });
-      setCredencial({ username: r.username, password: r.password, nueva: false });
+  function confirmada(fn: () => Promise<unknown>, aviso: string) {
+    return async () => {
+      await fn();
+      setError('');
+      avisar(aviso);
+      setRecarga((n) => n + 1);
+    };
+  }
+
+  const patch = (username: string, body: object) => () =>
+    api(`/users/${username}`, { method: 'PATCH', body: JSON.stringify(body) });
+
+  function alternarControl(u: UserView) {
+    if (!u.canControl) {
+      void accion(patch(u.username, { canControl: true }), `${u.username} puede volver a controlar drones.`);
+      return;
+    }
+    setPedido({
+      titulo: `Suspender el control de ${u.username}`,
+      consecuencia: CONSECUENCIA.suspender(u.username),
+      detalle: 'Se vuelve a autorizar desde esta misma fila.',
+      confirmar: 'Suspender',
+      enCurso: 'Suspendiendo…',
+      accion: confirmada(patch(u.username, { canControl: false }), `Control de ${u.username} suspendido.`),
     });
   }
 
-  function eliminar(usuario: UserView) {
-    setAEliminar(null);
-    accion(() => api(`/users/${usuario.username}`, { method: 'DELETE' }));
+  function alternarActiva(u: UserView) {
+    if (!u.active) {
+      void accion(patch(u.username, { active: true }), `Cuenta de ${u.username} reactivada.`);
+      return;
+    }
+    setPedido({
+      titulo: `Desactivar a ${u.username}`,
+      consecuencia: CONSECUENCIA.desactivar(u.username),
+      detalle: 'La cuenta se conserva tal cual y se reactiva desde esta misma fila.',
+      confirmar: 'Desactivar',
+      enCurso: 'Desactivando…',
+      accion: confirmada(patch(u.username, { active: false }), `Cuenta de ${u.username} desactivada.`),
+    });
+  }
+
+  /**
+   * Regenerar es la única forma de recuperar el acceso a una cuenta: la
+   * anterior se pisa en el acto y la nueva se muestra una sola vez, acá mismo.
+   * Por eso pregunta: un clic de más dejaba a alguien afuera sin saberlo.
+   */
+  function regenerar(u: UserView) {
+    setPedido({
+      titulo: `Regenerar la contraseña de ${u.username}`,
+      consecuencia: `La contraseña actual de ${u.username} deja de servir en el acto.`,
+      detalle: 'La nueva se muestra una sola vez, en la pantalla que sigue: tenela a mano para anotarla o dictarla.',
+      confirmar: 'Regenerar',
+      enCurso: 'Regenerando…',
+      tono: 'primario',
+      accion: async () => {
+        const r = await api<UserView & { password: string }>(`/users/${u.username}/regenerate-password`, {
+          method: 'POST',
+        });
+        setErrorCopia('');
+        setCredencial({ username: r.username, password: r.password, nueva: false });
+      },
+    });
+  }
+
+  function pedirBaja(u: UserView) {
+    setPedido({
+      titulo: `Eliminar a ${u.username}`,
+      subtitulo: 'La baja se puede deshacer',
+      consecuencia: (
+        <>
+          La cuenta <strong>{u.username}</strong> deja de poder entrar a la consola y sale del listado.
+        </>
+      ),
+      detalle:
+        'El borrado es lógico: un administrador puede restaurarla más adelante desde «Ver eliminados». Hasta entonces el nombre de usuario sigue ocupado.',
+      confirmar: 'Eliminar',
+      enCurso: 'Eliminando…',
+      accion: confirmada(() => api(`/users/${u.username}`, { method: 'DELETE' }), `Cuenta de ${u.username} eliminada.`),
+    });
   }
 
   function creado(usuario: UserView & { password: string }) {
     setCreando(false);
+    setErrorCopia('');
     setCredencial({ username: usuario.username, password: usuario.password, nueva: true });
     setRecarga((n) => n + 1);
   }
 
   function guardado() {
+    if (editando) avisar(`Cambios de ${editando.username} guardados.`);
     setEditando(null);
     setRecarga((n) => n + 1);
+  }
+
+  /**
+   * Copiar la contraseña decía nada, saliera bien o mal: fuera de un contexto
+   * seguro el navegador no da portapapeles y el botón quedaba igual. Ahora lo
+   * confirma el aviso, y si no se pudo, lo dice al lado de la contraseña.
+   */
+  async function copiarCredencial(password: string) {
+    setErrorCopia('');
+    try {
+      if (!navigator.clipboard) throw new Error('sin portapapeles');
+      await navigator.clipboard.writeText(password);
+      avisar('Contraseña copiada.');
+    } catch {
+      setErrorCopia('No se pudo copiar: seleccioná la contraseña y copiala a mano.');
+    }
   }
 
   // El backend sólo respeta `includeDeleted` para supervisor+; el filtro de acá
   // es el que garantiza que con el toggle apagado no se cuele ninguna baja.
   const visibles = users.filter((u) => verEliminados || !u.deleted);
+  const hayBusqueda = (consultaMostrada ?? '').trim() !== '';
 
   return (
     <main className="page-main">
-      <div className="barra-acciones">
-        <h2>Usuarios</h2>
-        <input
-          className="buscador"
-          type="search"
-          value={busqueda}
-          onChange={(e) => setBusqueda(e.target.value)}
-          placeholder="Buscar por usuario, nombre, DNI o rol…"
-          aria-label="Buscar usuarios"
-        />
-        {esSupervisor && (
-          <button
-            className={`toggle-eliminados${verEliminados ? ' activo' : ''}`}
-            aria-pressed={verEliminados}
-            onClick={() => setVerEliminados((v) => !v)}
-          >
-            {verEliminados ? 'Ocultar eliminados' : 'Ver eliminados'}
-          </button>
-        )}
-        {esAdmin && (
-          <button className="primario chico" onClick={() => setCreando(true)}>
-            Nuevo usuario
-          </button>
-        )}
-      </div>
+      <EncabezadoDeVista
+        titulo="Usuarios"
+        filtros={
+          <input
+            className="buscador"
+            type="search"
+            value={busqueda}
+            onChange={(e) => setBusqueda(e.target.value)}
+            placeholder="Buscar por usuario, nombre, DNI o rol…"
+            aria-label="Buscar usuarios"
+          />
+        }
+        opciones={
+          esSupervisor && (
+            <button
+              type="button"
+              className={`toggle-eliminados${verEliminados ? ' activo' : ''}`}
+              aria-pressed={verEliminados}
+              onClick={() => setVerEliminados((v) => !v)}
+            >
+              Ver eliminados
+            </button>
+          )
+        }
+        accion={
+          esAdmin && (
+            <button type="button" className="primario" onClick={() => setCreando(true)}>
+              Nuevo usuario
+            </button>
+          )
+        }
+      />
 
       {error && (
         <p className="aviso malo" role="alert">
@@ -177,11 +245,24 @@ export default function UsersView({ me }: { me: Me }) {
       )}
 
       <section className="card">
-        {visibles.length === 0 ? (
-          <p className="vacio">No hay usuarios para mostrar.</p>
-        ) : (
-          <div className="tabla-envoltorio">
-            <table className="tabla">
+        {cargando && consultaMostrada === null && <EsqueletoDeTabla texto="Trayendo los usuarios…" />}
+        {/* Sin el error afuera, con la carga caída el cartel decía que no
+            había usuarios, o que la búsqueda no coincidía, sin haberla hecho.
+            Mientras viaja la búsqueda siguiente el cartel queda, ocupado. */}
+        {consultaMostrada !== null && !error && visibles.length === 0 && (
+          <div aria-busy={cargando || undefined}>
+            {hayBusqueda ? (
+              <EstadoVacio titulo="Ningún usuario coincide con la búsqueda.">
+                Probá con otra parte del nombre, el DNI sin puntos o el rol.
+              </EstadoVacio>
+            ) : (
+              <EstadoVacio titulo="No hay usuarios para mostrar." />
+            )}
+          </div>
+        )}
+        {visibles.length > 0 && (
+          <div className="tabla-envoltorio" aria-busy={cargando || undefined}>
+            <table className="tabla tabla-gestion">
               <thead>
                 <tr>
                   <th>Usuario</th>
@@ -190,7 +271,7 @@ export default function UsersView({ me }: { me: Me }) {
                   <th>Rol</th>
                   <th>Control de drones</th>
                   <th>Estado</th>
-                  {esSupervisor && <th>Acciones</th>}
+                  {esSupervisor && <th className="columna-acciones">Acciones</th>}
                 </tr>
               </thead>
               <tbody>
@@ -218,16 +299,16 @@ export default function UsersView({ me }: { me: Me }) {
                       <td>{ROL[u.role]}</td>
                       <td>
                         {controlAplica ? (
-                          <>
+                          <span className="celda-con-accion">
                             <span className={u.canControl ? 'ok' : 'bad'}>
                               {u.canControl ? 'Autorizado' : 'Suspendido'}
-                            </span>{' '}
+                            </span>
                             {puedeTocarControl && (
-                              <button className="chico" onClick={patch(u.username, { canControl: !u.canControl })}>
+                              <button type="button" className="chico" onClick={() => alternarControl(u)}>
                                 {u.canControl ? 'Suspender' : 'Autorizar'}
                               </button>
                             )}
-                          </>
+                          </span>
                         ) : (
                           <span className="muted">No aplica</span>
                         )}
@@ -236,49 +317,60 @@ export default function UsersView({ me }: { me: Me }) {
                         {eliminado ? (
                           <span className="badge">Eliminado</span>
                         ) : (
-                          <>
+                          <span className="celda-con-accion">
                             <span className={`estado ${u.active ? 'ok' : 'muted'}`}>
                               {u.active ? 'Activo' : 'Desactivado'}
-                            </span>{' '}
+                            </span>
                             {esAdmin && !esYo && (
-                              <button className="chico" onClick={patch(u.username, { active: !u.active })}>
+                              <button type="button" className="chico" onClick={() => alternarActiva(u)}>
                                 {u.active ? 'Desactivar' : 'Reactivar'}
                               </button>
                             )}
-                          </>
+                          </span>
                         )}
                       </td>
                       {esSupervisor && (
                         <td className="barra-acciones">
-                          {puedeEditar && (
-                            <button
-                              className="chico"
-                              aria-label={`Editar a ${u.username}`}
-                              onClick={() => setEditando(u)}
-                            >
-                              Editar
-                            </button>
-                          )}
-                          {esAdmin &&
-                            (eliminado ? (
+                          {/* El mismo grupo y el mismo orden que en Drones, Bases
+                              y Rutas: Editar primero, Eliminar al final. */}
+                          <div className="acciones-fila" role="group" aria-label={`Acciones de ${u.username}`}>
+                            {puedeEditar && (
                               <button
+                                type="button"
                                 className="chico"
-                                onClick={() => accion(() => api(`/users/${u.username}/restore`, { method: 'POST' }))}
+                                aria-label={`Editar a ${u.username}`}
+                                onClick={() => setEditando(u)}
                               >
-                                Restaurar
+                                Editar
                               </button>
-                            ) : (
-                              <>
-                                <button className="chico" onClick={() => regenerar(u)}>
-                                  Regenerar contraseña
+                            )}
+                            {esAdmin &&
+                              (eliminado ? (
+                                <button
+                                  type="button"
+                                  className="chico"
+                                  onClick={() =>
+                                    accion(
+                                      () => api(`/users/${u.username}/restore`, { method: 'POST' }),
+                                      `Cuenta de ${u.username} restaurada.`,
+                                    )
+                                  }
+                                >
+                                  Restaurar
                                 </button>
-                                {!esYo && (
-                                  <button className="chico dismiss" onClick={() => setAEliminar(u)}>
-                                    Eliminar
+                              ) : (
+                                <>
+                                  <button type="button" className="chico" onClick={() => regenerar(u)}>
+                                    Regenerar contraseña
                                   </button>
-                                )}
-                              </>
-                            ))}
+                                  {!esYo && (
+                                    <button type="button" className="chico dismiss" onClick={() => pedirBaja(u)}>
+                                      Eliminar
+                                    </button>
+                                  )}
+                                </>
+                              ))}
+                          </div>
                         </td>
                       )}
                     </tr>
@@ -315,29 +407,24 @@ export default function UsersView({ me }: { me: Me }) {
               y eso invalida la anterior.
             </p>
             <p className="credencial mono">{credencial.password}</p>
-            <button
-              type="button"
-              className="chico"
-              onClick={() => navigator.clipboard?.writeText(credencial.password)}
-            >
+            <button type="button" className="chico copiar-credencial" onClick={() => copiarCredencial(credencial.password)}>
               Copiar
             </button>
+            {errorCopia && (
+              <p className="aviso malo" role="alert">
+                {errorCopia}
+              </p>
+            )}
           </div>
           <footer className="modal-pie">
-            <button className="primario" onClick={() => setCredencial(null)}>
+            <button type="button" className="primario" onClick={() => setCredencial(null)}>
               Ya la anoté
             </button>
           </footer>
         </Modal>
       )}
 
-      {aEliminar && (
-        <ModalEliminar
-          usuario={aEliminar.username}
-          onCancelar={() => setAEliminar(null)}
-          onConfirmar={() => eliminar(aEliminar)}
-        />
-      )}
+      {pedido && <DialogoConfirmacion pedido={pedido} onCerrar={() => setPedido(null)} />}
     </main>
   );
 }

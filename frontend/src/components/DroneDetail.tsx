@@ -1,17 +1,18 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, rutasDeBase } from '../api';
 import { posicionDelDron, stateLabel } from '../format';
 import type { RastroObjetivo } from '../rastro';
 import type { Alert, Drone, DroneStatus, EventRow, Me, PatrolRoute } from '../types';
 import type { DecidirAlerta } from '../useDecisionDeAlerta';
 import AlertaEnCurso from './AlertaEnCurso';
+import { useAvisar } from './AvisosFlotantes';
+import DialogoConfirmacion from './DialogoConfirmacion';
 import DroneStatusCard from './DroneStatusCard';
 import DronesMap, { type MapItem, type WaypointsLayer } from './DronesMap';
 import EditableName from './EditableName';
 import EventLog from './EventLog';
 import LiveVideo from './LiveVideo';
 import type { Ejes } from './MandoVirtual';
-import Modal from './Modal';
 import PanelObjetivo from './PanelObjetivo';
 import PilotajePantallaCompleta from './PilotajePantallaCompleta';
 
@@ -120,6 +121,12 @@ export default function DroneDetail({
   onCamara: (pitch: number) => boolean;
 }) {
   const [history, setHistory] = useState<EventRow[]>([]);
+  // Hasta que llega el historial, el registro no puede decir "sin eventos":
+  // es lo primero que se lee al entrar y era mentira por medio segundo.
+  const [historiaCargada, setHistoriaCargada] = useState(false);
+  /** El supervisor pidió quitarle el control a otro y falta confirmarlo. */
+  const [quitando, setQuitando] = useState(false);
+  const avisar = useAvisar();
   const [error, setError] = useState('');
   const [rutaElegida, setRutaElegida] = useState<number | ''>('');
   // Ids de las rutas que la base de este dron tiene habilitadas. `null` mientras
@@ -154,8 +161,6 @@ export default function DroneDetail({
    * se cerraba diciendo que el control se soltó "desde otra sesión".
    */
   const fichaAlCortarseElEnlace = useRef<Drone | null>(null);
-  const idTitulo = useId();
-  const idTexto = useId();
 
   // Un dron sólo puede patrullar las rutas de la base de la que sale. Ofrecerle
   // todas las del sistema era mandarlo a volar a la otra punta de la ciudad.
@@ -175,11 +180,23 @@ export default function DroneDetail({
     };
   }, [drone.droneId, drone.baseId]);
 
+  // Como los demás cargadores: la respuesta de un dron que ya se dejó no se
+  // escribe. Sin esto, saltar de A a B desde la campana dejaba que la
+  // respuesta de A llenara el registro de B con eventos ajenos, o que diera
+  // por cargado el de B y dijera "Sin eventos" mientras el suyo seguía viajando.
   useEffect(() => {
+    let vigente = true;
     setHistory([]);
+    setHistoriaCargada(false);
     api<EventRow[]>(`/events?droneId=${encodeURIComponent(drone.droneId)}`)
-      .then(setHistory)
-      .catch(console.error);
+      .then((h) => vigente && setHistory(h))
+      .catch(console.error)
+      .finally(() => {
+        if (vigente) setHistoriaCargada(true);
+      });
+    return () => {
+      vigente = false;
+    };
   }, [drone.droneId]);
 
   // Historial del dron más los eventos que fueron llegando por WebSocket.
@@ -241,6 +258,12 @@ export default function DroneDetail({
   useEffect(() => {
     if (!soyControlador) setOrdenEnCurso(null);
   }, [soyControlador]);
+  // Si el control cambia de manos (o se suelta) mientras el supervisor lee la
+  // pregunta, la pregunta ya no es la misma: se descarta en vez de quedar
+  // pendiente y reaparecer con el próximo que lo tome.
+  useEffect(() => {
+    setQuitando(false);
+  }, [controlador]);
 
   /**
    * El estado que el dron reportó DESPUÉS de que se tomó el control, o `null`
@@ -355,10 +378,20 @@ export default function DroneDetail({
    */
   const soltarControl = (resume: 'none' | 'last') =>
     llamar(`/drones/${drone.droneId}/control`, { method: 'DELETE', body: JSON.stringify({ resume }) });
-  // Supervisor: mismo endpoint, el backend registra que fue forzado. Con
-  // objetivo, el dron vuelve a él: quitarle el control a alguien no es decidir
-  // que el objetivo deja de importar.
-  const quitarControl = () => soltarControl(objetivo ? 'none' : 'last');
+  /**
+   * Supervisor: mismo endpoint, el backend registra que fue forzado. Con
+   * objetivo, el dron vuelve a él: quitarle el control a alguien no es decidir
+   * que el objetivo deja de importar. Va por la confirmación (le corta el vuelo
+   * a otra persona), así que el error sube al diálogo en vez de quedar acá.
+   */
+  async function quitarControl() {
+    const otro = controlador;
+    await api(`/drones/${drone.droneId}/control`, {
+      method: 'DELETE',
+      body: JSON.stringify({ resume: objetivo ? 'none' : 'last' }),
+    });
+    avisar(`Se le quitó el control de ${drone.displayName} a ${otro}.`);
+  }
   /**
    * La salida de la vista de pilotaje suelta el control con la misma regla que
    * el supervisor: con objetivo, el dron vuelve a él. La vista se cierra antes
@@ -469,7 +502,7 @@ export default function DroneDetail({
           <svg width="15" height="15" viewBox="0 0 16 16" {...TRAZO} style={{ verticalAlign: '-2px' }}>
             <path d="M13 8H3.4M7.4 3.4 3 8l4.4 4.6" />
           </svg>{' '}
-          Volver a Drones
+          Volver a Operación
         </button>
         <h2>
           <EditableName name={drone.displayName} onRename={onRename} />
@@ -705,7 +738,7 @@ export default function DroneDetail({
               <p className="muted">
                 Controlado por <strong>{controlador}</strong>.{' '}
                 {esSupervisor && (
-                  <button className="chico dismiss" onClick={quitarControl}>
+                  <button className="chico dismiss" onClick={() => setQuitando(true)}>
                     Quitar control
                   </button>
                 )}
@@ -717,7 +750,7 @@ export default function DroneDetail({
 
       {/* La alerta de este dron se decide arriba, al lado del video; la
           campana del encabezado sigue avisando desde cualquier vista. */}
-      <EventLog events={events} />
+      <EventLog events={events} cargando={!historiaCargada} />
 
       {pilotando && (
         <PilotajePantallaCompleta
@@ -745,30 +778,39 @@ export default function DroneDetail({
         />
       )}
 
+      {/* La misma confirmación que el resto de la consola. La orden sale sin
+          esperar al backend (el diálogo se cierra en el acto) porque su
+          resultado se lee donde se está mirando: en la tarjeta o en el HUD. */}
       {aConfirmar && confirmacion && (
-        <Modal etiquetadoPor={idTitulo} descritoPor={idTexto} onCerrar={() => setAConfirmar(null)}>
-          <header className="modal-cabecera">
-            <h2 className="modal-titulo" id={idTitulo}>
-              {confirmacion.titulo} {drone.displayName}
-            </h2>
-          </header>
-          <div className="modal-cuerpo">
-            <p id={idTexto}>{confirmacion.texto}</p>
-            <p className="muted">{confirmacion.aviso}</p>
-          </div>
-          <footer className="modal-pie">
-            <button type="button" className="ghost" onClick={() => setAConfirmar(null)}>
-              Cancelar
-            </button>
-            <button
-              type="button"
-              className={aConfirmar === 'despegar' ? 'primario' : 'dismiss'}
-              onClick={() => confirmarOrden(aConfirmar)}
-            >
-              {confirmacion.boton}
-            </button>
-          </footer>
-        </Modal>
+        <DialogoConfirmacion
+          pedido={{
+            titulo: `${confirmacion.titulo} ${drone.displayName}`,
+            consecuencia: confirmacion.texto,
+            detalle: confirmacion.aviso,
+            confirmar: confirmacion.boton,
+            tono: aConfirmar === 'despegar' ? 'primario' : 'peligro',
+            accion: () => {
+              void confirmarOrden(aConfirmar);
+            },
+          }}
+          onCerrar={() => setAConfirmar(null)}
+        />
+      )}
+
+      {quitando && controlador && (
+        <DialogoConfirmacion
+          pedido={{
+            titulo: `Quitarle el control a ${controlador}`,
+            consecuencia: objetivo
+              ? `${controlador} deja de pilotear ${drone.displayName} en el acto y el dron vuelve al objetivo que estaba siguiendo.`
+              : `${controlador} deja de pilotear ${drone.displayName} en el acto y el dron vuelve a patrullar su ruta.`,
+            detalle: 'Queda en el registro que el control se soltó a la fuerza, y quién lo hizo.',
+            confirmar: 'Quitar control',
+            enCurso: 'Quitando…',
+            accion: quitarControl,
+          }}
+          onCerrar={() => setQuitando(false)}
+        />
       )}
     </main>
   );

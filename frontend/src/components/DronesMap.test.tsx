@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import DronesMap, { type MapItem } from './DronesMap';
+import { OPACIDAD_TRAZO, TRAZO } from '../mapa';
 import type { DroneStatus, ObjetivoEnSeguimiento, PatrolRoute } from '../types';
 
 /*
@@ -704,14 +705,49 @@ describe('DronesMap — objetivo', () => {
   it('rojo mientras la alerta espera, oro una vez validada (sin crear otra mira)', () => {
     const { rerender } = render(<DronesMap items={[conObjetivo()]} />);
     const mira = miras()[0];
-    expect(htmlIcono(mira)).toContain('#9C3B30');
-    expect(hilos()[0].estilo.color).toBe('#9C3B30');
+    expect(htmlIcono(mira)).toContain('#8E3328');
+    expect(hilos()[0].estilo.color).toBe('#8E3328');
 
     rerender(<DronesMap items={[conObjetivo({ decision: 'VALIDATED' })]} />);
     expect(miras()).toHaveLength(1);
     expect(htmlIcono(mira)).toContain('#B8912F');
-    expect(htmlIcono(mira)).not.toContain('#9C3B30');
-    expect(hilos()[0].estilo.color).toBe('#B8912F');
+    expect(htmlIcono(mira)).not.toContain('#8E3328');
+    expect(hilos().filter((c) => c.enMapa).map((c) => c.estilo.color)).toEqual(['#B8912F']);
+  });
+
+  it('el hilo y el rastro llevan la clase que el tema tiñe, y la cambian al decidirse la alerta', () => {
+    // Leaflet pone la clase sólo al crear el path (setStyle no la toca): si el
+    // trazo no se rehiciera, el CSS lo seguiría pintando de óxido ya validado.
+    const rastro: [number, number][] = [
+      [-34.604, -58.382],
+      [-34.60412, -58.3817],
+    ];
+    const trazos = () => [...hilos(), ...rastros()].filter((c) => c.enMapa);
+    const { rerender } = render(<DronesMap items={[conObjetivo({}, { rastroObjetivo: rastro })]} />);
+    expect(trazos()).toHaveLength(2);
+    for (const t of trazos()) expect(t.estilo.className).toBe(TRAZO.objetivoPendiente);
+    // Con la misma decisión se actualizan en el lugar: no se rehacen en cada status.
+    const [hilo, rastroDibujado] = trazos();
+    rerender(<DronesMap items={[conObjetivo({ lat: -34.6042 }, { rastroObjetivo: rastro })]} />);
+    expect(trazos()).toEqual([hilo, rastroDibujado]);
+
+    rerender(<DronesMap items={[conObjetivo({ decision: 'VALIDATED' }, { rastroObjetivo: rastro })]} />);
+    expect(hilo.enMapa).toBe(false);
+    expect(rastroDibujado.enMapa).toBe(false);
+    expect(trazos()).toHaveLength(2);
+    for (const t of trazos()) expect(t.estilo.className).toBe(TRAZO.objetivoValidado);
+  });
+
+  it('el hilo a la base, el del objetivo y el rastro van con la opacidad que mide el contraste', () => {
+    const rastro: [number, number][] = [
+      [-34.604, -58.382],
+      [-34.60412, -58.3817],
+    ];
+    render(<DronesMap items={[conObjetivo({}, { rastroObjetivo: rastro })]} />);
+    const aLaBase = todas('polyline').find((c) => c.estilo.className === TRAZO.hilo)!;
+    expect(aLaBase.estilo.opacity).toBe(OPACIDAD_TRAZO.hilo);
+    expect(hilos()[0].estilo.opacity).toBe(OPACIDAD_TRAZO.hiloObjetivo);
+    expect(rastros()[0].estilo.opacity).toBe(OPACIDAD_TRAZO.rastroObjetivo);
   });
 
   it('perdido: la mira y el rastro van apagados y punteados', () => {

@@ -1,7 +1,7 @@
 import L from 'leaflet';
 import { useEffect, useRef } from 'react';
 import { rumbo as textoDeRumbo } from '../format';
-import { CENTRO_POR_DEFECTO, crearFondos, filtroDeTeselas, vestir, vestirAtribucion } from '../mapa';
+import { CENTRO_POR_DEFECTO, crearFondos, vestirAtribucion } from '../mapa';
 
 /** Zoom de calle: se ven la cuadra y las de alrededor, que es lo que sirve para no perderse. */
 const ZOOM = 17;
@@ -41,9 +41,10 @@ export default function Minimapa({
       touchZoom: false,
     }).setView(CENTRO_POR_DEFECTO, ZOOM);
     // Sólo el callejero: en un recuadro de 200 px el satelital es una mancha
-    // verde y gris donde no se distingue una calle.
+    // verde y gris donde no se distingue una calle. De noche lo oscurece el
+    // CSS por la clase que trae la capa (mapa.ts): sobre el video, un recuadro
+    // de mapa diurno era lo que más encandilaba del HUD.
     crearFondos().mapa.addTo(m);
-    vestir(m.getPane('tilePane'), { filter: filtroDeTeselas() });
     // La atribución de OpenStreetMap es obligatoria; el "Leaflet" de adelante
     // no, y en un recuadro tan chico tapa la mitad del ancho.
     vestirAtribucion(m, '');

@@ -49,4 +49,21 @@ describe('EventLog', () => {
     expect(screen.getByText('Evento')).toBeInTheDocument();
     expect(screen.getByText('Detalle')).toBeInTheDocument();
   });
+
+  it('mientras llega el historial no dice "sin eventos": muestra el esqueleto', () => {
+    const { rerender } = render(<EventLog events={[]} cargando />);
+    expect(screen.getByRole('status')).toHaveTextContent('Trayendo los eventos del dron…');
+    expect(screen.queryByText('Sin eventos registrados.')).not.toBeInTheDocument();
+
+    rerender(<EventLog events={[]} cargando={false} />);
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.getByText('Sin eventos registrados.')).toBeInTheDocument();
+  });
+
+  it('lo que llega en vivo se ve aunque el historial todavía viaje', () => {
+    render(<EventLog events={[makeEvent({ id: 9, message: 'llegó en vivo' })]} cargando />);
+    expect(screen.getByText('llegó en vivo')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByText('Sin eventos registrados.')).not.toBeInTheDocument();
+  });
 });

@@ -272,4 +272,48 @@ describe('LogsView', () => {
     expect(screen.queryByText('antes / después')).not.toBeInTheDocument();
     expect(document.querySelector('pre')).toBeNull();
   });
+
+  it('la primera carga es un esqueleto; cambiar de pestaña deja la lista de antes, apagada, hasta que llega la nueva', async () => {
+    let liberar: (p: PaginaLogs) => void = () => {};
+    traerLogsMock.mockImplementation(() => new Promise<PaginaLogs>((r) => (liberar = r)));
+    render(<LogsView />);
+    expect(screen.getByRole('status')).toHaveTextContent('Trayendo el registro…');
+    expect(screen.queryByText('Sin registros.')).not.toBeInTheDocument();
+
+    await act(async () => liberar(pagina([makeEvent({ id: 1, message: 'arranque del sistema' })])));
+    const panel = screen.getByRole('tabpanel');
+    expect(panel).not.toHaveAttribute('aria-busy');
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Usuarios' }));
+    // Ni parpadeo de "sin registros" ni esqueleto: la lista sigue, ocupada.
+    expect(panel).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByText('arranque del sistema')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+
+    await act(async () => liberar(pagina([])));
+    expect(panel).not.toHaveAttribute('aria-busy');
+    expect(screen.getByText('Sin registros.')).toBeInTheDocument();
+  });
+
+  it('el vacío dice qué va a aparecer acá', async () => {
+    render(<LogsView />);
+    expect(await screen.findByText(/va a quedar anotado acá/)).toBeInTheDocument();
+  });
+
+  it('el error se anuncia solo, como los de las otras vistas', async () => {
+    traerLogsMock.mockRejectedValue(new Error('Requiere rol admin'));
+    render(<LogsView />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('No se pudo traer el registro: Requiere rol admin');
+  });
+
+  it('la cabecera es la de todas las vistas, con el tamaño de página y actualizar a la derecha', () => {
+    traerLogsMock.mockReturnValue(new Promise(() => {}));
+    const { container } = render(<LogsView />);
+    const cabecera = container.querySelector('.vista-cabecera') as HTMLElement;
+    expect(cabecera).toContainElement(screen.getByRole('heading', { name: 'Registro del sistema' }));
+    expect(cabecera.querySelector('.vista-opciones')).toContainElement(screen.getByLabelText('Por página'));
+    expect(cabecera.querySelector('.vista-opciones')).toContainElement(screen.getByRole('button', { name: 'Actualizar' }));
+    expect(screen.getByRole('tablist', { name: 'Categorías del registro' })).toBeInTheDocument();
+  });
 });
+
