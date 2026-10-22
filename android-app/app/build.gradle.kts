@@ -148,6 +148,10 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.13")
     testImplementation("androidx.test:core:1.6.1")
+    // Reloj virtual para las corrutinas de las pruebas: la espera de 3 s antes
+    // de reconectar un socket se verifica al milisegundo adelantando ese reloj,
+    // sin dormir la suite. Misma versión que kotlinx-coroutines-android.
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
 
     // DJI Mobile SDK v5 — solo para el flavor "dji" (publicado en Maven Central).
     // 5.17.0 es la primera versión con el Mini 4 Pro + RC-N3; 5.18.0 (mayo 2026)

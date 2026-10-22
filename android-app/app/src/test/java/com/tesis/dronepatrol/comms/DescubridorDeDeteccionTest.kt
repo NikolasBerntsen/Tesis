@@ -1,6 +1,7 @@
 package com.tesis.dronepatrol.comms
 
 import android.os.Build
+import com.tesis.dronepatrol.patrol.RelojFalso
 import java.io.IOException
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -28,7 +29,9 @@ import org.robolectric.annotation.Config
  *
  * La escucha corre contra un socket UDP de mentira ([SocketUdpFalso]): el
  * "hola" de verdad sale por broadcast a la LAN de la PC de desarrollo, y ahí un
- * servidor de detección abierto lo tomaba por un teléfono.
+ * servidor de detección abierto lo tomaba por un teléfono. El ritmo del "hola"
+ * se mide con un [RelojFalso] que el test adelanta: los 2 s y los 5 s se
+ * prueban en su límite exacto y sin esperarlos.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -36,6 +39,9 @@ class DescubridorDeDeteccionTest {
 
     private val udp = SocketUdpFalso()
     private val enMarcha = mutableListOf<DescubridorDeDeteccion>()
+
+    /** Un instante cualquiera, lejos del cero: el primer "hola" sale porque "nunca" se oyó a la PC. */
+    private val reloj = RelojFalso(1_700_000_000_000L)
 
     /** La red elegida de mentira: anota qué sockets le pidieron atar. */
     private class RedQueAnota : RedLocal {
@@ -50,7 +56,8 @@ class DescubridorDeDeteccionTest {
         anunciarse: Boolean = false,
         red: RedLocal = RedPorDefecto,
         crearSocket: () -> DatagramSocket = { udp },
-    ) = DescubridorDeDeteccion(red = red, anunciarse = anunciarse, crearSocket = crearSocket).also { enMarcha += it }
+    ) = DescubridorDeDeteccion(red = red, anunciarse = anunciarse, crearSocket = crearSocket, reloj = reloj::ahora)
+        .also { enMarcha += it }
 
     @After
     fun parar() {
@@ -121,7 +128,6 @@ class DescubridorDeDeteccionTest {
     fun `un anuncio que llega se publica con la direccion de origen`() {
         val d = descubridor()
         d.empezar()
-        val antes = System.currentTimeMillis()
 
         udp.llega("""{"service":"dronepatrol-detection","port":8765,"name":"notebook-campo"}""", "192.168.1.40")
 
@@ -129,7 +135,7 @@ class DescubridorDeDeteccionTest {
         val anuncio = d.anuncio.value!!
         assertEquals("ws://192.168.1.40:8765/phone", anuncio.url)
         assertEquals("notebook-campo", anuncio.nombre)
-        assertTrue(anuncio.recibidoMs >= antes)
+        assertEquals("se fecha con la hora en que llegó", reloj.ms, anuncio.recibidoMs)
         assertNull(d.fallo.value)
     }
 
@@ -158,29 +164,36 @@ class DescubridorDeDeteccionTest {
     /**
      * Mientras no oye a la PC, la app se anuncia ella: un "hola" por broadcast
      * al puerto de los anuncios, cada 2 s (§4), con el modelo del teléfono.
+     * Uno por intervalo: a los 2 s justos todavía no toca el siguiente.
      */
     @Test
     fun `mientras no oye a la PC se anuncia cada dos segundos`() {
         descubridor(anunciarse = true).empezar()
 
-        esperarHasta("dos holas", topeMs = 6_000) { udp.enviados.size >= 2 }
-        val (primero, segundo) = udp.enviados
+        esperarHasta("el primer hola") { udp.enviados.isNotEmpty() }
+        val primero = udp.enviados.single()
         assertEquals(InetAddress.getByName("255.255.255.255"), primero.destino)
         assertEquals(8766, primero.puerto)
         val hola = JSONObject(primero.texto)
         assertEquals("dronepatrol-app", hola.getString("service"))
         assertEquals(8766, hola.getInt("port"))
         assertEquals(Build.MODEL, hola.getString("name"))
-        assertEquals(primero.texto, segundo.texto)
-        assertTrue(
-            "entre hola y hola pasaron ${segundo.ms - primero.ms} ms",
-            segundo.ms - primero.ms >= DescubridorDeDeteccion.INTERVALO_HOLA_MS - 100,
-        )
+
+        reloj.adelantar(DescubridorDeDeteccion.INTERVALO_HOLA_MS)
+        udp.esperarUnaVueltaEntera()
+        assertEquals("a los 2 s justos todavía no", 1, udp.enviados.size)
+
+        reloj.adelantar(1)
+        esperarHasta("el segundo hola") { udp.enviados.size == 2 }
+        assertEquals(primero.texto, udp.enviados[1].texto)
+        udp.esperarUnaVueltaEntera()
+        assertEquals("uno solo por intervalo", 2, udp.enviados.size)
     }
 
     /**
      * Oír a la PC calla el "hola": no hace falta anunciarse mientras llegan sus
-     * anuncios. Si pasan 5 s sin ninguno, la app vuelve a anunciarse.
+     * anuncios, aunque ya haya pasado el intervalo del "hola". Si pasan más de
+     * 5 s sin ninguno, la app vuelve a anunciarse.
      */
     @Test
     fun `un anuncio calla el hola hasta que pasan cinco segundos sin anuncios`() {
@@ -189,17 +202,15 @@ class DescubridorDeDeteccionTest {
         esperarHasta("el primer hola") { udp.enviados.isNotEmpty() }
 
         udp.llega("""{"service":"dronepatrol-detection","port":8765}""", "192.168.1.40")
-        esperarHasta("el anuncio") { d.anuncio.value != null }
-        val oido = d.anuncio.value!!.recibidoMs
+        udp.esperarQueLoProcese()
+        assertEquals("el anuncio se fecha con el reloj", reloj.ms, d.anuncio.value?.recibidoMs)
 
-        Thread.sleep(DescubridorDeDeteccion.INTERVALO_HOLA_MS + 500)
-        assertEquals("con la PC a la vista no se anuncia", 1, udp.enviados.size)
+        reloj.adelantar(DescubridorDeDeteccion.SIN_ANUNCIOS_MS)
+        udp.esperarUnaVueltaEntera()
+        assertEquals("con la PC oída hace 5 s justos no se anuncia", 1, udp.enviados.size)
 
-        esperarHasta("que vuelva a anunciarse", topeMs = 8_000) { udp.enviados.size >= 2 }
-        assertTrue(
-            "volvió a anunciarse ${udp.enviados[1].ms - oido} ms después del último anuncio",
-            udp.enviados[1].ms - oido >= DescubridorDeDeteccion.SIN_ANUNCIOS_MS - 100,
-        )
+        reloj.adelantar(1)
+        esperarHasta("que vuelva a anunciarse") { udp.enviados.size == 2 }
     }
 
     /** Sin red el "hola" no sale, pero la escucha sigue esperando el anuncio de la PC. */
@@ -285,7 +296,9 @@ class DescubridorDeDeteccionTest {
         d.empezar()
         d.empezar()
         esperarHasta("el socket") { sockets.get() == 1 }
-        Thread.sleep(100)
+        // Una segunda escucha habría pedido su socket al arrancar, mucho antes
+        // de que la primera dé dos vueltas
+        udp.esperarUnaVueltaEntera()
 
         assertEquals(1, sockets.get())
     }

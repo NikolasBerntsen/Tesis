@@ -10,8 +10,6 @@ import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.concurrent.CopyOnWriteArrayList
 import javax.net.SocketFactory
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import okhttp3.OkHttpClient
 import org.json.JSONObject
@@ -37,12 +35,19 @@ import org.robolectric.annotation.Config
  * Nada sale a la red: los WebSocket y el UDP del descubrimiento son de
  * mentira (ver RedFalsa.kt) y el test les hace llegar a mano lo que diría
  * OkHttp. Robolectric por org.json.
+ *
+ * Las corrutinas del cliente (la escucha de los anuncios y los reintentos)
+ * corren con un [RelojDeCorrutinas], en el hilo del test y solo cuando el
+ * test lo dice. Así, cuando el test le hace llegar algo al socket vigente, el
+ * cliente ya terminó de abrirlo: si la escucha corriera en otro hilo, el aviso
+ * podía llegar antes de que el cliente lo tomara como vigente y perderse.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class DetectionClientEnlaceTest {
 
-    private val alcance = CoroutineScope(SupervisorJob())
+    private val reloj = RelojDeCorrutinas()
+    private val alcance = reloj.alcance
     private val sockets = SocketsFalsos()
     private val clientesHttp = CopyOnWriteArrayList<OkHttpClient>()
     private val udp = SocketUdpFalso()
@@ -82,15 +87,32 @@ class DetectionClientEnlaceTest {
 
     private val unaDeteccion = """{"type":"detection","detected":true,"classes":["PERSON"],"confidence":0.9,"ts":5}"""
 
-    private fun anunciarLaptop(ip: String, nombre: String = "notebook") =
+    /**
+     * Llega el anuncio de la laptop en [ip] y el cliente lo atiende: el
+     * descubridor lo publica en su hilo y la escucha del cliente corre acá,
+     * hasta terminar con lo que ese anuncio pida (abrir un socket, o nada).
+     */
+    private fun anunciarLaptop(ip: String, nombre: String = "notebook") {
         udp.llega("""{"service":"dronepatrol-detection","port":8765,"name":"$nombre"}""", ip)
+        udp.esperarQueLoProcese()
+        reloj.correrLoPendiente()
+    }
 
-    /** Conecta en AUTO y espera el socket que abre el anuncio de la laptop en [ip]. */
+    /** Conecta en AUTO y devuelve el socket que abre el anuncio de la laptop en [ip], ya vigente. */
     private fun conectadoEnAutoA(ip: String): SocketFalso {
         cliente.connect(ModoEnlace.AUTO)
         anunciarLaptop(ip)
-        esperarHasta("el socket a $ip") { sockets.abiertos.size == 1 }
         return sockets.abiertos.single()
+    }
+
+    /**
+     * El descubrimiento se cae con [error] y el cliente se entera: la escucha
+     * suelta el socket UDP recién después de publicar el fallo.
+     */
+    private fun seCaeElDescubrimiento(error: IOException) {
+        udp.seCae(error)
+        esperarHasta("que la escucha suelte el socket") { udp.cierres.get() >= 1 }
+        reloj.correrLoPendiente()
     }
 
     // --- Los avisos del socket vigente --------------------------------------
@@ -145,7 +167,6 @@ class DetectionClientEnlaceTest {
         cliente.connect(ModoEnlace.CABLE)
         val socket = sockets.abiertos.single()
         socket.abrir()
-        val antes = tareasDe(alcance)
 
         socket.oyente.onClosed(socket, 1011, "error interno")
 
@@ -154,7 +175,7 @@ class DetectionClientEnlaceTest {
             "El software de detección cerró el enlace (código 1011). Fijate que siga corriendo en la laptop.",
             cliente.ultimoFallo.value,
         )
-        esperarLasNuevas(alcance, antes)
+        reloj.pasan(3_000)
         assertEquals(2, sockets.abiertos.size)
     }
 
@@ -248,14 +269,12 @@ class DetectionClientEnlaceTest {
         assertEquals("el cliente de la red conserva el ping", 15_000, clientesHttp[0].pingIntervalMillis)
 
         primero.abrir()
-        val antes = tareasDe(alcance)
-        val caida = System.currentTimeMillis()
         primero.oyente.onFailure(primero, IOException("Software caused connection abort"), null)
-        assertEquals("no reintenta en el acto", 1, sockets.abiertos.size)
-        esperarLasNuevas(alcance, antes)
+        reloj.pasan(2_999)
+        assertEquals("no reintenta antes de los 3 s", 1, sockets.abiertos.size)
+        reloj.pasan(1)
 
-        assertTrue("reintentó antes de los 3 s", System.currentTimeMillis() - caida >= 2_900)
-        assertEquals(2, sockets.abiertos.size)
+        assertEquals("reintenta a los 3 s", 2, sockets.abiertos.size)
         assertEquals(primero.request().url, sockets.abiertos[1].request().url)
         assertSame("la red se vuelve a buscar en cada intento", wifi.fabricas[1], clientesHttp[1].socketFactory)
     }
@@ -276,9 +295,10 @@ class DetectionClientEnlaceTest {
         val socket = sockets.abiertos.single()
         val antes = tareasDe(alcance)
         socket.oyente.onFailure(socket, ConnectException("Connection refused"), null)
+        assertEquals("la caída agendó el reintento", 1, tareasDe(alcance).size - antes.size)
 
         cliente.disconnect()
-        esperarLasNuevas(alcance, antes)
+        reloj.pasan(3_000)
 
         assertEquals(1, sockets.abiertos.size)
         assertNull("desconectar borra el fallo", cliente.ultimoFallo.value)
@@ -295,11 +315,11 @@ class DetectionClientEnlaceTest {
         val socket = sockets.abiertos.single()
         val antes = tareasDe(alcance)
         socket.oyente.onFailure(socket, ConnectException("Connection refused"), null)
-        val reintento = nuevasDe(alcance, antes)
+        assertEquals("la caída agendó el reintento", 1, tareasDe(alcance).size - antes.size)
 
         cliente.disconnect()
         cliente.connect(ModoEnlace.AUTO)
-        esperar(reintento)
+        reloj.pasan(3_000)
 
         assertEquals(1, sockets.abiertos.size)
         assertEquals("", cliente.urlActual)
@@ -326,9 +346,8 @@ class DetectionClientEnlaceTest {
         socket.abrir()
 
         anunciarLaptop("192.168.1.40", nombre = "otro nombre, misma dirección")
-        esperarHasta("el segundo anuncio") { descubridor.anuncio.value?.nombre == "otro nombre, misma dirección" }
-        Thread.sleep(200)
 
+        assertEquals("otro nombre, misma dirección", descubridor.anuncio.value?.nombre)
         assertEquals(1, sockets.abiertos.size)
         assertNull(socket.codigoDeCierre)
         assertTrue(cliente.connected.value)
@@ -346,11 +365,12 @@ class DetectionClientEnlaceTest {
         viejo.abrir()
 
         anunciarLaptop("192.168.1.41")
-        esperarHasta("el socket a la dirección nueva") { sockets.abiertos.size == 2 }
+        assertEquals(2, sockets.abiertos.size)
         val nuevo = sockets.abiertos[1]
         assertEquals(1000, viejo.codigoDeCierre)
         assertEquals("ws://192.168.1.41:8765/phone", cliente.urlActual)
         nuevo.abrir()
+        assertTrue(cliente.connected.value)
 
         val detecciones = mutableListOf<Deteccion>()
         cliente.onDetection = { detecciones += it }
@@ -358,12 +378,13 @@ class DetectionClientEnlaceTest {
         viejo.oyente.onClosed(viejo, 1000, "")
         viejo.oyente.onFailure(viejo, IOException("Socket closed"), null)
         viejo.oyente.onMessage(viejo, unaDeteccion)
-        esperarLasNuevas(alcance, antes)
 
+        assertEquals("ningún reintento agendado por el viejo", antes, tareasDe(alcance))
+        reloj.pasan(60_000)
         assertTrue("el vigente sigue conectado", cliente.connected.value)
         assertNull(cliente.ultimoFallo.value)
         assertTrue("una detección del socket viejo no cuenta", detecciones.isEmpty())
-        assertEquals("ningún reintento por el viejo", 2, sockets.abiertos.size)
+        assertEquals(2, sockets.abiertos.size)
 
         // Y una apertura tardía del viejo no hace pasar por conectado al nuevo caído
         nuevo.oyente.onFailure(nuevo, ConnectException("Connection refused"), null)
@@ -382,12 +403,13 @@ class DetectionClientEnlaceTest {
         val primero = conectadoEnAutoA("192.168.1.40")
         val antes = tareasDe(alcance)
         primero.oyente.onFailure(primero, ConnectException("Connection refused"), null)
-        val reintento = nuevasDe(alcance, antes)
+        assertEquals("la caída agendó el reintento", 1, tareasDe(alcance).size - antes.size)
 
         anunciarLaptop("192.168.1.41")
-        esperarHasta("el socket a la dirección nueva") { sockets.abiertos.size == 2 }
-        esperar(reintento)
+        assertEquals(2, sockets.abiertos.size)
+        reloj.pasan(3_000)
 
+        assertEquals("el reintento ya corrió", antes, tareasDe(alcance))
         assertEquals(2, sockets.abiertos.size)
     }
 
@@ -395,10 +417,10 @@ class DetectionClientEnlaceTest {
     @Test
     fun sinEnlaceUnFalloDelDescubrimientoSeMuestra() {
         cliente.connect(ModoEnlace.AUTO)
+        assertEquals(DetectionClient.BUSCANDO, cliente.ultimoFallo.value)
 
-        udp.seCae(IOException("Network is unreachable"))
+        seCaeElDescubrimiento(IOException("Network is unreachable"))
 
-        esperarHasta("el fallo en pantalla") { cliente.ultimoFallo.value != DetectionClient.BUSCANDO }
         assertEquals("Se cortó la escucha de anuncios de la detección: Network is unreachable", cliente.ultimoFallo.value)
     }
 
@@ -408,10 +430,9 @@ class DetectionClientEnlaceTest {
         val socket = conectadoEnAutoA("192.168.1.40")
         socket.abrir()
 
-        udp.seCae(IOException("Network is unreachable"))
-        esperarHasta("el fallo del descubridor") { descubridor.fallo.value != null }
-        Thread.sleep(200)
+        seCaeElDescubrimiento(IOException("Network is unreachable"))
 
+        assertEquals("Se cortó la escucha de anuncios de la detección: Network is unreachable", descubridor.fallo.value)
         assertNull(cliente.ultimoFallo.value)
         assertTrue(cliente.connected.value)
     }

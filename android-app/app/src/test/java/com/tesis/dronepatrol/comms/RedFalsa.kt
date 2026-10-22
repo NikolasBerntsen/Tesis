@@ -14,9 +14,13 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -143,8 +147,8 @@ internal class SocketsFalsos : WebSocket.Factory {
         SocketFalso(request, listener).also { abiertos += it }
 }
 
-/** Un datagrama que mandó el descubridor: texto, destino y cuándo. */
-internal data class DatagramaEnviado(val texto: String, val destino: InetAddress?, val puerto: Int, val ms: Long)
+/** Un datagrama que mandó el descubridor: texto y destino. */
+internal data class DatagramaEnviado(val texto: String, val destino: InetAddress?, val puerto: Int)
 
 /**
  * El socket UDP del descubrimiento, de mentira: nunca se ata a un puerto ni
@@ -152,12 +156,24 @@ internal data class DatagramaEnviado(val texto: String, val destino: InetAddress
  * hay, el timeout de la espera, como el real), anota lo que se manda y deja
  * simular un corte. Hereda de DatagramSocket porque es lo que el descubridor
  * maneja; el socket de la JDK que hay debajo queda sin atar y se cierra.
+ *
+ * La escucha corre en su propio hilo, así que el test no puede mirar sin más
+ * lo que hizo: se sincroniza con [esperarQueLoProcese] y
+ * [esperarUnaVueltaEntera], nunca durmiendo un rato.
  */
 internal class SocketUdpFalso : DatagramSocket(null as SocketAddress?) {
 
     private val entrantes = LinkedBlockingQueue<Any>()
     val enviados = CopyOnWriteArrayList<DatagramaEnviado>()
     val cierres = AtomicInteger()
+
+    /**
+     * Veces que la escucha entró a esperar un datagrama: cada una es una vuelta
+     * de su lazo. Lo que la escucha hace entre una espera y la siguiente
+     * (publicar un anuncio, mandar el "hola") ya pasó, y se ve desde el hilo
+     * del test, cuando este contador avanza.
+     */
+    private val esperas = AtomicInteger()
 
     @Volatile
     var atadoA: SocketAddress? = null
@@ -181,6 +197,7 @@ internal class SocketUdpFalso : DatagramSocket(null as SocketAddress?) {
     }
 
     override fun receive(p: DatagramPacket) {
+        esperas.incrementAndGet()
         if (isClosed) throw SocketException("Socket closed")
         when (val x = entrantes.poll(20, TimeUnit.MILLISECONDS)) {
             null -> throw SocketTimeoutException("Receive timed out")
@@ -195,7 +212,7 @@ internal class SocketUdpFalso : DatagramSocket(null as SocketAddress?) {
 
     override fun send(p: DatagramPacket) {
         fallaAlMandar?.let { throw it }
-        enviados += DatagramaEnviado(String(p.data, p.offset, p.length, Charsets.UTF_8), p.address, p.port, System.currentTimeMillis())
+        enviados += DatagramaEnviado(String(p.data, p.offset, p.length, Charsets.UTF_8), p.address, p.port)
     }
 
     override fun close() {
@@ -203,26 +220,78 @@ internal class SocketUdpFalso : DatagramSocket(null as SocketAddress?) {
         super.close()
     }
 
+    /**
+     * Vuelve cuando la escucha ya leyó todo lo que llegó y terminó de
+     * procesarlo: el anuncio quedó publicado y quien lo escucha ya fue
+     * despertado. La escucha tiene que seguir viva; si lo que llegó es una
+     * caída, el punto de sincronización es [cierres].
+     */
+    fun esperarQueLoProcese() {
+        esperarHasta("que la escucha lea lo que llegó") { entrantes.isEmpty() }
+        // La espera que vació la cola es esta o una anterior: la próxima
+        // entrada llega recién después de procesar lo leído.
+        esperarVueltas(1)
+    }
+
+    /**
+     * Vuelve tras una vuelta ENTERA del lazo empezada después de este llamado,
+     * que por eso ya leyó la hora que el test acaba de poner en el reloj. Es lo
+     * que deja afirmar que algo NO pasó (un "hola" que no tocaba) sin dormir.
+     */
+    fun esperarUnaVueltaEntera() = esperarVueltas(2)
+
+    private fun esperarVueltas(n: Int) {
+        val desde = esperas.get()
+        esperarHasta("$n vuelta(s) de la escucha") { esperas.get() >= desde + n }
+    }
+
     private class DatagramaEntrante(val datos: ByteArray, val origen: InetAddress?)
 }
 
-/** Las corrutinas que [alcance] tiene en curso, para después esperar solo las nuevas. */
-internal fun tareasDe(alcance: CoroutineScope): Set<Job> = alcance.coroutineContext.job.children.toSet()
+/**
+ * El reloj de las corrutinas de los clientes, de mentira. Los clientes agendan
+ * sus reintentos en el alcance que reciben (`delay(3_000)` y reabrir); este
+ * alcance corre con un reloj virtual que avanza solo cuando el test lo
+ * adelanta, y en el hilo del test. Así los 3 s se verifican al milisegundo sin
+ * esperarlos, y lo que hace una corrutina (abrir un socket, anotar un fallo)
+ * ya pasó cuando el test lo mira: no hay otro hilo con el que competir.
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+internal class RelojDeCorrutinas {
+    private val planificador = TestCoroutineScheduler()
 
-/** Las corrutinas que [alcance] lanzó después de [antes]: un reintento agendado, por ejemplo. */
-internal fun nuevasDe(alcance: CoroutineScope, antes: Set<Job>): List<Job> =
-    alcance.coroutineContext.job.children.filter { it !in antes }.toList()
+    /** Lo que se le pasa al cliente en lugar del alcance de la app. */
+    val alcance = CoroutineScope(SupervisorJob() + StandardTestDispatcher(planificador))
+
+    /**
+     * Corre lo que ya está listo sin adelantar el reloj: una corrutina recién
+     * lanzada, o una escucha a la que otro hilo le publicó un valor.
+     */
+    fun correrLoPendiente() = planificador.runCurrent()
+
+    /** Adelanta el reloj [ms] y corre todo lo que vence hasta ese instante inclusive. */
+    fun pasan(ms: Long) {
+        planificador.advanceTimeBy(ms)
+        planificador.runCurrent()
+    }
+}
+
+/**
+ * Las corrutinas que [alcance] tiene en curso: para ver si el cliente agendó
+ * algo (un reintento) o no, y para después esperar solo las nuevas.
+ */
+internal fun tareasDe(alcance: CoroutineScope): Set<Job> = alcance.coroutineContext.job.children.toSet()
 
 /**
  * Espera a que terminen las corrutinas que [alcance] lanzó después de [antes]:
- * los reintentos agendados. Es exacto y no depende de un tope de tiempo: si el
- * cliente agendó un reintento, esto espera a que corra; si no agendó ninguno,
- * vuelve en el acto. Ojo: no sirve si en el medio se lanzó algo que no
- * termina nunca (las escuchas del modo AUTO); para eso, [nuevasDe] y [esperar].
+ * el aviso de cierre de sesión, que sale por su cuenta en Dispatchers.IO. Es
+ * exacto y no depende de un tope de tiempo: si el cliente lanzó el aviso, esto
+ * espera a que termine; si no lanzó ninguno, vuelve en el acto. Lo que corre
+ * con un [RelojDeCorrutinas] no se espera así: se adelanta su reloj.
  */
-internal fun esperarLasNuevas(alcance: CoroutineScope, antes: Set<Job>) = esperar(nuevasDe(alcance, antes))
-
-internal fun esperar(tareas: List<Job>) = runBlocking { tareas.forEach { it.join() } }
+internal fun esperarLasNuevas(alcance: CoroutineScope, antes: Set<Job>) = runBlocking {
+    alcance.coroutineContext.job.children.filter { it !in antes }.forEach { it.join() }
+}
 
 /** [esperarA] de las pruebas del patrullaje, para usar fuera de una corrutina. */
 internal fun esperarHasta(que: String, topeMs: Long = 5_000, condicion: () -> Boolean) =
