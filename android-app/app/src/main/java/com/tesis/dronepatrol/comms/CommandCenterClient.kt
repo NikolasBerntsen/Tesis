@@ -35,7 +35,24 @@ import org.json.JSONObject
  * los dos destinos del video es un defecto que CI no veía— y para eso hereda y
  * pisa el envío.
  */
-open class CommandCenterClient(private val scope: CoroutineScope) {
+open class CommandCenterClient internal constructor(
+    private val scope: CoroutineScope,
+    /**
+     * Entra por acá solo para las pruebas de las pantallas (login y menú de
+     * campo): con un interceptor que contesta en lugar del Comando Central se
+     * recorre el flujo entero —incluido el texto de error que la pantalla
+     * interpreta— sin salir a la red. La app usa siempre el constructor
+     * público, que arma el de siempre.
+     */
+    private val http: OkHttpClient,
+) {
+
+    constructor(scope: CoroutineScope) : this(
+        scope,
+        OkHttpClient.Builder()
+            .pingInterval(15, TimeUnit.SECONDS)
+            .build(),
+    )
 
     /**
      * Decisión del operador sobre una alerta. [alertId] es null solo si el
@@ -77,9 +94,6 @@ open class CommandCenterClient(private val scope: CoroutineScope) {
     var onRenamed: ((displayName: String) -> Unit)? = null
     val connected = MutableStateFlow(false)
 
-    private val http = OkHttpClient.Builder()
-        .pingInterval(15, TimeUnit.SECONDS)
-        .build()
     private val json = "application/json".toMediaType()
 
     private var baseUrl = ""

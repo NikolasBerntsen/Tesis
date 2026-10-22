@@ -4,13 +4,23 @@ import android.content.Intent
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
+import com.tesis.dronepatrol.ComandoCentralFalso.Companion.RUTA_LOGIN
+import com.tesis.dronepatrol.ComandoCentralFalso.Companion.RUTA_LOGOUT
+import java.net.ConnectException
+import java.util.concurrent.CountDownLatch
+import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 /**
@@ -25,6 +35,46 @@ class LoginActivityLaunchTest {
     private companion object {
         /** La del contrato: es la que tiene que aparecer sola en el campo. */
         const val URL_POR_DEFECTO = "https://tesis.144-22-138-149.sslip.io"
+    }
+
+    private val app get() = RuntimeEnvironment.getApplication()
+
+    /** El cliente del login es el de verdad; el Comando Central del otro lado no (ver ComandoCentralFalso). */
+    private val comando = ComandoCentralFalso()
+    private val fabricaOriginal = SesionDeCampo.fabricaDeClientes
+
+    @Before
+    fun conectarAlComandoCentralDeMentira() {
+        SesionDeCampo.fabricaDeClientes = { comando.cliente(it) }
+    }
+
+    // La sesión vive en el proceso: sin esto un login exitoso se filtra al test siguiente
+    @After
+    fun desarmar() {
+        comando.retencion?.countDown()
+        SesionDeCampo.cerrar()
+        SesionDeCampo.fabricaDeClientes = fabricaOriginal
+    }
+
+    private fun completar(
+        actividad: LoginActivity,
+        url: String = ComandoCentralFalso.URL,
+        usuario: String = "operador.campo",
+        clave: String = "clave-de-prueba",
+    ) {
+        actividad.findViewById<EditText>(R.id.editBackendUrl).setText(url)
+        actividad.findViewById<EditText>(R.id.editUsername).setText(usuario)
+        actividad.findViewById<EditText>(R.id.editPassword).setText(clave)
+    }
+
+    private fun LoginActivity.boton(): Button = findViewById(R.id.btnLogin)
+
+    private fun LoginActivity.estado(): String = findViewById<TextView>(R.id.txtLoginStatus).text.toString()
+
+    /** Toca "Iniciar sesión" y espera a que el Comando Central conteste (el botón vuelve o la pantalla se va). */
+    private fun entrar(actividad: LoginActivity) {
+        actividad.boton().performClick()
+        esperarEnElHiloPrincipal("la respuesta del login") { actividad.boton().isEnabled || actividad.isFinishing }
     }
 
     @Test
@@ -102,5 +152,140 @@ class LoginActivityLaunchTest {
             actividad.getString(R.string.login_faltan_datos),
             actividad.findViewById<TextView>(R.id.txtLoginStatus).text.toString(),
         )
+    }
+
+    /** Cualquiera de los tres datos que falte frena el login antes de salir a la red. */
+    @Test
+    @Config(sdk = [34])
+    fun sinUrlOSinContrasenaTampocoSaleAPreguntar() {
+        val actividad = Robolectric.buildActivity(LoginActivity::class.java).setup().get()
+
+        completar(actividad, url = "   ")
+        actividad.boton().performClick()
+        assertEquals(actividad.getString(R.string.login_faltan_datos), actividad.estado())
+
+        completar(actividad, clave = "")
+        actividad.boton().performClick()
+        assertEquals(actividad.getString(R.string.login_faltan_datos), actividad.estado())
+
+        assertTrue(actividad.boton().isEnabled)
+        assertTrue(comando.pedidos(RUTA_LOGIN).isEmpty())
+    }
+
+    /**
+     * Credenciales buenas: abre la sesión efímera con lo que dice el Comando
+     * Central, pasa al menú de campo y recuerda la URL. Usuario y URL se limpian
+     * de espacios (el teclado del teléfono los agrega solo); la contraseña va
+     * tal cual, porque un espacio puede ser parte de ella.
+     */
+    @Test
+    @Config(sdk = [34])
+    fun conCredencialesValidasAbreLaSesionYPasaAlMenuDeCampo() {
+        comando.aceptarLogin(usuario = "operador.campo", rol = "supervisor", segundos = 600)
+        val actividad = Robolectric.buildActivity(LoginActivity::class.java).setup().get()
+        completar(actividad, url = "  https://comando.prueba/  ", usuario = " operador.campo ", clave = " clave de prueba ")
+
+        entrar(actividad)
+
+        val pedido = comando.pedidos(RUTA_LOGIN).single()
+        assertEquals("https://comando.prueba/api/auth/login", pedido.url)
+        assertEquals("operador.campo", pedido.cuerpo!!.getString("username"))
+        assertEquals(" clave de prueba ", pedido.cuerpo.getString("password"))
+
+        assertTrue(actividad.isFinishing)
+        val siguiente = shadowOf(app).nextStartedActivity
+        assertEquals(FieldMenuActivity::class.java.name, siguiente?.component?.className)
+        assertTrue(SesionDeCampo.vigente)
+        assertEquals("operador.campo", SesionDeCampo.usuario)
+        assertEquals("supervisor", SesionDeCampo.rol)
+        // Los 10 minutos que informó el Comando Central, no los 20 por defecto
+        // (con margen: el reloj corre unos milisegundos mientras vuelve el login)
+        assertTrue(SesionDeCampo.restanteMs() in 590_000L..600_000L)
+        assertEquals("https://comando.prueba/", PreferenciasEnlace(app).urlComandoCentral)
+    }
+
+    /** Mientras el Comando Central no contesta no se puede tocar dos veces "Iniciar sesión". */
+    @Test
+    @Config(sdk = [34])
+    fun mientrasVerificaNoSePuedeVolverATocarIniciarSesion() {
+        comando.aceptarLogin()
+        comando.retencion = CountDownLatch(1)
+        val actividad = Robolectric.buildActivity(LoginActivity::class.java).setup().get()
+        completar(actividad)
+
+        actividad.boton().performClick()
+        esperarEnElHiloPrincipal("el pedido de login") { comando.pedidos(RUTA_LOGIN).isNotEmpty() }
+
+        assertFalse(actividad.boton().isEnabled)
+        assertEquals(actividad.getString(R.string.login_verificando), actividad.estado())
+
+        comando.retencion!!.countDown()
+        esperarEnElHiloPrincipal("el menú de campo") { actividad.isFinishing }
+        assertEquals(1, comando.pedidos(RUTA_LOGIN).size)
+    }
+
+    /**
+     * Un operador de consola no despliega drones: el login le dice qué rol
+     * tiene y con quién entrar, y no queda NADA de esa sesión —ni el JWT ni la
+     * URL—. Tampoco se avisa un cierre: la sesión nunca llegó a abrirse.
+     */
+    @Test
+    @Config(sdk = [34])
+    fun unRolSinPermisoNoAbreSesionNiRecuerdaLaUrl() {
+        comando.aceptarLogin(rol = "operator")
+        val actividad = Robolectric.buildActivity(LoginActivity::class.java).setup().get()
+        completar(actividad)
+
+        entrar(actividad)
+
+        assertEquals(actividad.getString(R.string.login_rol_sin_permiso, "operador"), actividad.estado())
+        assertTrue(actividad.boton().isEnabled)
+        assertFalse(actividad.isFinishing)
+        assertNull(shadowOf(app).nextStartedActivity)
+        assertNull(SesionDeCampo.cliente)
+        assertEquals(URL_POR_DEFECTO, PreferenciasEnlace(app).urlComandoCentral)
+        assertTrue(comando.pedidos(RUTA_LOGOUT).isEmpty())
+    }
+
+    @Test
+    @Config(sdk = [34])
+    fun conCredencialesIncorrectasLoDiceYDejaReintentar() {
+        comando.responder(RUTA_LOGIN, 401, "")
+        val actividad = Robolectric.buildActivity(LoginActivity::class.java).setup().get()
+        completar(actividad)
+
+        entrar(actividad)
+
+        assertEquals(actividad.getString(R.string.login_fallo, "Usuario o contraseña incorrectos"), actividad.estado())
+        assertTrue(actividad.boton().isEnabled)
+        assertNull(shadowOf(app).nextStartedActivity)
+        assertNull(SesionDeCampo.cliente)
+    }
+
+    /**
+     * Sin señal o con la URL mal escrita el Comando Central no contesta: se
+     * dice por qué, el botón vuelve y el segundo intento —ya con conexión—
+     * entra sin tener que reabrir la app.
+     */
+    @Test
+    @Config(sdk = [34])
+    fun sinComandoCentralAlAlcanceAvisaYElReintentoEntra() {
+        comando.cortar(RUTA_LOGIN, ConnectException("Failed to connect to comando.prueba"))
+        val actividad = Robolectric.buildActivity(LoginActivity::class.java).setup().get()
+        completar(actividad)
+
+        entrar(actividad)
+
+        assertEquals(actividad.getString(R.string.login_fallo, "Failed to connect to comando.prueba"), actividad.estado())
+        assertTrue(actividad.boton().isEnabled)
+        assertNull(SesionDeCampo.cliente)
+        assertEquals("la URL no se recuerda si no se pudo entrar", URL_POR_DEFECTO, PreferenciasEnlace(app).urlComandoCentral)
+
+        comando.aceptarLogin()
+        entrar(actividad)
+
+        assertTrue(actividad.isFinishing)
+        assertEquals(FieldMenuActivity::class.java.name, shadowOf(app).nextStartedActivity?.component?.className)
+        assertNotNull(SesionDeCampo.cliente)
     }
 }

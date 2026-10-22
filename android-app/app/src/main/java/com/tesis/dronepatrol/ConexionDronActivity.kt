@@ -71,7 +71,13 @@ class ConexionDronActivity : AppCompatActivity() {
     /** Desde cuándo (reloj de SystemClock) el control está enchufado sin enlace con la aeronave; 0 si no lo está. */
     private var sinEnlaceDesdeMs = 0L
     private var localizacion: FusedLocationProviderClient? = null
-    private val alCambiarUbicacion = object : LocationCallback() {
+
+    /**
+     * `internal` solo para las pruebas: el proveedor de ubicación de Google no
+     * tiene doble en Robolectric, y sin poder entregarle una posición del
+     * teléfono no hay forma de probar el aviso de "el dron enlazado está lejos".
+     */
+    internal val alCambiarUbicacion = object : LocationCallback() {
         override fun onLocationResult(resultado: LocationResult) {
             ubicacionTelefono = resultado.lastLocation
             pintarDistancia()
