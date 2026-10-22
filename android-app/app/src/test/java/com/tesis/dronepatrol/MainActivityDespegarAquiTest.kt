@@ -1,13 +1,11 @@
 package com.tesis.dronepatrol
 
 import android.content.DialogInterface
-import android.content.Intent
 import android.os.Looper
 import android.view.View
 import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
-import com.tesis.dronepatrol.drone.DronEnCurso
 import com.tesis.dronepatrol.patrol.DronEspia
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -15,9 +13,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
-import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowDialog
@@ -36,22 +32,13 @@ class MainActivityDespegarAquiTest {
         estado.value = estado.value.copy(enVuelo = false, satelites = 0, baseFijada = false, detalle = "sin GPS")
     }
 
-    @After
-    fun desarmar() {
-        DronEnCurso.soltar()
-    }
+    // Sin rutas: el Comando Central de mentira no tiene ninguna cargada
+    private val banco = BancoDeOperacion(dron)
 
-    private fun pantallaDeOperacion(): MainActivity {
-        DronEnCurso.usar(dron)
-        val intent = Intent(RuntimeEnvironment.getApplication(), MainActivity::class.java)
-            .putExtra(MainActivity.EXTRA_DRONE_TOKEN, "token-de-prueba")
-            .putExtra(MainActivity.EXTRA_DRONE_HASH, "0123456789abcdef0123456789abcdef")
-            .putExtra(MainActivity.EXTRA_DISPLAY_NAME, "Alfa")
-            .putExtra(MainActivity.EXTRA_MODE, "TEST")
-        val pantalla = Robolectric.buildActivity(MainActivity::class.java, intent).setup().get()
-        shadowOf(Looper.getMainLooper()).idle()
-        return pantalla
-    }
+    @After
+    fun desarmar() = banco.desarmar()
+
+    private fun pantallaDeOperacion(): MainActivity = banco.abrir()
 
     private fun preguntar(pantalla: MainActivity): AlertDialog {
         val boton = pantalla.findViewById<Button>(R.id.btnDespegarAqui)

@@ -30,6 +30,7 @@ import com.tesis.dronepatrol.model.FlightEvent
 import com.tesis.dronepatrol.model.PatrolRoute
 import com.tesis.dronepatrol.model.PatrolState
 import com.tesis.dronepatrol.patrol.PatrolManager
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -91,6 +92,27 @@ class MainActivity : AppCompatActivity() {
 
         /** Estados desde los que "Reanudar" retoma la ruta. */
         private val ESTADOS_REANUDABLES = setOf(PatrolState.PAUSED, PatrolState.ORBITING, PatrolState.FOLLOWING, PatrolState.MANUAL)
+
+        /**
+         * De dónde sale el cliente del Comando Central. La app usa siempre este;
+         * lo cambia solo el banco de pruebas, igual que el dron con
+         * [DronEnCurso.usar]. Hace falta porque la pantalla se conecta apenas se
+         * abre: con el cliente de verdad cada prueba le pegaba al Comando Central
+         * de producción con un token inventado, y las rutas —que solo llegan del
+         * servidor— no había forma de cargarlas.
+         */
+        internal var crearComandoCentral: (CoroutineScope) -> CommandCenterClient = { alcance -> CommandCenterClient(alcance) }
+
+        /**
+         * De dónde sale el cliente de la detección; por lo mismo que
+         * [crearComandoCentral]: con el de verdad, abrir la pantalla en una prueba
+         * salía a buscar la laptop por la red de la PC de desarrollo.
+         */
+        internal var crearDeteccion: (CoroutineScope, Context) -> DetectionClient = { alcance, contexto ->
+            // Los sockets de la detección se atan a la Wi-Fi: con la red del lugar
+            // sin internet, Android manda lo demás por los datos móviles (RedLocal).
+            DetectionClient(alcance, RedWifi(contexto))
+        }
     }
 
     private lateinit var binding: ActivityMainBinding
@@ -134,10 +156,8 @@ class MainActivity : AppCompatActivity() {
         modo = intent.getStringExtra(EXTRA_MODE) ?: "TEST"
         displayName = intent.getStringExtra(EXTRA_DISPLAY_NAME) ?: hashAbreviado(droneHash)
 
-        commandCenter = CommandCenterClient(lifecycleScope)
-        // Los sockets de la detección se atan a la Wi-Fi: con la red del lugar
-        // sin internet, Android manda lo demás por los datos móviles (RedLocal).
-        detection = DetectionClient(lifecycleScope, RedWifi(this))
+        commandCenter = crearComandoCentral(lifecycleScope)
+        detection = crearDeteccion(lifecycleScope, this)
         manager = PatrolManager(controller, commandCenter, detection, lifecycleScope, modo)
         commandCenter.onRenamed = { nombre -> lifecycleScope.launch { aplicarNombre(nombre) } }
 
