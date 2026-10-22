@@ -6,6 +6,7 @@ import android.widget.EditText
 import android.widget.TextView
 import com.tesis.dronepatrol.ComandoCentralFalso.Companion.RUTA_LOGIN
 import com.tesis.dronepatrol.ComandoCentralFalso.Companion.RUTA_LOGOUT
+import com.tesis.dronepatrol.patrol.DronEspia
 import java.net.ConnectException
 import java.util.concurrent.CountDownLatch
 import org.junit.After
@@ -90,16 +91,16 @@ class LoginActivityLaunchTest {
      */
     @Test
     fun laPantallaPrincipalArrancaSinCrashear() {
-        val intent = Intent(RuntimeEnvironment.getApplication(), MainActivity::class.java)
-            .putExtra(MainActivity.EXTRA_DRONE_TOKEN, "token-de-prueba")
-            .putExtra(MainActivity.EXTRA_DRONE_HASH, "0123456789abcdef0123456789abcdef")
-            .putExtra(MainActivity.EXTRA_DISPLAY_NAME, "Alfa")
-            .putExtra(MainActivity.EXTRA_BASE_LAT, -34.6037)
-            .putExtra(MainActivity.EXTRA_BASE_LON, -58.3816)
-            .putExtra(MainActivity.EXTRA_MODE, "TEST")
-
-        val controller = Robolectric.buildActivity(MainActivity::class.java, intent).setup()
-        assertNotNull(controller.get())
+        // Por el banco y no con los clientes de verdad: la pantalla se conecta
+        // apenas se crea, y así cada corrida (en las tres APIs) le pegaba al
+        // Comando Central de producción con un token inventado y anunciaba la
+        // detección en la red de la PC de desarrollo.
+        val banco = BancoDeOperacion(DronEspia())
+        try {
+            assertNotNull(banco.abrir(baseLat = -34.6037, baseLon = -58.3816))
+        } finally {
+            banco.desarmar()
+        }
     }
 
     // De acá para abajo va comportamiento, que no depende de la versión de

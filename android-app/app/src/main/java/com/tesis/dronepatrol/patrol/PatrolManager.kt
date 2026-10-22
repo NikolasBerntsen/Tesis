@@ -738,8 +738,13 @@ class PatrolManager(
             log("Se ordenó desviar al nodo ${index + 1} de la ruta $routeId pero no existe: se ignora")
             return
         }
-        // Ojo: no se pisa resumeWaypoint, así un resume posterior retoma el
-        // patrullaje normal hacia el nodo que tenía por delante
+        // Un resume posterior retoma el patrullaje normal hacia el nodo que tenía
+        // por delante: si se sale de PATROLLING se anota ese nodo, como en todas
+        // las demás salidas. Sin anotarlo, resumeWaypoint quedaba con un valor
+        // viejo (el 0 del arranque) y "Reanudar" mandaba al dron de vuelta al
+        // primer nodo a repetir la ruta entera. Desde otro estado (MANUAL, un
+        // desvío anterior) el nodo ya quedó anotado al salir del patrullaje.
+        if (_state.value == PatrolState.PATROLLING) resumeWaypoint = proximoWaypoint
         terminarSeguimiento("desvío forzado a un nodo (orden de $orderedBy)")
         forcedIndex = index
         // El estado antes que la orden (ver pasarA()): también se llega acá desde

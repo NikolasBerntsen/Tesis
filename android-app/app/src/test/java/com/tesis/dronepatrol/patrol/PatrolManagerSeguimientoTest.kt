@@ -144,6 +144,33 @@ class PatrolManagerSeguimientoTest {
         assertNull(patrulla.objetivo)
     }
 
+    /**
+     * Un desvío forzado en medio de la ruta y después "Reanudar": el dron sigue
+     * hacia el nodo que tenía por delante, no vuelve al primero. Antes el desvío
+     * no anotaba ese nodo y la reanudación arrancaba la ruta desde el 0.
+     */
+    @Test
+    fun reanudarDespuesDeUnDesvioForzadoSigueHaciaElNodoQueTeniaPorDelante() = runBlocking {
+        patrulla.availableRoutes = listOf(ruta)
+        patrulla.start()
+        telemetria()
+        patrulla.startPatrol(ruta)
+        withTimeout(5_000) { patrulla.state.first { it == PatrolState.PATROLLING } }
+        // Pasó por los nodos 1 y 2: el que tiene por delante es el tercero (índice 2)
+        dron.flightEvents.emit(FlightEvent.WaypointReached(0))
+        dron.flightEvents.emit(FlightEvent.WaypointReached(1))
+        delay(100)
+
+        mensaje("""{"type":"force_goto","routeId":1,"index":0,"orderedBy":"op"}""")
+        withTimeout(5_000) { patrulla.state.first { it == PatrolState.FORCED } }
+        esperarA("el desvío") { dron.ultimaOrden.startsWith("gotoPoint") }
+
+        mensaje("""{"type":"resume_patrol","orderedBy":"op"}""")
+        withTimeout(5_000) { patrulla.state.first { it == PatrolState.PATROLLING } }
+        esperarA("la ruta retomada") { dron.ultimaOrden.startsWith("startRoute") }
+        assertEquals("startRoute(1, 2)", dron.ultimaOrden)
+    }
+
     @Test
     fun descartadoEnElUltimoNodoRetomaDesdeElPrimero() = runBlocking {
         patrulla.start()
