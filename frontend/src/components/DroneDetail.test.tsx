@@ -540,6 +540,57 @@ describe('DroneDetail — salir de la vista de pilotaje', () => {
     expect(await screen.findByRole('dialog', { name: 'Pilotaje de Alfa' })).toBeInTheDocument();
   });
 
+  it('si el dron se desconecta, la vista se cierra y dice que el control se soltó por eso', async () => {
+    const usados = renderDetail(conControl());
+    await abrirPilotaje();
+    // `drone_offline`: el backend borra el lock del dron y la consola olvida
+    // su telemetría, así que no queda nadie a cargo.
+    usados.volverARenderizar({ drone: makeDrone({ controlledBy: null, online: false }), status: null });
+    expect(vistaDePilotaje()).not.toBeInTheDocument();
+    expect(screen.getByTestId('aviso-pilotaje')).toHaveTextContent(
+      'El dron se desconectó del Comando Central y el control manual se soltó: se cerró la vista de pilotaje.',
+    );
+  });
+
+  it('si se corta el canal y al reconectar el control ya no es suyo, dice que se soltó por el corte', async () => {
+    const usados = renderDetail(conControl());
+    await abrirPilotaje();
+    // Se cae el canal: la consola todavía no sabe nada y la vista sigue.
+    usados.volverARenderizar({ conectado: false });
+    expect(vistaDePilotaje()).toBeInTheDocument();
+    // Vuelve, todavía con la ficha de antes del corte.
+    usados.volverARenderizar({ conectado: true });
+    expect(vistaDePilotaje()).toBeInTheDocument();
+
+    // Llega la lista de drones que la consola vuelve a pedir: el backend soltó
+    // el control al cerrarse la última consola de la cuenta. El status de
+    // antes del corte todavía lo nombra, así que la vista espera al próximo.
+    const fichaNueva = makeDrone({ controlledBy: null, online: true });
+    usados.volverARenderizar({ drone: fichaNueva });
+    expect(vistaDePilotaje()).toBeInTheDocument();
+    usados.volverARenderizar({ drone: fichaNueva, status: makeStatus({ state: 'PATROLLING', controlledBy: null }) });
+
+    expect(vistaDePilotaje()).not.toBeInTheDocument();
+    expect(screen.getByTestId('aviso-pilotaje')).toHaveTextContent(
+      'Se cortó la conexión con el Comando Central y el control manual se soltó solo: se cerró la vista de pilotaje.',
+    );
+  });
+
+  it('si el corte no le costó el control, una pérdida posterior no se le achaca al corte', async () => {
+    const usados = renderDetail(conControl());
+    await abrirPilotaje();
+    usados.volverARenderizar({ conectado: false });
+    // Había otra consola de la cuenta abierta: la ficha nueva sigue a su nombre.
+    usados.volverARenderizar({ drone: makeDrone({ controlledBy: 'admin1', online: true }) });
+    expect(vistaDePilotaje()).toBeInTheDocument();
+
+    usados.volverARenderizar({
+      drone: makeDrone({ controlledBy: null, online: true }),
+      status: makeStatus({ state: 'PATROLLING', controlledBy: null }),
+    });
+    expect(screen.getByTestId('aviso-pilotaje')).toHaveTextContent('El control manual se soltó desde otra sesión');
+  });
+
   it('recién tomado, la vista espera el lock y cuando llega el teclado vuela', async () => {
     const usados = renderDetail({ drone: makeDrone({ controlledBy: null, online: true }) });
     await esperarCarga();
@@ -604,6 +655,40 @@ describe('DroneDetail — despegar y aterrizar desde la vista de pilotaje', () =
     fireEvent.click(within(dialogo).getByRole('button', { name: 'Aterrizar' }));
     await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/drones/d1/land', { method: 'POST' }));
     expect(await within(vista).findByTestId('pilotaje-orden-en-curso')).toHaveTextContent(/Aterrizaje ordenado/);
+  });
+
+  it('si el backend rechaza el despegue, el motivo se lee adentro de la vista', async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path.startsWith('/events')) return Promise.resolve([]);
+      if (path.endsWith('/takeoff')) return Promise.reject(new Error('El dron rechazó el despegue'));
+      return Promise.resolve({});
+    });
+    renderDetail(conControl({ flying: false }));
+    const vista = await abrirPilotaje();
+    fireEvent.click(within(vista).getByRole('button', { name: 'Despegar' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Despegar Alfa' })).getByRole('button', { name: 'Despegar' }));
+
+    // El detalle de atrás está inerte (y en pantalla completa ni se pinta): si
+    // el motivo sólo estuviera ahí, el operador no se enteraría de nada.
+    expect(await within(vista).findByText('El dron rechazó el despegue')).toHaveAttribute('role', 'alert');
+    expect(within(vista).queryByTestId('pilotaje-orden-en-curso')).not.toBeInTheDocument();
+    expect(vistaDePilotaje()).toBeInTheDocument();
+  });
+
+  it('un error viejo del detalle no aparece al volver a la vista', async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path.startsWith('/events')) return Promise.resolve([]);
+      if (path.endsWith('/manual_move')) return Promise.reject(new Error('El dron no pudo moverse'));
+      return Promise.resolve({});
+    });
+    renderDetail(conControl({ flying: true }));
+    await esperarCarga();
+    fireEvent.click(screen.getByRole('button', { name: 'Mover al norte' }));
+    expect(await screen.findByText('El dron no pudo moverse')).toBeInTheDocument();
+
+    const vista = await abrirPilotaje();
+    expect(within(vista).queryByTestId('pilotaje-error')).not.toBeInTheDocument();
+    expect(screen.queryByText('El dron no pudo moverse')).not.toBeInTheDocument();
   });
 });
 

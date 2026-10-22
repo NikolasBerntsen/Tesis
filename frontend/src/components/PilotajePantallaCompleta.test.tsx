@@ -93,6 +93,7 @@ function montar(cambios: Partial<Props> = {}) {
     enElSuelo: false,
     enElAire: true,
     avisoDeOrden: null,
+    error: '',
     hayObjetivo: false,
     suspendido: false,
     onMando: vi.fn<(ejes: Ejes) => boolean>(() => true),
@@ -274,6 +275,19 @@ describe('PilotajePantallaCompleta — HUD', () => {
     fireEvent.keyDown(window, { code: 'KeyW' });
     expect(screen.getByTestId('pilotaje-no-salio')).toHaveAttribute('role', 'alert');
   });
+
+  it('si el backend rechazó la orden, el motivo se lee adentro de la vista', () => {
+    const { vista } = montar({ error: 'El dron rechazó el despegue' });
+    const error = screen.getByTestId('pilotaje-error');
+    expect(error).toHaveTextContent('El dron rechazó el despegue');
+    expect(error).toHaveAttribute('role', 'alert');
+    expect(vista.contains(error)).toBe(true);
+  });
+
+  it('sin error no hay aviso de error', () => {
+    montar();
+    expect(screen.queryByTestId('pilotaje-error')).not.toBeInTheDocument();
+  });
 });
 
 describe('PilotajePantallaCompleta — teclado', () => {
@@ -415,6 +429,36 @@ describe('PilotajePantallaCompleta — cámara con la rueda', () => {
     act(() => vi.advanceTimersByTime(2500));
     volverARenderizar({ status: makeStatus({ gimbalPitch: -40 }) });
     expect(hud('camara')).toBe('-40°');
+  });
+
+  it('si la cámara hace tope antes y el dron informa siempre lo mismo, el HUD se corrige igual', () => {
+    vi.useFakeTimers();
+    const { video, onCamara, volverARenderizar } = montar({ status: makeStatus({ gimbalPitch: 0 }) });
+    // El operador sube la cámara hasta el tope del contrato...
+    for (let i = 0; i < 6; i += 1) rueda(video, -1);
+    expect(hud('camara')).toBe('30°');
+
+    // ...pero la Mini no mira arriba del horizonte: informa 0 adentro de la
+    // espera (no le gana al gesto) y sigue informando 0 después.
+    volverARenderizar({ status: makeStatus({ gimbalPitch: 0 }) });
+    expect(hud('camara')).toBe('30°');
+    act(() => vi.advanceTimersByTime(2500));
+    volverARenderizar({ status: makeStatus({ gimbalPitch: 0 }) });
+    expect(hud('camara')).toBe('0°');
+
+    // Y la muesca siguiente parte de donde está la cámara de verdad.
+    rueda(video, 1);
+    expect(onCamara).toHaveBeenLastCalledWith(-5);
+    expect(hud('camara')).toBe('-5°');
+  });
+
+  it('un status sin la inclinación (una app vieja) no toca lo que muestra el HUD', () => {
+    vi.useFakeTimers();
+    const { video, volverARenderizar } = montar();
+    rueda(video, -1);
+    act(() => vi.advanceTimersByTime(2500));
+    volverARenderizar({ status: makeStatus({}) });
+    expect(hud('camara')).toBe('-25°');
   });
 });
 
@@ -626,6 +670,47 @@ describe('PilotajePantallaCompleta — sticks virtuales', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Ocultar sticks virtuales' }));
     expect(screen.queryByRole('group', { name: 'Mando virtual de vuelo continuo' })).not.toBeInTheDocument();
+  });
+
+  it('con una tecla sostenida y un stick agarrado sale UN solo flujo a 10 Hz, con los dos sumados', () => {
+    vi.useFakeTimers();
+    const { onMando } = montar();
+    fireEvent.click(screen.getByRole('button', { name: 'Mostrar sticks virtuales' }));
+    const plato = screen.getByTestId('palanca-izquierda');
+    plato.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 200 }) as DOMRect;
+
+    fireEvent.keyDown(window, { code: 'KeyW' });
+    // El stick de altura hasta arriba, con W todavía apretada.
+    fireEvent.mouseDown(plato, { clientX: 100, clientY: 0, buttons: 1 });
+    onMando.mockClear();
+    act(() => vi.advanceTimersByTime(1000));
+    // Diez mensajes, no veinte, y todos dicen lo mismo: avanzar Y subir. Con
+    // dos emisores el dron recibía uno de cada uno, cada uno anulando al otro.
+    expect(onMando).toHaveBeenCalledTimes(10);
+    for (const [ejes] of onMando.mock.calls) expect(ejes).toEqual({ pitch: 0.5, roll: 0, yaw: 0, throttle: 1 });
+
+    // Soltar el stick deja la tecla sola, en el tick siguiente.
+    fireEvent.mouseUp(window);
+    act(() => vi.advanceTimersByTime(100));
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, pitch: 0.5 });
+    // Y soltar la tecla manda el cero de cierre, una sola vez.
+    fireEvent.keyUp(window, { code: 'KeyW' });
+    expect(onMando).toHaveBeenLastCalledWith(EJES_EN_CERO);
+    const llamadas = onMando.mock.calls.length;
+    act(() => vi.advanceTimersByTime(1000));
+    expect(onMando).toHaveBeenCalledTimes(llamadas);
+  });
+
+  it('esconder los sticks con una palanca agarrada deja el dron en cero', () => {
+    const { onMando } = montar();
+    fireEvent.click(screen.getByRole('button', { name: 'Mostrar sticks virtuales' }));
+    const plato = screen.getByTestId('palanca-derecha');
+    plato.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 200 }) as DOMRect;
+    fireEvent.mouseDown(plato, { clientX: 200, clientY: 100, buttons: 1 });
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, roll: 1 });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ocultar sticks virtuales' }));
+    expect(onMando).toHaveBeenLastCalledWith(EJES_EN_CERO);
   });
 
   it('heredan el impedimento, y sin el control confirmado quedan inertes', () => {

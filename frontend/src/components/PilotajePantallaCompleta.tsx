@@ -20,7 +20,7 @@ import {
 } from '../pilotaje';
 import type { Alert, DroneStatus } from '../types';
 import AyudaDeControles from './AyudaDeControles';
-import MandoVirtual, { type Ejes } from './MandoVirtual';
+import MandoVirtual, { EJES_EN_CERO, type Ejes } from './MandoVirtual';
 import Minimapa from './Minimapa';
 import Modal from './Modal';
 import { useTecladoDeVuelo } from './useTecladoDeVuelo';
@@ -121,6 +121,7 @@ export default function PilotajePantallaCompleta({
   enElSuelo,
   enElAire,
   avisoDeOrden,
+  error,
   hayObjetivo,
   suspendido,
   onMando,
@@ -154,6 +155,12 @@ export default function PilotajePantallaCompleta({
   enElAire: boolean;
   /** El aviso de una orden de despegue o aterrizaje que el dron todavía no cumplió. */
   avisoDeOrden: string | null;
+  /**
+   * Por qué el backend rechazó la última orden (despegar, aterrizar), o vacío.
+   * Tiene que leerse acá: el detalle de atrás queda inerte y, en pantalla
+   * completa, el navegador ni siquiera lo pinta.
+   */
+  error: string;
   /** Con un objetivo cargado, soltar el control devuelve el dron al objetivo. */
   hayObjetivo: boolean;
   /** Un diálogo del detalle está abierto encima (despegar, aterrizar): el teclado no vuela. */
@@ -182,6 +189,9 @@ export default function PilotajePantallaCompleta({
   const [confirmandoSalida, setConfirmandoSalida] = useState(false);
   const [zoom, setZoom] = useState<Zoom>(SIN_ZOOM);
   const [giroMouse, setGiroMouse] = useState(0);
+  // Los sticks virtuales no emiten: informan sus ejes y salen sumados a los del
+  // teclado por el único emisor de la vista (ver `useTecladoDeVuelo`).
+  const [ejesDeSticks, setEjesDeSticks] = useState<Ejes>(EJES_EN_CERO);
   const [avisoDelNavegador, setAvisoDelNavegador] = useState('');
   // Las alertas que ya estaban al abrir la vista se decidían en el detalle; lo
   // que se avisa acá es lo que llega mientras se vuela.
@@ -212,6 +222,7 @@ export default function PilotajePantallaCompleta({
     inerte: impedimento !== null,
     onMando,
     giroExtra: giroMouse,
+    sticks: ejesDeSticks,
   });
   const puedeMoverLaCamara = controlTomado && camaraDisponible;
 
@@ -252,14 +263,21 @@ export default function PilotajePantallaCompleta({
 
   // Lo que informa el dron manda cuando el operador no está moviendo la cámara:
   // así la vista arranca donde la cámara realmente está y se entera si la
-  // movió otro (la app al retomar la patrulla, por ejemplo).
+  // movió otro (la app al retomar la patrulla, por ejemplo). Se mira con CADA
+  // status que llega, no sólo cuando cambia el número: si la cámara hace tope
+  // antes que la consola —la Mini no mira arriba del horizonte sin la opción de
+  // DJI Fly—, el dron informa siempre lo mismo, y esperando un cambio el HUD
+  // se quedaba para siempre con lo que la consola había supuesto (y la muesca
+  // siguiente partía de ahí). La consola crea un objeto por cada status que
+  // llega, así que su identidad es la marca de "llegó otro".
   useEffect(() => {
-    if (typeof reportada !== 'number' || !Number.isFinite(reportada)) return;
+    const informada = status?.gimbalPitch;
+    if (typeof informada !== 'number' || !Number.isFinite(informada)) return;
     if (Date.now() - ultimoGestoDeCamara.current < ESPERA_PARA_SINCRONIZAR_MS) return;
-    const valor = acotarInclinacion(reportada);
+    const valor = acotarInclinacion(informada);
     inclinacionRef.current = valor;
     setInclinacion(valor);
-  }, [reportada]);
+  }, [status]);
 
   useEffect(() => {
     const envio = envioDeCamara.current;
@@ -566,8 +584,14 @@ export default function PilotajePantallaCompleta({
             </div>
           </dl>
 
-          {/* Los avisos van en orden de gravedad: primero lo que hace que el
-              mando no responda, después lo que es una espera. */}
+          {/* Los avisos van en orden de gravedad: primero una orden que el
+              backend rechazó, después lo que hace que el mando no responda y
+              al final lo que es una espera. */}
+          {error && (
+            <p className="aviso malo" role="alert" data-testid="pilotaje-error">
+              {error}
+            </p>
+          )}
           {!controlTomado && (
             <p className="aviso" role="status" data-testid="pilotaje-esperando-control">
               {ESPERANDO_EL_CONTROL}
@@ -643,9 +667,11 @@ export default function PilotajePantallaCompleta({
             <div className="pilotaje-sticks pilotaje-panel" id={idSticks}>
               {/* Su propio teclado se apaga: acá el teclado vuela con el
                   esquema de la vista (W adelante), y el del mando (W sube)
-                  mandaría el dron para otro lado con la misma tecla. */}
+                  mandaría el dron para otro lado con la misma tecla. Y no
+                  emite: informa sus ejes, que salen sumados a los del teclado
+                  y el mouse por el emisor de la vista. */}
               <MandoVirtual
-                onMando={onMando}
+                onEjes={setEjesDeSticks}
                 impedimento={controlTomado ? impedimento : ESPERANDO_EL_CONTROL}
                 teclado={false}
               />

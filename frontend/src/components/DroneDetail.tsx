@@ -145,6 +145,15 @@ export default function DroneDetail({
    * una pérdida, y cerrar la vista ahí la cerraría apenas abierta.
    */
   const controlVistoAlPilotear = useRef(false);
+  /**
+   * La ficha del dron que había cuando se cortó el canal con el Comando Central
+   * en pleno pilotaje, o `null` si no se cortó. El backend suelta el control
+   * cuando se cierra la última consola de la cuenta, pero la consola se entera
+   * recién al reconectar, con la lista de drones que vuelve a pedir: para
+   * entonces el canal ya está arriba otra vez, y sin recordar el corte la vista
+   * se cerraba diciendo que el control se soltó "desde otra sesión".
+   */
+  const fichaAlCortarseElEnlace = useRef<Drone | null>(null);
   const idTitulo = useId();
   const idTexto = useId();
 
@@ -371,14 +380,43 @@ export default function DroneDetail({
     setPilotando(false);
   }, [drone.droneId]);
 
+  /**
+   * Volver a la vista con el control ya tomado. El error de una acción
+   * anterior (un salto del pad, una ruta) se borra: adentro de la vista se lee
+   * como el resultado de lo que se ordene ahí, y uno viejo confundiría.
+   */
+  function volverAPilotar() {
+    setError('');
+    setPilotando(true);
+  }
+
   // El control se puede perder sin que este operador haga nada: un supervisor
-  // que se lo saca, la misma cuenta que lo suelta desde otra pestaña. Seguir
+  // que se lo saca, la misma cuenta que lo suelta desde otra pestaña, el dron
+  // que se desconecta (el backend suelta su lock) o el canal de esta consola
+  // que se corta (lo suelta si era la última consola de la cuenta). Seguir
   // mostrando la vista sería dejarlo apretando teclas que el backend ya no
-  // acepta; se cierra y se dice por qué.
+  // acepta; se cierra y se dice por qué, con el motivo más probable.
   useEffect(() => {
     if (!pilotando) {
       controlVistoAlPilotear.current = false;
+      fichaAlCortarseElEnlace.current = null;
       return;
+    }
+    if (!conectado) {
+      // Con el canal caído no llega ninguna ficha nueva: la que hay ahora es la
+      // última de antes del corte, y cualquier otra que llegue será posterior.
+      fichaAlCortarseElEnlace.current = drone;
+    } else if (
+      fichaAlCortarseElEnlace.current !== null &&
+      fichaAlCortarseElEnlace.current !== drone &&
+      soyControlador &&
+      drone.controlledBy === controlador
+    ) {
+      // Con el canal arriba llegó una ficha nueva del dron, y es ELLA la que
+      // dice que el control sigue siendo de este operador (no el status, que
+      // puede ser de antes del corte): había otra consola de la cuenta abierta
+      // y el corte no costó nada. Una pérdida posterior ya no es por el corte.
+      fichaAlCortarseElEnlace.current = null;
     }
     if (soyControlador) {
       controlVistoAlPilotear.current = true;
@@ -389,9 +427,13 @@ export default function DroneDetail({
     setAvisoDePilotaje(
       controlador
         ? `${controlador} tomó el control del dron: se cerró la vista de pilotaje.`
-        : 'El control manual se soltó desde otra sesión: se cerró la vista de pilotaje.',
+        : !drone.online
+          ? 'El dron se desconectó del Comando Central y el control manual se soltó: se cerró la vista de pilotaje.'
+          : fichaAlCortarseElEnlace.current !== null
+            ? 'Se cortó la conexión con el Comando Central y el control manual se soltó solo: se cerró la vista de pilotaje.'
+            : 'El control manual se soltó desde otra sesión: se cerró la vista de pilotaje.',
     );
-  }, [pilotando, soyControlador, controlador]);
+  }, [pilotando, soyControlador, controlador, conectado, drone]);
   const mover = (bearing: number) => () =>
     llamar(`/drones/${drone.droneId}/manual_move`, { method: 'POST', body: JSON.stringify({ bearing, distanceM: 25 }) });
 
@@ -637,7 +679,7 @@ export default function DroneDetail({
                 <hr className="regla" />
                 <h3>Vuelo continuo</h3>
                 <p className="muted">Teclado, mouse y sticks virtuales, con la cámara a pantalla completa.</p>
-                <button className="primario" onClick={() => setPilotando(true)}>
+                <button className="primario" onClick={volverAPilotar}>
                   Volver a la vista de pilotaje
                 </button>
 
@@ -694,6 +736,7 @@ export default function DroneDetail({
           enElSuelo={enElSuelo}
           enElAire={enElAire}
           avisoDeOrden={ordenEnCurso && ORDEN_EN_CURSO[ordenEnCurso]}
+          error={error}
           hayObjetivo={!!objetivo}
           suspendido={aConfirmar !== null}
           onMando={onMando}

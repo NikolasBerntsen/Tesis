@@ -242,6 +242,60 @@ describe('useTecladoDeVuelo', () => {
     expect(onMando).not.toHaveBeenCalled();
   });
 
+  it('la repetición automática no vuelve a meter una tecla que se olvidó al levantarse el impedimento', () => {
+    const { onMando, rerender, inicial, result } = montar({ inerte: true });
+    apretar('KeyW');
+    // El dron terminó de despegar con W todavía sostenida: el sistema sigue
+    // mandando keydown repetidos de W, y ninguno puede hacerlo avanzar.
+    rerender({ ...inicial, inerte: false });
+    const repetida = new KeyboardEvent('keydown', { code: 'KeyW', repeat: true, cancelable: true });
+    act(() => {
+      window.dispatchEvent(repetida);
+    });
+    // Se ataja igual: la repetición de Espacio tampoco puede apretar un botón.
+    expect(repetida.defaultPrevented).toBe(true);
+    expect(result.current.ejes).toEqual(EJES_EN_CERO);
+    expect(onMando).not.toHaveBeenCalled();
+
+    // Recién soltarla y volver a apretarla vuela.
+    soltar('KeyW');
+    apretar('KeyW');
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, pitch: 0.5 });
+  });
+
+  it('tampoco la de una tecla que se soltó al abrirse un diálogo', () => {
+    const { onMando, rerender, inicial, result } = montar();
+    apretar('KeyD');
+    rerender({ ...inicial, activo: false });
+    rerender({ ...inicial, activo: true });
+    fireEvent.keyDown(window, { code: 'KeyD', repeat: true });
+    expect(result.current.ejes).toEqual(EJES_EN_CERO);
+    expect(onMando).toHaveBeenLastCalledWith(EJES_EN_CERO);
+  });
+
+  it('suma los sticks virtuales a las teclas, eje por eje, por el mismo emisor', () => {
+    const { onMando, rerender, inicial } = montar();
+    // Un stick solo también comanda: sale en el acto, como una tecla.
+    rerender({ ...inicial, sticks: { ...EJES_EN_CERO, roll: -0.6 } });
+    expect(onMando).toHaveBeenCalledTimes(1);
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, roll: -0.6 });
+
+    // W sostenida mientras se arrastra: avanzar Y subir, y el avance del stick
+    // se suma al de la tecla (0,5 + 0,8, recortado a 1).
+    apretar('KeyW');
+    rerender({ ...inicial, sticks: { ...EJES_EN_CERO, pitch: 0.8, throttle: 1 } });
+    act(() => vi.advanceTimersByTime(1000));
+    expect(onMando).toHaveBeenCalledTimes(11);
+    expect(onMando).toHaveBeenLastCalledWith({ pitch: 1, roll: 0, yaw: 0, throttle: 1 });
+
+    // El stick vuelve al centro: queda la tecla, en el tick siguiente.
+    rerender({ ...inicial, sticks: EJES_EN_CERO });
+    act(() => vi.advanceTimersByTime(100));
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, pitch: 0.5 });
+    soltar('KeyW');
+    expect(onMando).toHaveBeenLastCalledWith(EJES_EN_CERO);
+  });
+
   it('suma el giro del mouse al de Q/E por el mismo emisor', () => {
     const { onMando, rerender, inicial } = montar({ giroExtra: 0.3 });
     expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, yaw: 0.3 });

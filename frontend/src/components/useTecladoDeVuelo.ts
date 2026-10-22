@@ -135,15 +135,20 @@ function hayComando(ejes: Ejes): boolean {
  * con un último mensaje en cero al soltar (la misma semántica que el mando
  * virtual: el dron queda en vuelo estacionario).
  *
- * `giroExtra` es el giro que pide el mouse en el modo mouse. Se suma al de Q/E
- * y sale por el MISMO emisor: dos emisores a 10 Hz intercalando mensajes harían
- * que el dron reciba un giro sí y otro no.
+ * `giroExtra` es el giro que pide el mouse en el modo mouse, y `sticks` lo que
+ * piden los sticks virtuales. Se suman eje por eje a lo del teclado (recortado
+ * a [-1, 1]) y salen por el MISMO emisor: dos emisores a 10 Hz intercalando
+ * mensajes harían que el dron reciba un vector y el otro, uno sí y otro no, y
+ * entre los dos llenarían justo el cupo de 20 mensajes por segundo que el
+ * Comando Central le deja a cada consola (FICHAS_POR_SEGUNDO en ws.ts): con
+ * cualquier demora de un temporizador, el hub empezaría a tirar mensajes.
  */
 export function useTecladoDeVuelo({
   activo,
   inerte,
   onMando,
   giroExtra = 0,
+  sticks = EJES_EN_CERO,
 }: {
   /** Si escucha el teclado: la vista abierta, el control tomado y ningún diálogo encima. */
   activo: boolean;
@@ -155,6 +160,8 @@ export function useTecladoDeVuelo({
   inerte: boolean;
   onMando: (ejes: Ejes) => boolean;
   giroExtra?: number;
+  /** Los ejes de los sticks virtuales, que informan sin emitir (`onEjes` de MandoVirtual). */
+  sticks?: Ejes;
 }) {
   const [teclas, setTeclas] = useState<TeclasSostenidas>(NINGUNA_TECLA);
   // Lo mismo que en el mando virtual: `onMando` devuelve false con el canal con
@@ -169,6 +176,13 @@ export function useTecladoDeVuelo({
       // Sin esto Espacio desplaza la página o aprieta el botón enfocado, y
       // Ctrl+D abre el diálogo de favoritos en pleno vuelo.
       ev.preventDefault();
+      // La repetición automática no aprieta nada: o es una tecla que ya está
+      // en su pila, o es una que se olvidó a propósito (apareció o se levantó
+      // un impedimento, se abrió un diálogo) y que el operador tiene que volver
+      // a apretar de verdad. Si no, una W sostenida durante el despegue volvía
+      // a la pila con la primera repetición, 30 ms después del reinicio, y el
+      // dron salía hacia adelante apenas llegaba al aire.
+      if (ev.repeat) return;
       setTeclas((previas) => apretarTecla(previas, ev.code));
     };
     const alSoltar = (ev: KeyboardEvent) => {
@@ -202,7 +216,8 @@ export function useTecladoDeVuelo({
 
   // Cuando aparece o se levanta un impedimento, lo sostenido se olvida: si el
   // dron termina de despegar con el operador apretando W "a ver si anda", no
-  // puede salir disparado hacia adelante sin que nadie lo vuelva a pedir. Se
+  // puede salir disparado hacia adelante sin que nadie lo vuelva a pedir (por
+  // eso `alApretar` no deja que la repetición automática la vuelva a meter). Se
   // ajusta en el mismo render y no en un efecto: con un efecto, el render del
   // cambio alcanzaba a comprometerse con W adentro y el emisor mandaba un
   // mensaje de avance antes de que el reinicio llegara.
@@ -220,8 +235,16 @@ export function useTecladoDeVuelo({
     // y no puede seguir saliendo con un diálogo abierto encima del video.
     if (inerte || !activo) return EJES_EN_CERO;
     const delTeclado = ejesDeTeclas(teclas);
-    return { ...delTeclado, yaw: acotarEje(delTeclado.yaw + giroExtra) };
-  }, [teclas, inerte, activo, giroExtra]);
+    // Sumados y no "manda el último", como entre teclas: el stick es un eje
+    // continuo, y W sostenida mientras se arrastra el stick de altura es pedir
+    // las dos cosas a la vez (avanzar subiendo), no elegir una.
+    return {
+      pitch: acotarEje(delTeclado.pitch + sticks.pitch),
+      roll: acotarEje(delTeclado.roll + sticks.roll),
+      yaw: acotarEje(delTeclado.yaw + sticks.yaw + giroExtra),
+      throttle: acotarEje(delTeclado.throttle + sticks.throttle),
+    };
+  }, [teclas, inerte, activo, giroExtra, sticks]);
 
   // Los ejes y el callback se leen de refs dentro del temporizador: si fueran
   // dependencias del efecto, cada cambio lo reiniciaría y se emitiría al ritmo
