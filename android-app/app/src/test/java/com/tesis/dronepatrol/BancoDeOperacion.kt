@@ -4,6 +4,7 @@ import android.content.Intent
 import android.os.Looper
 import androidx.appcompat.app.AlertDialog
 import androidx.lifecycle.Lifecycle
+import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import com.tesis.dronepatrol.comms.CommandCenterClient
 import com.tesis.dronepatrol.comms.DescubridorDeDeteccion
 import com.tesis.dronepatrol.comms.DetectionClient
@@ -55,6 +56,7 @@ internal class BancoDeOperacion(private val dron: DroneController) {
     // y Robolectric reusa las clases entre una prueba y la siguiente.
     private val crearComandoCentralDeLaApp = MainActivity.crearComandoCentral
     private val crearDeteccionDeLaApp = MainActivity.crearDeteccion
+    private val relojDeLaSenialDeLaApp = MainActivity.relojDeLaSenial
 
     /** Lo que contesta el Comando Central al pedirle las rutas cuando se abre la pantalla. */
     var rutas: List<PatrolRoute> = emptyList()
@@ -70,6 +72,17 @@ internal class BancoDeOperacion(private val dron: DroneController) {
     lateinit var deteccion: DetectionClient
         private set
     private var controlador: ActivityController<MainActivity>? = null
+
+    /**
+     * El reloj con el que la patrulla mide cuánto hace que no llega telemetría.
+     * Lo mueve solo la prueba, con [dejarPasarSinTelemetria]. El del hilo
+     * principal no sirve: Robolectric lo corre solo mientras dibuja las
+     * animaciones de las barras (casi 2 s con una telemetría), y "cuánto pasó"
+     * dependería de cuánto duran las animaciones de Material. Arranca en 1 s
+     * porque la patrulla toma el cero como "todavía no llegó telemetría".
+     */
+    @Volatile
+    private var relojDeLaSenialMs = 1_000L
 
     fun abrir(
         modo: String? = "TEST",
@@ -95,6 +108,7 @@ internal class BancoDeOperacion(private val dron: DroneController) {
             DetectionClient(alcance, RedSinSalida, DescubridorDeDeteccion(puerto = 0, red = RedSinSalida, anunciarse = false))
                 .also { deteccion = it }
         }
+        MainActivity.relojDeLaSenial = { relojDeLaSenialMs }
         val intent = Intent(aplicacion, MainActivity::class.java)
             .putExtra(MainActivity.EXTRA_DRONE_TOKEN, "token-de-prueba")
             .putExtra(MainActivity.EXTRA_DRONE_HASH, HASH)
@@ -106,6 +120,15 @@ internal class BancoDeOperacion(private val dron: DroneController) {
         controlador = armado
         correrLaPantalla()
         return armado.get()
+    }
+
+    /**
+     * Deja pasar [ms] en el reloj de la señal y le da una vuelta al vigía, que
+     * revisa una vez por segundo en el hilo principal.
+     */
+    fun dejarPasarSinTelemetria(ms: Long) {
+        relojDeLaSenialMs += ms
+        adelantarElReloj(1)
     }
 
     /** Cierra la pantalla como lo hace Android al salir de ella. */
@@ -131,6 +154,7 @@ internal class BancoDeOperacion(private val dron: DroneController) {
         SesionDeCampo.cerrar()
         MainActivity.crearComandoCentral = crearComandoCentralDeLaApp
         MainActivity.crearDeteccion = crearDeteccionDeLaApp
+        MainActivity.relojDeLaSenial = relojDeLaSenialDeLaApp
     }
 }
 
@@ -158,6 +182,16 @@ internal fun esperarEnLaPantalla(que: String, topeMs: Long = 5_000, condicion: (
         if (System.currentTimeMillis() > limite) fail("se agotó la espera de $que")
         Thread.sleep(10)
     }
+}
+
+/**
+ * Lo que ofrece el desplegable de rutas, en orden. Es lo único de donde el
+ * operador elige qué patrullar, así que se mira lo que tiene adentro y no solo
+ * el texto del campo, que la pantalla escribe aparte al elegir.
+ */
+internal fun MainActivity.opcionesDelDesplegable(): List<String> {
+    val opciones = findViewById<MaterialAutoCompleteTextView>(R.id.dropdownRoutes).adapter ?: return emptyList()
+    return (0 until opciones.count).map { opciones.getItem(it).toString() }
 }
 
 /** La última confirmación que abrió la pantalla, o null si no abrió ninguna. */

@@ -162,9 +162,13 @@ class MainActivityTableroTest {
         assertEquals(pantalla.color(R.color.texto), pantalla.colorDelTexto(R.id.txtSignal))
         assertEquals(90, barra.progress)
 
-        // El vigía de la señal mira el reloj de verdad: hay que dejarlo pasar
-        Thread.sleep(4_200)
-        adelantarElReloj(1)
+        // Cuatro segundos justos sin telemetría todavía no es una señal perdida
+        banco.dejarPasarSinTelemetria(4_000)
+        assertEquals(pantalla.getString(R.string.main_senal_ok, 90), pantalla.texto(R.id.txtSignal))
+        assertEquals(pantalla.getString(R.string.estado_idle), pantalla.texto(R.id.txtState))
+
+        // Un instante más y el vigía la da por perdida
+        banco.dejarPasarSinTelemetria(1)
 
         assertEquals(pantalla.getString(R.string.main_senal_perdida), pantalla.texto(R.id.txtSignal))
         assertEquals(pantalla.color(R.color.estado_peligro), pantalla.colorDelTexto(R.id.txtSignal))

@@ -21,6 +21,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowListPopupWindow
 
 /**
  * Las rutas y los botones de vuelo de la pantalla de operación. Cada botón se
@@ -72,6 +73,7 @@ class MainActivityPatrullajeTest {
     fun laPrimeraRutaQuedaElegidaConSusNodosYSuAltura() {
         val pantalla = banco.abrir()
 
+        assertEquals("las rutas por su nombre, en el orden del servidor", listOf("Costanera", "Reserva"), pantalla.opcionesDelDesplegable())
         assertEquals("Costanera", pantalla.texto(R.id.dropdownRoutes))
         val esperado = pantalla.resources.getQuantityString(R.plurals.main_waypoints, 3, 3) + " · " +
             pantalla.getString(R.string.main_altura_m, 40.0)
@@ -83,10 +85,16 @@ class MainActivityPatrullajeTest {
         val pantalla = banco.abrir()
         val desplegable = pantalla.findViewById<MaterialAutoCompleteTextView>(R.id.dropdownRoutes)
 
-        // Lo que hace el desplegable cuando el operador toca la segunda opción
-        desplegable.onItemClickListener.onItemClick(null, null, 1, 1L)
+        // El operador abre el desplegable y toca la segunda opción de la lista
+        desplegable.showDropDown()
+        correrLaPantalla()
+        val lista = ShadowListPopupWindow.getLatestListPopupWindow()
+        assertTrue("el desplegable se abrió", desplegable.isPopupShowing)
+        assertEquals("Reserva", lista.listView!!.adapter.getItem(1).toString())
+        assertTrue(lista.performItemClick(1))
         correrLaPantalla()
 
+        assertFalse("elegida la ruta, la lista se cierra", desplegable.isPopupShowing)
         assertEquals("Reserva", pantalla.texto(R.id.dropdownRoutes))
         assertEquals(
             pantalla.resources.getQuantityString(R.plurals.main_waypoints, 1, 1) + " · " + pantalla.getString(R.string.main_altura_m, 55.0),
@@ -102,6 +110,7 @@ class MainActivityPatrullajeTest {
         banco.rutas = listOf(PatrolRoute(7, "Borrador", emptyList()))
         val pantalla = banco.abrir()
 
+        assertEquals(listOf("Borrador"), pantalla.opcionesDelDesplegable())
         assertEquals("Borrador", pantalla.texto(R.id.dropdownRoutes))
         assertEquals(pantalla.resources.getQuantityString(R.plurals.main_waypoints, 0, 0), pantalla.texto(R.id.txtRouteInfo))
     }
@@ -111,6 +120,7 @@ class MainActivityPatrullajeTest {
         banco.rutas = emptyList()
         val pantalla = banco.abrir()
 
+        assertEquals("el aviso no es una opción que se pueda elegir", emptyList<String>(), pantalla.opcionesDelDesplegable())
         assertEquals(pantalla.getString(R.string.main_sin_rutas), pantalla.texto(R.id.dropdownRoutes))
         assertEquals("", pantalla.texto(R.id.txtRouteInfo))
         assertFalse(pantalla.boton(R.id.btnStartPatrol).isEnabled)

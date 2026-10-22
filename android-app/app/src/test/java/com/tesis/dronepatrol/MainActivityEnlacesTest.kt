@@ -65,6 +65,7 @@ class MainActivityEnlacesTest {
         assertEquals(View.VISIBLE, pantalla.findViewById<View>(R.id.btnRetry).visibility)
         assertEquals("No se pudieron obtener las rutas: HTTP 503", ShadowToast.getTextOfLatestToast())
         assertFalse("sin Comando Central no se enciende el dron", dron.ordenes.contains("connect"))
+        assertEquals("sin rutas no hay nada que elegir", emptyList<String>(), pantalla.opcionesDelDesplegable())
 
         banco.comando.falloAlPedirRutas = null
         banco.comando.rutas = listOf(COSTANERA, RESERVA)
@@ -72,6 +73,7 @@ class MainActivityEnlacesTest {
         correrLaPantalla()
 
         assertEquals(View.GONE, pantalla.findViewById<View>(R.id.btnRetry).visibility)
+        assertEquals("las rutas del reintento llegan al desplegable", listOf("Costanera", "Reserva"), pantalla.opcionesDelDesplegable())
         assertEquals("Costanera", pantalla.texto(R.id.dropdownRoutes))
         assertTrue(dron.ordenes.contains("connect"))
         assertEquals("se reintenta abriendo el socket de nuevo", 2, banco.comando.conexionesPedidas)

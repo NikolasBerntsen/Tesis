@@ -113,6 +113,14 @@ class MainActivity : AppCompatActivity() {
             // sin internet, Android manda lo demás por los datos móviles (RedLocal).
             DetectionClient(alcance, RedWifi(contexto))
         }
+
+        /**
+         * El reloj con el que la patrulla da la señal por perdida
+         * (PatrolManager.relojDeLaSenial). La app usa siempre el del sistema; lo
+         * cambia solo el banco de pruebas, por uno que adelanta a mano: así la
+         * señal perdida se ve en la pantalla sin dormir cuatro segundos de verdad.
+         */
+        internal var relojDeLaSenial: () -> Long = System::currentTimeMillis
     }
 
     private lateinit var binding: ActivityMainBinding
@@ -158,7 +166,14 @@ class MainActivity : AppCompatActivity() {
 
         commandCenter = crearComandoCentral(lifecycleScope)
         detection = crearDeteccion(lifecycleScope, this)
-        manager = PatrolManager(controller, commandCenter, detection, lifecycleScope, modo)
+        manager = PatrolManager(
+            controller,
+            commandCenter,
+            detection,
+            lifecycleScope,
+            modo,
+            relojDeLaSenial = relojDeLaSenial,
+        )
         commandCenter.onRenamed = { nombre -> lifecycleScope.launch { aplicarNombre(nombre) } }
 
         configurarBarra()
