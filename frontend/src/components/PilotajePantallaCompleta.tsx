@@ -575,7 +575,10 @@ export default function PilotajePantallaCompleta({
   const ultimaAlerta = nuevasAlertas.reduce<Alert | null>((ultima, a) => (!ultima || a.id > ultima.id ? a : ultima), null);
 
   const vista = (
-    <section
+    // La vista ES la superficie de vuelo: el mouse sobre el video pilota (zoom
+    // con el derecho, giro en modo mouse). No hay control nativo que sirva de
+    // pantalla de juego, y el teclado se atiende en window (useTecladoDeVuelo).
+    <section // NOSONAR(S6847): superficie de vuelo a pantalla completa, ver arriba
       ref={raiz}
       className={`pilotaje${modoMouse ? ' pilotaje-modo-mouse' : ''}`}
       role="dialog"

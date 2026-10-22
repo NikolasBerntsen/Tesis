@@ -563,12 +563,12 @@ describe('UsersView', () => {
   describe('edición en un diálogo', () => {
     const OPER1 = makeUser({ username: 'oper1', fullName: 'Olga Operadora', dni: '30123456' });
 
-    async function abrirEdicion(usuario: UserView, role: RolConsola = 'admin', yo = 'admin1') {
-      servir([ADMIN1, usuario]);
+    async function abrirEdicion(cuenta: UserView, role: RolConsola = 'admin', yo = 'admin1') {
+      servir([ADMIN1, cuenta]);
       montar(role, yo);
-      await screen.findByText(usuario.username);
-      await userEvent.click(within(fila(usuario.username)).getByRole('button', { name: `Editar a ${usuario.username}` }));
-      return screen.findByRole('dialog', { name: `Editar a ${usuario.username}` });
+      await screen.findByText(cuenta.username);
+      await userEvent.click(within(fila(cuenta.username)).getByRole('button', { name: `Editar a ${cuenta.username}` }));
+      return screen.findByRole('dialog', { name: `Editar a ${cuenta.username}` });
     }
 
     it('abre con la ficha actual de la cuenta', async () => {

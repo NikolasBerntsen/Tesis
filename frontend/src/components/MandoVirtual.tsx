@@ -480,7 +480,7 @@ export default function MandoVirtual({
       role="group"
       // Sin teclado no hay nada que hacer con el foco: enfocable sería una
       // parada más del tabulador que no responde a ninguna tecla.
-      tabIndex={teclado ? 0 : undefined}
+      tabIndex={teclado ? 0 : undefined} // NOSONAR(S6845): el mando es un control de teclado (W/A/S/D y flechas)
       aria-label="Mando virtual de vuelo continuo"
       aria-describedby={idAyuda}
       aria-disabled={inerte}

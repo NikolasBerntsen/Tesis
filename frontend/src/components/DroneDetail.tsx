@@ -446,7 +446,8 @@ export default function DroneDetail({
    */
   const salirDelPilotaje = () => {
     setPilotando(false);
-    soltarControl(objetivo ? 'none' : 'last');
+    // llamar() ya atrapa el rechazo y lo deja a la vista: no hay nada que esperar acá.
+    void soltarControl(objetivo ? 'none' : 'last');
   };
 
   // Otro dron en pantalla es otro vuelo: la vista no se queda abierta pilotando

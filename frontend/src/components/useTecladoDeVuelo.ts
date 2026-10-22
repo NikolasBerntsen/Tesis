@@ -261,7 +261,7 @@ export function useTecladoDeVuelo({
   const [ctrlBajaAnterior, setCtrlBajaAnterior] = useState(ctrlBaja);
   if (ctrlBajaAnterior !== ctrlBaja) {
     setCtrlBajaAnterior(ctrlBaja);
-    if (!ctrlBaja) setTeclas((previas) => TECLAS_CTRL.reduce(soltarTecla, previas));
+    if (!ctrlBaja) setTeclas((previas) => TECLAS_CTRL.reduce((pila, code) => soltarTecla(pila, code), previas));
   }
 
   const ejes = useMemo<Ejes>(() => {

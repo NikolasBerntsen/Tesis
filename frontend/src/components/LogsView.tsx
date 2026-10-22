@@ -113,7 +113,7 @@ export default function LogsView() {
         opciones={
           <>
             <label className="etiqueta selector-en-linea">
-              Por página
+              <span>Por página</span>
               <select value={tamanio} onChange={(e) => cambiarTamanio(e.target.value)}>
                 {TAMANIOS_PAGINA.map((t) => (
                   <option key={t} value={t}>

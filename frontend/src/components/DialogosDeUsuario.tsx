@@ -86,7 +86,7 @@ function CampoDni({
   return (
     <div className="form-usuario-campo">
       <label>
-        DNI
+        <span>DNI</span>
         <input
           value={valor}
           onChange={(e) => onCambiar(e.target.value)}
@@ -133,7 +133,7 @@ function CasillaControl({
           aria-describedby={esOperadorDeCampo ? idNota : undefined}
           onChange={(e) => onCambiar(e.target.checked)}
         />
-        Puede controlar drones
+        <span>Puede controlar drones</span>
       </label>
       {esOperadorDeCampo && (
         <p className="form-usuario-nota" id={idNota}>
@@ -199,7 +199,7 @@ export function DialogoNuevoUsuario({
           )}
           <div className="form-usuario">
             <label>
-              Usuario
+              <span>Usuario</span>
               <input
                 value={ficha.username}
                 onChange={(e) => setFicha({ ...ficha, username: e.target.value })}
@@ -209,7 +209,7 @@ export function DialogoNuevoUsuario({
               />
             </label>
             <label>
-              Nombre y apellido
+              <span>Nombre y apellido</span>
               <input
                 value={ficha.fullName}
                 onChange={(e) => setFicha({ ...ficha, fullName: e.target.value })}
@@ -227,7 +227,7 @@ export function DialogoNuevoUsuario({
               }}
             />
             <label>
-              Rol
+              <span>Rol</span>
               <select
                 value={ficha.role}
                 onChange={(e) => setFicha({ ...ficha, role: rolAsignable(e.target.value) ?? 'operator' })}
@@ -387,7 +387,7 @@ export function DialogoEditarUsuario({
           )}
           <div className="form-usuario">
             <label>
-              Nombre y apellido
+              <span>Nombre y apellido</span>
               <input
                 value={ficha.fullName}
                 onChange={(e) => setFicha({ ...ficha, fullName: e.target.value })}
@@ -408,7 +408,7 @@ export function DialogoEditarUsuario({
             />
             <div className="form-usuario-campo">
               <label>
-                Rol
+                <span>Rol</span>
                 <select value={rol} disabled={!esAdmin || esAdminElEditado} onChange={(e) => elegirRol(e.target.value)}>
                   {opcionesDeRol.map((r) => (
                     <option key={r} value={r}>
@@ -434,7 +434,7 @@ export function DialogoEditarUsuario({
                   disabled={!esAdmin}
                   onChange={(e) => setFicha({ ...ficha, active: e.target.checked })}
                 />
-                Cuenta activa
+                <span>Cuenta activa</span>
               </label>
             </div>
           </div>

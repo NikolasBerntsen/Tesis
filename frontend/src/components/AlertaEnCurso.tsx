@@ -110,7 +110,10 @@ export default function AlertaEnCurso({
   }
 
   return (
-    <section
+    // El carrusel se recorre con las flechas cuando el foco está en cualquier
+    // parte de la tarjeta (patrón de carrusel del APG); los botones anterior y
+    // siguiente son el camino sin teclado.
+    <section // NOSONAR(S6847): carrusel recorrible con flechas, ver arriba
       ref={seccion}
       className={apaisada ? 'card alerta-en-curso apaisada' : 'card alerta-en-curso'}
       aria-labelledby={idTitulo}
@@ -118,7 +121,7 @@ export default function AlertaEnCurso({
       // En el orden del tabulador sólo con algo para recorrer: así un click en
       // la tarjeta ya deja andando las flechas. Con una sola queda enfocable
       // por código (-1), que es adonde vuelve el foco al decidir la penúltima.
-      tabIndex={varias ? 0 : -1}
+      tabIndex={varias ? 0 : -1} // NOSONAR(S6845): la tarjeta del carrusel recibe el foco para las flechas
       onKeyDown={varias ? alTeclear : undefined}
       onFocus={() => (focoAdentro.current = true)}
       onBlur={alSalirElFoco}

@@ -17,5 +17,5 @@
  * WebSocket: un número donde se esperaba texto se escapa en vez de romper.
  */
 export function esc(texto: string): string {
-  return String(texto).replace(/[<>&"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  return String(texto).replace(/[<>&"']/g, (c) => `&#${c.codePointAt(0)};`);
 }
