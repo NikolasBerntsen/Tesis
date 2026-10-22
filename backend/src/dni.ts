@@ -40,7 +40,14 @@ export function normalizarDni(valor: unknown): string | null {
  * izquierda, así "05.123" encuentra al 5.123.456. Sacarle los ceros a una
  * búsqueda parcial sólo puede ampliarla —"0456" pasa a "456", que está adentro
  * de todo lo que contenía "0456"—, nunca dejar afuera a quien se buscaba.
+ *
+ * Una búsqueda hecha SOLO de ceros ("0", "00", "0.0") se deja como está: sin
+ * ceros quedaba vacía, y una búsqueda vacía no encuentra ningún DNI, cuando
+ * "0" tiene que encontrar a todos los que tienen un cero adentro (un DNI
+ * canónico nunca empieza con cero, pero los tiene en el medio).
  */
 export function dniParaBuscar(q: string): string {
-  return q.replace(/[.\s]/g, '').replace(/^0+/, '');
+  const digitos = q.replace(/[.\s]/g, '');
+  const sinCeros = digitos.replace(/^0+/, '');
+  return sinCeros === '' ? digitos : sinCeros;
 }

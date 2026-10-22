@@ -301,6 +301,86 @@ describe('Modal con algo en pantalla completa', () => {
     // Colgado de un nodo suelto, el diálogo no se vería nunca.
     expect(screen.getByRole('dialog', { name: 'Despegar' }).parentElement?.parentElement).toBe(document.body);
   });
+
+  /*
+   * requestFullscreen tarda hasta que el navegador avisa, y en ese rato la vista
+   * de pilotaje ya deja apretar "Salir del control manual". El diálogo nace en
+   * el body; cuando la pantalla completa entra, el navegador sólo pinta la
+   * vista, y sin mudarse quedaba abierto, atrapando el teclado, pero invisible.
+   */
+  it('un diálogo abierto mientras la pantalla completa todavía entraba se muda adentro al entrar, con el foco', () => {
+    render(
+      <Modal etiquetadoPor="t-entrando" onCerrar={vi.fn()}>
+        <h2 id="t-entrando">¿Salir del control manual?</h2>
+        <button type="button" data-autofoco>
+          Seguir piloteando
+        </button>
+      </Modal>,
+    );
+    expect(screen.getByRole('dialog').parentElement?.parentElement).toBe(document.body);
+
+    const pantalla = enPantallaCompleta();
+    act(() => {
+      document.dispatchEvent(new Event('fullscreenchange'));
+    });
+
+    expect(pantalla.contains(screen.getByRole('dialog', { name: '¿Salir del control manual?' }))).toBe(true);
+    // La caja se armó de nuevo adentro: el foco no puede quedar en el body.
+    expect(screen.getByRole('button', { name: 'Seguir piloteando' })).toHaveFocus();
+  });
+
+  it('salir de la pantalla completa no muda el diálogo', () => {
+    const pantalla = enPantallaCompleta();
+    render(<Despegar texto="Revisá alrededor" />);
+    const caja = screen.getByRole('dialog', { name: 'Despegar' });
+
+    cambiarPantallaCompleta(null);
+    act(() => {
+      document.dispatchEvent(new Event('fullscreenchange'));
+    });
+
+    expect(screen.getByRole('dialog', { name: 'Despegar' })).toBe(caja);
+    expect(pantalla.contains(caja)).toBe(true);
+  });
+
+  it('una pantalla completa que entra con el diálogo ya adentro de otra no lo mueve', () => {
+    const primera = enPantallaCompleta();
+    render(<Despegar texto="Revisá alrededor" />);
+    const caja = screen.getByRole('dialog', { name: 'Despegar' });
+
+    const otra = document.createElement('section');
+    document.body.appendChild(otra);
+    cambiarPantallaCompleta(otra);
+    act(() => {
+      document.dispatchEvent(new Event('fullscreenchange'));
+    });
+
+    expect(primera.contains(screen.getByRole('dialog', { name: 'Despegar' }))).toBe(true);
+    expect(screen.getByRole('dialog', { name: 'Despegar' })).toBe(caja);
+    otra.remove();
+  });
+
+  it('después de mudarse, el eco del cierre queda en la pantalla completa y no se deja otro al mudarse', async () => {
+    vi.stubGlobal('matchMedia', (q: string) => ({ matches: q.includes('no-preference') }));
+    try {
+      const { unmount } = render(<Despegar texto="Revisá alrededor" />);
+      const pantalla = enPantallaCompleta();
+      await act(async () => {
+        document.dispatchEvent(new Event('fullscreenchange'));
+      });
+      // Mudarse no es cerrar: ningún eco en ningún lado.
+      expect(document.querySelectorAll('.modal-saliendo')).toHaveLength(0);
+
+      unmount();
+      await act(async () => {}); // el eco se inserta en una microtarea
+      const ecos = document.querySelectorAll('.modal-saliendo');
+      expect(ecos).toHaveLength(1);
+      expect(pantalla.contains(ecos[0])).toBe(true);
+      ecos.forEach((n) => n.remove());
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe('Modal: dónde arranca el foco', () => {

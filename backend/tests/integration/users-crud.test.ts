@@ -543,6 +543,21 @@ describe('integración — DNI de los usuarios', () => {
       const r = await api(srv.base, `/api/users?q=${encodeURIComponent('05.123.456')}`, adm);
       expect(r.body.map((u: { username: string }) => u.username)).toEqual(['mayor']);
     });
+
+    // Sacarle los ceros a "0" la dejaba vacía, y una búsqueda vacía no
+    // encontraba ningún DNI: "0" tiene que traer a todos los que tienen un cero.
+    it('una búsqueda hecha solo de ceros encuentra los DNI que tienen ceros adentro', async () => {
+      await crearUsuario(srv.base, adm, { username: 'conzero', fullName: 'Con Cero', dni: '30012345' });
+      await crearUsuario(srv.base, adm, { username: 'sinzero', fullName: 'Sin Cero', dni: '31234567' });
+      // "0.0" busca "00", que está adentro de 30.012.345.
+      for (const q of ['0', '00', '0.0']) {
+        const nombres = (await api(srv.base, `/api/users?q=${encodeURIComponent(q)}`, adm)).body.map(
+          (u: { username: string }) => u.username,
+        );
+        expect(nombres).toContain('conzero');
+        expect(nombres).not.toContain('sinzero');
+      }
+    });
   });
 
   it('el cambio de DNI queda registrado con antes y después', async () => {

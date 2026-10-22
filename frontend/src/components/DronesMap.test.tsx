@@ -451,6 +451,21 @@ describe('DronesMap — drones y bases', () => {
     expect(caja.querySelector('img')).toBeNull();
   });
 
+  // El globo de la base nombra a su dron en la fila "Dron". El escape vive en
+  // ficha(), compartido con el resto: este test es el que avisa si alguna vez
+  // ese escape se pierde, porque el nombre del dron lo escribe una persona.
+  it('el nombre del dron en el globo de su base también va como texto', () => {
+    const malicioso = '<img src=x onerror="alert(1)">';
+    render(<DronesMap items={[item({ displayName: malicioso })]} />);
+
+    const caja = document.createElement('div');
+    caja.innerHTML = todas('marker')[0].htmlGlobo as string;
+    expect(caja.querySelector('img')).toBeNull();
+    const filas = [...caja.querySelectorAll('dt')];
+    const dron = filas.find((dt) => dt.textContent === 'Dron')!;
+    expect(dron.nextElementSibling!.textContent).toBe(malicioso);
+  });
+
   it('el nombre de la base tampoco se inyecta en su globo', () => {
     const malicioso = '<img src=x onerror="alert(1)">';
     render(<DronesMap items={[item({ base: { ...BASE, name: malicioso } })]} />);
