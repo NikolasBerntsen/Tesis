@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, rutasDeBase } from '../api';
 import { posicionDelDron, stateLabel } from '../format';
 import type { RastroObjetivo } from '../rastro';
@@ -161,6 +161,44 @@ export default function DroneDetail({
    * se cerraba diciendo que el control se soltó "desde otra sesión".
    */
   const fichaAlCortarseElEnlace = useRef<Drone | null>(null);
+  /**
+   * El botón de la tarjeta del control que esté en pantalla: "Tomar control
+   * manual" sin nadie a cargo, o "Volver a la vista de pilotaje" con el control
+   * tomado (nunca los dos a la vez). Es adonde vuelve el foco al cerrarse la
+   * vista de pilotaje, si lo que lo tenía antes de abrirla ya no está.
+   */
+  const botonDelControl = useRef<HTMLButtonElement | null>(null);
+  /** El aviso de por qué se cerró sola la vista: el foco va ahí si no hay botón que lo reciba. */
+  const avisoDePilotajeRef = useRef<HTMLParagraphElement>(null);
+  /**
+   * El botón del control que se fue tenía el foco: lo hereda el que entra en su
+   * lugar en el mismo cambio. Es el camino de salir de la vista: el foco vuelve
+   * a "Volver a la vista de pilotaje", y cuando llega la confirmación de que se
+   * soltó el control ese botón deja paso a "Tomar control manual". Sin esto el
+   * foco se iba al body un instante después de haberlo devuelto.
+   */
+  const focoAHeredar = useRef(false);
+  // Estable a propósito: con una función nueva en cada render, React soltaría y
+  // volvería a poner la ref en cada status que llega.
+  const refDelBotonDelControl = useCallback((boton: HTMLButtonElement | null) => {
+    if (boton === null) {
+      // React suelta la ref antes de sacar el nodo de la página: todavía se
+      // puede preguntar si tenía el foco.
+      focoAHeredar.current = document.activeElement === botonDelControl.current;
+      botonDelControl.current = null;
+      return;
+    }
+    botonDelControl.current = boton;
+    if (focoAHeredar.current) boton.focus();
+    focoAHeredar.current = false;
+  }, []);
+  // Si en el mismo cambio no entró ningún botón (otro operador tomó el
+  // control), la herencia no puede quedar esperando al que aparezca mucho
+  // después y robarle el foco a lo que el operador esté haciendo. Las refs de
+  // los hijos se ponen antes que los efectos de layout del padre.
+  useLayoutEffect(() => {
+    focoAHeredar.current = false;
+  });
 
   // Un dron sólo puede patrullar las rutas de la base de la que sale. Ofrecerle
   // todas las del sistema era mandarlo a volar a la otra punta de la ciudad.
@@ -255,8 +293,16 @@ export default function DroneDetail({
     if (ordenEnCurso === 'despegar' && enElAire) setOrdenEnCurso(null);
     if (ordenEnCurso === 'aterrizar' && enElSuelo) setOrdenEnCurso(null);
   }, [ordenEnCurso, enElAire, enElSuelo]);
+  // Lo mismo con la orden que espera confirmación: sin el control ya no es de
+  // este operador (el backend la rechazaría), y confirmarla después, si el
+  // control vuelve, sería despegar con una pregunta vieja. Cubre también la
+  // vista de pilotaje que se cierra por la pérdida: el diálogo pedido desde
+  // ahí vive adentro de la vista en pantalla completa, y la vista se va en
+  // este mismo cambio (ver `contenedor` en Modal.tsx).
   useEffect(() => {
-    if (!soyControlador) setOrdenEnCurso(null);
+    if (soyControlador) return;
+    setOrdenEnCurso(null);
+    setAConfirmar(null);
   }, [soyControlador]);
   // Si el control cambia de manos (o se suelta) mientras el supervisor lee la
   // pregunta, la pregunta ya no es la misma: se descarta en vez de quedar
@@ -419,6 +465,17 @@ export default function DroneDetail({
     setPilotando(true);
   }
 
+  /**
+   * Adónde va el foco al cerrarse la vista si lo que lo tenía antes de abrirla
+   * ya no está: al botón del control que haya ahora. Si no hay ninguno que lo
+   * pueda recibir —otro operador se llevó el control, o el dron se desconectó y
+   * "Tomar control manual" está apagado—, al aviso que explica por qué se cerró.
+   */
+  function devolverFocoTrasElPilotaje() {
+    botonDelControl.current?.focus();
+    if (document.activeElement !== botonDelControl.current) avisoDePilotajeRef.current?.focus();
+  }
+
   // El control se puede perder sin que este operador haga nada: un supervisor
   // que se lo saca, la misma cuenta que lo suelta desde otra pestaña, el dron
   // que se desconecta (el backend suelta su lock) o el canal de esta consola
@@ -522,7 +579,9 @@ export default function DroneDetail({
         </p>
       )}
       {avisoDePilotaje && (
-        <p className="aviso" role="status" data-testid="aviso-pilotaje">
+        // Enfocable sólo desde el código (ver `devolverFocoTrasElPilotaje`):
+        // no es un control y no tiene que estar en el orden del tabulador.
+        <p className="aviso" role="status" data-testid="aviso-pilotaje" tabIndex={-1} ref={avisoDePilotajeRef}>
           {avisoDePilotaje}
         </p>
       )}
@@ -636,7 +695,12 @@ export default function DroneDetail({
             <h2>Control del dron</h2>
             {!controlador && (
               <>
-                <button className="primario" onClick={tomarControl} disabled={!drone.online}>
+                <button
+                  ref={refDelBotonDelControl}
+                  className="primario"
+                  onClick={tomarControl}
+                  disabled={!drone.online}
+                >
                   Tomar control manual
                 </button>
                 <p className="muted">
@@ -710,7 +774,7 @@ export default function DroneDetail({
                 <hr className="regla" />
                 <h3>Vuelo continuo</h3>
                 <p className="muted">Teclado, mouse y sticks virtuales, con la cámara a pantalla completa.</p>
-                <button className="primario" onClick={volverAPilotar}>
+                <button ref={refDelBotonDelControl} className="primario" onClick={volverAPilotar}>
                   Volver a la vista de pilotaje
                 </button>
 
@@ -775,6 +839,7 @@ export default function DroneDetail({
           onOrden={setAConfirmar}
           onCerrar={() => setPilotando(false)}
           onSalir={salirDelPilotaje}
+          onDevolverFoco={devolverFocoTrasElPilotaje}
         />
       )}
 

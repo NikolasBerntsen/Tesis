@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 const FOCUSABLES =
@@ -32,8 +32,12 @@ function animarSalida(): boolean {
  * desvanece y se borra sola. Se arma antes de que React quite el original
  * —después ya no hay nada que copiar— y se inserta recién cuando el commit
  * terminó, para poder distinguir un cierre real de un desmontaje de prueba.
+ *
+ * `contenedor` es donde vivía el diálogo (ver `elegirContenedor`), y es ahí
+ * donde va el eco: en pantalla completa el navegador sólo pinta ese elemento,
+ * y un eco colgado del body se desvanecía detrás, sin que nadie lo viera.
  */
-function dejarEco(fondo: HTMLElement) {
+function dejarEco(fondo: HTMLElement, contenedor: Element) {
   if (!animarSalida()) return;
   const eco = fondo.cloneNode(true) as HTMLElement;
   eco.classList.add('modal-saliendo');
@@ -42,18 +46,36 @@ function dejarEco(fondo: HTMLElement) {
   // Un id repetido haría que un diálogo que se abre enseguida tome su título
   // del eco que se está yendo.
   eco.querySelectorAll('[id]').forEach((n) => n.removeAttribute('id'));
-  const yaEstaban = new Set(document.body.children);
+  // Se anotan los hijos de los dos lugares adonde puede ir el eco: hasta la
+  // microtarea no se sabe si el contenedor sigue en la página.
+  const yaEstaban = new Set([...contenedor.children, ...document.body.children]);
   queueMicrotask(() => {
     // StrictMode desmonta y vuelve a montar en desarrollo sin sacar el nodo:
     // si sigue en la página no hubo cierre de verdad y no hay nada que despedir.
     if (fondo.isConnected) return;
+    // Si el contenedor se fue junto con el diálogo (la vista de pilotaje que se
+    // cierra con una confirmación abierta), el eco no tiene dónde verse ahí.
+    const destino = contenedor.isConnected ? contenedor : document.body;
     // Si en el mismo gesto se abrió otro diálogo (el alta de un dron que deja
     // paso a su sticker), el eco va debajo: el nuevo no puede quedar tapado
     // por el que se está yendo.
-    const nuevo = [...document.body.children].find((n) => !yaEstaban.has(n)) ?? null;
-    document.body.insertBefore(eco, nuevo);
+    const nuevo = [...destino.children].find((n) => !yaEstaban.has(n)) ?? null;
+    destino.insertBefore(eco, nuevo);
     setTimeout(() => eco.remove(), SALIDA_MS);
   });
+}
+
+/**
+ * Dónde se cuelga el diálogo. Con algo en pantalla completa (la vista de
+ * pilotaje), el navegador sólo pinta ese elemento y lo que tiene adentro: un
+ * diálogo colgado del body quedaría abierto, atrapando el teclado, pero
+ * invisible. Un elemento que ya salió de la página no sirve: el navegador
+ * todavía lo puede nombrar como el de pantalla completa en el instante en que
+ * se lo saca, antes de avisar con `fullscreenchange`.
+ */
+function elegirContenedor(): Element {
+  const completa = document.fullscreenElement;
+  return completa?.isConnected ? completa : document.body;
 }
 
 /**
@@ -108,6 +130,14 @@ export default function Modal({
   // `click` en el ancestro común, que es el velo: sin recordar dónde empezó,
   // soltar el botón un poco afuera cerraba el diálogo y se perdía la lectura.
   const arrancoEnElVelo = useRef(false);
+  // Se elige UNA vez, al montar. Antes se miraba en cada render, y cambiar de
+  // contenedor con el diálogo abierto es, para React, otro portal: lo vuelve a
+  // montar entero en el lugar nuevo. Al cerrarse la vista de pilotaje con una
+  // confirmación abierta adentro, la caja se iba con la vista pero el diálogo
+  // seguía montado (invisible, en la pila, comiéndose el tabulador) y en el
+  // render siguiente reaparecía en el body, viejo. Si la pantalla completa
+  // cambia con el diálogo abierto, el diálogo se queda donde nació.
+  const [contenedor] = useState(elegirContenedor);
 
   useEffect(() => {
     const previo = document.activeElement;
@@ -131,8 +161,8 @@ export default function Modal({
   // montar, que es cuando se sabe que la ref está puesta.
   useLayoutEffect(() => {
     const nodo = fondo.current!;
-    return () => dejarEco(nodo);
-  }, []);
+    return () => dejarEco(nodo, contenedor);
+  }, [contenedor]);
 
   // Entrada y salida de la pila. La ref de la caja hace de identidad: es
   // estable entre renders y única por diálogo.
@@ -215,9 +245,6 @@ export default function Modal({
         {children}
       </div>
     </div>,
-    // Con algo en pantalla completa (la vista de pilotaje), el navegador sólo
-    // pinta ese elemento y lo que tiene adentro: un diálogo colgado del body
-    // quedaría abierto, atrapando el teclado, pero invisible.
-    document.fullscreenElement ?? document.body,
+    contenedor,
   );
 }

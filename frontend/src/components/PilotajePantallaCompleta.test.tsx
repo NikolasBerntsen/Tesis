@@ -14,10 +14,33 @@ import PilotajePantallaCompleta from './PilotajePantallaCompleta';
  * `pointerlockchange`. Así se prueba lo que hace la vista con cada cambio, que
  * es lo que importa, y cada test puede romperlos a su gusto para probar el
  * navegador que se niega.
+ *
+ * El bloqueo del teclado queda esperando la respuesta del navegador hasta que
+ * el test la da con `cumplirBloqueo` o `negarBloqueo`: lo que cambia con él
+ * (si Ctrl baja) depende de esa respuesta, y así cada test elige cuándo llega.
  */
 let enPantallaCompleta: Element | null = null;
 let capturado: Element | null = null;
-const teclado = { lock: vi.fn(() => Promise.resolve()), unlock: vi.fn() };
+let cumplirBloqueo: () => void = () => {};
+let negarBloqueo: () => void = () => {};
+const teclado = {
+  lock: vi.fn(
+    () =>
+      new Promise<void>((cumplir, negar) => {
+        cumplirBloqueo = cumplir;
+        negarBloqueo = () => negar(new DOMException('No se pudo bloquear', 'AbortError'));
+      }),
+  ),
+  unlock: vi.fn(),
+};
+
+/** El navegador contesta el pedido de bloqueo, y la vista se entera. */
+async function contestarBloqueo(cumplido: boolean) {
+  await act(async () => {
+    if (cumplido) cumplirBloqueo();
+    else negarBloqueo();
+  });
+}
 
 function avisar(evento: string) {
   act(() => {
@@ -101,6 +124,7 @@ function montar(cambios: Partial<Props> = {}) {
     onOrden: vi.fn(),
     onCerrar: vi.fn(),
     onSalir: vi.fn(),
+    onDevolverFoco: vi.fn(),
     ...cambios,
   };
   const resultado = render(<PilotajePantallaCompleta {...props} />);
@@ -303,12 +327,95 @@ describe('PilotajePantallaCompleta — teclado', () => {
     expect(onMando).toHaveBeenLastCalledWith(EJES_EN_CERO);
   });
 
-  it('Ctrl y C bajan', () => {
+  it('con el teclado bloqueado en pantalla completa, Ctrl y C bajan', async () => {
     const { onMando } = montar();
-    fireEvent.keyDown(window, { code: 'ControlLeft' });
+    await contestarBloqueo(true);
+    const ctrl = new KeyboardEvent('keydown', { code: 'ControlLeft', cancelable: true });
+    act(() => {
+      window.dispatchEvent(ctrl);
+    });
+    // Con el bloqueo la página recibe Ctrl+W: atajarla no cierra la pestaña.
+    expect(ctrl.defaultPrevented).toBe(true);
     expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, throttle: -0.5 });
     fireEvent.keyUp(window, { code: 'ControlLeft' });
     fireEvent.keyDown(window, { code: 'KeyC' });
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, throttle: -0.5 });
+  });
+
+  /**
+   * Sin el bloqueo el navegador se queda con Ctrl+W aunque la página la ataje:
+   * bajar con Ctrl mientras se avanzaba con W cerraba la pestaña en pleno vuelo.
+   */
+  const SIN_BLOQUEO = [
+    { caso: 'mientras el navegador no contestó el pedido de bloqueo', preparar: async () => {} },
+    { caso: 'si el navegador niega el bloqueo', preparar: () => contestarBloqueo(false) },
+    {
+      caso: 'en un navegador sin Keyboard Lock (Firefox, Safari)',
+      antes: () => delete (navigator as unknown as Record<string, unknown>).keyboard,
+      preparar: async () => {},
+    },
+    {
+      caso: 'si el navegador no dejó poner la pantalla completa',
+      antes: () => pedirPantalla.mockImplementationOnce(() => Promise.reject(new Error('Permissions check failed'))),
+      preparar: async () => {},
+    },
+  ];
+
+  it.each(SIN_BLOQUEO)('$caso, Ctrl no baja ni se ataja, y la C sí baja', async ({ antes, preparar }) => {
+    antes?.();
+    const { onMando } = montar();
+    await preparar();
+    const ctrl = new KeyboardEvent('keydown', { code: 'ControlRight', cancelable: true });
+    act(() => {
+      window.dispatchEvent(ctrl);
+    });
+    // Sostenida tampoco: la repetición automática no hace nada.
+    fireEvent.keyDown(window, { code: 'ControlRight', repeat: true });
+    expect(ctrl.defaultPrevented).toBe(false);
+    expect(onMando).not.toHaveBeenCalled();
+    fireEvent.keyUp(window, { code: 'ControlRight' });
+
+    fireEvent.keyDown(window, { code: 'KeyC' });
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, throttle: -0.5 });
+  });
+
+  it('al salir de la pantalla completa Ctrl deja de bajar, aunque esté sostenida', async () => {
+    const { onMando } = montar();
+    await contestarBloqueo(true);
+    vi.useFakeTimers();
+    fireEvent.keyDown(window, { code: 'ControlLeft' });
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, throttle: -0.5 });
+
+    act(() => {
+      void document.exitFullscreen();
+    });
+    // El dron queda estacionario: esa Ctrl ya no es de la vista.
+    expect(onMando).toHaveBeenLastCalledWith(EJES_EN_CERO);
+    fireEvent.keyDown(window, { code: 'ControlLeft' });
+    act(() => vi.advanceTimersByTime(500));
+    expect(onMando).toHaveBeenLastCalledWith(EJES_EN_CERO);
+  });
+
+  it('un bloqueo que llega cuando ya se salió de la pantalla completa no vale, ni al volver a ella', async () => {
+    const { onMando } = montar();
+    act(() => {
+      void document.exitFullscreen();
+    });
+    await contestarBloqueo(true);
+    fireEvent.keyDown(window, { code: 'ControlLeft' });
+    expect(onMando).not.toHaveBeenCalled();
+    fireEvent.keyUp(window, { code: 'ControlLeft' });
+
+    // De nuevo en pantalla completa: el pedido nuevo todavía no tiene respuesta,
+    // y la del viejo no lo reemplaza.
+    fireEvent.click(screen.getByRole('button', { name: 'Pantalla completa' }));
+    expect(teclado.lock).toHaveBeenCalledTimes(2);
+    fireEvent.keyDown(window, { code: 'ControlLeft' });
+    expect(onMando).not.toHaveBeenCalled();
+    fireEvent.keyUp(window, { code: 'ControlLeft' });
+
+    await contestarBloqueo(true);
+    fireEvent.keyDown(window, { code: 'ControlLeft' });
     expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, throttle: -0.5 });
   });
 
@@ -590,6 +697,45 @@ describe('PilotajePantallaCompleta — modo mouse', () => {
     expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, pitch: 0.5 });
   });
 
+  /**
+   * 0,15° por píxel, redondeado a la décima en cada paso, daba +0,2° por cada
+   * píxel para arriba y -0,1° por cada uno para abajo: la cámara subía sola con
+   * el pulso de la mano. La cuenta va exacta y se redondea sólo lo que se ve y
+   * lo que sale.
+   */
+  it.each([
+    { sentido: 'abajo', px: 1, ida: '-45°', idaPitch: -45 },
+    { sentido: 'arriba', px: -1, ida: '-15°', idaPitch: -15 },
+  ])('cien píxeles para $sentido son 15°, y volverlos deja la cámara donde estaba', ({ px, ida, idaPitch }) => {
+    vi.useFakeTimers();
+    const { onCamara } = montar();
+    fireEvent.click(screen.getByRole('button', { name: 'Modo mouse' }));
+    expect(hud('camara')).toBe('-30°');
+
+    for (let i = 0; i < 100; i += 1) moverMouse(0, px);
+    act(() => vi.advanceTimersByTime(200));
+    expect(hud('camara')).toBe(ida);
+    expect(onCamara).toHaveBeenLastCalledWith(idaPitch);
+
+    for (let i = 0; i < 100; i += 1) moverMouse(0, -px);
+    act(() => vi.advanceTimersByTime(200));
+    expect(hud('camara')).toBe('-30°');
+    expect(onCamara).toHaveBeenLastCalledWith(-30);
+  });
+
+  it('un temblor que no alcanza la décima no manda nada, pero cuenta para el siguiente', () => {
+    const { onCamara } = montar();
+    fireEvent.click(screen.getByRole('button', { name: 'Modo mouse' }));
+    // Con la pantalla escalada el navegador entrega fracciones de píxel: 0,2 px
+    // son 0,03°, que no mueven la décima.
+    moverMouse(0, -0.2);
+    expect(onCamara).not.toHaveBeenCalled();
+    // El segundo suma 0,06°: ahora sí, y sale. Redondeando cada paso, los dos
+    // se perdían.
+    moverMouse(0, -0.2);
+    expect(onCamara).toHaveBeenLastCalledWith(-29.9);
+  });
+
   it('fuera del modo mouse, mover el mouse no hace nada', () => {
     const { onMando, onCamara } = montar();
     moverMouse(30, 30);
@@ -736,6 +882,11 @@ describe('PilotajePantallaCompleta — ayuda', () => {
     }
     expect(within(ayuda).getByText('Adelante y atrás')).toBeInTheDocument();
     expect(within(ayuda).getByText('Sale del modo mouse')).toBeInTheDocument();
+    // Ctrl no se promete a secas: fuera de la pantalla completa con Chrome o
+    // Edge el navegador se queda con Ctrl+W.
+    expect(within(ayuda).getByText('Bajar').closest('div')).toHaveTextContent(
+      'C (o Ctrl en pantalla completa con Chrome o Edge)',
+    );
     expect(within(ayuda).getByRole('button', { name: 'Cerrar la ayuda' })).toHaveFocus();
 
     fireEvent.keyDown(window, { key: 'Escape' });
@@ -828,6 +979,55 @@ describe('PilotajePantallaCompleta — salir', () => {
     const { vista } = montar();
     fireEvent.click(screen.getByRole('button', { name: 'Salir del control manual' }));
     expect(vista.contains(screen.getByRole('dialog', { name: '¿Salir del control manual?' }))).toBe(true);
+  });
+});
+
+describe('PilotajePantallaCompleta — el foco al cerrarse', () => {
+  /** Un botón de la página de atrás, enfocado antes de abrir la vista. */
+  function botonQueAbre(): HTMLButtonElement {
+    const boton = document.createElement('button');
+    boton.textContent = 'Tomar control manual';
+    document.body.append(boton);
+    boton.focus();
+    return boton;
+  }
+
+  it('vuelve a lo que lo tenía antes de abrir, ya sin lo de atrás inerte', () => {
+    const abrio = botonQueAbre();
+    // Mientras lo de atrás siga inerte el navegador no le da el foco a nada:
+    // se anota cómo estaba el botón en el momento de enfocarlo.
+    let inerteAlEnfocar: boolean | null = null;
+    const enfocarDeVerdad = HTMLElement.prototype.focus;
+    vi.spyOn(abrio, 'focus').mockImplementation(function (this: HTMLElement) {
+      inerteAlEnfocar = this.closest('[inert]') !== null;
+      enfocarDeVerdad.call(this);
+    });
+    const { vista, onDevolverFoco, unmount } = montar();
+    expect(vista).toHaveFocus();
+    expect(abrio).toHaveAttribute('inert');
+
+    unmount();
+    expect(abrio).toHaveFocus();
+    expect(inerteAlEnfocar).toBe(false);
+    expect(onDevolverFoco).not.toHaveBeenCalled();
+    abrio.remove();
+  });
+
+  it('si lo que lo tenía ya no está en la página, le pregunta al detalle adónde', () => {
+    // "Tomar control manual" se va apenas el control queda tomado.
+    const abrio = botonQueAbre();
+    const { onDevolverFoco, unmount } = montar();
+    abrio.remove();
+    unmount();
+    expect(onDevolverFoco).toHaveBeenCalledTimes(1);
+  });
+
+  it('si no había nada enfocado al abrir, también le pregunta al detalle', () => {
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.activeElement).toBe(document.body);
+    const { onDevolverFoco, unmount } = montar();
+    unmount();
+    expect(onDevolverFoco).toHaveBeenCalledTimes(1);
   });
 });
 

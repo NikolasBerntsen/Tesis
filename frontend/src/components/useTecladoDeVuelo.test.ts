@@ -59,10 +59,18 @@ describe('teclas de vuelo — mapa', () => {
   });
 
   it('distingue las teclas de vuelo del resto', () => {
-    expect(esTeclaDeVuelo('KeyW')).toBe(true);
-    expect(esTeclaDeVuelo('ShiftRight')).toBe(true);
-    expect(esTeclaDeVuelo('KeyZ')).toBe(false);
-    expect(esTeclaDeVuelo('Escape')).toBe(false);
+    expect(esTeclaDeVuelo('KeyW', false)).toBe(true);
+    expect(esTeclaDeVuelo('ShiftRight', false)).toBe(true);
+    expect(esTeclaDeVuelo('KeyZ', true)).toBe(false);
+    expect(esTeclaDeVuelo('Escape', true)).toBe(false);
+  });
+
+  it('las Ctrl son de vuelo sólo con el teclado bloqueado; la C, siempre', () => {
+    expect(esTeclaDeVuelo('ControlLeft', true)).toBe(true);
+    expect(esTeclaDeVuelo('ControlRight', true)).toBe(true);
+    expect(esTeclaDeVuelo('ControlLeft', false)).toBe(false);
+    expect(esTeclaDeVuelo('ControlRight', false)).toBe(false);
+    expect(esTeclaDeVuelo('KeyC', false)).toBe(true);
   });
 });
 
@@ -324,5 +332,61 @@ describe('useTecladoDeVuelo', () => {
     apretar('KeyQ');
     unmount();
     expect(onMando).toHaveBeenLastCalledWith(EJES_EN_CERO);
+  });
+
+  it('sin el teclado bloqueado (por defecto), Ctrl no baja ni se ataja, ni sostenida; la C sí baja', () => {
+    const { onMando, result } = montar();
+    const abajo = new KeyboardEvent('keydown', { code: 'ControlLeft', cancelable: true });
+    const repetida = new KeyboardEvent('keydown', { code: 'ControlLeft', repeat: true, cancelable: true });
+    act(() => {
+      window.dispatchEvent(abajo);
+      window.dispatchEvent(repetida);
+    });
+    act(() => vi.advanceTimersByTime(500));
+    // Ctrl queda para el navegador: si la página la atajara igual no podría
+    // frenar Ctrl+W, y el dron bajaría con cada atajo.
+    expect(abajo.defaultPrevented).toBe(false);
+    expect(repetida.defaultPrevented).toBe(false);
+    expect(result.current.ejes).toEqual(EJES_EN_CERO);
+    expect(onMando).not.toHaveBeenCalled();
+    const arriba = new KeyboardEvent('keyup', { code: 'ControlLeft', cancelable: true });
+    act(() => {
+      window.dispatchEvent(arriba);
+    });
+    expect(arriba.defaultPrevented).toBe(false);
+
+    apretar('KeyC');
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, throttle: -0.5 });
+  });
+
+  it('con el teclado bloqueado, Ctrl baja y se ataja', () => {
+    const { onMando } = montar({ ctrlBaja: true });
+    const abajo = new KeyboardEvent('keydown', { code: 'ControlRight', cancelable: true });
+    act(() => {
+      window.dispatchEvent(abajo);
+    });
+    expect(abajo.defaultPrevented).toBe(true);
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, throttle: -0.5 });
+    soltar('ControlRight');
+    expect(onMando).toHaveBeenLastCalledWith(EJES_EN_CERO);
+  });
+
+  it('si el bloqueo se pierde con Ctrl sostenida, deja de bajar; lo demás sigue', () => {
+    const { onMando, rerender, inicial, result } = montar({ ctrlBaja: true });
+    apretar('KeyW');
+    apretar('ControlLeft');
+    expect(result.current.ejes).toEqual({ ...EJES_EN_CERO, pitch: 0.5, throttle: -0.5 });
+
+    // Se salió de la pantalla completa: el keyup de esa Ctrl ya no es de la vista.
+    rerender({ ...inicial, ctrlBaja: false });
+    expect(result.current.ejes).toEqual({ ...EJES_EN_CERO, pitch: 0.5 });
+    act(() => vi.advanceTimersByTime(100));
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, pitch: 0.5 });
+
+    // Y si el bloqueo vuelve, la Ctrl que quedó apretada no baja sola: hay que
+    // volver a apretarla (la repetición automática no cuenta).
+    rerender({ ...inicial, ctrlBaja: true });
+    fireEvent.keyDown(window, { code: 'ControlLeft', repeat: true });
+    expect(result.current.ejes).toEqual({ ...EJES_EN_CERO, pitch: 0.5 });
   });
 });
