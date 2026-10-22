@@ -3,17 +3,21 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProveedorDeAvisos } from './AvisosFlotantes';
 import DroneDetail from './DroneDetail';
-import type { MapItem } from './DronesMap';
+import type { MapItem, WaypointsLayer } from './DronesMap';
 import { api, rutasDeBase } from '../api';
 import { makeAlert, makeDrone, makeEvent, makeMe, makeRoute, makeStatus } from '../test/fixtures';
 import type { Alert, ObjetivoEnSeguimiento } from '../types';
 
 // El mapa anota los items que recibe: es la forma de ver que el rastro del
-// objetivo baja hasta él sin correr Leaflet.
-const { mapa } = vi.hoisted(() => ({ mapa: { items: [] as MapItem[] } }));
+// objetivo baja hasta él sin correr Leaflet. Anota también la capa de nodos,
+// que trae lo que hacen los botones del globo de cada nodo ("Forzar").
+const { mapa } = vi.hoisted(() => ({
+  mapa: { items: [] as MapItem[], waypoints: null as WaypointsLayer | null | undefined },
+}));
 vi.mock('./DronesMap', () => ({
-  default: ({ items }: { items: MapItem[] }) => {
+  default: ({ items, waypoints }: { items: MapItem[]; waypoints?: WaypointsLayer | null }) => {
     mapa.items = items;
+    mapa.waypoints = waypoints;
     return <div data-testid="mapa-mock" />;
   },
 }));
@@ -339,6 +343,41 @@ describe('DroneDetail', () => {
     const aviso = await screen.findByText('Backend caído');
     expect(aviso).toBeInTheDocument();
     expect(aviso).toHaveAttribute('role', 'alert');
+  });
+
+  it('forzar un nodo desde el mapa ordena el salto en la ruta activa y, si se rechaza, deja el motivo a la vista', async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path.startsWith('/events')) return Promise.resolve([]);
+      if (path.endsWith('/goto')) return Promise.reject(new Error('El dron ya no patrulla esa ruta'));
+      return Promise.resolve({});
+    });
+    renderDetail({ status: makeStatus({ droneId: 'd1', state: 'PATROLLING', routeId: 1, waypointIndex: 0 }) });
+    await esperarCarga();
+
+    // El mapa no espera nada de vuelta (`onForce` es void): el rechazo tiene
+    // que quedar a la vista igual, porque nadie más lo va a mostrar.
+    act(() => mapa.waypoints?.onForce?.(1));
+
+    expect(apiMock).toHaveBeenCalledWith('/drones/d1/goto', {
+      method: 'POST',
+      body: JSON.stringify({ routeId: 1, index: 1 }),
+    });
+    expect(await screen.findByRole('alert')).toHaveTextContent('El dron ya no patrulla esa ruta');
+  });
+
+  it('continuar desde un nodo del mapa retoma la ruta interrumpida a partir de ese nodo', async () => {
+    renderDetail({ status: makeStatus({ droneId: 'd1', state: 'MANUAL', routeId: 1, waypointIndex: 0 }) });
+    await esperarCarga();
+    // Con el patrullaje interrumpido el globo del nodo ofrece "Continuar desde acá".
+    expect(mapa.waypoints?.canContinue).toBe(true);
+
+    await act(async () => mapa.waypoints?.onContinue?.(1));
+
+    expect(apiMock).toHaveBeenCalledWith('/drones/d1/resume', {
+      method: 'POST',
+      body: JSON.stringify({ fromIndex: 1 }),
+    });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('rotula los cuatro símbolos del mapa en la leyenda', async () => {

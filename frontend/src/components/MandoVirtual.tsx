@@ -449,7 +449,12 @@ export default function MandoVirtual({
     return (
       <div className="palanca">
         <span className="etiqueta">{titulo}</span>
-        <div
+        {/* El plato es una palanca analógica que se arrastra: ningún control
+            nativo ni rol de ARIA recibe un vector de dos ejes, y darle uno
+            (slider, botón) le prometería al lector de pantalla algo que no es.
+            Su camino de teclado no está en cada plato sino en el mando entero
+            (W/A/S/D y flechas); en la vista de pilotaje, en la ventana. */}
+        <div // NOSONAR(S6848): palanca de arrastre; el teclado la maneja desde el mando, ver arriba
           className="palanca-plato"
           data-testid={`palanca-${palanca}`}
           onPointerDown={alBajarPuntero}
@@ -475,7 +480,12 @@ export default function MandoVirtual({
   }
 
   return (
-    <div
+    // El mando es UN control de teclado: con el foco en el bloque, W/A/S/D y
+    // las flechas mueven las palancas. Es un grupo (dos palancas, sus lecturas
+    // y la ayuda) y ningún rol interactivo de ARIA describe un par de palancas
+    // analógicas; cambiarle el rol para callar al análisis sería mentirle al
+    // lector de pantalla.
+    <div // NOSONAR(S6847): el grupo atiende el teclado del mando, ver arriba
       className={`mando${inerte ? ' mando-impedido' : ''}`}
       role="group"
       // Sin teclado no hay nada que hacer con el foco: enfocable sería una

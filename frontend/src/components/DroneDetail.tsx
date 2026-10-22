@@ -397,7 +397,10 @@ export default function DroneDetail({
     llamar(`/drones/${drone.droneId}/resume`, { method: 'POST', body: JSON.stringify({ fromIndex: index }) });
   const forzarNodo = (index: number) => {
     const routeId = rutaActiva?.id ?? rutaElegida;
-    if (routeId) llamar(`/drones/${drone.droneId}/goto`, { method: 'POST', body: JSON.stringify({ routeId, index }) });
+    // `void` y no un catch: `llamar` nunca rechaza, el error lo deja a la vista
+    // ella misma. Y si el backend aceptó acá no cambia nada: el avance por los
+    // nodos lo pinta el status del dron, no esta respuesta.
+    if (routeId) void llamar(`/drones/${drone.droneId}/goto`, { method: 'POST', body: JSON.stringify({ routeId, index }) });
   };
 
   const comenzarRuta = () =>

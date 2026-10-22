@@ -53,6 +53,11 @@ describe('LoginForm', () => {
     expect(onLogin).not.toHaveBeenCalled();
   });
 
+  it('arranca con el foco en el usuario, listo para escribir', () => {
+    render(<LoginForm onLogin={() => {}} />);
+    expect(screen.getByLabelText('Usuario')).toHaveFocus();
+  });
+
   it('arma la placa de ingreso: título, subtítulo y filigrana separadora', () => {
     const { container } = render(<LoginForm onLogin={() => {}} />);
     expect(screen.getByRole('heading', { name: 'Comando Central' })).toBeInTheDocument();

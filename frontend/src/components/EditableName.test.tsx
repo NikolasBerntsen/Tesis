@@ -24,6 +24,12 @@ describe('EditableName', () => {
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
   });
 
+  it('al entrar en edición deja el foco en el campo, así se escribe sin otro clic', async () => {
+    render(<EditableName name="Alfa" onRename={() => {}} />);
+    await userEvent.click(screen.getByTitle('Renombrar dron'));
+    expect(screen.getByRole('textbox', { name: 'Nombre del dron' })).toHaveFocus();
+  });
+
   it('guarda con la tecla Enter', async () => {
     const onRename = vi.fn();
     render(<EditableName name="Alfa" onRename={onRename} />);
