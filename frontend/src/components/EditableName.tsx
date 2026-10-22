@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 // Los íconos son SVG de trazo que heredan el color del botón: el tema no
 // admite glifos sueltos (✎ ✓ ✕) porque no siguen el peso del resto del dibujo.
@@ -24,6 +24,15 @@ export default function EditableName({
 }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(name);
+  const campo = useRef<HTMLInputElement>(null);
+
+  // Al pasar a edición el lápiz que se clickeó desaparece, y con él el foco:
+  // se lleva al campo para escribir de una. Va por código y no con
+  // `autoFocus`, que el análisis de accesibilidad (Sonar) marca en cualquier
+  // lado; acá el foco lo pide el operador con el clic.
+  useEffect(() => {
+    if (editing) campo.current?.focus();
+  }, [editing]);
 
   if (!editing) {
     return (
@@ -61,7 +70,7 @@ export default function EditableName({
     // encima del botón estirado es el z-index de `.editable-name`.
     <span className="editable-name">
       <input
-        autoFocus
+        ref={campo}
         maxLength={40}
         aria-label="Nombre del dron"
         value={value}
