@@ -206,8 +206,19 @@ export interface EntradaDron {
 export interface EntradaUsuario {
   username: string;
   fullName?: string;
+  dni?: string;
   role?: string;
   canControl?: boolean;
+}
+
+/**
+ * El alta exige un DNI y no puede repetirse entre cuentas vivas: cada llamada
+ * sin uno explícito se lleva el siguiente de esta serie.
+ */
+let proximoDni = 20_000_000;
+export function dniDePrueba(): string {
+  proximoDni += 1;
+  return String(proximoDni);
 }
 
 /**
@@ -215,10 +226,10 @@ export interface EntradaUsuario {
  * única forma de conocerla: no se elige y no se puede volver a leer.
  */
 export async function crearUsuario(base: string, token: string, input: EntradaUsuario) {
-  const body = { fullName: `Persona ${input.username}`, role: 'operator', ...input };
+  const body = { fullName: `Persona ${input.username}`, role: 'operator', dni: dniDePrueba(), ...input };
   const r = await api(base, '/api/users', token, { method: 'POST', body: JSON.stringify(body) });
   if (r.status !== 201) throw new Error(`no se pudo crear el usuario: ${r.status} ${JSON.stringify(r.body)}`);
-  return r.body as { username: string; fullName: string; role: string; canControl: boolean; password: string };
+  return r.body as { username: string; fullName: string; dni: string; role: string; canControl: boolean; password: string };
 }
 
 export interface EntradaBase {

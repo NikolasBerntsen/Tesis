@@ -104,9 +104,28 @@ export interface AuthedRequest extends Request {
 type Resolucion = { ok: true; user: AuthedUser } | { ok: false; status: number; error: string };
 
 /**
+ * Por qué se rechaza la sesión de alguien a quien le cambiaron el rol. Es la
+ * misma frase con que el hub le cierra la consola en el momento del cambio,
+ * así que la persona lee lo mismo la cierren por donde la cierren.
+ */
+export const SESION_DE_OTRO_ROL = 'Cambió tu rol: volvé a iniciar sesión';
+
+/**
+ * Si el token es de una sesión anterior a un cambio de rol. El token se firma
+ * con el rol que la cuenta tenía al iniciar sesión (ver `firmar`), y cambiarlo
+ * obliga a volver a entrar: así la consola arranca de nuevo con el rol nuevo en
+ * vez de seguir mostrando el viejo, y el operador que pasa a ser de campo no se
+ * queda con el token largo de la consola sino con el corto del celular.
+ */
+export function esDeOtroRol(payload: TokenPayload, rolActual: Role): boolean {
+  return payload.role !== rolActual;
+}
+
+/**
  * Resuelve quién hace la request contra el estado ACTUAL de la base: el token
- * solo dice a qué tabla mirar (los drones viven en `drones`, las personas en
- * `users`). Así una desactivación o un borrado surten efecto al instante.
+ * dice a qué tabla mirar (los drones viven en `drones`, las personas en
+ * `users`) y con qué rol se inició la sesión. Así una desactivación, un borrado
+ * o un cambio de rol surten efecto al instante.
  */
 function resolverIdentidad(req: AuthedRequest): Resolucion {
   const header = req.headers.authorization ?? '';
@@ -126,6 +145,9 @@ function resolverIdentidad(req: AuthedRequest): Resolucion {
   if (!user) return { ok: false, status: 401, error: 'Usuario inexistente' };
   if (user.deleted) return { ok: false, status: 403, error: 'Cuenta eliminada' };
   if (!user.active) return { ok: false, status: 403, error: 'Cuenta desactivada' };
+  // 401 y no 403: la cuenta sigue habilitada, lo que terminó es ESTA sesión. Es
+  // el código con que la consola y la app de campo mandan a iniciar sesión.
+  if (esDeOtroRol(payload, user.role)) return { ok: false, status: 401, error: SESION_DE_OTRO_ROL };
   return { ok: true, user: { sub: user.username, role: user.role, canControl: !!user.can_control } };
 }
 

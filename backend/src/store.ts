@@ -9,6 +9,8 @@ export interface UserRow {
   password_hash: string;
   role: Role;
   full_name: string;
+  /** Solo dígitos; vacío en las cuentas anteriores al DNI. */
+  dni: string;
   display_name: string | null;
   active: number;
   can_control: number;
@@ -23,6 +25,8 @@ export interface UserView {
   username: string;
   /** Nombre y apellido de la persona. Vacío en las cuentas anteriores al cambio. */
   fullName: string;
+  /** DNI normalizado a dígitos (7 u 8). Vacío en las cuentas anteriores al cambio. */
+  dni: string;
   role: Role;
   active: boolean;
   canControl: boolean;
@@ -34,6 +38,7 @@ export function toUserView(u: UserRow): UserView {
   return {
     username: u.username,
     fullName: u.full_name ?? '',
+    dni: u.dni,
     role: u.role,
     active: !!u.active,
     canControl: !!u.can_control,
@@ -174,11 +179,36 @@ export function getActiveUser(username: string): UserRow | undefined {
     .get(username) as UserRow | undefined;
 }
 
-/** Usuarios humanos de los roles pedidos. Los borrados solo salen si se piden. */
+/**
+ * Lleva un DNI a solo dígitos, o devuelve null si no es uno válido. Se aceptan
+ * los puntos y los espacios con que la gente lo escribe ("30.123.456") porque
+ * así figura en el documento; cualquier otro carácter lo invalida en vez de
+ * descartarse, para no convertir un error de tipeo en el DNI de otra persona.
+ * Válido es de 7 u 8 dígitos: los de 7 son los de las personas mayores.
+ *
+ * Solo se acepta texto: un número de JSON como 3012345.6 pasaría a "30123456"
+ * al sacarle el punto, y ese no es el DNI que nadie escribió.
+ */
+export function normalizarDni(valor: unknown): string | null {
+  if (typeof valor !== 'string') return null;
+  const digitos = valor.replace(/[.\s]/g, '');
+  return /^\d{7,8}$/.test(digitos) ? digitos : null;
+}
+
+/**
+ * Otra cuenta viva con ese DNI, si la hay. Las eliminadas no cuentan: la baja
+ * lógica libera el número para que la persona pueda volver con otra cuenta.
+ */
+export function usuarioConDni(dni: string, excepto?: string): UserRow | undefined {
+  return db
+    .prepare('SELECT * FROM users WHERE dni = ? AND deleted = 0 AND username != ?')
+    .get(dni, excepto ?? '') as UserRow | undefined;
+}
+
 /**
  * `q` busca en un solo campo lo que el operador tenga a mano: usuario, nombre
- * completo o rol. El rol se compara además contra su etiqueta en español, que
- * es lo que la persona ve en pantalla y por lo tanto lo que va a tipear.
+ * completo, DNI o rol. El rol se compara además contra su etiqueta en español,
+ * que es lo que la persona ve en pantalla y por lo tanto lo que va a tipear.
  */
 const ETIQUETA_ROL: Record<string, string> = {
   field_operator: 'operador de campo',
@@ -187,6 +217,7 @@ const ETIQUETA_ROL: Record<string, string> = {
   admin: 'administrador',
 };
 
+/** Usuarios humanos de los roles pedidos. Los borrados solo salen si se piden. */
 export function listUsers(roles: Role[], opts: { includeDeleted?: boolean; q?: string } = {}): UserView[] {
   const marks = roles.map(() => '?').join(',');
   const filtroBorrados = opts.includeDeleted ? '' : ' AND deleted = 0';
@@ -195,10 +226,14 @@ export function listUsers(roles: Role[], opts: { includeDeleted?: boolean; q?: s
     .all(...roles) as UserRow[];
 
   const q = (opts.q ?? '').trim().toLowerCase();
+  // El DNI se guarda sin puntos y la persona lo tipea con ellos: se comparan
+  // los dos sin puntos ni espacios, así "30.123" encuentra a 30123456.
+  const qDni = q.replace(/[.\s]/g, '');
   const filtradas = q
     ? rows.filter((u) =>
         u.username.toLowerCase().includes(q) ||
         (u.full_name ?? '').toLowerCase().includes(q) ||
+        (qDni !== '' && u.dni.includes(qDni)) ||
         u.role.toLowerCase().includes(q) ||
         (ETIQUETA_ROL[u.role] ?? '').includes(q))
     : rows;
@@ -227,15 +262,23 @@ export function generarContrasenia(): string {
 export interface UserInput {
   username: string;
   fullName: string;
+  /**
+   * Ya normalizado (ver normalizarDni). Opcional acá porque la exigencia es de
+   * la API: el store también siembra y migra cuentas que no lo tienen.
+   */
+  dni?: string;
   passwordHash: string;
   role: Role;
   canControl: boolean;
 }
 
 export function createUser(input: UserInput): UserView {
-  db.prepare('INSERT INTO users (username, full_name, password_hash, role, can_control) VALUES (?, ?, ?, ?, ?)').run(
+  db.prepare(
+    'INSERT INTO users (username, full_name, dni, password_hash, role, can_control) VALUES (?, ?, ?, ?, ?, ?)',
+  ).run(
     input.username,
     input.fullName,
+    input.dni ?? '',
     input.passwordHash,
     input.role,
     input.canControl ? 1 : 0,
@@ -245,6 +288,9 @@ export function createUser(input: UserInput): UserView {
 
 export interface UserPatch {
   fullName?: string;
+  /** Ya normalizado (ver normalizarDni). */
+  dni?: string;
+  role?: Role;
   active?: boolean;
   canControl?: boolean;
   passwordHash?: string;
@@ -258,12 +304,16 @@ export function updateUser(username: string, patch: UserPatch): { before: UserVi
   db.prepare(
     `UPDATE users SET
        full_name = COALESCE(?, full_name),
+       dni = COALESCE(?, dni),
+       role = COALESCE(?, role),
        active = COALESCE(?, active),
        can_control = COALESCE(?, can_control),
        password_hash = COALESCE(?, password_hash)
      WHERE username = ?`,
   ).run(
     patch.fullName ?? null,
+    patch.dni ?? null,
+    patch.role ?? null,
     patch.active === undefined ? null : patch.active ? 1 : 0,
     patch.canControl === undefined ? null : patch.canControl ? 1 : 0,
     patch.passwordHash ?? null,

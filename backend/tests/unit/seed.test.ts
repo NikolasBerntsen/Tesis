@@ -121,6 +121,25 @@ describe('seed de demostración', () => {
     expect(primeros.every((h) => /^[0-9a-f]{32}$/.test(h))).toBe(true);
   });
 
+  it('cada usuario de demostración nace con su DNI, distinto para cada uno', () => {
+    sembrar();
+    const dnis = (db.prepare('SELECT dni FROM users ORDER BY username').all() as { dni: string }[]).map((u) => u.dni);
+    expect(dnis.every((d) => /^\d{7,8}$/.test(d))).toBe(true);
+    expect(new Set(dnis).size).toBe(4);
+  });
+
+  // El índice único haría fallar el INSERT, y un seed que falla tira el backend.
+  it('si una persona real ya tiene el DNI de demostración, la cuenta de demostración nace sin él', () => {
+    sembrar();
+    const { dni } = db.prepare("SELECT dni FROM users WHERE username = 'campo'").get() as { dni: string };
+    db.prepare("DELETE FROM users WHERE username = 'campo'").run();
+    db.prepare("INSERT INTO users (username, password_hash, role, dni) VALUES ('real', 'h', 'operator', ?)").run(dni);
+
+    expect(() => sembrar()).not.toThrow();
+    const campo = db.prepare("SELECT dni FROM users WHERE username = 'campo'").get() as { dni: string };
+    expect(campo.dni).toBe('');
+  });
+
   it('correrlo dos veces no duplica nada', () => {
     sembrar();
     sembrar();

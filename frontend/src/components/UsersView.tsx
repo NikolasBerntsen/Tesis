@@ -1,41 +1,9 @@
-import { useEffect, useId, useState, type FormEvent } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { api, buscarUsuarios } from '../api';
-import type { Me, RolAsignable, RolConsola, UserView } from '../types';
+import { formatearDni } from '../dni';
+import type { Me, UserView } from '../types';
+import { DialogoEditarUsuario, DialogoNuevoUsuario, ICONO_CERRAR, ROL, textoError } from './DialogosDeUsuario';
 import Modal from './Modal';
-
-const ROL: Record<RolConsola, string> = {
-  field_operator: 'Operador de campo',
-  operator: 'Operador',
-  supervisor: 'Supervisor',
-  admin: 'Administrador',
-};
-
-/** Los roles que el backend acepta en el alta: un admin no se crea desde acá. */
-const ROLES_ALTA: readonly RolAsignable[] = ['operator', 'supervisor', 'field_operator'];
-
-const ICONO_CERRAR = {
-  width: 15,
-  height: 15,
-  viewBox: '0 0 16 16',
-  fill: 'none',
-  stroke: 'currentColor',
-  strokeWidth: 1.5,
-  strokeLinecap: 'round',
-  'aria-hidden': true,
-} as const;
-
-type Alta = { username: string; fullName: string; role: RolAsignable; canControl: boolean };
-
-const ALTA_VACIA: Alta = { username: '', fullName: '', role: 'operator', canControl: true };
-
-function textoError(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
-
-/** El `value` del select llega como string suelto: se valida contra la lista. */
-function rolDeAlta(valor: string): RolAsignable {
-  return ROLES_ALTA.find((r) => r === valor) ?? 'operator';
-}
 
 /**
  * Confirmación de la baja. Un `confirm()` del navegador no alcanza: hay que
@@ -94,9 +62,14 @@ function ModalEliminar({
 
 /**
  * Gestión de usuarios. El supervisor ve a los operadores y les suspende o
- * autoriza el control de drones; el admin además crea cuentas, las desactiva,
- * las elimina y las restaura. La baja es lógica: la cuenta eliminada queda
- * escondida salvo que se pida verla, y su nombre no vuelve a estar libre.
+ * autoriza el control de drones; el admin además crea cuentas, edita su ficha
+ * (nombre, DNI, rol), las desactiva, las elimina y las restaura. La baja es
+ * lógica: la cuenta eliminada queda escondida salvo que se pida verla, y su
+ * nombre no vuelve a estar libre.
+ *
+ * El alta y la edición van en diálogos y no en una fila de la tabla: son
+ * fichas de cinco campos con validaciones y errores propios, y en un renglón
+ * no había lugar para explicarlos.
  */
 export default function UsersView({ me }: { me: Me }) {
   const [users, setUsers] = useState<UserView[]>([]);
@@ -104,15 +77,14 @@ export default function UsersView({ me }: { me: Me }) {
   const [verEliminados, setVerEliminados] = useState(false);
   const [recarga, setRecarga] = useState(0);
   const [aEliminar, setAEliminar] = useState<UserView | null>(null);
-  const [nuevo, setNuevo] = useState<Alta>(ALTA_VACIA);
+  const [creando, setCreando] = useState(false);
+  const [editando, setEditando] = useState<UserView | null>(null);
   const [busqueda, setBusqueda] = useState('');
   // La contraseña generada se muestra UNA vez: después no se puede recuperar.
   const [credencial, setCredencial] = useState<{ username: string; password: string; nueva: boolean } | null>(null);
-  const idNotaCampo = useId();
 
   const esAdmin = me.role === 'admin';
   const esSupervisor = esAdmin || me.role === 'supervisor';
-  const esOperadorDeCampo = nuevo.role === 'field_operator';
 
   useEffect(() => {
     let vigente = true;
@@ -155,16 +127,15 @@ export default function UsersView({ me }: { me: Me }) {
     accion(() => api(`/users/${usuario.username}`, { method: 'DELETE' }));
   }
 
-  function crear(e: FormEvent) {
-    e.preventDefault();
-    accion(async () => {
-      // El backend le fuerza `canControl:false` al operador de campo; se manda
-      // ya resuelto para que el alta no prometa un permiso que no va a existir.
-      const cuerpo: Alta = { ...nuevo, canControl: !esOperadorDeCampo && nuevo.canControl };
-      const creado = await api<UserView & { password: string }>('/users', { method: 'POST', body: JSON.stringify(cuerpo) });
-      setNuevo(ALTA_VACIA);
-      setCredencial({ username: creado.username, password: creado.password, nueva: true });
-    });
+  function creado(usuario: UserView & { password: string }) {
+    setCreando(false);
+    setCredencial({ username: usuario.username, password: usuario.password, nueva: true });
+    setRecarga((n) => n + 1);
+  }
+
+  function guardado() {
+    setEditando(null);
+    setRecarga((n) => n + 1);
   }
 
   // El backend sólo respeta `includeDeleted` para supervisor+; el filtro de acá
@@ -180,7 +151,7 @@ export default function UsersView({ me }: { me: Me }) {
           type="search"
           value={busqueda}
           onChange={(e) => setBusqueda(e.target.value)}
-          placeholder="Buscar por usuario, nombre o rol…"
+          placeholder="Buscar por usuario, nombre, DNI o rol…"
           aria-label="Buscar usuarios"
         />
         {esSupervisor && (
@@ -190,6 +161,11 @@ export default function UsersView({ me }: { me: Me }) {
             onClick={() => setVerEliminados((v) => !v)}
           >
             {verEliminados ? 'Ocultar eliminados' : 'Ver eliminados'}
+          </button>
+        )}
+        {esAdmin && (
+          <button className="primario chico" onClick={() => setCreando(true)}>
+            Nuevo usuario
           </button>
         )}
       </div>
@@ -210,10 +186,11 @@ export default function UsersView({ me }: { me: Me }) {
                 <tr>
                   <th>Usuario</th>
                   <th>Nombre</th>
+                  <th>DNI</th>
                   <th>Rol</th>
                   <th>Control de drones</th>
                   <th>Estado</th>
-                  {esAdmin && <th>Acciones</th>}
+                  {esSupervisor && <th>Acciones</th>}
                 </tr>
               </thead>
               <tbody>
@@ -225,7 +202,11 @@ export default function UsersView({ me }: { me: Me }) {
                   // que en su fila el permiso ni siquiera corresponde.
                   const controlAplica = u.role !== 'field_operator';
                   // A una cuenta eliminada no se le toca nada: primero se restaura.
-                  const puedeTocarControl = controlAplica && !eliminado && !esYo && (esAdmin || u.role === 'operator');
+                  // Y nadie se edita a sí mismo: el backend lo rechaza, para que
+                  // nadie se quite el último acceso de administrador por error.
+                  const puedeEditar = !eliminado && !esYo && (esAdmin || u.role === 'operator');
+                  const puedeTocarControl = controlAplica && puedeEditar;
+                  const dni = formatearDni(u.dni);
                   return (
                     <tr key={u.username} className={eliminado ? 'fila-eliminada' : undefined}>
                       <td>
@@ -233,6 +214,7 @@ export default function UsersView({ me }: { me: Me }) {
                         {esYo && <span className="muted"> (vos)</span>}
                       </td>
                       <td className="inscripcion">{u.fullName || <span className="muted">—</span>}</td>
+                      <td className="dni">{dni || <span className="muted">—</span>}</td>
                       <td>{ROL[u.role]}</td>
                       <td>
                         {controlAplica ? (
@@ -266,27 +248,37 @@ export default function UsersView({ me }: { me: Me }) {
                           </>
                         )}
                       </td>
-                      {esAdmin && (
-                        <td>
-                          {eliminado ? (
+                      {esSupervisor && (
+                        <td className="barra-acciones">
+                          {puedeEditar && (
                             <button
                               className="chico"
-                              onClick={() => accion(() => api(`/users/${u.username}/restore`, { method: 'POST' }))}
+                              aria-label={`Editar a ${u.username}`}
+                              onClick={() => setEditando(u)}
                             >
-                              Restaurar
+                              Editar
                             </button>
-                          ) : (
-                            <>
-                              <button className="chico" onClick={() => regenerar(u)}>
-                                Regenerar contraseña
-                              </button>
-                              {!esYo && (
-                                <button className="chico dismiss" onClick={() => setAEliminar(u)}>
-                                  Eliminar
-                                </button>
-                              )}
-                            </>
                           )}
+                          {esAdmin &&
+                            (eliminado ? (
+                              <button
+                                className="chico"
+                                onClick={() => accion(() => api(`/users/${u.username}/restore`, { method: 'POST' }))}
+                              >
+                                Restaurar
+                              </button>
+                            ) : (
+                              <>
+                                <button className="chico" onClick={() => regenerar(u)}>
+                                  Regenerar contraseña
+                                </button>
+                                {!esYo && (
+                                  <button className="chico dismiss" onClick={() => setAEliminar(u)}>
+                                    Eliminar
+                                  </button>
+                                )}
+                              </>
+                            ))}
                         </td>
                       )}
                     </tr>
@@ -298,53 +290,15 @@ export default function UsersView({ me }: { me: Me }) {
         )}
       </section>
 
-      {esAdmin && (
-        <section className="card">
-          <h2>Crear usuario</h2>
-          <form className="form-crear" aria-label="Crear usuario" onSubmit={crear}>
-            <label>
-              Usuario
-              <input value={nuevo.username} onChange={(e) => setNuevo({ ...nuevo, username: e.target.value })} required />
-            </label>
-            <label>
-              Nombre y apellido
-              <input
-                value={nuevo.fullName}
-                onChange={(e) => setNuevo({ ...nuevo, fullName: e.target.value })}
-                minLength={3}
-                maxLength={60}
-                required
-              />
-            </label>
-            <label>
-              Rol
-              <select value={nuevo.role} onChange={(e) => setNuevo({ ...nuevo, role: rolDeAlta(e.target.value) })}>
-                {ROLES_ALTA.map((r) => (
-                  <option key={r} value={r}>
-                    {ROL[r]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="fila">
-              <input
-                type="checkbox"
-                checked={!esOperadorDeCampo && nuevo.canControl}
-                disabled={esOperadorDeCampo}
-                aria-describedby={esOperadorDeCampo ? idNotaCampo : undefined}
-                onChange={(e) => setNuevo({ ...nuevo, canControl: e.target.checked })}
-              />
-              Puede controlar drones
-            </label>
-            <button type="submit">Crear</button>
-          </form>
-          {esOperadorDeCampo && (
-            <p className="muted" id={idNotaCampo}>
-              El operador de campo no opera drones: sólo los da de alta y los empareja por QR, así que el sistema le
-              niega el control.
-            </p>
-          )}
-        </section>
+      {creando && <DialogoNuevoUsuario onCerrar={() => setCreando(false)} onCreado={creado} />}
+
+      {editando && (
+        <DialogoEditarUsuario
+          usuario={editando}
+          esAdmin={esAdmin}
+          onCerrar={() => setEditando(null)}
+          onGuardado={guardado}
+        />
       )}
 
       {credencial && (

@@ -1,6 +1,6 @@
 import type { Server } from 'node:http';
 import { WebSocketServer, WebSocket, type RawData } from 'ws';
-import { ROLE_RANK, verifyToken } from './auth';
+import { ROLE_RANK, SESION_DE_OTRO_ROL, esDeOtroRol, verifyToken } from './auth';
 import {
   createAlert, createLog, getActiveUser, getAlert, getDrone, getDroneIdentity, listDecisionsSince, listDrones,
   renameDrone,
@@ -994,6 +994,13 @@ export function setupWebSocket(server: Server) {
     const cuenta = getActiveUser(payload.sub);
     if (!cuenta) {
       ws.close(4403, 'Cuenta desactivada o eliminada');
+      return;
+    }
+    // Mismo criterio que requireAuth: el token de antes de un cambio de rol ya
+    // no abre la consola. Sin esto, la consola a la que el cambio le cerró el
+    // socket se reconectaba sola a los 3 s con el mismo token y seguía adentro.
+    if (esDeOtroRol(payload, cuenta.role)) {
+      ws.close(4401, SESION_DE_OTRO_ROL);
       return;
     }
     // El rol sale de la base y no del token, como en requireAuth: el canal en

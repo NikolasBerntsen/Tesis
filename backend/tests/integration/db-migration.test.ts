@@ -89,7 +89,7 @@ describe('integración — migración desde el esquema original', () => {
 
   it('agrega las columnas nuevas a users, incluidas las del borrado lógico', () => {
     const cols = columnas(db, 'users');
-    for (const col of ['display_name', 'active', 'can_control', 'deleted', 'deleted_at', 'deleted_by']) {
+    for (const col of ['display_name', 'active', 'can_control', 'deleted', 'deleted_at', 'deleted_by', 'dni']) {
       expect(cols).toContain(col);
     }
   });
@@ -122,6 +122,10 @@ describe('integración — migración desde el esquema original', () => {
     expect(oldop.role).toBe('operator');
     expect(oldop.active).toBe(1);
     expect(oldop.can_control).toBe(1);
+    // la cuenta vieja no tiene de dónde sacar el DNI: queda vacío, a completar
+    expect(oldop.dni).toBe('');
+    const indices = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='users'").all();
+    expect(indices.map((i) => i.name)).toContain('idx_users_dni_vivo');
     // las tablas que faltaban se crearon
     const tablas = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((t) => t.name as string);
     expect(tablas).toContain('patrol_routes');
