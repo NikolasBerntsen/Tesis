@@ -13,16 +13,24 @@ export interface MensajeHub {
   [clave: string]: unknown;
 }
 
+/** Balde de fichas de un tipo de mando (ver `hayCupo`). */
+interface Balde {
+  /** Fichas que le quedan. */
+  fichas: number;
+  /** Cuándo se contaron, para reponerlas al usar las siguientes. */
+  medidoEn: number;
+}
+
 /** Consola conectada. El rol y el vencimiento se guardan para revalidarla. */
 interface SesionConsola {
   username: string;
   role: Role;
   /** Epoch en segundos del JWT; infinito si el token no lleva vencimiento. */
   expiraEn: number;
-  /** Fichas de mando que le quedan a este socket (ver `hayCupoDeMando`). */
-  fichasDeMando: number;
-  /** Cuándo se contaron esas fichas, para reponerlas al usar las siguientes. */
-  fichasMedidasEn: number;
+  /** Cupo de `manual_stick` de este socket. */
+  cupoDePalancas: Balde;
+  /** Cupo de `manual_gimbal`, aparte del de las palancas (ver `cupoDelMando`). */
+  cupoDeCamara: Balde;
 }
 
 /**
@@ -44,8 +52,9 @@ const TOPE_FRAME_BYTES = 1024 * 1024;
 /**
  * Tope del mensaje de una CONSOLA, en bytes y medido sobre el frame CRUDO: antes
  * de decodificarlo a string y antes de parsearlo. Acá sí puede ser chico: lo
- * único que una consola manda para arriba es `manual_stick`, que con el droneId
- * y los cuatro ejes no llega a 200 bytes. Se mide primero porque decodificar y
+ * único que una consola manda para arriba es el mando —`manual_stick`, que con
+ * el droneId y los cuatro ejes no llega a 200 bytes, y `manual_gimbal`, que con
+ * un solo número es más chico todavía—. Se mide primero porque decodificar y
  * parsear es justamente el trabajo caro que un socket abusivo quiere regalarle
  * al hub (ver `handleOperatorMessage`).
  */
@@ -363,9 +372,27 @@ interface MensajeDron {
   droneLat?: unknown;
   droneLon?: unknown;
   droneAlt?: unknown;
+  gimbalPitch?: unknown;
   snapshotBase64?: string;
   displayName?: string;
   [clave: string]: unknown;
+}
+
+/**
+ * La inclinación de la cámara que informa el `status` (§1, `gimbalPitch`), solo
+ * si es un número finito; si no, el campo no sale. Va TAL CUAL llegó, sin
+ * recortarla: es lo que el gimbal dice que está haciendo, no una orden, y la
+ * consola la muestra para que el operador sepa adónde mira la cámara.
+ *
+ * Es el único campo del status que el hub filtra además de la posición, y por
+ * el mismo motivo: la consola lo dibuja. Un texto o un null que se colaran como
+ * inclinación le pintarían al operador una cámara apuntando a ningún lado,
+ * cuando sin el campo la consola ya sabe qué suponer (una app vieja no lo
+ * manda). `Number.isFinite` y no `Number(...)`, igual que en [posicionValida]:
+ * `Number(null)` es 0 y el horizonte no es lo mismo que "no sé".
+ */
+function inclinacionInformada(gimbalPitch: unknown): { gimbalPitch?: number } {
+  return Number.isFinite(gimbalPitch) ? { gimbalPitch: gimbalPitch as number } : {};
 }
 
 /**
@@ -382,7 +409,8 @@ interface MensajeDron {
  *   true. Si la app lo manda en false se respeta: ella sabe si tiene fix.
  *
  * Todo lo demás —`target` incluido— se reenvía tal cual: el hub no filtra
- * campos, y una consola que no conozca uno lo ignora.
+ * campos, y una consola que no conozca uno lo ignora. La excepción, además de la
+ * posición, es `gimbalPitch` (ver [inclinacionInformada]).
  */
 function normalizarPosicion(msg: MensajeDron): { lat: number | null; lon: number | null; gpsFix: boolean } {
   const posicion = posicionValida(msg.lat, msg.lon);
@@ -525,9 +553,13 @@ function handleDroneMessage(droneId: string, raw: string) {
 
   switch (msg.type) {
     case 'status': {
+      // La inclinación se saca del resto para que una que no sirva no viaje
+      // por la copia tal cual: vuelve solo si es un número.
+      const { gimbalPitch, ...resto } = msg;
       const status: MensajeHub = {
-        ...msg,
+        ...resto,
         ...normalizarPosicion(msg),
+        ...inclinacionInformada(gimbalPitch),
         type: 'status',
         droneId,
         displayName,
@@ -615,6 +647,7 @@ function handleDroneMessage(droneId: string, raw: string) {
 interface MensajeOperador {
   type?: string;
   droneId?: string;
+  /** En `manual_stick` es el eje adelante/atrás; en `manual_gimbal`, la inclinación de la cámara en grados. */
   pitch?: unknown;
   roll?: unknown;
   yaw?: unknown;
@@ -639,9 +672,33 @@ function eje(valor: unknown): number | null {
 }
 
 /**
- * Techo de ritmo del mando, por socket de consola, en forma de balde de fichas:
- * cada `manual_stick` atendido gasta una ficha y el balde se repone a razón de
- * [FICHAS_POR_SEGUNDO] hasta [FICHAS_DE_MANDO].
+ * Rango de la inclinación de la cámara que acepta `manual_gimbal`, en grados:
+ * 0 es el horizonte y los negativos miran hacia abajo, hasta el nadir (-90).
+ * Por arriba del horizonte se deja un poco (30) para mirar un techo, una copa o
+ * un balcón; más arriba el gimbal del Mini no llega y la cámara le mostraría al
+ * operador sus propias hélices.
+ */
+const INCLINACION_MINIMA = -90;
+const INCLINACION_MAXIMA = 30;
+
+/**
+ * La inclinación ABSOLUTA de la cámara pedida por la consola, recortada a
+ * [INCLINACION_MINIMA, INCLINACION_MAXIMA]; null si no es un número finito.
+ *
+ * Mismo criterio que [eje]: `Number.isFinite` para que un null o un texto no
+ * se cuelen como un 0 —que acá es apuntar al horizonte, una orden que nadie
+ * dio—, y recortar en vez de descartar porque la consola la arma desde un
+ * deslizador o un arrastre: un -95 por redondeo quiere decir "todo para abajo".
+ */
+function inclinacionDeCamara(valor: unknown): number | null {
+  if (!Number.isFinite(valor)) return null;
+  return Math.min(INCLINACION_MAXIMA, Math.max(INCLINACION_MINIMA, valor as number));
+}
+
+/**
+ * Techo de ritmo del mando, por socket de consola y por tipo de mando, en forma
+ * de balde de fichas: cada mensaje atendido gasta una ficha y el balde se repone
+ * a razón de [FICHAS_POR_SEGUNDO] hasta [FICHAS_DE_MANDO].
  *
  * Es un balde y no un intervalo mínimo entre mensajes porque el ritmo real
  * llega a los tirones: el temporizador del navegador y la red agrupan mensajes,
@@ -658,32 +715,72 @@ function eje(valor: unknown): number | null {
 const FICHAS_DE_MANDO = 40;
 const FICHAS_POR_SEGUNDO = 20;
 
+/** Un balde lleno, como arranca cada consola (ver `setupWebSocket`). */
+function baldeLleno(ahora: number): Balde {
+  return { fichas: FICHAS_DE_MANDO, medidoEn: ahora };
+}
+
 /**
- * Gasta una ficha del balde de la sesión y dice si el mando se puede atender.
+ * Gasta una ficha del balde y dice si el mando se puede atender.
  *
- * El balde vive en la `SesionConsola`, que sale del mapa `operators` cuando el
- * socket se cierra: el cupo se va con la consola y no queda estado colgado de
- * nadie. Es por socket, así que una consola abierta dos veces tiene dos cupos;
+ * Los baldes viven en la `SesionConsola`, que sale del mapa `operators` cuando
+ * el socket se cierra: el cupo se va con la consola y no queda estado colgado de
+ * nadie. Son por socket, así que una consola abierta dos veces tiene dos cupos;
  * sigue siendo un techo, y el que abre consolas es alguien ya autenticado y con
  * el mando tomado.
  */
-function hayCupoDeMando(sesion: SesionConsola, ahora: number): boolean {
+function hayCupo(balde: Balde, ahora: number): boolean {
   // Un transcurrido negativo es el reloj del servidor acomodándose hacia atrás
   // (NTP, cambio de hora): se toma como cero en vez de descontar fichas que
   // nadie gastó, que dejaría el mando mudo hasta que el reloj se recupere.
-  const transcurrido = Math.max(0, ahora - sesion.fichasMedidasEn);
-  sesion.fichasMedidasEn = ahora;
-  sesion.fichasDeMando = Math.min(FICHAS_DE_MANDO, sesion.fichasDeMando + (transcurrido * FICHAS_POR_SEGUNDO) / 1000);
-  if (sesion.fichasDeMando < 1) return false;
-  sesion.fichasDeMando -= 1;
+  const transcurrido = Math.max(0, ahora - balde.medidoEn);
+  balde.medidoEn = ahora;
+  balde.fichas = Math.min(FICHAS_DE_MANDO, balde.fichas + (transcurrido * FICHAS_POR_SEGUNDO) / 1000);
+  if (balde.fichas < 1) return false;
+  balde.fichas -= 1;
   return true;
 }
 
 /**
- * Mando virtual: lo único que una consola manda HACIA el hub. Va por el socket
- * que ya tiene abierto y no por REST porque son ~10 mensajes por segundo
- * mientras el operador mantiene la palanca, y abrir un POST por cada uno sería
- * absurdo.
+ * De qué balde gasta cada tipo de mando; null si el tipo no es un mando.
+ *
+ * La cámara tiene su PROPIO balde y no comparte el de las palancas, a
+ * propósito: el operador puede arrastrar el deslizador de la cámara mientras
+ * sostiene la palanca, y son 10 Hz de cada uno. Con un balde compartido, esos
+ * 20 mensajes por segundo son exactamente la reposición del balde: al primer
+ * tirón del navegador se empiezan a perder mensajes, y el que se pierde puede
+ * ser el de los cuatro ejes en cero de soltar la palanca, que es el que deja al
+ * dron estacionario. Inclinar la cámara no puede gastarle el cupo al mando que
+ * vuela; con dos baldes cada uno tiene su techo, y una inundación de uno no
+ * enmudece al otro. El costo es que el techo del socket se duplica, y sigue
+ * siendo un techo.
+ *
+ * Es un `switch` y no una tabla indexada por el `type`, porque el `type` lo
+ * escribe el otro lado: un objeto común hereda Object.prototype y un mensaje
+ * con `type: "toString"` encontraría ahí una función (ver el control del rol).
+ */
+function cupoDelMando(sesion: SesionConsola, type: unknown): Balde | null {
+  switch (type) {
+    case 'manual_stick':
+      return sesion.cupoDePalancas;
+    case 'manual_gimbal':
+      return sesion.cupoDeCamara;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Mando virtual: lo único que una consola manda HACIA el hub, las palancas
+ * (`manual_stick`) y la inclinación de la cámara (`manual_gimbal`). Va por el
+ * socket que ya tiene abierto y no por REST porque son ~10 mensajes por segundo
+ * mientras el operador mantiene la palanca o arrastra la cámara, y abrir un
+ * POST por cada uno sería absurdo.
+ *
+ * Los dos pasan por los MISMOS controles (ver [puedeMandar]): mover la cámara
+ * es parte de pilotear —le cambia al operador lo que ve y, con eso, hacia dónde
+ * va la georreferencia de las detecciones—, así que lo hace el titular del lock
+ * y nadie más.
  *
  * Todo rechazo es SILENCIOSO: al que manda no se le contesta nada. La consola ya
  * sabe si tiene el mando o no porque el hub le avisa con `control_changed` cada
@@ -700,48 +797,25 @@ function handleOperatorMessage(ws: WebSocket, sesion: SesionConsola, datos: RawD
   if (bytesDelFrame(datos) > TOPE_MENSAJE_CONSOLA) return;
   const msg = parsearMensaje(textoDelFrame(datos)) as MensajeOperador | null;
   if (!msg) return;
-  // Por ahora el mando es lo único que la consola manda para arriba; cualquier
-  // otro tipo se ignora en vez de tratarse como error.
-  if (msg.type !== 'manual_stick') return;
-
-  // El JWT no se revoca del lado del servidor, así que un socket abierto puede
-  // sobrevivir al vencimiento de su sesión: una sesión vencida no vuela un dron.
-  // sesionVigente además cierra el socket con 4401.
-  if (!sesionVigente(ws, sesion)) return;
+  // El mando es lo único que la consola manda para arriba; cualquier otro tipo
+  // se ignora en vez de tratarse como error.
+  const cupo = cupoDelMando(sesion, msg.type);
+  if (!cupo) return;
 
   // Si falta el droneId, String(undefined) no va a coincidir con ningún lock y
-  // el mensaje muere acá mismo, que es lo que corresponde.
+  // el mensaje muere en puedeMandar, que es lo que corresponde.
   const droneId = String(msg.droneId);
-  // El lock es lo que hace exclusivo el mando, así que se comprueba primero:
-  // es la condición que puede cambiar sola mientras el operador vuela (un
-  // supervisor se lo quita, se le cae la última consola) y la que decide si
-  // este socket es o no el que manda ESTE dron.
-  if (controlledBy.get(droneId) !== sesion.username) return;
+  if (!puedeMandar(ws, sesion, droneId, cupo)) return;
 
-  // El techo de ritmo va ANTES de la consulta a la base: es lo que impide que
-  // una consola con el mando tomado —comprometida, o con el temporizador roto—
-  // le haga al hub un SELECT y un envío al celular por cada mensaje a la
-  // velocidad del socket. El contrato manda 10 Hz y acá entra el doble.
-  if (!hayCupoDeMando(sesion, Date.now())) return;
-
-  // La cuenta se revalida contra la BASE en cada mensaje, igual que hace
-  // requireAuth con cada request: al operador al que le acaban de quitar
-  // canControl, le bajaron el rol o le dieron de baja la cuenta no le sirve
-  // tener el socket abierto de antes. Es también la última línea de defensa si
-  // alguna vez un camino liberara el permiso sin liberar el lock.
-  const cuenta = getActiveUser(sesion.username);
-  if (!cuenta || !cuenta.can_control) return;
-  // El tipo `Role` de la fila es una promesa del esquema, no una garantía: la
-  // columna `role` no tiene CHECK (db.ts: "validado en código") y las
-  // migraciones copian el valor viejo tal cual. Si el rol no está en ROLE_RANK,
-  // `undefined < 2` da false en JS y el mando SALDRÍA igual: el control falla
-  // cerrado a propósito, que en un sistema de fuerzas de seguridad lo
-  // desconocido no vuela.
-  // Se exige NÚMERO, no "distinto de undefined": ROLE_RANK hereda
-  // Object.prototype, así que un rol llamado `toString` o `constructor` devuelve
-  // una función, y con ella `=== undefined` es false y `función < 2` también.
-  const rango: unknown = ROLE_RANK[cuenta.role];
-  if (typeof rango !== 'number' || rango < ROLE_RANK.operator) return;
+  // A propósito SIN createLog, ninguno de los dos: a 10 Hz un registro por
+  // mensaje inundaría el log y taparía todo lo demás. Lo que queda registrado es
+  // tomar y soltar el control (CONTROL_TAKEN / CONTROL_RELEASED), que es lo que
+  // la auditoría necesita saber: quién tuvo el mando de qué dron y desde cuándo.
+  if (msg.type === 'manual_gimbal') {
+    const pitch = inclinacionDeCamara(msg.pitch);
+    if (pitch !== null) sendToDrone(droneId, { type: 'manual_gimbal', pitch, by: sesion.username });
+    return;
+  }
 
   const ejes = {
     pitch: eje(msg.pitch),
@@ -752,12 +826,50 @@ function handleOperatorMessage(ws: WebSocket, sesion: SesionConsola, datos: RawD
   // Un solo eje inválido invalida el mensaje entero: mandarle al dron tres ejes
   // buenos y uno inventado es peor que no mandarle nada.
   if (Object.values(ejes).some((v) => v === null)) return;
-
-  // A propósito SIN createLog: a 10 Hz un registro por mensaje inundaría el log
-  // y taparía todo lo demás. Lo que queda registrado es tomar y soltar el
-  // control (CONTROL_TAKEN / CONTROL_RELEASED), que es lo que la auditoría
-  // necesita saber: quién tuvo el mando de qué dron y desde cuándo.
   sendToDrone(droneId, { type: 'manual_stick', ...ejes, by: sesion.username });
+}
+
+/**
+ * Los controles que tiene que pasar un mando antes de llegar al dron, en este
+ * orden. Son los mismos para las palancas y para la cámara: lo único que cambia
+ * es de qué [cupo] gasta cada uno (ver [cupoDelMando]).
+ */
+function puedeMandar(ws: WebSocket, sesion: SesionConsola, droneId: string, cupo: Balde): boolean {
+  // El JWT no se revoca del lado del servidor, así que un socket abierto puede
+  // sobrevivir al vencimiento de su sesión: una sesión vencida no vuela un dron.
+  // sesionVigente además cierra el socket con 4401.
+  if (!sesionVigente(ws, sesion)) return false;
+
+  // El lock es lo que hace exclusivo el mando, así que se comprueba primero:
+  // es la condición que puede cambiar sola mientras el operador vuela (un
+  // supervisor se lo quita, se le cae la última consola) y la que decide si
+  // este socket es o no el que manda ESTE dron.
+  if (controlledBy.get(droneId) !== sesion.username) return false;
+
+  // El techo de ritmo va ANTES de la consulta a la base: es lo que impide que
+  // una consola con el mando tomado —comprometida, o con el temporizador roto—
+  // le haga al hub un SELECT y un envío al celular por cada mensaje a la
+  // velocidad del socket. El contrato manda 10 Hz y acá entra el doble.
+  if (!hayCupo(cupo, Date.now())) return false;
+
+  // La cuenta se revalida contra la BASE en cada mensaje, igual que hace
+  // requireAuth con cada request: al operador al que le acaban de quitar
+  // canControl, le bajaron el rol o le dieron de baja la cuenta no le sirve
+  // tener el socket abierto de antes. Es también la última línea de defensa si
+  // alguna vez un camino liberara el permiso sin liberar el lock.
+  const cuenta = getActiveUser(sesion.username);
+  if (!cuenta || !cuenta.can_control) return false;
+  // El tipo `Role` de la fila es una promesa del esquema, no una garantía: la
+  // columna `role` no tiene CHECK (db.ts: "validado en código") y las
+  // migraciones copian el valor viejo tal cual. Si el rol no está en ROLE_RANK,
+  // `undefined < 2` da false en JS y el mando SALDRÍA igual: el control falla
+  // cerrado a propósito, que en un sistema de fuerzas de seguridad lo
+  // desconocido no vuela.
+  // Se exige NÚMERO, no "distinto de undefined": ROLE_RANK hereda
+  // Object.prototype, así que un rol llamado `toString` o `constructor` devuelve
+  // una función, y con ella `=== undefined` es false y `función < 2` también.
+  const rango: unknown = ROLE_RANK[cuenta.role];
+  return typeof rango === 'number' && rango >= ROLE_RANK.operator;
 }
 
 /**
@@ -890,10 +1002,11 @@ export function setupWebSocket(server: Server) {
       username: cuenta.username,
       role: cuenta.role,
       expiraEn: payload.exp ?? Number.POSITIVE_INFINITY,
-      // Arranca con el balde lleno: el operador que recién abre la consola tiene
-      // que poder tomar el mando y volar sin esperar a que se le repongan fichas.
-      fichasDeMando: FICHAS_DE_MANDO,
-      fichasMedidasEn: Date.now(),
+      // Arranca con los baldes llenos: el operador que recién abre la consola
+      // tiene que poder tomar el mando y volar sin esperar a que se le repongan
+      // fichas.
+      cupoDePalancas: baldeLleno(Date.now()),
+      cupoDeCamara: baldeLleno(Date.now()),
     };
     operators.set(ws, sesion);
     // Estado inicial: el operador pinta el dashboard sin esperar al próximo tick

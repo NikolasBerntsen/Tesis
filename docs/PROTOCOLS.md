@@ -78,16 +78,18 @@ lo suelta sin reanudar y el dron vuelve al objetivo** (§2 `control_released`).
 
 Tener el lock es lo que habilita a pilotear: las dos órdenes de vuelo a mano
 (`manual_move` por REST y el mando con palancas `manual_stick` por WebSocket,
-§3.b) se aceptan **solo del titular**. Pero no se apoyan en lo mismo:
+§3.b) y **la inclinación de la cámara (`manual_gimbal`, también por WebSocket)**
+se aceptan **solo del titular**. Pero no se apoyan en lo mismo:
 
 - `POST /manual_move` compara el titular del lock y nada más. La cuenta y el rol
   igual se releen de la base en cada request (es lo que hace `requireAuth` con
   todas), pero **`canControl` no se vuelve a mirar**: para este endpoint, el lock
   hace de permiso.
-- `manual_stick` viaja por un socket que se abrió una vez y puede quedar horas
-  abierto, así que además del lock **revalida la cuenta entera contra la base en
-  cada mensaje**: que siga activa, que no esté eliminada, que conserve
-  `canControl` y que su rol sea `operator` o superior (§3.b).
+- `manual_stick` y `manual_gimbal` viajan por un socket que se abrió una vez y
+  puede quedar horas abierto, así que además del lock **revalidan la cuenta
+  entera contra la base en cada mensaje**: que siga activa, que no esté
+  eliminada, que conserve `canControl` y que su rol sea `operator` o superior
+  (§3.b).
 
 Hoy la diferencia no se nota porque quitarle `canControl` a alguien le suelta
 todos los locks (`releaseAllControlledBy`), así que quedarse con el lock sin el
@@ -213,7 +215,7 @@ Conexión: `ws://<backend>:4000/ws?token=<JWT>` (el rol `drone` sale del token).
 
 | Mensaje | Campos | Efecto en el backend |
 |---|---|---|
-| `status` | ver tabla de abajo | Se guarda como último estado del dron y se reenvía a los operadores **tal cual** (el hub no filtra campos) |
+| `status` | ver tabla de abajo | Se guarda como último estado del dron y se reenvía a los operadores **tal cual** (el hub no filtra campos; solo sanea la posición y **`gimbalPitch`**, ver la tabla) |
 | `event` | `eventType, message`, **`alertId?`, `lat?`, `lon?`** | Se persiste en `events` y se reenvía a los operadores. **Con `alertId` la fila queda encadenada a esa alerta** (columna `alert_id` y `meta.alerta`, si la alerta existe y es de ese dron). **Con `lat`/`lon` válidos** (números finitos, dentro de rango, no 0,0) se guardan en `meta.ubicacion` (`accuracyM: null`): es la posición del **objetivo** en los eventos de seguimiento, para que el equipo de tierra la tenga en el registro |
 | `video_frame` | `jpegBase64, ts` | Se reenvía a los operadores etiquetado con `droneId`. JPEG de 640 px de ancho, calidad 60; el ritmo es el del controlador (**5 por segundo con el dron real**; el simulado emite al suyo) |
 | `alert_request` | `alertType (PERSON\|VEHICLE), lat, lon, snapshotBase64, confidence, classes`, **`ref`, `droneLat?`, `droneLon?`, `droneAlt?`** | Crea fila en `alerts` (PENDING) + evento `ALERT_CREATED`, y notifica a los operadores. `lat`/`lon` son la **posición estimada del objetivo** (no la del dron) y `snapshotBase64` el cuadro **anotado** que disparó la detección. **`confidence`, `classes` y la pose del dron (`droneLat/Lon/Alt`) quedan en `meta.detalle` del `ALERT_CREATED`** (`{confianza, clases, dronLat, dronLon, dronAlt}`). **`ref`** es un identificador que inventa la app (texto ≤ 64): el hub le contesta al dron con `alert_ack {ref, alertId}` (§2), y así la app sabe qué alerta es la del objetivo que está siguiendo |
@@ -239,6 +241,7 @@ Conexión: `ws://<backend>:4000/ws?token=<JWT>` (el rol `drone` sale del token).
 | `alt` | number | Altura sobre el punto de despegue, en metros (barómetro del dron; 0 en el suelo) |
 | `satellites` | number | Satélites GPS en uso (el dron real; el simulado informa 14) |
 | `flying` | boolean | `true` con el dron en el aire. En el suelo la app rechaza toda orden de vuelo salvo comenzar un patrullaje, que despega solo |
+| **`gimbalPitch`** | number, **opcional** | **Inclinación actual de la cámara en grados: `0` es el horizonte y los negativos miran hacia abajo (`-90`, derecho al suelo).** La app la manda solo si la conoce (el dron real la informa al rato de enlazar). **Una app vieja no la manda: la consola supone `-30` hasta saberla.** El hub la reenvía solo si es un número finito y **sin recortarla** (es lo que el gimbal dice que hace, no una orden); si no lo es, el campo no sale |
 
 Los campos nuevos el hub los reenvía tal cual: una consola que no los conozca
 los ignora.
@@ -283,7 +286,7 @@ la estimación vigente:
 `ORBIT_STARTED`, `GOTO_ARRIVED`, `FORCED_GOTO`, `CONTROL_RESUMED`, `LANDED`,
 `BATTERY_RECHARGED`, `DRONE_PROBLEM` (el dron o su SDK rechazó una orden: el
 motivo va en `message`, con un techo de repetición para no inundar el registro).
-`DETECTION` (detección confirmada que se avisa sin seguimiento: dron en el suelo, a baja altura o sin GPS; con `lat`/`lon` si se pudo ubicar),
+`DETECTION` (detección confirmada que se avisa sin seguimiento: dron en el suelo, a baja altura, sin GPS o con el objetivo imposible de ubicar en el terreno —la cámara al horizonte o más arriba—; con `lat`/`lon` si se pudo ubicar),
 `TARGET_DETECTED` (detección durante el control manual: arranca el seguimiento sin mover al dron).
 **Seguimiento** (todos con `alertId` si se conoce y con `lat`/`lon` del objetivo):
 `TARGET_MOVING` (el objetivo se mueve: el dron deja la órbita y lo sigue),
@@ -311,6 +314,7 @@ Los mensajes se dirigen **solo al dron correspondiente**, salvo que se indique.
 | **`land`** | **`by`** | **Aterriza donde está. Solo con el control manual tomado y el dron en el aire. Al tocar el suelo el control sigue tomado (`MANUAL` en el suelo)** |
 | `manual_move` | `bearing, distanceM, by` | **Desplazamiento puntual** de esa distancia en ese rumbo (solo en `MANUAL`, en el aire y con GPS) |
 | `manual_stick` | `pitch, roll, yaw, throttle, by` | **Vuelo continuo con palancas** (solo en `MANUAL` y **en el aire**: en el suelo se descarta en silencio, la consola muestra "despegá primero"): cada eje es un número en `[-1, 1]` y el dron lo sostiene hasta el mensaje siguiente. Ver §3.b |
+| **`manual_gimbal`** | **`pitch, by`** | **Inclina la cámara a `pitch` grados, en ángulo ABSOLUTO** (`0` horizonte, negativo hacia abajo; llega ya recortado a `[-90, 30]`). **Solo con el control manual tomado (`MANUAL`), en el suelo o en el aire**: inclinar la cámara no mueve al dron. En cualquier otro estado se descarta en silencio (patrullando, orbitando o siguiendo, la cámara la maneja la app). No cambia el estado ni toca el vuelo; la inclinación nueva se ve en `status.gimbalPitch`. Al retomar la ruta la app vuelve a la inclinación de patrulla. Ver §3.b |
 | `control_released` | `by` | Sale del control manual. **Con un objetivo en seguimiento, el dron vuelve a él (`ORBITING` o `FOLLOWING`, evento `TRACKING_RESUMED`)**; sin objetivo, si no llega un `resume_patrol` a continuación queda `PAUSED` |
 | `renamed` | `displayName` | El operador renombró al dron: la app actualiza el nombre que muestra |
 
@@ -367,11 +371,13 @@ el JWT no haya vencido y que la cuenta siga activa; si no, el socket se cierra.
 
 El socket de la consola es de **doble vía**. Casi todo lo que la consola le pide
 al backend va por REST; lo único que sube por el WebSocket es el **mando
-virtual**, y sube por acá justamente porque no es una acción suelta sino un flujo:
+virtual** —las palancas y **la inclinación de la cámara**—, y sube por acá
+justamente porque no es una acción suelta sino un flujo:
 
 | Mensaje | Campos | Efecto en el backend |
 |---|---|---|
 | `manual_stick` | `droneId, pitch, roll, yaw, throttle` | Si se acepta, se reenvía al dron como `manual_stick` con `by: <username>`. No genera registro |
+| **`manual_gimbal`** | **`droneId, pitch`** | **Si se acepta, se reenvía al dron como `manual_gimbal` con `pitch` recortado a `[-90, 30]` y `by: <username>`. No genera registro** |
 
 ```json
 { "type": "manual_stick", "droneId": "a3f9c1…7e42", "pitch": 0.6, "roll": 0, "yaw": -0.3, "throttle": 0 }
@@ -426,6 +432,40 @@ palanca manda **un último mensaje con los cuatro ejes en `0`**: ese mensaje es 
 que deja al dron en vuelo estacionario. Por eso un mando todo en cero es un
 mensaje válido y no se filtra.
 
+### Inclinación de la cámara (`manual_gimbal`)
+
+```json
+{ "type": "manual_gimbal", "droneId": "a3f9c1…7e42", "pitch": -45 }
+```
+
+`pitch` es la inclinación **ABSOLUTA** de la cámara en grados, no un
+incremento: `0` es el horizonte, los negativos miran hacia abajo y `-90` es
+derecho al suelo. El rango válido es **`[-90, 30]`**: por arriba del horizonte
+se deja un poco para mirar un techo o un balcón (cuánto sube de verdad lo decide
+la aeronave y su ajuste de inclinación hacia arriba).
+
+- Tiene que ser un **número**: un texto (`"-30"`), `null` o un campo ausente
+  descartan el mensaje. Convertirlos daría un `0` que nadie escribió, y eso es
+  apuntar la cámara al horizonte.
+- Un valor fuera de rango **no se descarta: se recorta** (`-120` llega como
+  `-90`), por lo mismo que los ejes de las palancas: sale de un deslizador o de
+  un arrastre, y lo que el operador quiso decir es "todo para abajo".
+- La consola lo emite **a 10 Hz como mucho, y manda el último valor**: mientras
+  el operador arrastra no hace falta mandar cada posición intermedia. Lo emite
+  solo mientras tiene el lock de ese dron.
+- Se acepta con **las mismas condiciones que `manual_stick`** (ver "Cuándo se
+  acepta"), salvo el cupo de ritmo, que es **propio** (ver más abajo).
+- La app lo aplica solo en `MANUAL` (§2) y el dron informa la inclinación en la
+  que quedó en `status.gimbalPitch` (§1).
+- Con el dron real, la app le pasa al gimbal **una inclinación por vez**: espera
+  a que el SDK conteste la anterior (con un tope de 2 s) y deja al menos 300 ms
+  entre una y otra. Las que llegan mientras tanto se pisan y va la última, que
+  nunca se pierde. Diez órdenes por segundo al gimbal eran diez recorridos que
+  se interrumpían entre sí.
+- Con la cámara **al horizonte o más arriba**, lo que el detector ve no se
+  puede ubicar en el terreno: la alerta sale sin posición del objetivo y sin
+  seguimiento (§4, "Qué hace la app con una detección").
+
 ### Por qué no es REST
 
 Es la única orden de vuelo que no tiene endpoint REST. A ~10 mensajes por
@@ -466,7 +506,10 @@ ser es que una sola consola no pueda dejar sin Comando Central a todo el resto
 - **Ritmo.** Cada socket tiene un cupo de mando que se repone solo. El contrato
   manda 10 Hz y el cupo tolera el doble sostenido, más una ráfaga para absorber
   los tirones del temporizador del navegador: corta la inundación, no al
-  operador que está volando.
+  operador que está volando. **Las palancas y la cámara tienen un cupo cada
+  una**: el operador puede arrastrar la cámara mientras sostiene la palanca, y
+  con un cupo compartido la cámara le podría comer al mando el mensaje de los
+  cuatro ejes en cero que deja al dron estacionario.
 
 Si algo de eso no se cumple, el mensaje se descarta **en silencio**: no se le
 contesta nada a la consola. Contestar no serviría, porque la consola ya se entera
@@ -475,10 +518,10 @@ mensaje descartado sería una avalancha que nadie mira. Un frame que no es JSON,
 uno que es JSON pero no un objeto (`null`, un arreglo, un número suelto) y un
 `type` que el hub no conoce también se ignoran sin cortar la conexión.
 
-**El mando no deja entradas en el registro.** A 10 Hz inundaría la tabla `events`
-y taparía todo lo demás. Lo que queda registrado es tomar y soltar el control
-(`CONTROL_TAKEN` / `CONTROL_RELEASED`), que es lo que la auditoría necesita:
-quién tuvo el mando de qué dron y desde cuándo.
+**El mando —palancas y cámara— no deja entradas en el registro.** A 10 Hz
+inundaría la tabla `events` y taparía todo lo demás. Lo que queda registrado es
+tomar y soltar el control (`CONTROL_TAKEN` / `CONTROL_RELEASED`), que es lo que
+la auditoría necesita: quién tuvo el mando de qué dron y desde cuándo.
 
 ## 4. App de control (celular) ↔ Software de detección (notebook)
 
@@ -582,7 +625,13 @@ cuadro viejo y nunca acumula retraso.
 2. **Ubica cada caja en el terreno** con la pose del dron en el instante del
    cuadro (`frameTs`): altura, rumbo de la cámara e inclinación del gimbal
    (`Georreferencia`). Sin GPS o por debajo de 2 m de altura no hay proyección
-   posible.
+   posible, y tampoco para una caja cuyo rayo no baja al menos 5° por debajo
+   del horizonte (la cámara al horizonte o más arriba, que el operador puede
+   pedir con `manual_gimbal`). En todos esos casos la caja queda **sin
+   posición**, nunca con la del dron, que con la cámara levantada es justo
+   donde el objetivo no está. Una detección sin cajas (el detector de
+   respaldo) cuenta en la posición del dron solo si el centro del cuadro se
+   puede proyectar; si no, también queda sin posición.
 3. **Toda detección confirmada avisa al Comando Central**: dos detecciones de
    la misma clase en menos de 2,5 s y a menos de 25 m una de otra (un solo
    cuadro no alerta). No se alerta despegando (el detector ve al equipo de
@@ -597,8 +646,9 @@ cuadro viejo y nunca acumula retraso.
    - **En control manual** (en el aire, con GPS): arranca el seguimiento SIN
      mover al dron (`TARGET_DETECTED`); al soltar el control, el dron va al
      objetivo.
-   - **En el suelo, a baja altura o sin GPS**: alerta sin seguimiento
-     (`DETECTION`), como mucho una por minuto.
+   - **En el suelo, a baja altura, sin GPS o con el objetivo sin posición**
+     (o en el aire sin patrullar): alerta sin seguimiento (`DETECTION`), como
+     mucho una por minuto.
    En todos los casos manda `alert_request` (tipo, **captura anotada**,
    posición del objetivo si se pudo ubicar, confianza, pose del dron y un
    `ref`) y, con seguimiento, queda a la espera del `alert_ack`.
@@ -668,7 +718,8 @@ Lo que cambió respecto de la versión anterior está marcado con **negrita**.
 
 El **mando virtual con palancas no está en esta tabla y no va a estar**: viaja por
 el WebSocket de la consola (§3.b) porque son ~10 mensajes por segundo mientras el
-operador sostiene la palanca.
+operador sostiene la palanca. **La inclinación de la cámara (`manual_gimbal`)
+tampoco**, por lo mismo.
 
 ### Alertas
 
@@ -718,7 +769,7 @@ del protocolo.
                   "gpsFix": true, "routeId": 1, "waypointIndex": 2, "waypointTotal": 4,
                   "signal": "OK", "signalPct": 78, "heading": 132, "mode": "TEST",
                   "alt": 40, "satellites": 14, "flying": true, "flightMode": "P-GPS",
-                  "target": null }
+                  "gimbalPitch": -70, "target": null }
 }
 ```
 

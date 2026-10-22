@@ -91,6 +91,7 @@ internal class DronEspia : DroneController {
     override fun gotoPoint(lat: Double, lon: Double) = anotar("gotoPoint")
     override fun manualStick(pitch: Double, roll: Double, yaw: Double, throttle: Double) =
         anotar("stick($pitch, $roll, $yaw, $throttle)")
+    override fun inclinarCamara(pitchGrados: Double) = anotar("camara($pitchGrados)")
     override fun returnHome() = anotar("returnHome")
     override fun land() = anotar("land")
     override fun seguirObjetivo(lat: Double, lon: Double, vNorteMs: Double, vEsteMs: Double) {

@@ -65,6 +65,13 @@ open class CommandCenterClient(private val scope: CoroutineScope) {
      * a unos 10 por segundo mientras el operador tiene la palanca tomada.
      */
     var onManualStick: ((pitch: Double, roll: Double, yaw: Double, throttle: Double, by: String) -> Unit)? = null
+
+    /**
+     * Inclinación ABSOLUTA de la cámara en grados (0 horizonte, negativo hacia
+     * abajo), tal como la manda la consola: hasta 10 por segundo mientras el
+     * operador la arrastra. Siempre llega un número finito (ver manejarMensaje).
+     */
+    var onManualGimbal: ((pitch: Double, by: String) -> Unit)? = null
     var onControlReleased: ((by: String) -> Unit)? = null
     /** El Comando Central renombró al dron. */
     var onRenamed: ((displayName: String) -> Unit)? = null
@@ -352,9 +359,32 @@ open class CommandCenterClient(private val scope: CoroutineScope) {
                 msg.optDouble("throttle", 0.0),
                 msg.optString("by"),
             )
+            "manual_gimbal" -> inclinacionPedida(msg.opt("pitch"))?.let { pitch ->
+                onManualGimbal?.invoke(pitch, msg.optString("by"))
+            }
             "control_released" -> onControlReleased?.invoke(msg.optString("by"))
             "renamed" -> onRenamed?.invoke(msg.optString("displayName"))
         }
+    }
+
+    /**
+     * La inclinación de un `manual_gimbal` a partir del `pitch` tal como vino en
+     * el JSON, o null si no es un número finito.
+     *
+     * A diferencia de un eje del mando, acá un valor ausente NO vale cero: el
+     * cero de la cámara es el horizonte, una orden concreta que nadie dio, y el
+     * mensaje entero se descarta. Se exige que sea un número del JSON y no se usa
+     * optDouble a secas porque ese convierte el texto ("-30") —el hub ya lo
+     * descarta, y la app no tiene por qué ser más permisiva que él— y devuelve
+     * NaN si falta, que metido en el gimbal es una orden sin sentido.
+     *
+     * Recibe el valor suelto y no el mensaje porque org.json no deja entrar un
+     * NaN ni un infinito al parsear: el control de "finito" no depende de ese
+     * detalle de la librería, y así se puede probar.
+     */
+    internal fun inclinacionPedida(valor: Any?): Double? {
+        val grados = (valor as? Number)?.toDouble() ?: return null
+        return grados.takeIf { it.isFinite() }
     }
 
     private fun scheduleReconnect() {
@@ -405,6 +435,12 @@ open class CommandCenterClient(private val scope: CoroutineScope) {
         flightMode: String = "",
         /** El objetivo que se orbita o se sigue; null si no hay. */
         target: ObjetivoReportado? = null,
+        /**
+         * Inclinación actual de la cámara en grados (0 horizonte, −90 nadir); NaN
+         * si el dron todavía no la informó, y entonces el campo no sale: la
+         * consola sabe qué suponer cuando falta, y no hay que inventarle un valor.
+         */
+        gimbalPitch: Double = Double.NaN,
     ) {
         val gpsFix = lat.isFinite() && lon.isFinite()
         send(
@@ -426,6 +462,9 @@ open class CommandCenterClient(private val scope: CoroutineScope) {
                 .put("satellites", satellites)
                 .put("flying", flying)
                 .put("flightMode", flightMode)
+                // Opcional en el contrato (§1): ausente y no null, que es como lo
+                // manda una app vieja y lo que la consola ya sabe interpretar.
+                .apply { if (gimbalPitch.isFinite()) put("gimbalPitch", gimbalPitch) }
                 .put("target", target?.let(::objetivoEnJson) ?: JSONObject.NULL),
         )
     }
