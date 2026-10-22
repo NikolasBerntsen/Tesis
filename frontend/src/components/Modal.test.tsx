@@ -35,6 +35,29 @@ function DosDialogos({ cerrarAbajo, cerrarArriba }: { cerrarAbajo: () => void; c
   );
 }
 
+/**
+ * jsdom no implementa la pantalla completa: se la simula con un elemento
+ * colgado del body que `document.fullscreenElement` nombra. `cambiar` deja
+ * mover lo que nombra con el diálogo ya abierto.
+ */
+let enPantalla: Element | null = null;
+function enPantallaCompleta(): HTMLElement {
+  const pantalla = document.createElement('section');
+  document.body.appendChild(pantalla);
+  enPantalla = pantalla;
+  Object.defineProperty(document, 'fullscreenElement', { get: () => enPantalla, configurable: true });
+  return pantalla;
+}
+function cambiarPantallaCompleta(elemento: Element | null) {
+  enPantalla = elemento;
+}
+/** Se saca para no ensuciar el resto de los tests, que corren sin pantalla completa. */
+function sinPantallaCompleta() {
+  delete (document as { fullscreenElement?: Element | null }).fullscreenElement;
+  enPantalla?.remove();
+  enPantalla = null;
+}
+
 describe('Modal apilado', () => {
   it('Escape cierra sólo el diálogo de arriba, y después el de abajo', async () => {
     const abajo = vi.fn();
@@ -121,6 +144,7 @@ describe('Modal — salida animada', () => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
     ecos().forEach((n) => n.remove());
+    sinPantallaCompleta();
   });
 
   function Alternable({ conOtro = false }: { conOtro?: boolean }) {
@@ -192,6 +216,33 @@ describe('Modal — salida animada', () => {
     expect(ecos()).toHaveLength(0);
   });
 
+  it('en pantalla completa el eco queda donde vivía el diálogo, que es lo único que se pinta', async () => {
+    conMovimiento(true);
+    const pantalla = enPantallaCompleta();
+    render(<Alternable />);
+
+    await userEvent.keyboard('{Escape}');
+    await act(async () => {});
+
+    const [eco] = ecos();
+    // Colgado del body se desvanecía detrás del elemento en pantalla completa.
+    expect(eco.parentElement).toBe(pantalla);
+  });
+
+  it('si el contenedor se fue junto con el diálogo, el eco va al body', async () => {
+    conMovimiento(true);
+    const pantalla = enPantallaCompleta();
+    render(<Alternable />);
+    // La vista de pilotaje se cierra con la confirmación abierta adentro.
+    pantalla.remove();
+
+    await userEvent.keyboard('{Escape}');
+    await act(async () => {});
+
+    const [eco] = ecos();
+    expect(eco.parentElement).toBe(document.body);
+  });
+
   it('el desmontaje de prueba de StrictMode no deja ecos al abrir', async () => {
     conMovimiento(true);
     render(
@@ -208,22 +259,47 @@ describe('Modal — salida animada', () => {
 });
 
 describe('Modal con algo en pantalla completa', () => {
+  afterEach(sinPantallaCompleta);
+
+  function Despegar({ texto }: { texto: string }) {
+    return (
+      <Modal etiquetadoPor="t-completa" onCerrar={vi.fn()}>
+        <h2 id="t-completa">Despegar</h2>
+        <p>{texto}</p>
+      </Modal>
+    );
+  }
+
   it('se monta adentro del elemento en pantalla completa, que es lo único que el navegador pinta', () => {
-    const pantalla = document.createElement('section');
-    document.body.appendChild(pantalla);
-    Object.defineProperty(document, 'fullscreenElement', { value: pantalla, configurable: true });
-    try {
-      render(
-        <Modal etiquetadoPor="t-completa" onCerrar={vi.fn()}>
-          <h2 id="t-completa">Despegar</h2>
-        </Modal>,
-      );
-      expect(pantalla.contains(screen.getByRole('dialog', { name: 'Despegar' }))).toBe(true);
-    } finally {
-      // jsdom no implementa la pantalla completa: se saca para no ensuciar el resto.
-      delete (document as { fullscreenElement?: Element | null }).fullscreenElement;
-      pantalla.remove();
-    }
+    const pantalla = enPantallaCompleta();
+    render(<Despegar texto="Revisá alrededor" />);
+    expect(pantalla.contains(screen.getByRole('dialog', { name: 'Despegar' }))).toBe(true);
+  });
+
+  it('el contenedor se elige al abrir: si la pantalla completa cambia, el diálogo no se muda ni se vuelve a montar', () => {
+    const pantalla = enPantallaCompleta();
+    const { rerender } = render(<Despegar texto="Revisá alrededor" />);
+    const caja = screen.getByRole('dialog', { name: 'Despegar' });
+
+    // Se sale de la pantalla completa con el diálogo abierto, y algo hace que
+    // el dueño vuelva a renderizar.
+    cambiarPantallaCompleta(null);
+    rerender(<Despegar texto="Revisá alrededor, ya" />);
+
+    // El mismo nodo, en el mismo lugar: mudarlo era montar otro diálogo encima
+    // del que el operador estaba leyendo (y dejar el primero suelto).
+    const ahora = screen.getByRole('dialog', { name: 'Despegar' });
+    expect(ahora).toBe(caja);
+    expect(pantalla.contains(ahora)).toBe(true);
+    expect(ahora).toHaveTextContent('Revisá alrededor, ya');
+  });
+
+  it('un elemento en pantalla completa que ya salió de la página no sirve de contenedor', () => {
+    const pantalla = enPantallaCompleta();
+    pantalla.remove();
+    render(<Despegar texto="Revisá alrededor" />);
+    // Colgado de un nodo suelto, el diálogo no se vería nunca.
+    expect(screen.getByRole('dialog', { name: 'Despegar' }).parentElement?.parentElement).toBe(document.body);
   });
 });
 

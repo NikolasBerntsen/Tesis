@@ -18,7 +18,10 @@ const SECCIONES: readonly { titulo: string; filas: readonly Fila[]; nota?: strin
       { teclas: <>{k('A')} {k('D')}</>, accion: 'Izquierda y derecha, sin girar' },
       { teclas: <>{k('Q')} {k('E')}</>, accion: 'Girar a la izquierda y a la derecha' },
       { teclas: k('Espacio'), accion: 'Subir' },
-      { teclas: <>{k('Ctrl')} o {k('C')}</>, accion: 'Bajar' },
+      // Ctrl baja sólo con el teclado bloqueado, que sólo Chromium tiene y sólo
+      // en pantalla completa (ver `TECLAS_CTRL`): prometerla sin esa aclaración
+      // era invitar al Ctrl+W que cierra la pestaña en pleno vuelo.
+      { teclas: <>{k('C')} (o {k('Ctrl')} en pantalla completa con Chrome o Edge)</>, accion: 'Bajar' },
       { teclas: k('Shift'), accion: 'Sostenida, vuela a fondo; sin ella, a velocidad intermedia' },
     ],
     nota: 'Con dos teclas opuestas apretadas manda la última; al soltarla vuelve a mandar la otra.',

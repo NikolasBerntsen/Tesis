@@ -4,8 +4,9 @@ import { EJES_EN_CERO, type Ejes } from './MandoVirtual';
 
 /**
  * El teclado de la vista de pilotaje, como en un videojuego: W/S avanza y
- * retrocede, A/D se desplaza de costado, Q/E gira, Espacio sube y Ctrl (o C)
- * baja. No es el esquema del mando virtual (ahí W sube): el mando imita las dos
+ * retrocede, A/D se desplaza de costado, Q/E gira, Espacio sube y C baja (y
+ * Ctrl, sólo con el teclado bloqueado: ver `TECLAS_CTRL`). No es el esquema
+ * del mando virtual (ahí W sube): el mando imita las dos
  * palancas de un control físico y la vista de pilotaje imita un juego en
  * primera persona, que es lo que la mano de cualquiera ya sabe hacer.
  *
@@ -34,9 +35,8 @@ type Tecla = { eje: EjeDeVuelo; sentido: 1 | -1 };
  * tecla y no la letra: en un teclado AZERTY la W física sigue siendo la de
  * avanzar, y Mayúsculas o Bloq Mayús no cambian nada.
  *
- * La C está porque Ctrl no siempre se puede usar: sin Keyboard Lock (Firefox,
- * Safari, o Chromium fuera de pantalla completa) el navegador se queda con
- * Ctrl+W y cierra la pestaña en pleno vuelo si se baja mientras se avanza.
+ * Las dos Ctrl están en el mapa pero sólo valen cuando la vista lo dice (ver
+ * `TECLAS_CTRL`); la C baja siempre.
  */
 export const TECLAS_DE_VUELO: Readonly<Record<string, Tecla | undefined>> = {
   KeyW: { eje: 'pitch', sentido: 1 },
@@ -55,6 +55,16 @@ export const TECLAS_DE_VUELO: Readonly<Record<string, Tecla | undefined>> = {
 export const TECLAS_RAPIDAS: readonly string[] = ['ShiftLeft', 'ShiftRight'];
 
 /**
+ * Las dos Ctrl, que bajan sólo con el teclado bloqueado (Keyboard Lock, que
+ * únicamente Chromium tiene y únicamente en pantalla completa). Sin el bloqueo
+ * el navegador se queda con sus atajos aunque la página los ataje: bajar con
+ * Ctrl mientras se avanza con W es Ctrl+W, y la pestaña se cerraba en pleno
+ * vuelo (con Shift, Ctrl+Shift+W cierra la ventana entera). Ahí baja sólo la
+ * C, y la Ctrl no es de la vista: ni baja ni se ataja.
+ */
+export const TECLAS_CTRL: readonly string[] = ['ControlLeft', 'ControlRight'];
+
+/**
  * Las teclas sostenidas. Cada eje guarda las suyas EN EL ORDEN en que se
  * apretaron, y manda la última: con A sostenida y D apretada encima el dron va
  * a la derecha, y al soltar D vuelve a la izquierda sin tener que levantar y
@@ -71,8 +81,12 @@ export const NINGUNA_TECLA: TeclasSostenidas = {
   rapidas: [],
 };
 
-/** Si la vista de pilotaje se queda con esta tecla (y le corta el efecto al navegador). */
-export function esTeclaDeVuelo(code: string): boolean {
+/**
+ * Si la vista de pilotaje se queda con esta tecla (y le corta el efecto al
+ * navegador). `ctrlBaja` dice si las Ctrl son de vuelo ahora (ver `TECLAS_CTRL`).
+ */
+export function esTeclaDeVuelo(code: string, ctrlBaja: boolean): boolean {
+  if (!ctrlBaja && TECLAS_CTRL.includes(code)) return false;
   return TECLAS_DE_VUELO[code] !== undefined || TECLAS_RAPIDAS.includes(code);
 }
 
@@ -149,6 +163,7 @@ export function useTecladoDeVuelo({
   onMando,
   giroExtra = 0,
   sticks = EJES_EN_CERO,
+  ctrlBaja = false,
 }: {
   /** Si escucha el teclado: la vista abierta, el control tomado y ningún diálogo encima. */
   activo: boolean;
@@ -162,17 +177,27 @@ export function useTecladoDeVuelo({
   giroExtra?: number;
   /** Los ejes de los sticks virtuales, que informan sin emitir (`onEjes` de MandoVirtual). */
   sticks?: Ejes;
+  /**
+   * Si las Ctrl también bajan: sólo con el teclado bloqueado (ver
+   * `TECLAS_CTRL`). Por defecto no, que es el lado seguro.
+   */
+  ctrlBaja?: boolean;
 }) {
   const [teclas, setTeclas] = useState<TeclasSostenidas>(NINGUNA_TECLA);
   // Lo mismo que en el mando virtual: `onMando` devuelve false con el canal con
   // el Comando Central cerrado, y el operador tiene que saber que el dron sigue
   // con la última velocidad que le llegó.
   const [ultimoSalio, setUltimoSalio] = useState(true);
+  // En una ref y no como dependencia del efecto de abajo: volver a suscribirse
+  // suelta todas las teclas, y bloquearse el teclado al entrar a la pantalla
+  // completa no puede frenar al dron que el operador ya venía moviendo.
+  const ctrlBajaRef = useRef(ctrlBaja);
+  ctrlBajaRef.current = ctrlBaja;
 
   useEffect(() => {
     if (!activo) return;
     const alApretar = (ev: KeyboardEvent) => {
-      if (!esTeclaDeVuelo(ev.code)) return;
+      if (!esTeclaDeVuelo(ev.code, ctrlBajaRef.current)) return;
       // Sin esto Espacio desplaza la página o aprieta el botón enfocado, y
       // Ctrl+D abre el diálogo de favoritos en pleno vuelo.
       ev.preventDefault();
@@ -186,7 +211,7 @@ export function useTecladoDeVuelo({
       setTeclas((previas) => apretarTecla(previas, ev.code));
     };
     const alSoltar = (ev: KeyboardEvent) => {
-      if (!esTeclaDeVuelo(ev.code)) return;
+      if (!esTeclaDeVuelo(ev.code, ctrlBajaRef.current)) return;
       // Un botón se activa con Espacio al SOLTAR la tecla: si sólo se atajara
       // el keydown, cada subida terminaría apretando el botón con el foco.
       ev.preventDefault();
@@ -228,6 +253,15 @@ export function useTecladoDeVuelo({
     // El aviso de "no salió" describía el corte que causó el impedimento; con
     // el impedimento levantado, el watchdog de la app ya frenó al dron.
     if (!inerte) setUltimoSalio(true);
+  }
+
+  // Si el bloqueo se pierde con una Ctrl sostenida (se salió de la pantalla
+  // completa), esa Ctrl deja de bajar en el acto: su keyup ya no es de la vista
+  // y nadie la sacaría de la pila. Lo demás que se sostiene sigue volando.
+  const [ctrlBajaAnterior, setCtrlBajaAnterior] = useState(ctrlBaja);
+  if (ctrlBajaAnterior !== ctrlBaja) {
+    setCtrlBajaAnterior(ctrlBaja);
+    if (!ctrlBaja) setTeclas((previas) => TECLAS_CTRL.reduce(soltarTecla, previas));
   }
 
   const ejes = useMemo<Ejes>(() => {

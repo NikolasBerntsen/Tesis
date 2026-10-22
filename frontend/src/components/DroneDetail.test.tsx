@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProveedorDeAvisos } from './AvisosFlotantes';
 import DroneDetail from './DroneDetail';
 import type { MapItem } from './DronesMap';
@@ -736,6 +736,120 @@ describe('DroneDetail — salir de la vista de pilotaje', () => {
   });
 });
 
+/**
+ * Al cerrarse la vista el foco caía en el body, y con el teclado había que
+ * volver a tabular desde arriba de la página. Vuelve a lo que lo tenía antes de
+ * abrirla, o al botón del control que haya ahora, o al aviso de por qué se cerró.
+ */
+describe('DroneDetail — el foco al cerrarse la vista de pilotaje', () => {
+  const conControl = () => ({
+    me: makeMe({ username: 'admin1', canControl: true }),
+    drone: makeDrone({ controlledBy: 'admin1', online: true }),
+    status: makeStatus({ state: 'MANUAL', controlledBy: 'admin1', flying: true }),
+  });
+  const volver = () => screen.getByRole('button', { name: 'Volver a la vista de pilotaje' });
+  const tomar = () => screen.getByRole('button', { name: 'Tomar control manual' });
+
+  /** Abre la vista con el teclado, como un operador que no usa el mouse. */
+  async function abrirDesde(boton: () => HTMLElement): Promise<HTMLElement> {
+    await esperarCarga();
+    boton().focus();
+    fireEvent.click(boton());
+    return screen.findByRole('dialog', { name: 'Pilotaje de Alfa' });
+  }
+
+  function cerrarSinSoltar(vista: HTMLElement) {
+    fireEvent.click(within(vista).getByRole('button', { name: 'Salir del control manual' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cerrar la vista sin soltar' }));
+  }
+
+  it('cerrar sin soltar devuelve el foco al botón que la abrió', async () => {
+    renderDetail(conControl());
+    cerrarSinSoltar(await abrirDesde(volver));
+    expect(vistaDePilotaje()).not.toBeInTheDocument();
+    expect(volver()).toHaveFocus();
+  });
+
+  it('abierta al tomar el control, el botón que la abrió ya no está: el foco va a "Volver a la vista"', async () => {
+    const usados = renderDetail({ drone: makeDrone({ controlledBy: null, online: true }) });
+    const vista = await abrirDesde(tomar);
+    // Llega el lock: "Tomar control manual" se va y aparece "Volver a la vista".
+    usados.volverARenderizar({ drone: makeDrone({ controlledBy: 'admin1', online: true }) });
+    cerrarSinSoltar(vista);
+    expect(volver()).toHaveFocus();
+  });
+
+  it('al salir, el foco sigue al botón del control cuando "Volver" deja paso a "Tomar control manual"', async () => {
+    const usados = renderDetail(conControl());
+    const vista = await abrirDesde(volver);
+    fireEvent.click(within(vista).getByRole('button', { name: 'Salir del control manual' }));
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: '¿Salir del control manual?' })).getByRole('button', {
+        name: 'Salir del control manual',
+      }),
+    );
+    expect(volver()).toHaveFocus();
+    await waitFor(() =>
+      expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', expect.objectContaining({ method: 'DELETE' })),
+    );
+
+    // Llega la confirmación de que se soltó: sin heredar el foco, se iba al body.
+    usados.volverARenderizar({
+      drone: makeDrone({ controlledBy: null, online: true }),
+      status: makeStatus({ state: 'PATROLLING', controlledBy: null }),
+    });
+    expect(tomar()).toHaveFocus();
+  });
+
+  it('un botón del control que se va sin el foco no le pasa nada al que entra', async () => {
+    const usados = renderDetail(conControl());
+    await esperarCarga();
+    const afuera = screen.getByRole('button', { name: 'Volver a Operación' });
+    afuera.focus();
+    usados.volverARenderizar({ drone: makeDrone({ controlledBy: null, online: true }) });
+    expect(afuera).toHaveFocus();
+  });
+
+  it('si el control se suelta desde otra sesión, el foco va a "Tomar control manual"', async () => {
+    const usados = renderDetail(conControl());
+    await abrirDesde(volver);
+    usados.volverARenderizar({
+      drone: makeDrone({ controlledBy: null, online: true }),
+      status: makeStatus({ state: 'PATROLLING', controlledBy: null }),
+    });
+    expect(vistaDePilotaje()).not.toBeInTheDocument();
+    expect(tomar()).toHaveFocus();
+  });
+
+  it('si otro se lleva el control no hay botón que lo reciba: el foco va al aviso de por qué se cerró', async () => {
+    const usados = renderDetail(conControl());
+    await abrirDesde(volver);
+    usados.volverARenderizar({ drone: makeDrone({ controlledBy: 'super1', online: true }) });
+    expect(screen.getByTestId('aviso-pilotaje')).toHaveFocus();
+  });
+
+  it('si el botón con el foco se va y no entra otro en su lugar, el que aparezca mucho después no roba el foco', async () => {
+    const usados = renderDetail(conControl());
+    await esperarCarga();
+    volver().focus();
+    // Un supervisor se lleva el control con el foco en "Volver a la vista".
+    usados.volverARenderizar({ drone: makeDrone({ controlledBy: 'super1', online: true }) });
+    const afuera = screen.getByRole('button', { name: 'Volver a Operación' });
+    afuera.focus();
+    // Un rato después lo suelta: aparece "Tomar control manual".
+    usados.volverARenderizar({ drone: makeDrone({ controlledBy: null, online: true }) });
+    expect(afuera).toHaveFocus();
+  });
+
+  it('si el dron se desconecta, "Tomar control manual" está apagado: el foco va al aviso', async () => {
+    const usados = renderDetail(conControl());
+    await abrirDesde(volver);
+    usados.volverARenderizar({ drone: makeDrone({ controlledBy: null, online: false }), status: null });
+    expect(tomar()).toBeDisabled();
+    expect(screen.getByTestId('aviso-pilotaje')).toHaveFocus();
+  });
+});
+
 describe('DroneDetail — despegar y aterrizar desde la vista de pilotaje', () => {
   const conControl = (status: Parameters<typeof makeStatus>[0]) => ({
     me: makeMe({ username: 'admin1', canControl: true }),
@@ -786,6 +900,92 @@ describe('DroneDetail — despegar y aterrizar desde la vista de pilotaje', () =
     expect(await within(vista).findByText('El dron rechazó el despegue')).toHaveAttribute('role', 'alert');
     expect(within(vista).queryByTestId('pilotaje-orden-en-curso')).not.toBeInTheDocument();
     expect(vistaDePilotaje()).toBeInTheDocument();
+  });
+
+  it('si se pierde el control con la confirmación abierta, se cierra con la vista y no vuelve', async () => {
+    const usados = renderDetail(conControl({ flying: false }));
+    const vista = await abrirPilotaje();
+    fireEvent.click(within(vista).getByRole('button', { name: 'Despegar' }));
+    expect(screen.getByRole('dialog', { name: 'Despegar Alfa' })).toBeInTheDocument();
+
+    // Un supervisor se lleva el control mientras el operador lee la pregunta.
+    usados.volverARenderizar({ drone: makeDrone({ controlledBy: 'super1', online: true }) });
+    expect(vistaDePilotaje()).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Despegar Alfa' })).not.toBeInTheDocument();
+
+    // Cuando el control vuelve, la pregunta vieja no reaparece para despegar.
+    usados.volverARenderizar({ drone: makeDrone({ controlledBy: 'admin1', online: true }) });
+    expect(screen.queryByRole('dialog', { name: 'Despegar Alfa' })).not.toBeInTheDocument();
+    expect(apiMock).not.toHaveBeenCalledWith('/drones/d1/takeoff', expect.anything());
+  });
+
+  it('la confirmación pedida desde la tarjeta también se descarta al perder el control', async () => {
+    const usados = renderDetail(conControl({ flying: true }));
+    await esperarCarga();
+    fireEvent.click(screen.getByRole('button', { name: 'Aterrizar' }));
+    expect(screen.getByRole('dialog', { name: 'Aterrizar Alfa' })).toBeInTheDocument();
+
+    usados.volverARenderizar({
+      drone: makeDrone({ controlledBy: null, online: true }),
+      status: makeStatus({ state: 'PATROLLING', controlledBy: null, flying: true }),
+    });
+    expect(screen.queryByRole('dialog', { name: 'Aterrizar Alfa' })).not.toBeInTheDocument();
+  });
+
+  /**
+   * El caso que se veía en el campo: en pantalla completa la confirmación vive
+   * adentro de la vista (es lo único que el navegador pinta). Al cerrarse la
+   * vista por la pérdida del control, la caja se iba con ella pero el diálogo
+   * quedaba montado: invisible, en la pila de diálogos, comiéndose el tabulador.
+   */
+  describe('en pantalla completa', () => {
+    let enPantallaCompleta: Element | null = null;
+
+    beforeEach(() => {
+      enPantallaCompleta = null;
+      Object.defineProperty(document, 'fullscreenElement', { get: () => enPantallaCompleta, configurable: true });
+      HTMLElement.prototype.requestFullscreen = function (this: Element) {
+        enPantallaCompleta = this;
+        document.dispatchEvent(new Event('fullscreenchange'));
+        return Promise.resolve();
+      } as unknown as HTMLElement['requestFullscreen'];
+      document.exitFullscreen = () => {
+        enPantallaCompleta = null;
+        document.dispatchEvent(new Event('fullscreenchange'));
+        return Promise.resolve();
+      };
+    });
+
+    afterEach(() => {
+      // Lo que jsdom no tiene se vuelve a sacar: el resto corre sin pantalla completa.
+      delete (HTMLElement.prototype as Partial<HTMLElement>).requestFullscreen;
+      delete (document as Partial<Document>).exitFullscreen;
+      delete (document as { fullscreenElement?: Element | null }).fullscreenElement;
+    });
+
+    it('la confirmación que se cierra con la vista no queda suelta comiéndose el tabulador', async () => {
+      const usados = renderDetail(conControl({ flying: false }));
+      const vista = await abrirPilotaje();
+      expect(document.fullscreenElement).toBe(vista);
+      fireEvent.click(within(vista).getByRole('button', { name: 'Despegar' }));
+      expect(vista.contains(screen.getByRole('dialog', { name: 'Despegar Alfa' }))).toBe(true);
+
+      usados.volverARenderizar({ drone: makeDrone({ controlledBy: 'super1', online: true }) });
+      expect(vistaDePilotaje()).not.toBeInTheDocument();
+      // Otro render cualquiera (llega un status): antes reaparecía en el body.
+      usados.volverARenderizar({
+        drone: makeDrone({ controlledBy: 'super1', online: true }),
+        status: makeStatus({ state: 'MANUAL', controlledBy: 'super1', flying: false }),
+      });
+      expect(screen.queryByRole('dialog', { name: 'Despegar Alfa' })).not.toBeInTheDocument();
+
+      // Y el tabulador vuelve a ser de la página.
+      const tab = new KeyboardEvent('keydown', { key: 'Tab', cancelable: true, bubbles: true });
+      act(() => {
+        document.dispatchEvent(tab);
+      });
+      expect(tab.defaultPrevented).toBe(false);
+    });
   });
 
   it('un error viejo del detalle no aparece al volver a la vista', async () => {

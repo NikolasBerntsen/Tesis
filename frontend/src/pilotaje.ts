@@ -70,12 +70,24 @@ export function acotarEje(valor: number): number {
 }
 
 /**
+ * La inclinación dentro del rango del contrato, SIN redondear: es la cuenta
+ * que lleva el modo mouse, que suma 0,15° por píxel. Redondear cada paso a
+ * 0,1° hacía que un píxel para arriba sumara 0,2° y uno para abajo restara
+ * 0,1° (`Math.round` lleva el ,5 siempre hacia arriba), y la cámara se iba
+ * subiendo sola con el pulso de la mano.
+ */
+export function recortarInclinacion(grados: number): number {
+  return recortar(grados, INCLINACION_MINIMA, INCLINACION_MAXIMA);
+}
+
+/**
  * La inclinación dentro del rango del contrato, con un decimal: la cámara no
  * distingue menos que eso, y un número con quince decimales en el HUD no le
- * dice nada a nadie.
+ * dice nada a nadie. Es lo que se muestra y lo que se manda, nunca lo que se
+ * acumula (ver `recortarInclinacion`).
  */
 export function acotarInclinacion(grados: number): number {
-  return Math.round(recortar(grados, INCLINACION_MINIMA, INCLINACION_MAXIMA) * 10) / 10;
+  return Math.round(recortarInclinacion(grados) * 10) / 10;
 }
 
 export function acotarZoom(escala: number): number {

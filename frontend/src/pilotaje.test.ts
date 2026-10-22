@@ -10,6 +10,7 @@ import {
   giroDelMouse,
   muescasDeRueda,
   pasosDeRueda,
+  recortarInclinacion,
   textoDeAltura,
   textoDeInclinacion,
   textoDeZoom,
@@ -37,6 +38,15 @@ describe('acotarInclinacion', () => {
 
   it('deja un decimal: el modo mouse suma fracciones de grado', () => {
     expect(acotarInclinacion(-30.149)).toBe(-30.1);
+  });
+});
+
+describe('recortarInclinacion', () => {
+  it('se queda en el rango del contrato sin tocar los decimales', () => {
+    expect(recortarInclinacion(-120)).toBe(INCLINACION_MINIMA);
+    expect(recortarInclinacion(45)).toBe(INCLINACION_MAXIMA);
+    // Es la cuenta exacta del modo mouse: redondearla acá es lo que la torcía.
+    expect(recortarInclinacion(-29.85)).toBe(-29.85);
   });
 });
 

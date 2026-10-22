@@ -14,6 +14,7 @@ import {
   giroDelMouse,
   muescasDeRueda,
   pasosDeRueda,
+  recortarInclinacion,
   textoDeAltura,
   textoDeInclinacion,
   textoDeZoom,
@@ -129,6 +130,7 @@ export default function PilotajePantallaCompleta({
   onOrden,
   onCerrar,
   onSalir,
+  onDevolverFoco,
 }: {
   nombre: string;
   droneId: string;
@@ -173,6 +175,12 @@ export default function PilotajePantallaCompleta({
   onCerrar: () => void;
   /** Cierra la vista y suelta el control. */
   onSalir: () => void;
+  /**
+   * Al cerrarse la vista, si lo que tenía el foco antes de abrirla ya no está
+   * en la página: casi siempre es "Tomar control manual", que se va en cuanto
+   * el control queda tomado. El detalle sabe qué ofrece ahora en su lugar.
+   */
+  onDevolverFoco: () => void;
 }) {
   const raiz = useRef<HTMLElement>(null);
   const video = useRef<HTMLDivElement>(null);
@@ -183,6 +191,19 @@ export default function PilotajePantallaCompleta({
   const idSalidaTexto = useId();
 
   const [pantallaCompleta, setPantallaCompleta] = useState(false);
+  /**
+   * El navegador cumplió el pedido de bloquear el teclado (Keyboard Lock).
+   * Recién ahí le pasa a la página los atajos con Ctrl (ver `TECLAS_CTRL` en
+   * useTecladoDeVuelo): pedirlo no alcanza, porque Firefox y Safari no lo
+   * tienen y Chromium lo puede negar.
+   */
+  const [tecladoBloqueado, setTecladoBloqueado] = useState(false);
+  // Lo que tenía el foco al abrir, leído en el primer render: los efectos de
+  // abajo lo mueven adentro de la vista y dejan inerte lo de atrás, y después
+  // ya no se sabe de dónde venía.
+  const [focoPrevio] = useState(() => document.activeElement);
+  const onDevolverFocoRef = useRef(onDevolverFoco);
+  onDevolverFocoRef.current = onDevolverFoco;
   const [modoMouse, setModoMouse] = useState(false);
   const [ayudaAbierta, setAyudaAbierta] = useState(false);
   const [sticksVisibles, setSticksVisibles] = useState(false);
@@ -202,8 +223,13 @@ export default function PilotajePantallaCompleta({
     acotarInclinacion(typeof reportada === 'number' && Number.isFinite(reportada) ? reportada : INCLINACION_POR_DEFECTO),
   );
   // La inclinación se lee de la ref en los manejadores nativos (rueda, mouse):
-  // dos muescas seguidas no pueden partir las dos del mismo valor viejo.
+  // dos muescas seguidas no pueden partir las dos del mismo valor viejo. Es la
+  // redondeada, la que se muestra y se manda.
   const inclinacionRef = useRef(inclinacion);
+  // La cuenta exacta, sin redondear, que es de donde parte cada gesto: el modo
+  // mouse suma 0,15° por píxel, y redondear cada paso torcía la cuenta para
+  // arriba (ver `recortarInclinacion`).
+  const inclinacionExacta = useRef(inclinacion);
   const ultimoGestoDeCamara = useRef(Number.NEGATIVE_INFINITY);
   const derechoApretado = useRef(false);
   const restoDeRueda = useRef(0);
@@ -223,6 +249,7 @@ export default function PilotajePantallaCompleta({
     onMando,
     giroExtra: giroMouse,
     sticks: ejesDeSticks,
+    ctrlBaja: pantallaCompleta && tecladoBloqueado,
   });
   const puedeMoverLaCamara = controlTomado && camaraDisponible;
 
@@ -253,8 +280,10 @@ export default function PilotajePantallaCompleta({
   function inclinar(delta: number) {
     if (!puedeMoverLaCamara || delta === 0) return;
     ultimoGestoDeCamara.current = Date.now();
-    const nueva = acotarInclinacion(inclinacionRef.current + delta);
-    // En el tope no hay nada que mandar: la cámara ya está ahí.
+    inclinacionExacta.current = recortarInclinacion(inclinacionExacta.current + delta);
+    const nueva = acotarInclinacion(inclinacionExacta.current);
+    // En el tope no hay nada que mandar: la cámara ya está ahí. Tampoco si el
+    // gesto no alcanzó a mover la décima, pero queda sumado para el siguiente.
     if (nueva === inclinacionRef.current) return;
     inclinacionRef.current = nueva;
     setInclinacion(nueva);
@@ -276,6 +305,7 @@ export default function PilotajePantallaCompleta({
     if (Date.now() - ultimoGestoDeCamara.current < ESPERA_PARA_SINCRONIZAR_MS) return;
     const valor = acotarInclinacion(informada);
     inclinacionRef.current = valor;
+    inclinacionExacta.current = valor;
     setInclinacion(valor);
   }, [status]);
 
@@ -404,8 +434,18 @@ export default function PilotajePantallaCompleta({
       const completa = document.fullscreenElement === elemento;
       setPantallaCompleta(completa);
       const teclado = tecladoDelNavegador();
-      if (completa) sinFallar(() => teclado?.lock?.());
-      else sinFallar(() => teclado?.unlock?.());
+      if (completa) {
+        sinFallar(() =>
+          teclado?.lock?.().then(() => {
+            // Si mientras el navegador contestaba se salió de la pantalla
+            // completa, el bloqueo ya no vale: Ctrl+W vuelve a ser suyo.
+            if (document.fullscreenElement === elemento) setTecladoBloqueado(true);
+          }),
+        );
+      } else {
+        setTecladoBloqueado(false);
+        sinFallar(() => teclado?.unlock?.());
+      }
     };
     document.addEventListener('fullscreenchange', alCambiarPantalla);
 
@@ -443,6 +483,23 @@ export default function PilotajePantallaCompleta({
       for (const hijo of apagados) hijo.removeAttribute('inert');
     };
   }, []);
+
+  // Al cerrarse, el foco vuelve a lo que lo tenía antes de abrir, como en los
+  // diálogos (Modal.tsx): sin esto caía en el body, y con el teclado había que
+  // empezar a tabular de nuevo desde arriba de la página. Si eso ya no está (o
+  // no había nada enfocado), el detalle dice adónde. Va DESPUÉS del efecto de
+  // `inert` a propósito: las limpiezas corren en el orden en que se declaran, y
+  // mientras lo de atrás siga inerte el navegador no le da el foco a nada.
+  useEffect(
+    () => () => {
+      if (focoPrevio instanceof HTMLElement && focoPrevio !== document.body && focoPrevio.isConnected) {
+        focoPrevio.focus();
+      } else {
+        onDevolverFocoRef.current();
+      }
+    },
+    [focoPrevio],
+  );
 
   // Con un diálogo encima hace falta el cursor para contestarlo.
   useEffect(() => {
