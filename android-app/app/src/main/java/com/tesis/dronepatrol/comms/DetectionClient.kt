@@ -48,6 +48,15 @@ open class DetectionClient(
     /** Por qué red sale el WebSocket (ver [RedLocal]); la misma que usa el descubridor. */
     private val red: RedLocal = RedPorDefecto,
     private val descubridor: DescubridorDeDeteccion = DescubridorDeDeteccion(red = red),
+    /**
+     * Abre el WebSocket con el cliente ya armado para la red del momento. Es
+     * parámetro solo para las pruebas: sin laptop del otro lado no hay socket
+     * que se abra, y lo que hay que verificar —con qué fábrica de sockets sale,
+     * a qué URL, y qué pasa con los avisos de un socket vigente y de uno viejo—
+     * se ve haciéndole llegar esos avisos a mano. La app usa siempre OkHttp.
+     */
+    private val abrirSocket: (cliente: OkHttpClient, pedido: Request, oyente: WebSocketListener) -> WebSocket =
+        { cliente, pedido, oyente -> cliente.newWebSocket(pedido, oyente) },
 ) {
 
     /** Solo las detecciones positivas: qué vio, dónde y la captura anotada (ver [interpretarDeteccion]). */
@@ -138,7 +147,8 @@ open class DetectionClient(
         // El cliente se arma con la red de este momento (la Wi-Fi puede haber
         // cambiado desde el intento anterior); newBuilder comparte el pool.
         val cliente = red.fabricaDeSockets()?.let { http.newBuilder().socketFactory(it).build() } ?: http
-        ws = cliente.newWebSocket(
+        ws = abrirSocket(
+            cliente,
             pedido,
             object : WebSocketListener() {
                 // Los avisos de un socket que ya no es el vigente se ignoran:

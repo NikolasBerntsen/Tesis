@@ -40,6 +40,13 @@ class DescubridorDeDeteccion(
      * de detección abierto los tomaba por un teléfono.
      */
     private val anunciarse: Boolean = true,
+    /**
+     * De dónde sale el socket UDP, todavía sin atar. Es parámetro solo para las
+     * pruebas: con uno de mentira se ve el "hola" que se manda y se le hacen
+     * llegar anuncios, timeouts y cortes sin tocar la red (el broadcast de
+     * verdad sale a la LAN, ver [anunciarse]). La app usa siempre el de la JDK.
+     */
+    private val crearSocket: () -> DatagramSocket = { DatagramSocket(null) },
 ) {
 
     /** Un anuncio de la laptop, con la dirección de la que llegó. */
@@ -80,7 +87,7 @@ class DescubridorDeDeteccion(
 
     private fun escuchar() {
         val s = try {
-            DatagramSocket(null).apply {
+            crearSocket().apply {
                 // Varias apps (o dos arranques seguidos) pueden escuchar el mismo
                 // puerto; sin esto el segundo falla con "Address already in use".
                 reuseAddress = true
