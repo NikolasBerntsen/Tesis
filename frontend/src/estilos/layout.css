@@ -46,6 +46,9 @@
 }
 .topbar h1 {
   grid-area: marca;
+  display: flex;
+  align-items: center;
+  gap: var(--e-2);
   margin: 0;
   font-family: var(--fuente-serif);
   font-size: var(--txt-lg);
@@ -263,6 +266,19 @@ td.barra-acciones > * + * { margin-left: var(--e-2); }
   background: var(--oro-lamina);
 }
 .login-card .regla-ornamental { margin-block: var(--e-2); }
+/* El escudo del proyecto: alto fijo y ancho proporcional, así la piedra no se
+   deforma en ninguna de las dos escalas. */
+.marca-escudo {
+  height: 2.6rem;
+  width: auto;
+  flex: none;
+}
+.login-escudo {
+  display: block;
+  width: 7.5rem;
+  height: auto;
+  margin: 0 auto var(--e-3);
+}
 .login-card h1 {
   margin: 0;
   font-family: var(--fuente-serif);

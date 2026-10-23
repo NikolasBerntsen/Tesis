@@ -1,3 +1,4 @@
+import escudo from '../assets/escudo-400.webp';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { login } from '../api';
 
@@ -33,8 +34,9 @@ export default function LoginForm({ onLogin }: { onLogin: () => void }) {
   return (
     <div className="login-wrapper">
       <form className="login-card" onSubmit={handleSubmit}>
-        <h1>Comando Central</h1>
-        <p className="login-subtitle">Sistema de patrullaje con drones</p>
+        <img className="login-escudo" src={escudo} alt="" />
+        <h1>Alta en el Cielo</h1>
+        <p className="login-subtitle">Comando Central · patrullaje con drones</p>
         {/* La filigrana separa el encabezado de los campos como el grabado de
             una placa: se tiene que adivinar, nunca competir con el dato. */}
         <hr className="regla-ornamental" />

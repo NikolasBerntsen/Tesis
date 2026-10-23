@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Fondo del ícono: el mismo fondo de la consola de campo, con un halo ámbar
-     muy tenue atrás del dron para que no sea una placa negra. -->
+     muy tenue atrás del escudo para que no sea una placa negra. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"

@@ -1,3 +1,4 @@
+import escudo from '../assets/escudo-128.webp';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, getRole, getUsername, motivoDelRechazoDeDecision } from '../api';
 import { sumarAlRastro, type RastroObjetivo } from '../rastro';
@@ -274,7 +275,11 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
       >
         <div className="dashboard">
           <header className="topbar">
-            <h1>Comando Central</h1>
+            {/* El escudo es decorativo: el nombre del proyecto ya lo dice el texto. */}
+            <h1 className="marca">
+              <img className="marca-escudo" src={escudo} alt="" />
+              <span>Alta en el Cielo</span>
+            </h1>
             <nav className="topnav" aria-label="Secciones de la consola">
               {secciones.map((s) => (
                 <button
