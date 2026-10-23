@@ -5,7 +5,6 @@ import {
   decisionDelObjetivo,
   formatDistance,
   haceCuanto,
-  initials,
   posicionDelDron,
   posicionValida,
   rumbo,
@@ -18,11 +17,16 @@ import { esc } from '../html';
 import {
   CENTRO_POR_DEFECTO,
   OPACIDAD_TRAZO,
+  PALETA,
   TRAZO,
   aplicarFondo,
+  aspectoDelObjetivo,
   crearFondos,
+  droneIcon,
   iconoBase,
+  iconoObjetivo,
   vestir,
+  type AspectoObjetivo,
   type Fondo,
 } from '../mapa';
 import type { Base, DroneStatus, ObjetivoEnSeguimiento, PatrolRoute } from '../types';
@@ -63,29 +67,10 @@ export interface WaypointsLayer {
   onContinue?: (index: number) => void;
 }
 
-/* Leaflet pinta sus capas con colores pasados por JS, no con CSS: por eso la
-   paleta se repite acá. Los que llevan un token al lado son los valores de
-   mármol de ese token, y teselas.test.ts los compara con tokens.css: el óxido
-   y el azul se habían quedado en los de antes de que el tema los ajustara.
-   Los trazos que van sobre las teselas, además, llevan una clase de TRAZO
-   (mapa.ts) para que el CSS les ponga el color del tema; el de acá queda de
-   respaldo. */
-const PALETA = {
-  // El halo de los marcadores: un marfil casi blanco, más claro que la piedra
-  // de la página, para que el marcador se despegue de cualquier tesela.
-  marfil: '#FBFAF7',
-  tinta: '#2B2620', // --tinta
-  tintaMedia: '#5C544A', // --tinta-media
-  oroClaro: '#F0E3B8',
-  oroMedio: '#D9BE6B',
-  oro: '#B8912F', // --oro
-  oroOscuro: '#8A6A1C', // --oro-oscuro
-  oliva: '#4F7A46', // --ok
-  oxido: '#8E3328', // --peligro
-  info: '#375870', // --info
-  negro: '#14120F',
-  ambar: '#F2C230', // el par negro/ámbar es el de mayor contraste posible
-} as const;
+/* La paleta que Leaflet recibe por JS vive en mapa.ts, junto con los íconos
+   del dron y del objetivo: el pop-up de una alerta los dibuja igual que este
+   mapa, y un marcador que cambia de cara entre dos mapas hay que volver a
+   aprenderlo. */
 
 const WP_PENDIENTE = PALETA.oxido;
 
@@ -156,29 +141,9 @@ const LINE_STYLE: L.PolylineOptions = {
 };
 
 /* --- Objetivo ---------------------------------------------------------------
-   El color dice qué se decidió y el trazo si se lo está viendo: rojo óxido
-   mientras la alerta espera, oro una vez validada (el mismo oro del dron:
-   "esto es nuestro"), y apagado y punteado si la detección lo perdió, porque
-   lo que se ve en el mapa es la última posición conocida y no una presencia. */
-
-interface AspectoObjetivo {
-  color: string;
-  /** La clase de TRAZO con que el CSS tiñe el hilo y el rastro según el tema. */
-  trazo: string;
-  perdido: boolean;
-  /** Identifica el ícono: sólo se rehace cuando cambia. */
-  clave: string;
-}
-
-function aspectoDelObjetivo(o: ObjetivoEnSeguimiento): AspectoObjetivo {
-  const validado = o.decision === 'VALIDATED';
-  return {
-    color: validado ? PALETA.oro : PALETA.oxido,
-    trazo: validado ? TRAZO.objetivoValidado : TRAZO.objetivoPendiente,
-    perdido: o.lost,
-    clave: `${o.decision}-${o.lost}`,
-  };
-}
+   Su aspecto (aspectoDelObjetivo) y su ícono viven en mapa.ts: el pop-up de la
+   alerta lo dibuja igual. Acá quedan el hilo al dron y el rastro, que sólo
+   tiene este mapa. */
 
 // Perdido, el hilo y el rastro se apagan a propósito: lo que se ve es la
 // última posición conocida, no una presencia. Esas dos opacidades quedan fuera
@@ -205,54 +170,6 @@ function estiloRastro(a: AspectoObjetivo): L.PolylineOptions {
     lineJoin: 'round',
     interactive: false,
   };
-}
-
-/** Una mira: se distingue del medallón del dron y del rombo de la base. */
-function iconoObjetivo(a: AspectoObjetivo): L.DivIcon {
-  const trazo = a.perdido ? 'stroke-dasharray="3 3"' : '';
-  return L.divIcon({
-    className: 'objetivo-icon',
-    html: `<svg width="28" height="28" viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg" opacity="${a.perdido ? 0.55 : 1}">
-      <circle cx="14" cy="14" r="10" fill="${PALETA.marfil}" fill-opacity=".85" stroke="${a.color}" stroke-width="2.6" ${trazo}/>
-      <path d="M14 1.5v6M14 20.5v6M1.5 14h6M20.5 14h6" stroke="${a.color}" stroke-width="2.2" stroke-linecap="round"/>
-      <circle cx="14" cy="14" r="3.2" fill="${a.color}"/>
-    </svg>`,
-    iconSize: [28, 28],
-    iconAnchor: [14, 14],
-    popupAnchor: [0, -14],
-  });
-}
-
-/* --- Marcadores: SVG inline, sin depender de hojas de estilo ------------- */
-
-// Cada medallón trae su propio degradé, así que necesita un id único
-let secuenciaLamina = 0;
-
-/**
- * El dron es lo único de oro macizo del mapa: un medallón de lámina dorada con
- * las iniciales grabadas y una punta que marca la posición exacta.
- */
-function droneIcon(name: string): L.DivIcon {
-  const id = `lamina-${++secuenciaLamina}`;
-  return L.divIcon({
-    className: 'drone-pin-icon',
-    html: `<svg width="34" height="42" viewBox="0 0 34 42" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stop-color="${PALETA.oroClaro}"/>
-          <stop offset=".28" stop-color="${PALETA.oroMedio}"/>
-          <stop offset=".55" stop-color="${PALETA.oro}"/>
-          <stop offset="1" stop-color="${PALETA.oroOscuro}"/>
-        </linearGradient>
-      </defs>
-      <path d="M17 40.6 11.7 28.4h10.6z" fill="url(#${id})" stroke="${PALETA.marfil}" stroke-width="1.6" stroke-linejoin="round"/>
-      <circle cx="17" cy="16.6" r="13" fill="url(#${id})" stroke="${PALETA.marfil}" stroke-width="2"/>
-      <text x="17" y="21" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="700" fill="${PALETA.tinta}">${esc(initials(name))}</text>
-    </svg>`,
-    iconSize: [34, 42],
-    iconAnchor: [17, 40],
-    popupAnchor: [0, -36],
-  });
 }
 
 /* --- Globos y etiquetas --------------------------------------------------- */

@@ -58,10 +58,15 @@ describe('LoginForm', () => {
     expect(screen.getByLabelText('Usuario')).toHaveFocus();
   });
 
-  it('arma la placa de ingreso: título, subtítulo y filigrana separadora', () => {
+  it('arma la placa de ingreso: escudo, nombre del proyecto, subtítulo y filigrana separadora', () => {
     const { container } = render(<LoginForm onLogin={() => {}} />);
-    expect(screen.getByRole('heading', { name: 'Comando Central' })).toBeInTheDocument();
-    expect(screen.getByText('Sistema de patrullaje con drones')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Alta en el Cielo' })).toBeInTheDocument();
+    expect(screen.getByText('Comando Central · patrullaje con drones')).toBeInTheDocument();
+    // El escudo es decorativo (alt vacío): el nombre ya lo dice el título.
+    const escudo = container.querySelector<HTMLImageElement>('.login-card img.login-escudo');
+    expect(escudo).not.toBeNull();
+    expect(escudo!.getAttribute('alt')).toBe('');
+    expect(escudo!.getAttribute('src')).toMatch(/escudo/);
     expect(container.querySelector('.login-card .regla-ornamental')).not.toBeNull();
   });
 

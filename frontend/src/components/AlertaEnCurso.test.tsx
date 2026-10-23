@@ -1,9 +1,16 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import AlertaEnCurso from './AlertaEnCurso';
+import ProveedorDeAlertas from './ProveedorDeAlertas';
 import { makeAlert, makeDrone } from '../test/fixtures';
+import type { Alert } from '../types';
 import { ESPERA_DEL_RELEVO_MS } from '../useCarruselDeAlertas';
+import type { Decision } from '../useDecisionDeAlerta';
+
+// El pop-up de la alerta lleva un mapa: Leaflet no corre en jsdom.
+vi.mock('leaflet', async () => (await import('../test/dobleLeaflet')).dobleLeaflet());
 
 type Props = Parameters<typeof AlertaEnCurso>[0];
 
@@ -416,5 +423,110 @@ describe('AlertaEnCurso — en el tablero', () => {
   it('sin `onVerDron` (vista del dron) no repite el nombre del dron', () => {
     montar({ alertas: [makeAlert({ id: 1, drone_id: 'd1' })], drones });
     expect(screen.queryByRole('button', { name: 'Alfa' })).not.toBeInTheDocument();
+  });
+
+  it('suelta, sin la consola alrededor, no ofrece abrir la alerta: no habría quién la muestre', () => {
+    montar();
+    expect(screen.queryByRole('button', { name: 'Ver detalle' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Ampliar la captura/ })).not.toBeInTheDocument();
+  });
+});
+
+describe('AlertaEnCurso — abrir la alerta en su pop-up', () => {
+  const alfa = makeDrone({ droneId: 'd1', displayName: 'Alfa' });
+
+  function enLaConsola(alertas = [makeAlert({ id: 7, type: 'VEHICLE', drone_id: 'd1', snapshot: 'QUFB' })]) {
+    const verDron = vi.fn();
+    render(
+      <ProveedorDeAlertas alertas={alertas} drones={[alfa]} statuses={{}} decidir={vi.fn()} verDron={verDron}>
+        <AlertaEnCurso alertas={alertas} onDecidir={vi.fn()} />
+      </ProveedorDeAlertas>,
+    );
+    return { verDron };
+  }
+
+  it('tocar la captura abre el pop-up con la alerta, y al cerrarlo el foco vuelve a la captura', async () => {
+    enLaConsola();
+    const captura = screen.getByRole('button', { name: 'Ampliar la captura de la alerta #7' });
+    expect(within(captura).getByAltText('Captura que disparó la detección')).toBeInTheDocument();
+
+    await userEvent.click(captura);
+    const dialogo = screen.getByRole('dialog', { name: 'Alerta de vehículo #7' });
+    expect(within(dialogo).getByAltText('Captura de la detección')).toBeInTheDocument();
+    expect(within(dialogo).getByRole('button', { name: 'Ver feed en vivo' })).toBeEnabled();
+
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(captura).toHaveFocus();
+  });
+
+  it('"Ver detalle" abre la misma alerta, también la que llegó sin captura', async () => {
+    enLaConsola([makeAlert({ id: 9, drone_id: 'd1', snapshot: null })]);
+    expect(screen.queryByRole('button', { name: /Ampliar la captura/ })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Ver detalle' }));
+    expect(screen.getByRole('dialog', { name: 'Alerta de persona #9' })).toBeInTheDocument();
+    expect(screen.getByText('La detección no dejó captura.')).toBeInTheDocument();
+  });
+
+  it('desde el pop-up se va al video del dron', async () => {
+    const { verDron } = enLaConsola();
+    await userEvent.click(screen.getByRole('button', { name: 'Ver detalle' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Ver feed en vivo' }));
+    expect(verDron).toHaveBeenCalledWith('d1');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  /**
+   * La consola reducida a lo que importa acá: decidir cambia el estado de la
+   * alerta y el carrusel recibe sólo las pendientes, como en el tablero. La
+   * decidida se va del carrusel —con el botón que abrió el pop-up— mientras el
+   * pop-up sigue abierto.
+   */
+  function TableroConCarrusel({ iniciales }: { iniciales: Alert[] }) {
+    const [alertas, setAlertas] = useState(iniciales);
+    const decidir = (id: number, decision: Decision) =>
+      setAlertas((antes) => antes.map((a) => (a.id === id ? { ...a, status: decision } : a)));
+    const pendientes = alertas.filter((a) => a.status === 'PENDING');
+    return (
+      <ProveedorDeAlertas alertas={alertas} drones={[alfa]} statuses={{}} decidir={decidir} verDron={vi.fn()}>
+        <main>
+          <h2 tabIndex={-1}>Operación</h2>
+          {pendientes.length > 0 && <AlertaEnCurso alertas={pendientes} onDecidir={decidir} />}
+        </main>
+      </ProveedorDeAlertas>
+    );
+  }
+
+  it('decidida desde el pop-up, al cerrarlo el foco vuelve al carrusel, que ya muestra la siguiente', async () => {
+    render(<TableroConCarrusel iniciales={[makeAlert({ id: 9 }), makeAlert({ id: 7, type: 'VEHICLE' })]} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Ver detalle' }));
+    const dialogo = screen.getByRole('dialog', { name: 'Alerta de persona #9' });
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Validar' }));
+    expect(within(tarjeta()).getByText('VEHÍCULO')).toBeInTheDocument();
+
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(tarjeta()).toHaveFocus();
+  });
+
+  it('si era la última y el carrusel se fue, al cerrar el pop-up el foco va al título de la vista', async () => {
+    render(<TableroConCarrusel iniciales={[makeAlert({ id: 7, snapshot: 'QUFB' })]} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Ampliar la captura de la alerta #7' }));
+    const dialogo = screen.getByRole('dialog', { name: 'Alerta de persona #7' });
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Descartar' }));
+    expect(screen.queryByRole('region', { name: 'Alerta en curso' })).not.toBeInTheDocument();
+
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Cerrar' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Operación' })).toHaveFocus();
+  });
+
+  it('cerrado sin decidir, el foco vuelve a lo que lo abrió y no al carrusel', async () => {
+    render(<TableroConCarrusel iniciales={[makeAlert({ id: 9 }), makeAlert({ id: 7 })]} />);
+    const verDetalle = screen.getByRole('button', { name: 'Ver detalle' });
+    await userEvent.click(verDetalle);
+    await userEvent.keyboard('{Escape}');
+    expect(verDetalle).toHaveFocus();
   });
 });

@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, type FocusEvent, type KeyboardEvent } from 'react';
+import { useAlertasEnVivo } from '../alertasEnVivo';
 import { time } from '../format';
 import type { Alert, Drone } from '../types';
 import { useCarruselDeAlertas } from '../useCarruselDeAlertas';
@@ -17,6 +18,15 @@ function Chevron({ hacia }: { hacia: 'atras' | 'adelante' }) {
       />
     </svg>
   );
+}
+
+/**
+ * El título de la vista que se está mirando: el primer encabezado de su
+ * <main>. Las vistas que llevan el carrusel lo dejan enfocar desde el código
+ * (`tabIndex={-1}`, fuera del tabulador) para esto.
+ */
+function enfocarElTituloDeLaVista() {
+  document.querySelector<HTMLElement>('main h2')?.focus();
 }
 
 /**
@@ -59,6 +69,9 @@ export default function AlertaEnCurso({
 }) {
   const carrusel = useCarruselDeAlertas(alertas);
   const { decidir, errorDe, decidiendo } = useDecisionDeAlerta(onDecidir);
+  // El pop-up con todo lo de la alerta (mapa, dron, video) lo abre la consola:
+  // ver ProveedorDeAlertas.
+  const { abrirAlerta } = useAlertasEnVivo();
   const idTitulo = useId();
   const seccion = useRef<HTMLElement>(null);
   const focoAdentro = useRef(false);
@@ -88,6 +101,9 @@ export default function AlertaEnCurso({
 
   const error = errorDe(alerta.id);
   const siguiendo = seguidas.includes(alerta.id);
+  const captura = alerta.snapshot ? (
+    <img className="snapshot" src={`data:image/jpeg;base64,${alerta.snapshot}`} alt="Captura que disparó la detección" />
+  ) : null;
   const dron = drones?.find((d) => d.droneId === alerta.drone_id) ?? null;
 
   function alTeclear(ev: KeyboardEvent<HTMLElement>) {
@@ -97,6 +113,20 @@ export default function AlertaEnCurso({
     else if (ev.key === 'ArrowRight') carrusel.siguiente();
     else return;
     ev.preventDefault();
+  }
+
+  /**
+   * Al cerrar el pop-up de la alerta el foco vuelve a lo que lo abrió
+   * (Modal.tsx). Pero decidirla desde el pop-up se lleva su diapositiva, y con
+   * ella el botón que lo abrió: el foco caía en <body> y el teclado arrancaba
+   * otra vez desde arriba de la página. Va al carrusel, que ya muestra la que
+   * le seguía, como al decidir desde la tarjeta; y si era la última y el
+   * carrusel también se fue, al título de la vista.
+   */
+  function devolverFoco() {
+    const carrusel = seccion.current;
+    if (carrusel?.isConnected) carrusel.focus();
+    else enfocarElTituloDeLaVista();
   }
 
   function alSalirElFoco(ev: FocusEvent<HTMLElement>) {
@@ -224,15 +254,32 @@ export default function AlertaEnCurso({
           <time className="mono muted" dateTime={alerta.created_at}>
             {time(alerta.created_at)}
           </time>
+          {abrirAlerta && (
+            <button
+              type="button"
+              className="enlace alerta-ver-detalle"
+              onClick={() => abrirAlerta(alerta, devolverFoco)}
+            >
+              Ver detalle
+            </button>
+          )}
         </div>
         <div className="alerta-cuerpo">
-          {alerta.snapshot ? (
-            <img
-              className="snapshot"
-              src={`data:image/jpeg;base64,${alerta.snapshot}`}
-              alt="Captura que disparó la detección"
-            />
-          ) : (
+          {captura && abrirAlerta && (
+            // La captura es lo que se mira primero: tocarla la abre en grande,
+            // con el mapa y el dron al lado. "Ver detalle" es el mismo camino
+            // para la alerta que llegó sin captura.
+            <button
+              type="button"
+              className="snapshot-boton"
+              aria-label={`Ampliar la captura de la alerta #${alerta.id}`}
+              onClick={() => abrirAlerta(alerta, devolverFoco)}
+            >
+              {captura}
+            </button>
+          )}
+          {captura && !abrirAlerta && captura}
+          {!captura && (
             // No `.video`: en el par del video y el mapa esa clase fija 420 px de
             // alto, y un aviso de una línea quedaría flotando en un hueco enorme.
             <p className="vacio">La alerta llegó sin captura</p>
