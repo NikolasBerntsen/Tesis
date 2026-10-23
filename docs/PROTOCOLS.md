@@ -833,7 +833,8 @@ El `ts` **ordena solo el objetivo**: B toma el `objetivo` de un `relay_target`
 estimación o una más vieja, y se queda con la que tiene). `origen`, `aLat`,
 `aLon` y `aAlt` los toma de **todos**, aunque el `ts` se repita: son del último
 status de A, y los mensajes de una misma conexión llegan en orden (el hub no
-reenvía `relay_target` viejos al reconectar). Un `retirado` con el `ts` del
+reenvía `relay_target` viejos al reconectar). Lo mismo `decision`: es la de la
+alerta en el hub al mandar el mensaje. Un `retirado` con el `ts` del
 último `en_linea` es lo normal. B **nunca compara `ts` con su propio reloj** (no
 están sincronizados). Vuela hacia la estimación extrapolada con
 `speedMs`/`courseDeg` y `lastSeenMs` + su tiempo de viaje, y baja a la altura de

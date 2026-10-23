@@ -2,6 +2,7 @@ package com.tesis.dronepatrol.patrol
 
 import com.tesis.dronepatrol.comms.CommandCenterClient
 import com.tesis.dronepatrol.comms.DetectionClient
+import com.tesis.dronepatrol.drone.UmbralesDelDji
 import com.tesis.dronepatrol.model.FlightEvent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -160,6 +161,24 @@ class PatrolManagerAvisosDelDronTest {
             PatrolManager.MAX_PROBLEMAS_POR_VENTANA,
             avisos,
         )
+    }
+
+    /**
+     * Los umbrales de batería mal puestos en DJI Fly los avisa el controlador al
+     * conectar (RELEVOS §0) por el mismo camino que los rechazos, pero no son una
+     * orden rechazada: el aviso dice lo que hay que corregir, sin ese prefijo.
+     */
+    @Test
+    fun losUmbralesMalPuestosNoSeAvisanComoUnaOrdenRechazada() = runBlocking {
+        val umbrales = UmbralesDelDji.problema(25.0, 20.0, PatrolManager.LOW_BATTERY_PCT)!!
+        dron.flightEvents.emit(FlightEvent.Problema(umbrales))
+        dron.flightEvents.emit(FlightEvent.Problema(OTRO_RECHAZO))
+        withTimeout(5_000) { patrulla.localLog.first { it.contains(OTRO_RECHAZO) } }
+
+        val aviso = avisos("batería crítica está en 25 %").single()
+        assertTrue(aviso, aviso.startsWith("Umbrales de batería del dron mal configurados en DJI Fly: "))
+        assertFalse(aviso, aviso.contains("rechazó una orden"))
+        assertEquals("un rechazo de verdad sigue diciéndolo", "El dron rechazó una orden: $OTRO_RECHAZO", avisos(OTRO_RECHAZO).single())
     }
 
     /**

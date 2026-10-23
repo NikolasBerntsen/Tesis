@@ -15,6 +15,7 @@ import com.tesis.dronepatrol.drone.Georreferencia
 import com.tesis.dronepatrol.drone.LimitadorDeRitmo
 import com.tesis.dronepatrol.drone.MandoVirtual
 import com.tesis.dronepatrol.drone.RastreadorDeObjetivo
+import com.tesis.dronepatrol.drone.UmbralesDelDji
 import com.tesis.dronepatrol.drone.ZonasDescartadas
 import com.tesis.dronepatrol.model.Caja
 import com.tesis.dronepatrol.model.Deteccion
@@ -412,6 +413,22 @@ class PatrolManager(
             // sin el presupuesto los dos atravesarían el filtro a 10 Hz.
             return avisosEnLaVentana < MAX_PROBLEMAS_POR_VENTANA
         }
+
+        /**
+         * El texto del `DRONE_PROBLEM` de un [FlightEvent.Problema]. Casi todos
+         * son una orden que el dron rechazó. Los umbrales de batería mal puestos
+         * en DJI Fly no: los revisa el controlador al conectar (RELEVOS §0) y los
+         * avisa por el mismo camino, y con el prefijo de siempre el operador
+         * buscaría una orden que nadie dio en vez de ir a corregir la
+         * configuración.
+         */
+        internal fun textoDelProblema(motivo: String): String =
+            if (motivo.startsWith(UmbralesDelDji.MAL_CONFIGURADOS)) {
+                // Empieza con el prefijo: nunca está vacío.
+                motivo.substring(0, 1).uppercase() + motivo.substring(1)
+            } else {
+                "El dron rechazó una orden: $motivo"
+            }
     }
 
     private val _state = MutableStateFlow(PatrolState.IDLE)
@@ -1885,7 +1902,7 @@ class PatrolManager(
                     problemasEnLaVentana = if (ventanaNueva) 1 else problemasEnLaVentana + 1
                     ultimoProblemaAvisado = e.motivo
                     ultimoProblemaAvisadoMs = ahora
-                    report("DRONE_PROBLEM", "El dron rechazó una orden: ${e.motivo}")
+                    report("DRONE_PROBLEM", textoDelProblema(e.motivo))
                 }
             }
             // Avisos de los relevos y del desvío a otra base (docs/RELEVOS.md
@@ -3220,12 +3237,17 @@ class PatrolManager(
     }
 
     /**
-     * `relay_target`: la estimación nueva del objetivo y dónde está A. Uno con
-     * un `ts` del hub que no es más nuevo que el último deja la estimación
-     * anterior (nunca se compara con el reloj propio, docs/PROTOCOLS.md §2.b),
-     * pero su `origen` se lee igual: `sin_enlace` y `retirado` llevan el `ts`
-     * del último objetivo válido, y descartar un `retirado` por eso dejaría a B
-     * esperando arriba a un A que ya se fue.
+     * `relay_target`: la estimación nueva del objetivo y dónde está A. El `ts`
+     * del hub ordena SOLO el objetivo (docs/PROTOCOLS.md §2.b): uno que no es
+     * más nuevo que el último deja la estimación anterior, y nunca se compara
+     * con el reloj propio. El resto —`origen`, la posición y la altura de A, la
+     * decisión— es del último status de A (o de la alerta, ahora) y se toma de
+     * TODOS, aunque el `ts` se repita: los mensajes de una conexión llegan en
+     * orden. En el traspaso A ya soltó su rastreador y manda el status sin
+     * objetivo, así que el hub repite el `ts` del último con A cada vez más
+     * lejos; descartar esos dejaría a B arriba hasta el `retirado`. Y
+     * `sin_enlace` y `retirado` llevan siempre el `ts` del último objetivo
+     * válido: descartar un `retirado` dejaría a B esperando a un A que ya se fue.
      */
     private fun alObjetivoActualizado(m: MensajeDelHub.ObjetivoActualizado) {
         val r = relevo
@@ -3237,18 +3259,17 @@ class PatrolManager(
         // El hub sigue hablando de este relevo, aunque sea con un objetivo viejo.
         r.ultimoTargetMs = ahora
         r.silencioAvisado = false
-        if (m.origen != "en_linea") {
-            if (m.origen == "retirado" && !r.aRetirado) log("${r.de.displayName} ya no sigue al objetivo")
-            r.anotarOrigen(m.origen)
-        }
-        if (m.ts <= r.ultimoTs) return
-        r.ultimoTs = m.ts
-        r.objetivo = m.objetivo
-        r.objetivoRecibidoMs = ahora
-        r.decision = m.decision
+        if (m.origen == "retirado" && !r.aRetirado) log("${r.de.displayName} ya no sigue al objetivo")
         r.anotarOrigen(m.origen)
         r.aLat = m.aLat
         r.aLon = m.aLon
+        r.decision = m.decision
+        val objetivoNuevo = m.ts > r.ultimoTs
+        if (objetivoNuevo) {
+            r.ultimoTs = m.ts
+            r.objetivo = m.objetivo
+            r.objetivoRecibidoMs = ahora
+        }
         if (!separarseDeA(r, m.aAlt)) return
         val s = seguimiento
         if (s != null && s.adoptado) {
@@ -3256,8 +3277,10 @@ class PatrolManager(
             // La estimación más fresca manda: mientras B no lo vio con su cámara,
             // o si lo vio pero A lo vio después, la de A es la mejor que hay. Sin
             // esto, una sola detección propia (la que adelantó la toma) dejaba a
-            // B con una estimación que deja de extrapolarse a los 4 s.
-            if (m.objetivo.vistoHaceMs < s.rastreador.estimar(ahora).vistoHaceMs) {
+            // B con una estimación que deja de extrapolarse a los 4 s. Una
+            // repetida no: es la misma de antes, y sembrarla como recién llegada
+            // la haría pasar por más fresca de lo que es.
+            if (objetivoNuevo && m.objetivo.vistoHaceMs < s.rastreador.estimar(ahora).vistoHaceMs) {
                 seguimiento = Seguimiento(Aproximacion.sembrar(m.objetivo, ahora, ahora), s.ref, s.origenLat, s.origenLon, adoptado = true)
                     .also {
                         it.alertId = s.alertId

@@ -21,6 +21,14 @@ object UmbralesDelDji {
     const val CRITICO_MAXIMO_PCT = 20.0
 
     /**
+     * Cómo empieza el aviso de [problema]. El controlador lo manda como
+     * [com.tesis.dronepatrol.model.FlightEvent.Problema], y PatrolManager lo
+     * reconoce por acá para no presentarlo como una orden rechazada: es la
+     * configuración del dron, no un rechazo.
+     */
+    const val MAL_CONFIGURADOS = "umbrales de batería del dron mal configurados en DJI Fly"
+
+    /**
      * El problema, redactado para el operador, o null si los dos están bien (o
      * no se saben: NaN no es un problema que se pueda señalar).
      *
@@ -42,6 +50,6 @@ object UmbralesDelDji {
         }
         val problemas = listOfNotNull(critico, aviso)
         if (problemas.isEmpty()) return null
-        return "umbrales de batería del dron mal configurados en DJI Fly: ${problemas.joinToString("; ")}"
+        return "$MAL_CONFIGURADOS: ${problemas.joinToString("; ")}"
     }
 }

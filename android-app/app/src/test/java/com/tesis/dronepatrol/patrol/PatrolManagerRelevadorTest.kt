@@ -369,6 +369,9 @@ class PatrolManagerRelevadorTest {
     fun conAJubiladoBajaAunqueEsteCerca() = runBlocking {
         enLaToma()
         banco.hub(relayTarget(7, 12, quieto, ts = 3_000, origen = "retirado", aNorteM = null, aAlt = null))
+        // El hub repite el retirado con cada status de A: se avisa una sola vez.
+        banco.hub(relayTarget(7, 12, quieto, ts = 3_000, origen = "retirado", aNorteM = null, aAlt = null))
+        assertEquals(1, patrulla.localLog.replayCache.count { it.contains("Alfa ya no sigue al objetivo") })
         banco.pasar(300)
         esperarA("la bajada") { "cambiarAltura(40)" in dron.ordenes }
         banco.telemetria(norteM = 545.0, bateria = 90.0, alt = 41.5)
@@ -401,12 +404,68 @@ class PatrolManagerRelevadorTest {
     }
 
     @Test
-    fun unSinEnlaceViejoSoloAnotaElOrigen() = runBlocking {
+    fun unSinEnlaceConACercaNoDejaBajar() = runBlocking {
         enLaToma()
         banco.hub(relayTarget(7, 12, quieto, ts = 2_000, origen = "sin_enlace", aNorteM = 600.0))
         banco.pasar(1_100)
         assertEquals("sin_enlace no deja bajar: A puede seguir encima", PatrolState.RELEVANDO, patrulla.state.value)
         assertTrue(dron.ordenes.none { it == "cambiarAltura(40)" })
+    }
+
+    /**
+     * En el traspaso A ya soltó su rastreador y manda el status sin objetivo: el
+     * hub repite el `ts` del último objetivo con la posición NUEVA de A
+     * (PROTOCOLS §2.b). El `ts` ordena solo el objetivo, así que B toma la
+     * posición de A igual y baja con A a más de 100 m, sin esperar el `retirado`.
+     */
+    @Test
+    fun unEnLineaConElTsRepetidoTraeLaPosicionDeAYHaceBajar() = runBlocking {
+        enLaToma()
+        // A sigue encima: con el ts repetido tampoco baja.
+        banco.hub(relayTarget(7, 12, quieto, ts = 2_000, aNorteM = 610.0))
+        banco.pasar(1_100)
+        assertTrue(dron.ordenes.none { it == "cambiarAltura(40)" })
+        // ts 2000 = el último aplicado; el objetivo corrido que trae no se toma.
+        banco.hub(relayTarget(7, 12, objetivo(12, 900.0), ts = 2_000, aNorteM = 720.0))
+        banco.pasar(300)
+        esperarA("la bajada") { "cambiarAltura(40)" in dron.ordenes }
+        assertEquals("el objetivo repetido no pisó la estimación", quieto.getDouble("lat"), patrulla.objetivo!!.lat, 1e-6)
+        assertFalse("A sigue en línea: no se lo da por retirado", enElRegistro("ya no sigue al objetivo"))
+    }
+
+    /** La altura de A también es del último status: si A sube con el `ts` repetido, B sube igual. */
+    @Test
+    fun siASubeConElTsRepetidoBSubeIgual() = runBlocking {
+        enCamino(aAlt = 40.0)
+        esperarA("la orden de tránsito") { dron.ultimoDestino != null }
+        // A perdió el objetivo un momento (su status no trae uno que pase) y subió: el mismo ts 2000.
+        banco.hub(relayTarget(7, 12, quieto, ts = 2_000, aNorteM = 600.0, aAlt = 55.0))
+        esperarA("la subida") { "cambiarAltura(75)" in dron.ordenes }
+    }
+
+    /**
+     * La decisión es la de la alerta en el hub al mandar el mensaje: una
+     * validación que llega con el `ts` repetido (el status de A no traía un
+     * objetivo que pase) se toma igual, y la toma sale con ella.
+     */
+    @Test
+    fun laDecisionDeLaAlertaSeTomaAunqueElTsSeRepita() = runBlocking {
+        val pendiente = objetivo(12, 600.0, decision = "PENDING")
+        disponible()
+        banco.hub(relayTracking(7, 12, pendiente, ts = 1_000))
+        aceptado(7)
+        banco.hub(relayTarget(7, 12, pendiente, ts = 2_000, aNorteM = 600.0))
+        banco.pasar(10_000)
+        esperarA("el despegue") { dron.ordenes.any { it.startsWith("despegarHasta") } }
+        dron.estado.value = dron.estado.value.copy(enVuelo = true)
+        banco.evento(FlightEvent.Despegando)
+        banco.telemetria(norteM = 5.0, bateria = 94.0, alt = 60.0)
+        banco.evento(FlightEvent.EnElAire)
+        banco.hub(relayTarget(7, 12, quieto, ts = 2_000, aNorteM = 600.0))
+        banco.telemetria(norteM = 545.0, bateria = 90.0, alt = 60.0)
+        banco.pasar(200)
+        esperarA("el relay_ready") { banco.mensajes("relay_ready").isNotEmpty() }
+        assertEquals("VALIDATED", patrulla.objetivo!!.decision)
     }
 
     /**
