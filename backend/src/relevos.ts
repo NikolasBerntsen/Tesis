@@ -39,6 +39,22 @@ export const PLAZOS = {
    * cualquier regreso: pasado eso, A ya aterrizó o se quedó sin batería.
    */
   seguimientoPosteriorMs: 600_000,
+  /**
+   * Cuánto se espera el `landed_at_base` de un A que su status ya muestra en
+   * tierra con un relevo de patrulla todavía RESERVADO. El aviso y el status
+   * salen casi juntos y pueden llegar en cualquier orden; pasado esto, A bajó
+   * sin avisar (un `land` del operador, una app que perdió el relevo) y el
+   * pedido vence: ante la duda en el suelo, B no despega.
+   */
+  avisoDeAterrizajeMs: 10_000,
+  /**
+   * Un pedido sin B avisado (`RESERVADO` o `SIN_RELEVO`) vence si pasa esto sin
+   * ningún status de A, contando desde el pedido o desde el arranque del hub.
+   * Con la batería con la que pidió, A ya está en tierra, y un B que apareciera
+   * horas después saldría a cubrir una ruta que nadie vuela, o a buscar un
+   * objetivo que ya no está ahí.
+   */
+  pedidoSinNoticiasDeAMs: 600_000,
 } as const;
 
 /** "Estar en una base" (RELEVOS §0): a menos de esto del punto de la base. */
@@ -63,6 +79,21 @@ const ESTADOS_CON_B_AVISADO: readonly EstadoRelevo[] = ['ORDENADO', 'EN_CAMINO',
 function estadoRetirado(state: unknown): boolean {
   return typeof state === 'string' &&
     (state.startsWith('RETURNING_HOME') || ['ATERRIZAJE_EMERGENCIA', 'LANDED', 'IDLE'].includes(state));
+}
+
+/**
+ * El status muestra al dron en tierra. Alcanza con `flying: false`, sea cual
+ * sea el estado: además de `LANDED` e `IDLE`, un `land` ordenado desde la
+ * consola deja al dron en `MANUAL` en el suelo (§2), y ese aterrizaje no manda
+ * `landed_at_base`. Una app vieja sin `flying` nunca cuenta como en tierra.
+ */
+function enTierra(status: Record<string, unknown>): boolean {
+  return status.flying === false;
+}
+
+/** Con A bajando en su base, una altura de 5 m o menos es "A abajo" (RELEVOS §2.5). */
+function alturaDeAbajo(alt: unknown): boolean {
+  return Number.isFinite(alt) && (alt as number) <= ALTURA_DE_A_ABAJO_M;
 }
 
 export interface DependenciasRelevos {
@@ -226,7 +257,8 @@ const MOTIVO_FIN_LEGIBLE: Record<MotivoFin, string> = {
   origen_sin_confirmar: 'el dron relevado no confirmó que se alejó',
   orden_del_operador: 'orden del operador',
   alerta_descartada: 'la alerta se descartó',
-  sin_relevo: 'no apareció ningún dron disponible a tiempo',
+  // También cuando había uno reservado y A aterrizó sin avisar: B nunca supo nada.
+  sin_relevo: 'el pedido venció sin que saliera ningún dron',
   origen_se_fue: 'el dron relevado dejó el objetivo sin relevo en camino',
   relevo_abortado: 'el relevo abortó',
   relevo_desconectado: 'el relevo perdió la conexión',
@@ -257,6 +289,15 @@ export class CoordinadorDeRelevos {
    * terminado, hasta que salga uno `retirado` o pase `seguimientoPosteriorMs`.
    */
   private readonly posteriores = new Map<number, number>();
+  /**
+   * Desde cuándo muestra el status de cada dron que está en tierra. Con A en
+   * tierra, un pedido que todavía no le avisó nada a B ya no tiene a quién
+   * esperar (RELEVOS §2.2: se asigna "mientras A no haya aterrizado"), y un
+   * desvío ya terminó (§4: el bloqueo dura hasta el aterrizaje del desviado).
+   */
+  private readonly enTierraDesde = new Map<string, number>();
+  /** Cuándo arrancó el hub: sin ningún status de A desde entonces, es lo último que se sabe de él. */
+  private arrancadoEn = 0;
 
   constructor(deps: DependenciasRelevos) {
     this.deps = deps;
@@ -273,6 +314,7 @@ export class CoordinadorDeRelevos {
    */
   iniciar(): void {
     const ahora = this.ahora();
+    this.arrancadoEn = ahora;
     for (const r of this.activos()) {
       if (r.relevo && ESTADOS_CON_B_AVISADO.includes(r.estado) && !this.deps.conectado(r.relevo)) {
         this.desconectadoDesde.set(r.relevo, ahora);
@@ -295,13 +337,14 @@ export class CoordinadorDeRelevos {
 
   private guardar(r: Relevo): void {
     db.prepare(
-      `UPDATE relevos SET relevo = ?, base_id = ?, base_origen = ?, ref_origen = ?, estado = ?, motivo_fin = ?,
-              rechazados = ?, vence_en = ?, segundos_disponibles = ?, pedido_en = ?, eta_s = ?, asignado_en = ?,
-              ordenado_en = ?, go_enviado = ?, descendiendo = ?, a_abajo = ?, aterrizado = ?, origen_retirado = ?,
-              abandonado = ?, objetivo = ?, objetivo_ts = ?, actualizado_en = ?
+      `UPDATE relevos SET relevo = ?, base_id = ?, base_origen = ?, route_id = ?, from_index = ?, ref_origen = ?,
+              estado = ?, motivo_fin = ?, rechazados = ?, vence_en = ?, segundos_disponibles = ?, pedido_en = ?,
+              eta_s = ?, asignado_en = ?, ordenado_en = ?, go_enviado = ?, descendiendo = ?, a_abajo = ?,
+              aterrizado = ?, origen_retirado = ?, abandonado = ?, objetivo = ?, objetivo_ts = ?, actualizado_en = ?
         WHERE id = ?`,
     ).run(
-      r.relevo, r.baseId, r.baseOrigen, r.refOrigen, r.estado, r.motivoFin, JSON.stringify(r.rechazados), r.venceEn,
+      r.relevo, r.baseId, r.baseOrigen, r.routeId, r.fromIndex, r.refOrigen, r.estado, r.motivoFin,
+      JSON.stringify(r.rechazados), r.venceEn,
       r.segundosDisponibles, r.pedidoEn, r.etaS, r.asignadoEn, r.ordenadoEn, r.goEnviado ? 1 : 0, r.descendiendo ? 1 : 0,
       r.aAbajo ? 1 : 0, r.aterrizado ? 1 : 0, r.origenRetirado ? 1 : 0, r.abandonado ? 1 : 0,
       r.objetivo ? JSON.stringify(r.objetivo) : null, r.objetivoTs, r.actualizadoEn, r.id,
@@ -464,11 +507,15 @@ export class CoordinadorDeRelevos {
 
   /** Despegues de relevo bloqueados desde la base destino de un desvío (RELEVOS §4). */
   baseBloqueada(baseId: number): boolean {
-    const ahora = this.ahora();
     for (const d of this.desvios.values()) {
-      if (d.motivo === 'otra_base' && d.baseId === baseId && ahora - d.desde < PLAZOS.bloqueoBaseDestinoMs) return true;
+      if (d.motivo === 'otra_base' && d.baseId === baseId && this.desvioVigente(d)) return true;
     }
     return false;
+  }
+
+  /** Un desvío bloquea su base destino durante `bloqueoBaseDestinoMs` (RELEVOS §4). */
+  private desvioVigente(d: DesvioAbierto): boolean {
+    return this.ahora() - d.desde < PLAZOS.bloqueoBaseDestinoMs;
   }
 
   // ---- Candidatos ----
@@ -776,11 +823,21 @@ export class CoordinadorDeRelevos {
     } else {
       this.enEsperaDesde.delete(droneId);
     }
+    if (enTierra(status)) {
+      if (!this.enTierraDesde.has(droneId)) this.enTierraDesde.set(droneId, ahora);
+      // El desvío terminó con el aterrizaje del desviado, donde haya sido: el
+      // landed_at_base es un solo mensaje y no llega si fue un land ordenado o
+      // si se perdió, y sin esto un desvío posterior a la misma base no la
+      // volvería a bloquear (ver `desviado`).
+      this.desvios.delete(droneId);
+    } else {
+      this.enTierraDesde.delete(droneId);
+    }
     if (this.primerStatus.delete(droneId)) this.reconciliar(droneId, relevo?.relayId ?? null);
 
     for (const r of this.activos()) {
       if (r.origen !== droneId) continue;
-      if (r.motivo === 'patrulla') this.statusDeAEnPatrulla(r, status);
+      if (r.motivo === 'patrulla') this.statusDeAEnPatrulla(r, status, ahora);
       else this.statusDeAEnSeguimiento(r, status, ahora);
     }
     for (const id of [...this.posteriores.keys()]) {
@@ -789,20 +846,31 @@ export class CoordinadorDeRelevos {
     }
   }
 
-  /** Patrulla: con A bajando, una altura de 5 m o menos es "A abajo" y B puede despegar (§2.5). */
-  private statusDeAEnPatrulla(r: Relevo, status: Record<string, unknown>): void {
-    if (!r.descendiendo || r.aAbajo) return;
-    if (!Number.isFinite(status.alt) || (status.alt as number) > ALTURA_DE_A_ABAJO_M) return;
-    r.aAbajo = true;
-    if (r.estado === 'EN_CAMINO') this.darGo(r);
-    this.actualizar(r, {});
+  /**
+   * Patrulla. Con A bajando en su base (`landing_at_base`), una altura de 5 m o
+   * menos, o el dron ya en tierra, es "A abajo" (§2.5): B puede despegar, y
+   * para el pedido vale lo mismo que el `landed_at_base` (`aterrizado`). Ese
+   * aviso es un solo mensaje sin reintento, y se pierde si al teléfono se le
+   * corta el enlace al tocar tierra: sin esto, un pedido SIN_RELEVO seguiría
+   * buscando B para siempre y uno que apareciera horas después despegaría solo
+   * a cubrir una ruta que ya nadie vuela. Sin ese aviso de descenso, A en
+   * tierra vence el pedido (ver `pedidoVencido`).
+   */
+  private statusDeAEnPatrulla(r: Relevo, status: Record<string, unknown>, ahora: number): void {
+    if (r.descendiendo && !r.aAbajo && (alturaDeAbajo(status.alt) || enTierra(status))) {
+      r.aAbajo = true;
+      r.aterrizado = true;
+      this.despacharSiPuede(r);
+    } else if (this.pedidoVencido(r, ahora)) {
+      this.terminar(r, 'CANCELADO', 'sin_relevo');
+    }
   }
 
   /** Seguimiento: el objetivo de A se guarda (si pasa) y se le reenvía a B. */
   private statusDeAEnSeguimiento(r: Relevo, status: Record<string, unknown>, ahora: number): void {
     // Un pedido pendiente vale mientras A siga sobre el objetivo (§3.2): si A
     // ya está volviendo o en el suelo, el pedido venció.
-    if (r.estado === 'SIN_RELEVO' && estadoRetirado(status.state)) {
+    if (r.estado === 'SIN_RELEVO' && (estadoRetirado(status.state) || enTierra(status))) {
       this.terminar(r, 'CANCELADO', 'sin_relevo');
       return;
     }
@@ -812,9 +880,12 @@ export class CoordinadorDeRelevos {
   /**
    * Guarda el objetivo del status de A si pasa la validación y le manda a B el
    * `relay_target` que corresponde (en curso o después de un traspaso sin
-   * confirmar). Un objetivo que no pasa no deja `relay_target` por ese status,
-   * salvo que A ya se haya retirado: ahí va la última estimación válida, que es
-   * lo que B necesita, con la posición nueva de A.
+   * confirmar). Sale uno con CADA status de A, aunque su objetivo no pase: B
+   * baja a la altura de seguimiento recién cuando ve a A a más de 100 m del
+   * objetivo (§3.5), y en el traspaso A ya soltó su rastreador y manda el
+   * status sin objetivo; callar ahí dejaría a B arriba para siempre. El
+   * objetivo que viaja es entonces el último que pasó, con su `ts`, y B lo
+   * vuelve a tomar solo si es más nuevo que el que tiene (PROTOCOLS §2.b).
    */
   private reenviarObjetivo(r: Relevo, status: Record<string, unknown>, ahora: number): void {
     // Las alertas no se borran: la de un seguimiento siempre está.
@@ -827,8 +898,7 @@ export class CoordinadorDeRelevos {
     }
     const enCurso = r.estado === 'EN_CAMINO' || r.estado === 'TRASPASO';
     if (!enCurso && !this.posteriores.has(r.id)) return;
-    if (r.origenRetirado || estadoRetirado(status.state)) this.enviarTarget(r, 'retirado');
-    else if (objetivo) this.enviarTarget(r, 'en_linea');
+    this.enviarTarget(r, r.origenRetirado || estadoRetirado(status.state) ? 'retirado' : 'en_linea');
   }
 
   /**
@@ -984,24 +1054,70 @@ export class CoordinadorDeRelevos {
       if (deOtro) return descartar(a, 'relay_request', `la alerta ${p.alertId} ya tiene un relevo de otro dron`);
     }
 
-    // Uno activo por (origen, motivo): la app se pudo reiniciar y perder el ref
-    // viejo, así que se adopta el nuevo y se contesta con ese relevo.
-    const activo = this.activos().find((x) => x.origen === a && x.motivo === p.motivo);
+    // Uno activo por (origen, motivo), y en seguimiento por la MISMA alerta: la
+    // app se pudo reiniciar y perder el ref viejo, así que se adopta el nuevo y
+    // se contesta con ese relevo. El de otra alerta no se adopta: su estado y
+    // su etaS son los de un B que va hacia otro objetivo, y A los usaría para
+    // estirar su regreso (ventana de gracia, §3.5).
+    const activo = this.activos().find(
+      (x) => x.origen === a && x.motivo === p.motivo && (p.motivo === 'patrulla' || x.alertId === p.alertId),
+    );
     if (activo) {
-      this.adoptarRef(a, p.ref, activo.id);
-      activo.refOrigen = p.ref;
-      if (p.motivo === 'seguimiento') {
-        activo.segundosDisponibles = p.segundosDisponibles;
-        activo.pedidoEn = this.ahora();
-      }
-      this.guardar(activo);
-      this.enviarStatus(activo, p.ref);
+      this.adoptar(activo, p);
       return;
     }
+    if (p.motivo === 'seguimiento') this.dejoOtroObjetivo(a);
     const r = this.crear(a, p.ref, p.motivo === 'patrulla'
       ? { motivo: 'patrulla', routeId: p.routeId, fromIndex: p.fromIndex, descendiendo: false }
       : { motivo: 'seguimiento', alertId: p.alertId, segundosDisponibles: p.segundosDisponibles });
     this.enviarStatus(r, p.ref);
+  }
+
+  /**
+   * El relevo activo adopta el pedido nuevo: su ref, y la hora del pedido (es
+   * una noticia de A). En seguimiento, los segundos que le quedan a A. En
+   * patrulla, la ruta y el nodo, mientras B no sepa nada (ver `renovarTramo`).
+   */
+  private adoptar(activo: Relevo, p: PedidoDeRelevo): void {
+    this.adoptarRef(activo.origen, p.ref, activo.id);
+    activo.refOrigen = p.ref;
+    activo.pedidoEn = this.ahora();
+    if (p.motivo === 'seguimiento') {
+      activo.segundosDisponibles = p.segundosDisponibles;
+      this.guardar(activo);
+    } else {
+      this.renovarTramo(activo, p.routeId, p.fromIndex);
+    }
+    this.enviarStatus(activo, p.ref);
+  }
+
+  /**
+   * Un pedido de patrulla que todavía no le avisó nada a B (`RESERVADO` o
+   * `SIN_RELEVO`) toma la ruta y el nodo del aviso más nuevo de A: son los de
+   * ESTE regreso, y B tiene que salir a cubrir la ruta que A deja ahora, no la
+   * de un pedido viejo que quedó colgado. Con B ya avisado no se tocan: tiene
+   * su `relay_start` con los de antes. Guarda siempre; a las consolas les avisa
+   * solo si cambiaron.
+   */
+  private renovarTramo(r: Relevo, routeId: number, fromIndex: number): void {
+    const sinAvisarAB = r.estado === 'RESERVADO' || r.estado === 'SIN_RELEVO';
+    if (sinAvisarAB && (r.routeId !== routeId || r.fromIndex !== fromIndex)) this.actualizar(r, { routeId, fromIndex });
+    else this.guardar(r);
+  }
+
+  /**
+   * A pide un relevo de seguimiento por una alerta y tiene otro activo por otra.
+   * A sigue un solo objetivo a la vez, así que ya dejó el anterior, y eso es
+   * un `relay_abandon` de ese relevo (§3.8): con B en camino, la alerta pasa a
+   * B y B se entera con un "retirado"; sin B, se cancela. Si ya lo había
+   * abandonado no cambia nada. En el traspaso A ya lo está soltando, y ese
+   * relevo termina solo. Se llama después de adoptar: el de la misma alerta, si
+   * había, ya se adoptó y no llega acá.
+   */
+  private dejoOtroObjetivo(a: string): void {
+    for (const r of this.activos()) {
+      if (r.origen === a && r.motivo === 'seguimiento' && r.estado !== 'TRASPASO') this.origenSeVa(r);
+    }
   }
 
   /**
@@ -1197,9 +1313,15 @@ export class CoordinadorDeRelevos {
       return;
     }
     if (!this.esActivo(r)) return descartar(a, 'landing_at_base', `el relevo ${r.id} ya terminó`);
+    // El ref de este regreso pasa a ser el del relevo: es el que A espera en
+    // cada relay_status (uno con otro ref lo ignora).
     this.adoptarRef(a, m.ref, r.id);
+    r.refOrigen = m.ref;
     r.descendiendo = true;
     if (r.estado === 'RESERVADO' || r.estado === 'SIN_RELEVO') {
+      // Autosuficiente también en el tramo: la ruta y el nodo son los de este regreso.
+      r.routeId = m.routeId;
+      r.fromIndex = m.fromIndex;
       if (!this.asignar(r)) this.sinCandidato(r);
       return;
     }
@@ -1242,8 +1364,14 @@ export class CoordinadorDeRelevos {
     const r = this.patrullaDe(a, 'rth_diverted', m.relayId);
     if (r === null) return;
     const anterior = this.desvios.get(a);
-    // Idempotente: se repite en cada reconexión; un evento por destino nuevo.
-    if (anterior?.baseId !== m.baseId || anterior?.motivo !== m.motivo) {
+    // Idempotente: se repite en cada reconexión mientras dure el desvío, y la
+    // repetición no vuelve a registrar ni a estirar el bloqueo. Un destino
+    // nuevo, o el mismo con el bloqueo ya vencido (el desvío de otro vuelo,
+    // cuyo aterrizaje no llegó), es un desvío nuevo: otro evento y otros 10
+    // minutos de bloqueo. Si no, la base destino quedaría sin bloquear.
+    const repetido = anterior !== undefined && anterior.baseId === m.baseId && anterior.motivo === m.motivo &&
+      this.desvioVigente(anterior);
+    if (!repetido) {
       this.desvios.set(a, { baseId: m.baseId, motivo: m.motivo, desde: this.ahora() });
       this.registrarDesvio(a, m, r?.id ?? null);
     }
@@ -1335,9 +1463,9 @@ export class CoordinadorDeRelevos {
   /**
    * Revisa todo lo que vence con el reloj: la respuesta de B (10 s), el
    * despegue (120 s), el traspaso (30 s), B desconectado (20 s), los pedidos
-   * pendientes, y lo que se repite cada 5 s (`relay_status` en camino y
-   * `relay_target` sin enlace). Es idempotente para un mismo instante: correrlo
-   * dos veces seguidas no manda nada dos veces.
+   * pendientes (que se asignan o vencen), y lo que se repite cada 5 s
+   * (`relay_status` en camino y `relay_target` sin enlace). Es idempotente para
+   * un mismo instante: correrlo dos veces seguidas no manda nada dos veces.
    */
   barrer(): void {
     const ahora = this.ahora();
@@ -1347,6 +1475,7 @@ export class CoordinadorDeRelevos {
       const r = this.leer(id) as Relevo;
       if (r.venceEn !== null && r.venceEn <= ahora) this.vencer(r);
       else if (this.bDesconectado(r, ahora)) this.terminar(r, 'FALLIDO', 'relevo_desconectado');
+      else if (this.pedidoVencido(r, ahora)) this.terminar(r, 'CANCELADO', 'sin_relevo');
       else if (r.estado === 'SIN_RELEVO') this.asignar(r);
       else this.repetir(r, ahora);
     }
@@ -1355,6 +1484,29 @@ export class CoordinadorDeRelevos {
       if (!r || hasta <= ahora) this.posteriores.delete(id);
       else this.targetSinEnlace(r, ahora);
     }
+  }
+
+  /**
+   * Un pedido que todavía no le avisó nada a B (`RESERVADO` o `SIN_RELEVO`) y
+   * ya no tiene a quién esperar (RELEVOS §2.2: se asigna "mientras A no haya
+   * aterrizado"; §3.2: "mientras A siga por encima de su piso"):
+   * - A en tierra sin haber avisado un descenso en su base (con el aviso,
+   *   `statusDeAEnPatrulla` lo resuelve antes): en `SIN_RELEVO` en el acto; en
+   *   `RESERVADO`, después de `avisoDeAterrizajeMs`, que es lo que se espera el
+   *   `landed_at_base` que lo despacharía;
+   * - ningún status de A en `pedidoSinNoticiasDeAMs`: A ya no está en el aire.
+   */
+  private pedidoVencido(r: Relevo, ahora: number): boolean {
+    if (r.estado !== 'SIN_RELEVO' && r.estado !== 'RESERVADO') return false;
+    if (ahora - this.ultimaNoticiaDeA(r) >= PLAZOS.pedidoSinNoticiasDeAMs) return true;
+    const enTierraDesde = this.enTierraDesde.get(r.origen);
+    if (enTierraDesde === undefined) return false;
+    return r.estado === 'SIN_RELEVO' || ahora - enTierraDesde >= PLAZOS.avisoDeAterrizajeMs;
+  }
+
+  /** Lo último que se supo de A: su último status, su pedido o el arranque del hub, lo más nuevo. */
+  private ultimaNoticiaDeA(r: Relevo): number {
+    return Math.max(r.pedidoEn, this.vistos.get(r.origen)?.recibidoEn ?? 0, this.arrancadoEn);
   }
 
   private bDesconectado(r: Relevo, ahora: number): boolean {

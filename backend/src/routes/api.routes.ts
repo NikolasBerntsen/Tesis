@@ -606,11 +606,14 @@ apiRouter.delete('/drones/:droneId/control', requireAuth('operator'), (req: Auth
   const esSupervisor = esSupervisorOMas(req.user!.role);
   if (!esTitular && !esSupervisor) return res.status(403).json({ error: `El control lo tiene ${holder}` });
 
-  const reanudacion = reanudacionPedida(req.body?.resume);
-  // Soltar con reanudación manda un resume_patrol: es la misma orden que
-  // POST /resume y vale lo mismo para un relevo (RELEVOS §3.9). Con 'none' no
-  // hay orden y el relevo sigue: tomar y soltar el control de B no cancela nada.
-  if (reanudacion !== 'none') relevos.ordenDelOperador(droneId);
+  // Soltar el control no es una orden (RELEVOS §3.9: tomar el control de B no
+  // cancela nada, y al soltarlo no sale resume_patrol si participa de un relevo
+  // activo), pida lo que pida la consola, que manda 'last' siempre que el dron
+  // no tiene objetivo: a B un resume_patrol lo sacaría del relevo, y a A, que
+  // vuelve por batería, lo mandaría a patrullar con la batería que lo hizo
+  // pedir uno. La orden explícita de reanudar es POST /resume, que sí cuenta
+  // para el relevo.
+  const reanudacion = relevos.participaDeUnRelevoActivo(droneId) ? 'none' : reanudacionPedida(req.body?.resume);
   releaseControl(droneId, req.user!.sub, { resume: reanudacion, forced: !esTitular });
   res.json(droneCard(droneId));
 });

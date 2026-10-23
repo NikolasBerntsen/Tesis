@@ -674,9 +674,13 @@ describe('relevos — caso B: relevo de seguimiento', () => {
     });
     expect(t1.objetivo).toMatchObject({ lat: -34.8506, vNorteMs: -0.14, decision: 'VALIDATED' });
 
-    // un objetivo que no pasa no deja relay_target
-    b.status(A, { state: 'FOLLOWING', battery: 37, lat: -34.8508, lon: -56.1998, alt: 41, target: { ...objetivo(alertId), speedMs: 99 } });
-    expect(b.a(C, 'relay_target')).toHaveLength(1);
+    // un objetivo que no pasa no se reenvía, pero el status de A sí sale: con
+    // la posición nueva de A y el último objetivo que pasó, con SU ts
+    b.status(A, { state: 'FOLLOWING', battery: 37, lat: -34.8509, lon: -56.1997, alt: 42, target: { ...objetivo(alertId), speedMs: 99 } });
+    expect(b.a(C, 'relay_target')).toHaveLength(2);
+    expect(b.ultimo(C, 'relay_target')).toMatchObject({
+      origen: 'en_linea', aLat: -34.8509, aLon: -56.1997, aAlt: 42, ts: t1.ts, objetivo: t1.objetivo,
+    });
 
     // A se calla: a los 5 s sin status sale la última estimación, sin_enlace
     b.avanzar(PLAZOS.aSinStatusParaSinEnlaceMs + 1);
@@ -684,11 +688,11 @@ describe('relevos — caso B: relevo de seguimiento', () => {
     expect(b.ultimo(C, 'relay_target')).toMatchObject({ origen: 'sin_enlace', ts: t1.ts, objetivo: t1.objetivo });
     b.avanzar(1000);
     b.coord.barrer();
-    expect(b.a(C, 'relay_target')).toHaveLength(2);
+    expect(b.a(C, 'relay_target')).toHaveLength(3);
     b.avanzar(PLAZOS.relayTargetSinEnlaceMs);
     b.desconectar(A);
     b.coord.barrer();
-    expect(b.a(C, 'relay_target')).toHaveLength(3);
+    expect(b.a(C, 'relay_target')).toHaveLength(4);
   });
 
   it('traspaso: la alerta pasa a B, A recibe relay_done; relay_released completa y B se entera de que A se fue', () => {
@@ -913,6 +917,127 @@ describe('relevos — caso B: relevo de seguimiento', () => {
     expect(b.a(C, 'relay_cancel')).toHaveLength(cancelaciones);
   });
 
+  it('un pedido por otra alerta no adopta el relevo abandonado de la anterior: es otro relevo, con su propio estado', () => {
+    const b = new Banco();
+    b.conectar(A, C);
+    const primera = aSiguiendo(b, 'VALIDATED');
+    b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+    pedirSeguimiento(b, primera, 400, 'r1');
+    b.manda(C, { type: 'relay_accept', relayId: 1 });
+    // el operador manda a A a otro lado: deja la primera, que pasa a Charlie
+    b.coord.ordenDelOperador(A);
+    expect(getAlert(primera)?.seguidaPor).toBe(C);
+
+    // A sigue otro objetivo y con la batería baja pide relevo por esa alerta
+    const segunda = aSiguiendo(b);
+    b.limpiar();
+    const st = pedirSeguimiento(b, segunda, 10, 'r2');
+    // no le llega el EN_CAMINO ni la eta de un Charlie que va hacia el otro objetivo
+    expect(st).toEqual({
+      type: 'relay_status', ref: 'r2', relayId: 2, estado: 'SIN_RELEVO', relevo: null, etaS: null, motivoFin: null,
+    });
+    expect(b.relevo(2)).toMatchObject({ alertId: segunda, estado: 'SIN_RELEVO' });
+    // el de la primera sigue igual, con Charlie, que no recibe nada nuevo
+    expect(b.relevo(1)).toMatchObject({ alertId: primera, estado: 'EN_CAMINO', relevo: { droneId: C } });
+    expect(b.a(C)).toEqual([]);
+    // y un reintento por la segunda contesta por su propio relevo
+    expect(pedirSeguimiento(b, segunda, 10, 'r3')).toMatchObject({ ref: 'r3', relayId: 2 });
+  });
+
+  it('pedir por otra alerta es dejar la anterior: con B en camino pasa a B, sin B se cancela, en el traspaso sigue', () => {
+    const b = new Banco();
+    b.conectar(A, B, C);
+    // un relevo de seguimiento de otro dron y uno de patrulla de A no se tocan
+    b.manda(A, { type: 'relay_request', ref: 'pa', motivo: 'patrulla', routeId: 1, fromIndex: 0 });
+    const deBravo = createAlert('PERSON', B, -34.85, -56.2, null);
+    b.status(B, { state: 'ORBITING', battery: 30, lat: -34.8501, lon: -56.2, alt: 40, flying: true, target: objetivo(deBravo.id) });
+    b.manda(B, { type: 'relay_request', ref: 'sb', motivo: 'seguimiento', alertId: deBravo.id, segundosDisponibles: 5 });
+
+    const primera = aSiguiendo(b, 'VALIDATED');
+    b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+    pedirSeguimiento(b, primera, 400, 'r1');
+    b.manda(C, { type: 'relay_accept', relayId: 3 });
+    b.limpiar();
+
+    // A pide por otra alerta sin haber avisado que dejó la primera
+    const segunda = createAlert('PERSON', A, -34.851, -56.201, null).id;
+    pedirSeguimiento(b, segunda, 10, 'r2');
+    expect(getAlert(primera)?.seguidaPor).toBe(C);
+    expect(b.ultimo(C, 'relay_target')).toMatchObject({ relayId: 3, origen: 'retirado' });
+    expect(b.relevo(3).estado).toBe('EN_CAMINO');
+    expect(b.relevo(4)).toMatchObject({ alertId: segunda, estado: 'SIN_RELEVO' });
+
+    // el pedido sin B por la segunda se cancela al pedir por una tercera
+    const tercera = createAlert('PERSON', A, -34.852, -56.202, null).id;
+    pedirSeguimiento(b, tercera, 10, 'r3');
+    expect(b.relevo(4)).toMatchObject({ estado: 'CANCELADO', motivoFin: 'origen_se_fue' });
+    expect(b.relevo(5)).toMatchObject({ alertId: tercera, estado: 'SIN_RELEVO' });
+    expect(b.relevo(1)).toMatchObject({ motivo: 'patrulla', estado: 'SIN_RELEVO' });
+    expect(b.relevo(2)).toMatchObject({ origen: { droneId: B }, estado: 'SIN_RELEVO' });
+
+    // en el traspaso A ya está soltando: ese relevo termina solo
+    b.manda(C, { type: 'relay_ready', relayId: 3 });
+    const cuarta = createAlert('PERSON', A, -34.853, -56.203, null).id;
+    pedirSeguimiento(b, cuarta, 10, 'r4');
+    expect(b.relevo(3).estado).toBe('TRASPASO');
+  });
+
+  it('en el traspaso, cada status de A le llega a B aunque A ya no tenga objetivo: B ve a A alejarse', () => {
+    const b = new Banco();
+    b.conectar(A, C);
+    const alertId = aSiguiendo(b);
+    b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+    pedirSeguimiento(b, alertId);
+    b.manda(C, { type: 'relay_accept', relayId: 1 });
+    b.avanzar(1000);
+    b.status(A, { state: 'ORBITING', battery: 33, lat: -34.851, lon: -56.2, alt: 40, target: objetivo(alertId) });
+    const ultimo = b.ultimo(C, 'relay_target');
+    b.manda(C, { type: 'relay_ready', relayId: 1 });
+    b.limpiar();
+
+    // A soltó su rastreador (status sin target) y se aleja hacia el norte, conectado
+    for (let i = 1; i <= 10; i++) {
+      b.avanzar(1000);
+      b.status(A, { state: 'FOLLOWING', battery: 32, lat: -34.851 + i * 0.0002, lon: -56.2, alt: 40, target: null });
+      b.coord.barrer();
+    }
+    const targets = b.a(C, 'relay_target');
+    expect(targets).toHaveLength(10);
+    // la posición de A es la de cada status; el objetivo y su ts, los del último que pasó
+    expect(targets.map((m) => m.aLat)).toEqual(Array.from({ length: 10 }, (_, i) => -34.851 + (i + 1) * 0.0002));
+    expect(targets.every((m) => m.origen === 'en_linea' && m.ts === ultimo.ts)).toBe(true);
+    expect(targets.at(-1).objetivo).toEqual(ultimo.objetivo);
+    // el retirado lleva el mismo ts: es el del objetivo, y B toma el origen igual (PROTOCOLS §2.b)
+    b.manda(A, { type: 'relay_released', relayId: 1 });
+    expect(b.ultimo(C, 'relay_target')).toMatchObject({ origen: 'retirado', ts: ultimo.ts });
+  });
+
+  it('después de un traspaso sin confirmar, los status de A sin objetivo también le llegan a B', () => {
+    const b = new Banco();
+    b.conectar(A, C);
+    const alertId = aSiguiendo(b);
+    b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+    pedirSeguimiento(b, alertId);
+    b.manda(C, { type: 'relay_accept', relayId: 1 });
+    b.manda(C, { type: 'relay_ready', relayId: 1 });
+    b.avanzar(PLAZOS.traspasoSinConfirmarMs);
+    b.coord.barrer();
+    expect(b.relevo(1).motivoFin).toBe('origen_sin_confirmar');
+    b.limpiar();
+    b.status(A, { state: 'FOLLOWING', battery: 30, lat: -34.849, lon: -56.2, alt: 40, target: null });
+    expect(b.ultimo(C, 'relay_target')).toMatchObject({ origen: 'en_linea', aLat: -34.849 });
+  });
+
+  it('el pedido pendiente también se cae con A en tierra, aunque su estado no lo diga', () => {
+    const b = new Banco();
+    b.conectar(A);
+    const alertId = aSiguiendo(b);
+    pedirSeguimiento(b, alertId);
+    // un land ordenado desde la consola: MANUAL en el suelo
+    b.status(A, { state: 'MANUAL', battery: 30, lat: -34.851, lon: -56.2, alt: 0, flying: false });
+    expect(b.relevo(1)).toMatchObject({ estado: 'CANCELADO', motivoFin: 'sin_relevo' });
+  });
+
   it('descartar la alerta corta el seguimiento posterior de un traspaso sin confirmar', () => {
     const b = new Banco();
     b.conectar(A, C);
@@ -977,6 +1102,44 @@ describe('relevos — caso D: desvío a otra base', () => {
     b.manda(A, { type: 'landed_at_base', relayId: null, baseId: 1, lat: null, lon: null });
     b.manda(A, { type: 'rth_diverted', relayId: null, baseId: null, lat: null, lon: null, motivo: 'emergencia' });
     expect(b.eventos('RTH_DIVERTED')).toHaveLength(4);
+  });
+
+  it('un desvío a la misma base con el bloqueo vencido es otro desvío: se registra y la vuelve a bloquear', () => {
+    const b = new Banco();
+    b.conectar(A);
+    const desvio = { type: 'rth_diverted', relayId: null, baseId: 2, lat: -34.857, lon: -56.2015, motivo: 'otra_base' };
+    b.manda(A, desvio);
+    expect(b.coord.baseBloqueada(2)).toBe(true);
+    // el aterrizaje de ese vuelo nunca llegó (un land ordenado, un mensaje perdido)
+    b.avanzar(3 * 3600_000);
+    expect(b.coord.baseBloqueada(2)).toBe(false);
+    b.manda(A, desvio);
+    expect(b.coord.baseBloqueada(2)).toBe(true);
+    expect(b.eventos('RTH_DIVERTED')).toHaveLength(2);
+    // la repetición del mismo desvío (reconexión) no lo registra ni estira el bloqueo
+    b.avanzar(PLAZOS.bloqueoBaseDestinoMs - 1);
+    b.manda(A, desvio);
+    expect(b.eventos('RTH_DIVERTED')).toHaveLength(2);
+    b.avanzar(1);
+    expect(b.coord.baseBloqueada(2)).toBe(false);
+  });
+
+  it('A en tierra cierra su desvío aunque no llegue el landed_at_base; el próximo vuelve a bloquear', () => {
+    const b = new Banco();
+    b.conectar(A);
+    const desvio = { type: 'rth_diverted', relayId: null, baseId: 2, lat: -34.857, lon: -56.2015, motivo: 'otra_base' };
+    b.manda(A, desvio);
+    b.volando(A, { ...alNorte(SUR, 200), alt: 60 });
+    expect(b.coord.baseBloqueada(2)).toBe(true);
+    // aterriza en el punto para visitantes, con el enlace cortado justo al tocar tierra
+    b.status(A, { state: 'LANDED', battery: 12, ...alNorte(SUR, 15), alt: 0, flying: false });
+    expect(b.coord.baseBloqueada(2)).toBe(false);
+    // otro vuelo, otro desvío a la misma base: se registra y bloquea, aunque no hayan pasado 10 minutos
+    b.avanzar(60_000);
+    b.volando(A, { ...alNorte(SUR, 300), alt: 60 });
+    b.manda(A, desvio);
+    expect(b.coord.baseBloqueada(2)).toBe(true);
+    expect(b.eventos('RTH_DIVERTED')).toHaveLength(2);
   });
 
   it('landed_at_base sin baseId levanta el bloqueo por la posición', () => {
@@ -1109,6 +1272,228 @@ describe('relevos — órdenes del operador', () => {
     b.manda(A, { type: 'relay_request', ref: 'p', motivo: 'patrulla', routeId: 1, fromIndex: 0 });
     b.coord.ordenDelOperador(A);
     expect(b.relevo(2).estado).toBe('SIN_RELEVO');
+  });
+});
+
+describe('relevos — pedidos que A deja sin aviso', () => {
+  /** A en tierra en su base: posado, sin volar. */
+  const enTierraEnNorte = { state: 'LANDED', battery: 20, ...NORTE, alt: 0, flying: false };
+  const descenso = { type: 'landing_at_base', ref: 'x1', relayId: null, baseId: 1, ...NORTE, routeId: 1, fromIndex: 1 };
+
+  it('A abajo por altura sin landed_at_base: el pedido sin candidato vence y un B que aparece horas después no despega', () => {
+    const b = new Banco();
+    b.conectar(A, B);
+    b.volando(A, { ...NORTE, alt: 30 });
+    b.manda(A, descenso);
+    expect(b.relevo(1).estado).toBe('SIN_RELEVO');
+    b.volando(A, { ...NORTE, alt: 12 });
+    expect(b.relevo(1).estado).toBe('SIN_RELEVO');
+    // A a 4 m, y al teléfono se le corta el enlace: el landed_at_base no llega nunca
+    b.volando(A, { ...NORTE, alt: 4 });
+    expect(b.relevo(1)).toMatchObject({ estado: 'CANCELADO', motivoFin: 'sin_relevo' });
+    expect(b.ultimo(A, 'relay_status')).toMatchObject({ estado: 'CANCELADO', motivoFin: 'sin_relevo' });
+    expect(b.eventos().at(-1).type).toBe('RELAY_CANCELLED');
+
+    b.avanzar(3 * 3600_000);
+    b.enEspera(B);
+    b.coord.barrer();
+    expect(b.a(B)).toEqual([]);
+    expect(b.coord.participaDeUnRelevoActivo(B)).toBe(false);
+  });
+
+  it('A abajo por altura con un B que recién aparece: sale con start y go, como con el landed_at_base', () => {
+    const b = new Banco();
+    b.conectar(A, B);
+    b.volando(A, { ...NORTE, alt: 30 });
+    b.manda(A, descenso);
+    // Bravo queda en espera justo antes de que corra el barrido
+    b.enEspera(B);
+    b.volando(A, { ...NORTE, alt: 3 });
+    expect(b.a(B).map((m) => m.type)).toEqual(['relay_start', 'relay_go']);
+    expect(b.relevo(1).estado).toBe('ORDENADO');
+  });
+
+  it('con A abajo por altura, si B rechaza y no hay otro, el pedido vence en vez de quedar pendiente', () => {
+    const b = new Banco();
+    b.conectar(A, B);
+    b.enEspera(B);
+    pedirPatrulla(b);
+    b.manda(A, { ...descenso, ref: 'p1', relayId: 1, fromIndex: 2 });
+    // en tierra cuenta igual que a 5 m o menos
+    b.status(A, { ...enTierraEnNorte, alt: null });
+    expect(b.a(B, 'relay_go')).toEqual([]);
+    b.manda(B, { type: 'relay_reject', relayId: 1, motivo: 'no_disponible' });
+    expect(b.relevo(1)).toMatchObject({ estado: 'CANCELADO', motivoFin: 'sin_relevo' });
+  });
+
+  it('A en tierra sin aviso de descenso: el pedido sin candidato vence en el acto', () => {
+    // A desviado a otra base, sin B: aterriza allá y no llega su landed_at_base
+    const b = new Banco();
+    b.conectar(A, B);
+    pedirPatrulla(b);
+    b.manda(A, { type: 'rth_diverted', relayId: 1, baseId: 3, lat: null, lon: null, motivo: 'otra_base' });
+    b.volando(A, { lat: -34.8575, lon: -56.201, alt: 20 });
+    expect(b.relevo(1).estado).toBe('SIN_RELEVO');
+    b.status(A, { state: 'LANDED', battery: 9, lat: -34.8575, lon: -56.201, alt: 0, flying: false });
+    expect(b.relevo(1)).toMatchObject({ estado: 'CANCELADO', motivoFin: 'sin_relevo' });
+    b.enEspera(B);
+    b.coord.barrer();
+    expect(b.a(B)).toEqual([]);
+
+    // un pedido que llega con A ya en tierra vence en el primer barrido
+    b.manda(A, { type: 'relay_request', ref: 'tarde', motivo: 'patrulla', routeId: 1, fromIndex: 0 });
+    expect(b.relevo(2).estado).toBe('SIN_RELEVO');
+    b.coord.barrer();
+    expect(b.relevo(2)).toMatchObject({ estado: 'CANCELADO', motivoFin: 'sin_relevo' });
+  });
+
+  it('reservado con A en tierra: espera el landed_at_base 10 s; si llega, despacha', () => {
+    const b = new Banco();
+    b.conectar(A, B);
+    b.volando(A);
+    b.enEspera(B);
+    pedirPatrulla(b);
+    // el status de A en tierra llega antes que su landed_at_base
+    b.status(A, enTierraEnNorte);
+    b.avanzar(PLAZOS.avisoDeAterrizajeMs - 1);
+    b.status(A, enTierraEnNorte);
+    b.enEspera(B);
+    b.coord.barrer();
+    expect(b.relevo(1).estado).toBe('RESERVADO');
+    b.manda(A, { type: 'landed_at_base', relayId: 1, baseId: 1, ...NORTE });
+    expect(b.a(B).map((m) => m.type)).toEqual(['relay_start', 'relay_go']);
+  });
+
+  it('reservado con A en tierra y sin landed_at_base: a los 10 s vence y B queda libre', () => {
+    const b = new Banco();
+    b.conectar(A, B);
+    b.volando(A);
+    b.enEspera(B);
+    pedirPatrulla(b, 'ayer');
+    expect(b.coord.participaDeUnRelevoActivo(B)).toBe(true);
+    // un land ordenado desde la consola: MANUAL en el suelo, sin aviso de base
+    b.status(A, { ...enTierraEnNorte, state: 'MANUAL' });
+    b.avanzar(PLAZOS.avisoDeAterrizajeMs);
+    b.coord.barrer();
+    expect(b.relevo(1)).toMatchObject({ estado: 'CANCELADO', motivoFin: 'sin_relevo' });
+    expect(b.coord.participaDeUnRelevoActivo(B)).toBe(false);
+    expect(b.a(B)).toEqual([]);
+
+    // al día siguiente, el pedido de A es otro relevo, con su ruta y su nodo
+    b.avanzar(24 * 3600_000);
+    b.volando(A);
+    b.enEspera(B);
+    expect(pedirPatrulla(b, 'hoy')).toMatchObject({ ref: 'hoy', relayId: 2, estado: 'RESERVADO' });
+
+    // y si A vuelve a despegar antes de los 10 s, el pedido sigue
+    b.status(A, { ...enTierraEnNorte, state: 'MANUAL' });
+    b.avanzar(PLAZOS.avisoDeAterrizajeMs - 1);
+    b.volando(A);
+    b.avanzar(PLAZOS.avisoDeAterrizajeMs);
+    b.enEspera(B);
+    b.coord.barrer();
+    expect(b.relevo(2).estado).toBe('RESERVADO');
+  });
+
+  it('un pedido nuevo toma la ruta y el nodo nuevos mientras B no sepa nada; con B avisado, no', () => {
+    const b = new Banco();
+    b.conectar(A, B);
+    b.volando(A);
+    b.enEspera(B);
+    pedirPatrulla(b, 'p1');
+    b.limpiar();
+    // la app se reinició y perdió el relevo: pide de nuevo, por otra ruta
+    b.manda(A, { type: 'relay_request', ref: 'p2', motivo: 'patrulla', routeId: 2, fromIndex: 0 });
+    expect(b.ultimo(A, 'relay_status')).toMatchObject({ ref: 'p2', relayId: 1, estado: 'RESERVADO' });
+    expect(b.relevo(1)).toMatchObject({ routeId: 2, fromIndex: 0 });
+    expect(b.consolas.filter((m) => m.type === 'relay_updated').at(-1).relay).toMatchObject({ routeId: 2, fromIndex: 0 });
+    // el mismo tramo otra vez no le avisa nada nuevo a la consola
+    const avisosALaConsola = b.consolas.length;
+    b.manda(A, { type: 'relay_request', ref: 'p3', motivo: 'patrulla', routeId: 2, fromIndex: 0 });
+    expect(b.consolas).toHaveLength(avisosALaConsola);
+
+    // el descenso en la base trae el tramo de este regreso, y su ref pasa a ser el del relevo
+    b.manda(A, { type: 'landing_at_base', ref: 'p4', relayId: null, baseId: 1, ...NORTE, routeId: 2, fromIndex: 1 });
+    expect(b.ultimo(B, 'relay_start')).toMatchObject({ relayId: 1, ruta: { id: 2 }, fromIndex: 1 });
+    expect(b.ultimo(A, 'relay_status')).toMatchObject({ ref: 'p4', estado: 'ORDENADO' });
+
+    // con B ya avisado, un pedido nuevo no le cambia el tramo
+    b.manda(A, { type: 'relay_request', ref: 'p5', motivo: 'patrulla', routeId: 1, fromIndex: 3 });
+    expect(b.relevo(1)).toMatchObject({ routeId: 2, fromIndex: 1, estado: 'ORDENADO' });
+    // y queda en la tabla: un coordinador nuevo (reinicio del hub) lo ve igual
+    expect(b.nuevoCoordinador().listar(true)[0]).toMatchObject({ routeId: 2, fromIndex: 1 });
+  });
+
+  it('el descenso sobre un pedido sin candidato también le cambia el tramo, y sigue pendiente', () => {
+    const b = new Banco();
+    b.conectar(A, B);
+    b.volando(A);
+    expect(pedirPatrulla(b, 'p1')).toMatchObject({ estado: 'SIN_RELEVO' });
+    b.limpiar();
+    b.manda(A, { type: 'landing_at_base', ref: 'p2', relayId: 1, baseId: 1, ...NORTE, routeId: 2, fromIndex: 1 });
+    expect(b.relevo(1)).toMatchObject({ estado: 'SIN_RELEVO', routeId: 2, fromIndex: 1 });
+    expect(b.consolas.filter((m) => m.type === 'relay_updated').at(-1).relay).toMatchObject({ routeId: 2, fromIndex: 1 });
+    // un solo RELAY_UNAVAILABLE: ya estaba sin candidato
+    expect(b.eventos()).toEqual([]);
+    // y Bravo, si aparece antes de que A baje del todo, sale a cubrir ESE tramo
+    b.enEspera(B);
+    b.coord.barrer();
+    expect(b.ultimo(B, 'relay_start')).toMatchObject({ relayId: 1, ruta: { id: 2 }, fromIndex: 1 });
+    expect(b.ultimo(A, 'relay_status')).toMatchObject({ ref: 'p2', estado: 'ORDENADO' });
+  });
+
+  it('un pedido sin B avisado vence a los 10 minutos sin ningún status de A; mientras A reporta en el aire, sigue', () => {
+    const b = new Banco();
+    b.conectar(A, B, C);
+    b.volando(A);
+    b.enEspera(B);
+    pedirPatrulla(b);
+    // un seguimiento de Charlie sin candidato también
+    const alerta = createAlert('VEHICLE', C, -34.85, -56.2, null);
+    b.status(C, { state: 'ORBITING', battery: 30, lat: -34.8501, lon: -56.2, alt: 40, flying: true, target: objetivo(alerta.id) });
+    b.manda(C, { type: 'relay_request', ref: 'sc', motivo: 'seguimiento', alertId: alerta.id, segundosDisponibles: null });
+    expect(b.relevo(2).estado).toBe('SIN_RELEVO');
+
+    // A sigue volviendo (un regreso largo, con el control tomado): su pedido sigue
+    for (let i = 0; i < 12; i++) {
+      b.avanzar(60_000);
+      b.volando(A);
+    }
+    b.enEspera(B);
+    b.coord.barrer();
+    expect(b.relevo(1).estado).toBe('RESERVADO');
+    // Charlie no mandó nada en 12 minutos: su pedido venció
+    expect(b.relevo(2)).toMatchObject({ estado: 'CANCELADO', motivoFin: 'sin_relevo' });
+
+    // A se calla: a los 10 minutos de su último status, vence
+    b.avanzar(PLAZOS.pedidoSinNoticiasDeAMs - 1);
+    b.enEspera(B);
+    b.coord.barrer();
+    expect(b.relevo(1).estado).toBe('RESERVADO');
+    b.avanzar(1);
+    b.enEspera(B);
+    b.coord.barrer();
+    expect(b.relevo(1)).toMatchObject({ estado: 'CANCELADO', motivoFin: 'sin_relevo' });
+  });
+
+  it('después de un reinicio, los 10 minutos sin noticias de A cuentan desde el arranque', () => {
+    const b = new Banco();
+    b.conectar(A, B);
+    b.volando(A);
+    b.enEspera(B);
+    pedirPatrulla(b);
+    // se cae el hub y vuelve al día siguiente: A nunca vuelve a conectarse
+    b.conectados.clear();
+    b.avanzar(24 * 3600_000);
+    const nuevo = b.nuevoCoordinador();
+    nuevo.iniciar();
+    b.avanzar(PLAZOS.pedidoSinNoticiasDeAMs - 1);
+    nuevo.barrer();
+    expect(nuevo.listar(true)).toEqual([expect.objectContaining({ id: 1, estado: 'RESERVADO' })]);
+    b.avanzar(1);
+    nuevo.barrer();
+    expect(nuevo.listar(false)[0]).toMatchObject({ estado: 'CANCELADO', motivoFin: 'sin_relevo' });
+    expect(nuevo.participaDeUnRelevoActivo(B)).toBe(false);
   });
 });
 

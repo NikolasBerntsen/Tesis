@@ -370,7 +370,7 @@ describe('integración — relevos entre drones', () => {
     await a.waitFor((m) => m.type === 'relay_status' && m.relayId === idS && m.estado === 'CANCELADO');
   });
 
-  it('soltar el control de un dron en un relevo: sin resume_patrol si se cae la consola; con resume "last" se cancela', async () => {
+  it('soltar el control de un dron en un relevo nunca manda resume_patrol ni lo cancela; reanudarlo a mano sí', async () => {
     const adm = (await login(srv.base, 'admin', CREDS.admin))!;
     const p = await crearUsuario(srv.base, adm, { username: 'piloto-relevo', canControl: true });
     const piloto = (await login(srv.base, 'piloto-relevo', p.password))!;
@@ -391,10 +391,30 @@ describe('integración — relevos entre drones', () => {
     expect(b.got.some((m) => m.type === 'resume_patrol')).toBe(false);
     expect((await relevoPorApi(id)).estado).toBe('ORDENADO');
 
-    // soltarlo a mano con resume 'last' es una orden de reanudar: cancela
+    // soltarlo a mano tampoco es una orden: la consola pide 'last' (B no tiene
+    // objetivo) y el hub lo suelta igual sin resume_patrol (RELEVOS §3.9)
     const consola2 = await conn(piloto);
+    const liberados = (c: WsClient) => c.got.filter((m) => m.type === 'control_released').length;
     await api(srv.base, `/api/drones/${B}/control`, piloto, { method: 'POST' });
-    await api(srv.base, `/api/drones/${B}/control`, piloto, { method: 'DELETE', body: JSON.stringify({ resume: 'last' }) });
+    const soltar = await api(srv.base, `/api/drones/${B}/control`, piloto, {
+      method: 'DELETE', body: JSON.stringify({ resume: 'last' }),
+    });
+    expect(soltar.status).toBe(200);
+    expect(soltar.body.controlledBy).toBeNull();
+    await b.waitFor(() => liberados(b) === 2);
+    // A, que vuelve por batería con el pedido en curso, tampoco recibe una
+    // reanudación, ni aunque la consola pida un nodo
+    await api(srv.base, `/api/drones/${A}/control`, piloto, { method: 'POST' });
+    await api(srv.base, `/api/drones/${A}/control`, piloto, { method: 'DELETE', body: JSON.stringify({ resume: 1 }) });
+    await a.waitFor(() => liberados(a) === 1);
+    await wait(100);
+    expect(b.got.some((m) => m.type === 'resume_patrol')).toBe(false);
+    expect(a.got.some((m) => m.type === 'resume_patrol')).toBe(false);
+    expect((await relevoPorApi(id)).estado).toBe('ORDENADO');
+
+    // la orden explícita de reanudar sí cuenta: cancela el relevo y le llega a B
+    await api(srv.base, `/api/drones/${B}/control`, piloto, { method: 'POST' });
+    expect((await api(srv.base, `/api/drones/${B}/resume`, piloto, { method: 'POST' })).status).toBe(200);
     await b.waitFor((m) => m.type === 'resume_patrol');
     expect((await relevoPorApi(id)).motivoFin).toBe('orden_del_operador');
     await consola2.close();
