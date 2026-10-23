@@ -345,6 +345,28 @@ export function IconoUbicacion(props: PropsDeIcono) {
   );
 }
 
+/** Un código QR: los tres cuadros de las esquinas y unos módulos sueltos ("Ver QR"). */
+export function IconoQr(props: PropsDeIcono) {
+  return (
+    <Trazo {...props}>
+      <rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1" />
+      <rect x="14" y="3.5" width="6.5" height="6.5" rx="1" />
+      <rect x="3.5" y="14" width="6.5" height="6.5" rx="1" />
+      <path d="M14 14h3M20.5 14v3M14 17.5v3M17.5 20.5h3M17.5 17.5h.01" />
+    </Trazo>
+  );
+}
+
+/** La flecha que vuelve sobre sus pasos: "Restaurar" lo que se dio de baja. */
+export function IconoRestaurar(props: PropsDeIcono) {
+  return (
+    <Trazo {...props}>
+      <path d="M9 14 4 9l5-5" />
+      <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />
+    </Trazo>
+  );
+}
+
 /** Las secciones de la barra, cada una con su ícono. */
 export const ICONO_DE_SECCION = {
   operacion: IconoOperacion,

@@ -102,13 +102,22 @@ samp {
 
 /* Etiqueta grabada: versalitas espaciadas. Es LA marca del sistema. */
 .etiqueta,
-.versalita {
+.versalita,
+.rotulo {
   font-family: var(--fuente-cuerpo);
   font-size: var(--txt-xs);
   text-transform: uppercase;
   letter-spacing: var(--versalita);
   font-weight: 600;
   color: var(--tinta-media);
+}
+/* El rótulo de un dato en una ficha ("BATERÍA", "BASE"): la misma etiqueta,
+   un escalón más chica y más abierta, arriba de un valor en negrita, como el
+   .rotulo del prototipo. */
+.rotulo {
+  font-size: var(--txt-xxs);
+  letter-spacing: .14em;
+  line-height: 1.2;
 }
 
 /* Cifra clave: serif grande, como un número cincelado */

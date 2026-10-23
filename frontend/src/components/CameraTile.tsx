@@ -113,20 +113,20 @@ export default function CameraTile({
       <div className="tile-info">
         <div className="tile-row">
           <EditableName name={drone.displayName} onRename={onRename} />
-          <span className={`estado ${sobreObjetivo(status?.state) ? 'accent' : 'muted'}`}>
+          <span className={`estado pastilla ${sobreObjetivo(status?.state) ? 'accent' : 'muted'}`}>
             {status ? stateLabel(status.state) : 'Sin estado'}
           </span>
         </div>
         <dl className="tile-datos">
           <div>
-            <dt className="etiqueta">Batería</dt>
+            <dt className="rotulo">Batería</dt>
             <dd>
               <strong className={`cifra-chica ${claseBateria}`}>{status ? `${status.battery.toFixed(0)}%` : '—'}</strong>
               {status && <BarraDeBateria nivel={status.battery} clase={claseBateria} />}
             </dd>
           </div>
           <div>
-            <dt className="etiqueta">Señal</dt>
+            <dt className="rotulo">Señal</dt>
             <dd>
               <strong className={`cifra-chica ${claseSenal}`}>{status ? `${status.signalPct}%` : '—'}</strong>
             </dd>
@@ -135,7 +135,7 @@ export default function CameraTile({
               pisaba el rótulo de la esquina. */}
           {pendingAlerts > 0 && (
             <div>
-              <dt className="etiqueta">Alertas pendientes</dt>
+              <dt className="rotulo">Alertas pendientes</dt>
               <dd>
                 <span className="badge-count">{pendingAlerts}</span>
               </dd>

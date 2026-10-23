@@ -6,6 +6,7 @@ import UsersView from './UsersView';
 import { CONSECUENCIA } from './DialogosDeUsuario';
 import { api, buscarUsuarios } from '../api';
 import { AYUDA_DNI } from '../dni';
+import { nombresDeBotones } from '../test/botones';
 import { makeMe, makeUser } from '../test/fixtures';
 import type { RolConsola, UserView } from '../types';
 
@@ -75,10 +76,10 @@ describe('UsersView', () => {
 
     expect(await screen.findByText('oper1')).toBeInTheDocument();
     expect(traerMock).toHaveBeenCalledWith({ incluirEliminados: false, q: '' });
-    expect(screen.getByText('Operador', { selector: 'td' })).toBeInTheDocument();
-    expect(screen.getByText('Supervisor', { selector: 'td' })).toBeInTheDocument();
-    expect(screen.getByText('Administrador', { selector: 'td' })).toBeInTheDocument();
-    expect(screen.getByText('Operador de campo', { selector: 'td' })).toBeInTheDocument();
+    expect(screen.getByText('Operador', { selector: '.rol' })).toBeInTheDocument();
+    expect(screen.getByText('Supervisor', { selector: '.rol' })).toBeInTheDocument();
+    expect(screen.getByText('Administrador', { selector: '.rol' })).toBeInTheDocument();
+    expect(screen.getByText('Operador de campo', { selector: '.rol' })).toBeInTheDocument();
     expect(screen.getByText('(vos)')).toBeInTheDocument();
     // El operador de campo no pilotea drones: el permiso no está suspendido, no
     // corresponde, y el backend rechaza con un 400 cualquier intento de darlo.
@@ -1139,8 +1140,8 @@ describe('UsersView — carga, vacío y tabla', () => {
     montar();
     await screen.findByText('oper1');
     const grupo = within(fila('oper1')).getByRole('group', { name: 'Acciones de oper1' });
-    expect(within(grupo).getAllByRole('button').map((b) => b.textContent)).toEqual([
-      'Editar',
+    expect(nombresDeBotones(within(grupo).getAllByRole('button'))).toEqual([
+      'Editar a oper1',
       'Regenerar contraseña',
       'Eliminar',
     ]);
@@ -1155,5 +1156,44 @@ describe('UsersView — carga, vacío y tabla', () => {
     expect(within(cabecera).getByRole('heading', { name: 'Usuarios' })).toBeInTheDocument();
     expect(within(cabecera).getByRole('searchbox', { name: 'Buscar usuarios' })).toBeInTheDocument();
     expect(within(cabecera).getAllByRole('button').map((b) => b.textContent)).toEqual(['Ver eliminados', 'Nuevo usuario']);
+  });
+});
+
+describe('UsersView — la tabla con el aspecto del prototipo', () => {
+  it('el rol va en un sello, el del administrador en oro, y el nombre en negrita', async () => {
+    servir([ADMIN1, makeUser({ username: 'oper1', fullName: 'Oscar Operador' })]);
+    montar();
+    await screen.findByText('oper1');
+    expect(within(fila('admin1')).getByText('Administrador')).toHaveClass('rol', 'admin');
+    expect(within(fila('oper1')).getByText('Operador')).toHaveClass('rol');
+    expect(within(fila('oper1')).getByText('Operador')).not.toHaveClass('admin');
+    expect(within(fila('oper1')).getByRole('cell', { name: 'Oscar Operador' })).toHaveClass('celda-nombre');
+  });
+
+  it('el permiso y el estado llevan su punto, como el resto de los estados de la consola', async () => {
+    servir([ADMIN1, makeUser({ username: 'oper1', canControl: false })]);
+    montar();
+    await screen.findByText('oper1');
+    expect(within(fila('oper1')).getByText('Suspendido')).toHaveClass('estado', 'bad');
+    expect(within(fila('admin1')).getByText('Autorizado')).toHaveClass('estado', 'ok');
+  });
+
+  it('la cabecera cuenta las cuentas y las activas; con una búsqueda, las que coinciden', async () => {
+    servir([ADMIN1, makeUser({ username: 'oper1', active: false })], [makeUser({ username: 'oper1', active: false })]);
+    const { container } = montar();
+    await screen.findByText('oper1');
+    const subtitulo = () => container.querySelector('.vista-subtitulo');
+    expect(subtitulo()).toHaveTextContent('2 cuentas · 1 activa');
+
+    await userEvent.type(screen.getByRole('searchbox', { name: 'Buscar usuarios' }), 'oper');
+    await waitFor(() => expect(subtitulo()).toHaveTextContent('1 coincide con la búsqueda'));
+  });
+
+  it('Editar y Eliminar de una fila son el lápiz y el tacho, con su nombre para el lector', async () => {
+    servir([ADMIN1, makeUser({ username: 'oper1' })]);
+    montar();
+    await screen.findByText('oper1');
+    expect(within(fila('oper1')).getByRole('button', { name: 'Editar a oper1' })).toHaveClass('icono-boton', 'cuadrado');
+    expect(within(fila('oper1')).getByRole('button', { name: 'Eliminar' })).toHaveClass('icono-boton', 'dismiss');
   });
 });

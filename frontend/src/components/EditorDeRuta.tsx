@@ -5,6 +5,7 @@ import { CENTRO_POR_DEFECTO, TRAZO, etiquetaDeNodo, iconoBase, useFondo, vestirA
 import type { PatrolRoute, Waypoint } from '../types';
 import ConmutadorDeFondo from './ConmutadorDeFondo';
 import IconoCerrar from './IconoCerrar';
+import { IconoChevronAbajo, IconoChevronArriba, IconoTacho } from './Iconos';
 import Modal from './Modal';
 
 /** Un nodo con identidad estable, para poder arrastrarlo sin que se confunda. */
@@ -285,25 +286,38 @@ export default function EditorDeRuta({
                   <span className="muted mono nodo-coord">
                     {n.lat.toFixed(4)}, {n.lon.toFixed(4)}
                   </span>
-                  <button type="button" className="chico" disabled={i === 0} onClick={() => mover(i, i - 1)} aria-label={`Subir el nodo ${i + 1}`}>
-                    ↑
+                  {/* Subir, bajar y quitar: los íconos de la consola (las flechas
+                      de texto cambiaban de dibujo según la tipografía). El
+                      nombre de cada uno, con el número del nodo, va en
+                      aria-label; el title lo muestra bajo el mouse. */}
+                  <button
+                    type="button"
+                    className="icono-boton cuadrado"
+                    disabled={i === 0}
+                    onClick={() => mover(i, i - 1)}
+                    aria-label={`Subir el nodo ${i + 1}`}
+                    title="Subir"
+                  >
+                    <IconoChevronArriba />
                   </button>
                   <button
                     type="button"
-                    className="chico"
+                    className="icono-boton cuadrado"
                     disabled={i === nodos.length - 1}
                     onClick={() => mover(i, i + 1)}
                     aria-label={`Bajar el nodo ${i + 1}`}
+                    title="Bajar"
                   >
-                    ↓
+                    <IconoChevronAbajo />
                   </button>
                   <button
                     type="button"
-                    className="chico dismiss"
+                    className="icono-boton cuadrado dismiss"
                     onClick={() => setNodos((ns) => ns.filter((_, j) => j !== i))}
                     aria-label={`Quitar el nodo ${i + 1}`}
+                    title="Quitar"
                   >
-                    Quitar
+                    <IconoTacho />
                   </button>
                 </li>
               ))}

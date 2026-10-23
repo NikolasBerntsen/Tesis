@@ -95,6 +95,8 @@
   .modal-cuerpo { padding: 0; overflow: visible; }
 
   .card,
+  .ficha,
+  .ruta-item,
   .qr-sticker {
     background: var(--papel) !important;
     background-image: none !important;

@@ -118,36 +118,158 @@
 
 /* ---------------------------------------------------------------------------
    LISTAS DE GESTIÓN
+   Drones y Bases son fichas, como en el prototipo. Usuarios sigue en tabla:
+   sus columnas (rol, DNI, permiso) se comparan de una fila a la otra. Rutas
+   es un catálogo al lado de su mapa (nuevos.css).
+
+   <ul class="fichas" aria-label="…">
+     <li><article class="ficha [eliminada]" aria-labelledby="…">
+       <header class="ficha-cabecera">
+         <div class="ficha-titulos"><h3 class="ficha-nombre">Halcón 1</h3><p class="ficha-sub">…</p></div>
+         <span class="estado pastilla ok">En línea</span>
+       </header>
+       <dl class="ficha-datos"><div><dt class="rotulo">Base</dt><dd>…</dd></div> …</dl>
+       <div class="ficha-acciones" role="group" aria-label="Acciones de …"> … </div>
+     </article></li>
+   </ul>
+
    <table class="tabla tabla-gestion"> … <td class="barra-acciones">
      <div class="acciones-fila" role="group" aria-label="Acciones de …">
-       <button class="chico">Editar</button> … <button class="chico dismiss">Eliminar</button>
+       <button class="icono-boton cuadrado" aria-label="Editar">✎</button> …
      </div></td>
-   Las acciones de cada fila van en un solo grupo compacto y en el mismo
-   orden en todas las vistas: Editar primero, Eliminar al final.
+
+   Las acciones van en un solo grupo y en el mismo orden en todas las vistas:
+   Editar primero, Eliminar al final. Editar y Eliminar son el lápiz y el
+   tacho (AccionesDeGestion.tsx); lo demás va escrito.
 ------------------------------------------------------------------------------ */
+.fichas {
+  display: grid;
+  /* Como la grilla de cámaras: en un teléfono la columna toma el ancho que
+     haya, en vez de salirse por el costado. */
+  grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
+  gap: var(--e-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* La ficha llena su celda: en una fila de la grilla todas miden lo mismo, y
+   las acciones quedan a la misma altura aunque una tenga un dato más. */
+.fichas > li {
+  display: flex;
+  min-width: 0;
+}
+.ficha {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-4);
+}
+.ficha-cabecera {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--e-2) var(--e-3);
+}
+/* Los títulos se quedan con el ancho y la pastilla, a la derecha: un nombre
+   largo parte renglón al lado de ella, en vez de mandarla abajo del modelo.
+   Sólo en una ficha muy angosta la pastilla baja a su propia línea. */
+.ficha-titulos {
+  flex: 1 1 10rem;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+/* El nombre grabado en Cinzel, como la marca: es lo que se busca en la
+   grilla. Uno largo ("Carancho del Sur Grande") parte renglón, no se sale. */
+.ficha-nombre {
+  font-family: var(--fuente-marca);
+  font-size: var(--txt-lg);
+  font-weight: 600;
+  letter-spacing: .04em;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+/* Debajo del nombre, el dato que lo acompaña: el modelo del dron, el lugar
+   de la base con su alfiler. */
+.ficha-sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--tinta-media);
+  font-size: var(--txt-sm);
+  font-variant-numeric: tabular-nums lining-nums;
+}
+.ficha-sub > svg {
+  flex: none;
+  color: var(--oro-texto);
+}
+.ficha-datos {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--e-4) var(--e-5);
+  margin: 0;
+}
+.ficha-dato-ancho { grid-column: 1 / -1; }
+/* El valor en negrita debajo de su rótulo, como el .valor del prototipo. */
+.ficha-datos dd {
+  margin: 6px 0 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+/* Las acciones al pie, detrás de un hilo de oro y siempre abajo de todo. Las
+   escritas se reparten el ancho; el lápiz y el tacho son cuadrados. Al alto
+   táctil: en la tableta de campo se tocan con el dedo. */
+.ficha-acciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--e-2);
+  margin-top: auto;
+  padding-top: var(--e-4);
+  border-top: 1px solid var(--veta);
+}
+.ficha-acciones > button { min-height: var(--alto-tactil); }
+.ficha-acciones > button:not(.icono-boton) { flex: 1 1 auto; }
+.ficha-acciones > .icono-boton {
+  width: var(--alto-tactil);
+  height: var(--alto-tactil);
+}
+/* Una baja: el nombre tachado y en la tinta apagada, como la fila eliminada
+   de una tabla (llega a AA sobre los paneles, contraste.test.ts). */
+.ficha.eliminada .ficha-nombre {
+  color: var(--tinta-suave);
+  text-decoration: line-through;
+}
+
 .acciones-fila {
   display: inline-flex;
   align-items: center;
   gap: var(--e-2);
 }
+/* Los botones escritos de una fila miden lo mismo que el lápiz y el tacho de
+   al lado: con su alto de "chico", "Regenerar contraseña" quedaba como una
+   tira más baja entre dos cuadrados. */
+.acciones-fila > button { min-height: var(--alto-control); }
 .tabla th.columna-acciones { text-align: right; }
 
-/* Al pasar por una fila, la veta se marca en el borde izquierdo: la misma
-   seña que la fila seleccionada, pero en piedra y no en oro. */
+/* Al pasar por una fila, el velo de oro de la fila que se abre (el mismo del
+   Registro) y la veta marcada en el borde izquierdo: la seña de la fila
+   seleccionada, pero en piedra y no en oro. */
 .tabla-gestion tbody tr {
   transition: background-color var(--transicion), box-shadow var(--transicion);
 }
 .tabla-gestion tbody tr:hover,
 .tabla-gestion tbody tr:focus-within {
-  background: var(--realce-70);
+  background: var(--oro-velo-fila);
   box-shadow: inset var(--filo) 0 0 0 var(--veta-fuerte);
 }
-/* La seleccionada (rutas) conserva su filo de oro aunque el mouse pase. */
-.tabla-gestion tbody tr.seleccionada:hover,
-.tabla-gestion tbody tr.seleccionada:focus-within {
-  background: var(--oro-velo);
-  box-shadow: inset var(--filo) 0 0 0 var(--oro);
-}
+/* En un teléfono la tabla no se aprieta hasta partir cada celda en una
+   palabra por renglón: conserva su ancho y scrollea de costado adentro de su
+   envoltorio (primitivos.css), sin mover la página. */
+.tabla-gestion { min-width: 720px; }
 
 /* Estado vacío con guía: el cartel de siempre y, debajo, qué hacer. */
 .vacio-guia .vacio { padding-bottom: var(--e-2); }

@@ -94,12 +94,14 @@
 }
 
 /* Un solo alto para todo lo que vive en la cabecera: antes "Ver eliminados",
-   "Nuevo dron" y el buscador medían 27, 25 y 35 px en la misma fila. El ícono
-   redondo ya mide --alto-control y no se toca. */
+   "Nuevo dron" y el buscador medían 27, 25 y 35 px en la misma fila. Es el
+   alto táctil, como los .btn del prototipo: "Nuevo dron", los filtros y el
+   buscador se tocan con el dedo en la tableta de campo, igual que "Cámaras" y
+   "Mapa". El ícono redondo de al lado (actualizar) mide lo mismo. */
 .vista-cabecera button:not(.icono-boton) {
-  min-height: var(--alto-control);
+  min-height: var(--alto-tactil);
   padding-block: 0;
-  padding-inline: 14px;
+  padding-inline: 16px;
   /* En versalitas, como "Cámaras" y "Mapa" del prototipo: en la cabecera son
      rótulos de la vista, no frases. */
   font-size: var(--txt-xs);
@@ -107,12 +109,14 @@
   letter-spacing: .1em;
   text-transform: uppercase;
 }
-/* "Cámaras / Mapa" es lo único de la cabecera de Operación y se toca con el
-   dedo en la tableta de campo: va al alto táctil, con su ícono y un ancho
-   mínimo común, para que las dos teclas midan lo mismo y el oro de la elegida
-   no haga saltar a la otra. */
+.vista-cabecera .icono-boton {
+  width: var(--alto-tactil);
+  height: var(--alto-tactil);
+}
+/* "Cámaras / Mapa" es lo único de la cabecera de Operación: con su ícono y un
+   ancho mínimo común, para que las dos teclas midan lo mismo y el oro de la
+   elegida no haga saltar a la otra. */
 .vista-cabecera .view-switch button {
-  min-height: var(--alto-tactil);
   min-width: 150px;
   padding-inline: 18px;
   gap: 10px;
@@ -123,7 +127,7 @@
 }
 .vista-cabecera input,
 .vista-cabecera select {
-  height: var(--alto-control);
+  height: var(--alto-tactil);
   padding-block: 0;
 }
 
@@ -314,12 +318,18 @@
 }
 
 /* Una recarga con la lista ya a la vista no la saca: la apaga un poco
-   mientras llega la nueva. Así no salta a un cartel y de vuelta. */
+   mientras llega la nueva. Así no salta a un cartel y de vuelta. Vale igual
+   para una tabla, para las fichas de Drones y Bases y para el catálogo de
+   rutas. */
 .tabla-envoltorio,
+.fichas,
+.lista-rutas,
 .vista-alta-cuerpo > .log {
   transition: opacity var(--transicion);
 }
 .tabla-envoltorio[aria-busy='true'],
+.fichas[aria-busy='true'],
+.lista-rutas[aria-busy='true'],
 .vista-alta-cuerpo[aria-busy='true'] > .log {
   opacity: .6;
 }
@@ -396,6 +406,9 @@
     animation: none;
   }
   .tabla-envoltorio,
+  .fichas,
+  .lista-rutas,
+  .ruta-item,
   .vista-alta-cuerpo > .log,
   .fila-elegir {
     transition: none;

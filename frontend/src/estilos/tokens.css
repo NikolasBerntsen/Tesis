@@ -292,13 +292,14 @@
   --duracion-aviso: 4500ms;
 
   /* --- Controles -------------------------------------------------------- */
-  /* Alto común de lo que vive en la cabecera de una vista (buscador, "Ver
-     eliminados", "Nuevo …", el ícono de actualizar): antes cada uno traía su
-     relleno y en la misma fila había tres altos distintos. Es el mismo del
-     .icono-boton redondo, que no se puede estirar. */
+  /* Alto de un control chico: el .icono-boton redondo, que no se puede
+     estirar, y los botones de una fila de tabla (el lápiz, el tacho, "Regenerar
+     contraseña"), que miden lo mismo para no quedar escalonados. */
   --alto-control: 34px;
-  /* Los controles de la barra de arriba (la campana, el tema, Salir) se
-     tocan con el dedo en la tableta de campo: 44 px es el mínimo táctil. */
+  /* Lo que se toca con el dedo en la tableta de campo: la barra de arriba (la
+     campana, el tema, Salir), la cabecera de cada vista (buscador, filtros,
+     "Nuevo …", actualizar) y las acciones de una ficha. 44 px es el mínimo
+     táctil. */
   --alto-tactil: 44px;
   /* Ancho mínimo del botón de la acción en el pie de un diálogo: "Guardar
      cambios" → "Guardando…" o "Eliminar" → "Eliminando…" no cambian el ancho

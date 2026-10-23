@@ -168,8 +168,13 @@ sobreSuperficies(
 // La sección abierta de la barra: el velo dorado, sin el fondo del botón.
 sobreSuperficies('sección abierta de la barra', '--oro-texto', ['--cara-activa'], TEXTO, PANELES);
 pares.push({ donde: 'texto seleccionado (::selection)', texto: '--tinta-sobre-oro', base: '--oro-claro', minimo: TEXTO });
-// Pestañas del registro: el velo de oro sube desde el pie sobre la tarjeta.
-sobreSuperficies('pestaña activa del registro', '--tinta', ['--oro-velo']);
+// Los filtros (las categorías del Registro, «Ver eliminados»): apagados son
+// la tinta media sobre lo que tengan atrás, que ya se mide arriba; encendidos,
+// el oro de lo presionado, sobre el lienzo de la cabecera y sobre un panel.
+sobreSuperficies('filtro encendido (categoría del Registro, «Ver eliminados»)', '--oro-texto', [
+  '--cara-activa',
+  '--boton-fondo',
+]);
 
 // --- Deshabilitados: apagados pero legibles ----------------------------------------
 // En su hueco (mármol 2) alcanza con 3:1: WCAG exime lo deshabilitado, pero
@@ -190,34 +195,53 @@ sobreSuperficies('fila eliminada elegida', '--tinta-media', ['--oro-velo']);
 sobreSuperficies('fila eliminada bajo el mouse', '--tinta-media', ['--realce-70']);
 
 // --- El Registro: filas que se abren con un clic ------------------------------------
-// Bajo el mouse la fila toma su velo de oro, y encima quedan las pastillas de
-// categoría, en texto chico sobre su propio velo. Las filas viven en la
-// tarjeta del Registro (un panel) y en el historial de un dron, que es un
-// pop-up (el panel firme): se miden sobre los dos.
-const PASTILLAS_DEL_REGISTRO: [string, string, string][] = [
-  ['.cat-drone', '--info', '--info-velo'],
-  ['.cat-sistema', '--ok-texto', '--ok-velo'],
-  ['.cat-usuarios', '--oro-texto', '--oro-velo'],
+// Bajo el mouse la fila toma su velo de oro, y encima quedan los sellos de
+// categoría, en texto chico. Los sellos no tienen relleno propio (un velo de
+// otro color encima del de la fila era un parche): su tinta va directo sobre
+// el velo de la fila. Las filas viven en la tarjeta del Registro (un panel) y
+// en el historial de un dron, que es un pop-up (el panel firme): se miden
+// sobre los dos.
+const SELLOS_DEL_REGISTRO: [string, string][] = [
+  ['.cat-drone', '--info'],
+  ['.cat-sistema', '--ok-texto'],
+  ['.cat-usuarios', '--oro-texto'],
 ];
 const EN_LA_TARJETA = [...PANELES, ...FIRMES];
-const filaDelRegistro = (donde: string, texto: string, velo: string[]) => {
+const filaDelRegistro = (donde: string, texto: string) => {
   for (const s of EN_LA_TARJETA) {
     pares.push({
       donde: `${donde} en una fila del Registro bajo el mouse, sobre ${s.nombre}`,
       texto,
-      sobre: [...velo, '--oro-velo-fila', ...s.sobre],
+      sobre: ['--oro-velo-fila', ...s.sobre],
       base: s.base,
       minimo: TEXTO,
     });
   }
 };
-for (const [pastilla, texto, velo] of PASTILLAS_DEL_REGISTRO) filaDelRegistro(pastilla, texto, [velo]);
-filaDelRegistro('hora y tipo de evento', '--tinta-media', []);
+for (const [sello, texto] of SELLOS_DEL_REGISTRO) filaDelRegistro(sello, texto);
+filaDelRegistro('hora y tipo de evento', '--tinta-media');
 // El historial de un dron resalta los tipos graves y los avisos, y su fila
 // abierta lleva el mismo velo que la del Registro bajo el mouse.
-filaDelRegistro('tipo de evento grave (.event-type.bad)', '--peligro', []);
-filaDelRegistro('tipo de evento de aviso (.event-type.warn)', '--alerta-texto', []);
-filaDelRegistro('mensaje del evento', '--tinta', []);
+filaDelRegistro('tipo de evento grave (.event-type.bad)', '--peligro');
+filaDelRegistro('tipo de evento de aviso (.event-type.warn)', '--alerta-texto');
+filaDelRegistro('mensaje del evento', '--tinta');
+
+// --- La tabla de Usuarios: el mismo velo de oro bajo el mouse --------------------------
+// La fila de gestión toma el velo de la fila del Registro, y encima va todo lo
+// que la tabla escribe: el nombre, el DNI y el rol (el del administrador en
+// oro), el permiso autorizado o suspendido, la cuenta activa o desactivada y
+// la fila de una cuenta eliminada (que bajo el mouse sube a la tinta media).
+// La tabla vive en una tarjeta: un panel.
+const EN_LA_FILA_DE_GESTION: [string, string][] = [
+  ['nombre, usuario y DNI', '--tinta'],
+  ['rol común y cuenta desactivada', '--tinta-media'],
+  ['rol del administrador (.rol.admin)', '--oro-texto'],
+  ['permiso autorizado y cuenta activa', '--ok-texto'],
+  ['permiso suspendido', '--peligro'],
+];
+for (const [donde, texto] of EN_LA_FILA_DE_GESTION) {
+  sobreSuperficies(`${donde} en una fila de Usuarios bajo el mouse`, texto, ['--oro-velo-fila'], TEXTO, PANELES);
+}
 
 // --- La marca de la barra -------------------------------------------------------------
 // Va suelta sobre la piedra, sin panel: la protege su halo (--velo-marca), que
@@ -333,8 +357,9 @@ describe('los pares medidos son los que pintan las hojas', () => {
   it.each([
     ['fila elegida', primitivos, '.tabla tbody tr.seleccionada', 'background', 'var(--oro-velo)'],
     ['fila bajo el mouse', primitivos, '.tabla tbody tr:hover', 'background', 'var(--realce-70)'],
-    ['fila de gestión bajo el mouse', modales, '.tabla-gestion tbody tr:hover', 'background', 'var(--realce-70)'],
-    ['fila de gestión con el foco adentro', modales, '.tabla-gestion tbody tr:focus-within', 'background', 'var(--realce-70)'],
+    ['fila de gestión bajo el mouse', modales, '.tabla-gestion tbody tr:hover', 'background', 'var(--oro-velo-fila)'],
+    ['fila de gestión con el foco adentro', modales, '.tabla-gestion tbody tr:focus-within', 'background', 'var(--oro-velo-fila)'],
+    ['rol del administrador', primitivos, '.rol.admin', 'color', 'var(--oro-texto)'],
     ['fila eliminada en reposo', primitivos, '.tabla tbody tr.fila-eliminada td', 'color', 'var(--tinta-suave)'],
     [
       'fila eliminada bajo el mouse, con el foco o elegida',
@@ -348,6 +373,8 @@ describe('los pares medidos son los que pintan las hojas', () => {
     // Las superficies: lo que se mide como panel, panel firme y lienzo.
     ['tarjeta', primitivos, '.card', 'background-color', 'var(--panel)'],
     ['cara de la tarjeta', primitivos, '.card', 'background-image', 'var(--piedra-cara)'],
+    ['ficha de un dron o de una base', primitivos, '.ficha', 'background-color', 'var(--panel)'],
+    ['placa de una ruta', primitivos, '.ruta-item', 'background-color', 'var(--panel)'],
     ['teja de cámara', vistas, '.camera-tile', 'background-color', 'var(--panel)'],
     ['placa de ingreso', layout, '.login-card', 'background-color', 'var(--panel)'],
     ['barra de secciones', layout, '.topbar::before', 'background-color', 'var(--panel)'],
@@ -367,6 +394,11 @@ describe('los pares medidos son los que pintan las hojas', () => {
     ['Descartar en una decisión', primitivos, '.alert-actions button.dismiss', 'background-color', 'var(--descarta-fondo)'],
     ['tinta de Descartar', primitivos, '.alert-actions button.dismiss', 'color', 'var(--descarta-texto)'],
     ['sección abierta de la barra', layout, '.topnav button.active', 'color', 'var(--oro-texto)'],
+    // Los filtros encendidos: el oro de lo presionado sobre el fondo del botón.
+    ['categoría elegida del Registro', nuevos, ".tabs button[aria-selected='true']", 'color', 'var(--oro-texto)'],
+    ['velo de la categoría elegida', nuevos, ".tabs button[aria-selected='true']", 'background-image', 'var(--cara-activa)'],
+    ['fondo de la categoría elegida', nuevos, ".tabs button[aria-selected='true']", 'background-color', 'var(--boton-fondo)'],
+    ['«Ver eliminados» encendido', nuevos, '.toggle-eliminados.activo', 'color', 'var(--oro-texto)'],
     // Las fichas de una alerta: la clase en la placa de Descartar, el dron en oro.
     ['ficha de la clase', primitivos, '.chip.rojo', 'background-color', 'var(--descarta-fondo)'],
     ['tinta de la ficha de la clase', primitivos, '.chip.rojo', 'color', 'var(--descarta-texto)'],
@@ -401,9 +433,19 @@ describe('los pares medidos son los que pintan las hojas', () => {
     }
   });
 
-  it.each(PASTILLAS_DEL_REGISTRO)('%s: la pastilla del Registro es %s sobre %s', (pastilla, texto, velo) => {
-    expect(valorDe(primitivos, pastilla, 'color')).toBe(`var(${texto})`);
-    expect(valorDe(primitivos, pastilla, 'background')).toBe(`var(${velo})`);
+  it.each(SELLOS_DEL_REGISTRO)('%s: el sello del Registro es %s, sin relleno propio', (sello, texto) => {
+    expect(valorDe(primitivos, sello, 'color')).toBe(`var(${texto})`);
+    // Si una categoría volviera a pintar su velo, la tinta se mediría sobre
+    // un fondo que no es el que se ve.
+    expect(valorDe(primitivos, sello, 'background')).toBeNull();
+    expect(valorDe(primitivos, sello, 'background-color')).toBeNull();
+  });
+
+  it('los sellos y las pastillas de estado van sin relleno: su tinta apoya en la fila o en el panel', () => {
+    expect(valorDe(primitivos, '.cat-badge', 'background')).toBe('none');
+    expect(valorDe(primitivos, '.rol', 'background')).toBe('none');
+    expect(valorDe(primitivos, '.estado.pastilla', 'background')).toBeNull();
+    expect(valorDe(primitivos, '.estado.pastilla', 'background-color')).toBeNull();
   });
 });
 

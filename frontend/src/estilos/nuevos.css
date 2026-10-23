@@ -251,9 +251,12 @@
   display: flex;
   gap: var(--e-2);
 }
+/* Del alto de los botones de una fila: los de "chico" quedaban como tiras
+   más bajas que el sello y el texto de al lado. */
 .paginador-botones button {
   min-width: 34px;
-  padding: 4px 10px;
+  min-height: var(--alto-control);
+  padding: 4px 12px;
   font-size: var(--txt-sm);
   font-variant-numeric: tabular-nums;
 }
@@ -305,6 +308,11 @@
 }
 .icono-boton.chico { width: 26px; height: 26px; }
 .icono-boton.chico svg { width: 14px; height: 14px; }
+/* Cuadrado: el .icono-btn del prototipo, el de las acciones de una ficha o
+   de una fila (el lápiz, el tacho) y de los nodos del editor de rutas. Al
+   lado de botones escritos, que son rectángulos, uno redondo se leía como
+   otra clase de control. */
+.icono-boton.cuadrado { border-radius: var(--radio-chico); }
 .girando svg { animation: girar 900ms linear infinite; }
 @keyframes girar { to { transform: rotate(360deg); } }
 
@@ -373,80 +381,48 @@
 .switch-texto { user-select: none; }
 
 /* ---------------------------------------------------------------------------
-   TOGGLE-ELIMINADOS — "Ver eliminados / Ocultar eliminados".
-   Es un botón normal; con .activo queda con filo dorado.
-   <button class="toggle-eliminados activo">Ocultar eliminados</button>
------------------------------------------------------------------------------- */
-.toggle-eliminados {
-  font-size: var(--txt-sm);
-  padding: 5px 13px;
-  color: var(--tinta-media);
-  background: transparent;
-  background-image: none;
-  border-color: var(--veta);
-  box-shadow: none;
-}
-.toggle-eliminados:hover:not(:disabled) { border-color: var(--oro); color: var(--tinta); }
-/* Encendido lleva el oro de lo presionado (primitivos.css): velo, filo y
-   tinta de oro. */
-.toggle-eliminados.activo {
-  color: var(--oro-texto);
-  font-weight: 600;
-  border-color: var(--oro);
-  background-image: var(--cara-activa);
-  box-shadow: var(--resplandor-oro);
-}
-
-/* ---------------------------------------------------------------------------
-   TABS — pestañas del registro (Todos / Drones / Usuarios / Sistema).
+   FILTROS — fichas redondas con filo, como los .filtro del prototipo.
+   <button class="toggle-eliminados [activo]" aria-pressed="…">Ver eliminados</button>
    <div class="tabs" role="tablist">
      <button role="tab" aria-selected="true" class="active">Todos</button> … </div>
-   El subrayado dorado marca la pestaña activa (filo, no relleno).
+   Los dos son lo mismo a la vista: un filtro de la lista, apagado o
+   encendido. Encendido lleva el oro de lo presionado (primitivos.css): velo,
+   filo y tinta de oro, con su resplandor. Las categorías del Registro siguen
+   siendo pestañas para el lector, con su panel abajo.
 ------------------------------------------------------------------------------ */
 .tabs {
   display: flex;
-  gap: var(--e-1);
-  border-bottom: 1px solid var(--veta);
+  flex-wrap: wrap;
+  gap: var(--e-2);
 }
+.toggle-eliminados,
 .tabs button {
-  position: relative;
-  padding: 8px 16px 10px;
-  border: 0;
-  border-radius: var(--radio-chico) var(--radio-chico) 0 0;
+  padding: 5px 16px;
+  border: 1px solid var(--veta);
+  border-radius: 999px;
+  color: var(--tinta-media);
   background: transparent;
   background-image: none;
   box-shadow: none;
-  color: var(--tinta-media);
-  font-size: var(--txt-sm);
-  text-transform: uppercase;
-  letter-spacing: var(--versalita);
+  font-size: var(--txt-xs);
   font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
 }
-.tabs button:hover:not(:disabled) {
+.toggle-eliminados:not(.activo):hover:not(:disabled),
+.tabs button:not([aria-selected='true']):hover:not(:disabled) {
   color: var(--tinta);
-  background: var(--realce-70);
+  border-color: var(--veta-fuerte);
+  background-image: none;
 }
+.toggle-eliminados.activo,
 .tabs button.active,
 .tabs button[aria-selected='true'] {
-  color: var(--tinta);
-  border-color: transparent;
-  box-shadow: none;
-  background: linear-gradient(180deg, transparent 40%, var(--oro-velo) 100%);
-}
-/* Subrayado de lámina: monta sobre la línea de veta del contenedor. La pestaña
-   no lleva el filo ni el resplandor del botón dorado (button.active): el oro
-   es este subrayado. */
-.tabs button.active::after,
-.tabs button[aria-selected='true']::after {
-  content: '';
-  position: absolute;
-  inset: auto 6px -1px 6px;
-  height: var(--filo);
-  padding: 0;
-  border-radius: 2px;
-  background: var(--oro-lamina);
-  -webkit-mask: none;
-  mask: none;
+  color: var(--oro-texto);
+  border-color: var(--oro);
+  background-color: var(--boton-fondo);
+  background-image: var(--cara-activa);
+  box-shadow: var(--resplandor-oro);
 }
 
 /* ---------------------------------------------------------------------------
@@ -466,6 +442,13 @@
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+/* En un teléfono (o en una ventana muy baja) la barra y la cabecera apilan
+   sus fichas y al cuerpo no le quedaba alto: el Registro era un panel vacío
+   con su paginador. Ahí se lee como cualquier otra vista: el lienzo vuelve a
+   medir lo que su contenido, la lista crece entera y scrollea la página. */
+@media (max-width: 640px), (max-height: 600px) {
+  .page-main:has(> .vista-alta) { min-height: auto; }
 }
 
 /* ---------------------------------------------------------------------------
@@ -651,17 +634,88 @@
 }
 .lista-bases button:hover { background: var(--oro-velo); }
 
-/* --- Rutas: catálogo y editor ---------------------------------------------- */
+/* --- Rutas: catálogo y editor ----------------------------------------------
+   <div class="rutas-cuerpo">
+     <ul class="lista-rutas"><li class="ruta-item [seleccionada] [eliminada]">
+       <div class="ruta-item-cabecera"><button class="fila-elegir ruta-item-nombre"/> acciones</div>
+       <p class="ruta-item-detalle"><span class="ruta-item-nodos">4 nodos</span> · descripción</p>
+     </li></ul>
+     <section class="card"> el mapa del recorrido </section>
+   </div>
+   Como en el prototipo: el catálogo a la izquierda, cada ruta en su placa, y
+   el recorrido de la elegida en su panel a la derecha. */
 .rutas-cuerpo {
   display: grid;
   grid-template-columns: minmax(280px, 4fr) 6fr;
-  gap: var(--e-4);
+  gap: var(--e-5);
   align-items: start;
 }
 @media (max-width: 1000px) {
-  .rutas-cuerpo { grid-template-columns: 1fr; }
+  .rutas-cuerpo { grid-template-columns: minmax(0, 1fr); }
 }
-.rutas-cuerpo .tabla tbody tr { cursor: pointer; }
+.lista-rutas {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* La placa es la del panel (primitivos.css), con el hilo más fino en reposo:
+   el filo fuerte queda para el mouse y el de oro, para la elegida. */
+.ruta-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-2);
+  padding: var(--e-4) 18px;
+  border-color: var(--veta);
+  cursor: pointer;
+  transition: border-color var(--transicion), box-shadow var(--transicion);
+}
+.ruta-item:hover { border-color: var(--veta-fuerte); }
+/* La que se dibuja en el mapa: el filo de oro por dentro y por fuera, con el
+   resplandor de lo que está abierto (la sección de la barra). */
+.ruta-item.seleccionada,
+.ruta-item.seleccionada:hover {
+  border-color: var(--oro);
+  box-shadow: inset 0 0 0 1px var(--oro), var(--resplandor-oro);
+}
+.ruta-item-cabecera {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--e-3);
+  min-height: var(--alto-control);
+}
+/* El nombre en Cinzel, como el de una ficha. `.fila-elegir` (pulido.css) le
+   hace heredar el cuerpo y el peso: por eso va con la placa delante. */
+.ruta-item .ruta-item-nombre {
+  min-width: 0;
+  font-family: var(--fuente-marca);
+  font-size: var(--txt-md);
+  font-weight: 600;
+  letter-spacing: .04em;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.ruta-item-detalle {
+  margin: 0;
+  color: var(--tinta-media);
+  font-size: var(--txt-sm);
+  line-height: 1.45;
+}
+.ruta-item-nodos {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums lining-nums;
+  white-space: nowrap;
+}
+/* Una ruta eliminada (con «Ver eliminadas»): el nombre tachado y apagado; si
+   es la elegida, en la tinta media, como la fila eliminada de una tabla. */
+.ruta-item.eliminada .ruta-item-nombre {
+  color: var(--tinta-suave);
+  text-decoration: line-through;
+}
+.ruta-item.eliminada.seleccionada .ruta-item-nombre { color: var(--tinta-media); }
 
 .editor-ruta { display: flex; flex-direction: column; gap: var(--e-3); }
 .editor-ruta-cuerpo {
@@ -721,6 +775,12 @@
 .nodo-orden { font-weight: 700; text-align: center; }
 .nodo-coord { font-size: var(--txt-xs); }
 .nodo-apodo, .nodo-alt { padding: 4px 6px; font-size: var(--txt-sm); }
+/* Subir, bajar y quitar: cuadrados del alto de los campos de al lado, para
+   que la fila no crezca y la lista siga mostrando cinco nodos. */
+.lista-nodos .icono-boton {
+  width: 30px;
+  height: 30px;
+}
 @media (max-width: 700px) {
   .nodos-encabezado { display: none; }
   .lista-nodos li { grid-template-columns: 26px 1fr auto; }

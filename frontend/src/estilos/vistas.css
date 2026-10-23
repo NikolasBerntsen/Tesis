@@ -259,7 +259,7 @@
   display: grid;
   grid-template-columns: 84px 180px 1fr;
   gap: var(--e-3);
-  padding: 8px 6px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--veta);
   align-items: baseline;
   transition: background-color var(--transicion);
@@ -269,10 +269,35 @@
 .log-encabezado { border-bottom-color: var(--veta-fuerte); }
 .log-row:last-child { border-bottom: none; }
 .log-row:hover { background: var(--realce-70); }
-.log-row-general { grid-template-columns: 150px 88px 180px 1fr; }
-/* La categoría es una pastilla: en la celda de la grilla se estiraba a los
-   88 px de la columna y se leía como una barra gris, no como un sello. */
+/* Hora, categoría, tipo y mensaje. La columna de la categoría es la del sello
+   más ancho ("USUARIOS" en versalitas abiertas): más angosta, el sello se
+   montaba sobre el tipo. */
+.log-row-general {
+  grid-template-columns: 150px 110px 180px minmax(0, 1fr);
+  align-items: center;
+}
+/* La hora del Registro en el cuerpo y con cifras de ancho fijo, como en el
+   prototipo: las filas se comparan de un vistazo hacia abajo. */
+.log-row-general > time {
+  font-size: var(--txt-sm);
+  font-variant-numeric: tabular-nums lining-nums;
+}
+/* La categoría es un sello: en la celda de la grilla se estiraba al ancho de
+   la columna y se leía como una barra, no como un sello. */
 .log-row > .cat-badge { justify-self: start; }
+/* Un mensaje largo se parte adentro de su columna en vez de salirse. */
+.log-row-general > :last-child { overflow-wrap: anywhere; }
+/* En un teléfono las cuatro columnas no entran: al mensaje le quedaba una
+   palabra por renglón. Arriba la hora y el sello, y debajo, a todo el ancho,
+   el tipo y el mensaje. */
+@media (max-width: 640px) {
+  .log-row-general {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--e-1) var(--e-3);
+  }
+  .log-row-general > .event-type,
+  .log-row-general > :last-child { grid-column: 1 / -1; }
+}
 .event-type {
   font-weight: 600;
   color: var(--tinta-media);
@@ -441,29 +466,17 @@ details.meta pre {
   font-weight: 600;
   letter-spacing: .04em;
 }
-/* El estado, en una pastilla con su punto: a la derecha del nombre. */
-.tile-info > .tile-row:first-child > .estado {
-  min-height: 26px;
-  margin-left: auto;
-  padding: 0 10px;
-  border: 1px solid var(--veta);
-  border-radius: 999px;
-  font-size: var(--txt-xxs);
-  font-weight: 600;
-  letter-spacing: .12em;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-.tile-info > .tile-row:first-child > .estado.accent { border-color: var(--oro); }
-/* Los datos: el rótulo en versalitas arriba, la cifra en serif abajo, y la
-   batería con su barra. */
+/* El estado, en su pastilla con el punto (primitivos.css, la misma de las
+   fichas de gestión): a la derecha del nombre. */
+.tile-info > .tile-row:first-child > .estado { margin-left: auto; }
+/* Los datos: el rótulo en versalitas arriba (.rotulo, base.css), la cifra en
+   serif abajo, y la batería con su barra. */
 .tile-datos {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--e-3);
   margin: 0;
 }
-.tile-datos dt { font-size: var(--txt-xxs); letter-spacing: .14em; }
 .tile-datos dd {
   margin: var(--e-1) 0 0;
   line-height: 1.1;

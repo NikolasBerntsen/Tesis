@@ -4,8 +4,13 @@
 
 /* --- Tarjeta: un panel translúcido con filo de oro ------------------------ */
 /* El velo del panel deja asomar la veta de la piedra (tokens.css explica
-   cuánto y por qué); el brillo rasante de --piedra-cara va encima. */
-.card {
+   cuánto y por qué); el brillo rasante de --piedra-cara va encima. La ficha
+   de un dron o de una base (modales.css) y la placa de una ruta (nuevos.css)
+   son el mismo panel: comparten la cara y el filo, pero no los títulos de
+   tarjeta de abajo. */
+.card,
+.ficha,
+.ruta-item {
   position: relative;
   padding: var(--e-5);
   border: 1px solid var(--veta-fuerte);
@@ -19,10 +24,12 @@
 /* Título de tarjeta: versalitas anchas en Cinzel, como "Drones activos" del
    prototipo. Si trae un ícono (<h2><svg/>Drones activos</h2>), va a la
    izquierda y en oro. El de la tarjeta de alertas habla igual pero comparte
-   renglón con los pasos del carrusel (alertas.css): la letra es la misma, la
-   caja la pone cada uno. */
+   renglón con los pasos del carrusel (alertas.css), y el de un mapa con su
+   cabecera (el recorrido de una ruta, la ubicación de un dron): la letra es
+   la misma, la caja la pone cada uno. */
 .card > h2,
-.carrusel-cabecera > h2 {
+.carrusel-cabecera > h2,
+.mapa-head > h2 {
   display: flex;
   align-items: center;
   gap: var(--e-3);
@@ -381,12 +388,14 @@ legend {
   border-bottom: 1px solid var(--veta);
   vertical-align: middle;
 }
+/* La fila de rótulos, como en el prototipo: versalitas chicas y abiertas,
+   en la tinta media (la apagada no llega a AA sobre la veta clara). */
 .tabla thead th {
   font-family: var(--fuente-cuerpo);
-  font-size: var(--txt-xs);
+  font-size: var(--txt-xxs);
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: var(--versalita);
+  letter-spacing: .14em;
   color: var(--tinta-media);
   border-bottom: 1px solid var(--veta-fuerte);
   padding-bottom: var(--e-2);
@@ -401,8 +410,11 @@ legend {
   background: var(--oro-velo);
   box-shadow: inset var(--filo) 0 0 0 var(--oro);
 }
-/* Fila de un registro borrado lógicamente */
+/* Fila de un registro borrado lógicamente. Los estados de adentro ("●
+   Suspendido") se apagan con ella: en rojo o en verde seguían leyéndose como
+   una cuenta viva. */
 .tabla tbody tr.fila-eliminada td { color: var(--tinta-suave); }
+.tabla tbody tr.fila-eliminada td :is(.ok, .bad, .warn) { color: inherit; }
 .tabla tbody tr.fila-eliminada td:first-child { text-decoration: line-through; }
 /* Bajo el mouse, con el foco adentro o elegida (Rutas con «Ver eliminadas»),
    el realce o el velo de oro aclaran el fondo y la tinta apagada bajaba de AA
@@ -518,20 +530,34 @@ button.chip:disabled {
   background-color: var(--marmol-2);
 }
 
-/* Distintivo de categoría del registro: versalitas dentro de un rectángulo */
-.cat-badge {
-  display: inline-block;
-  font-size: var(--txt-xxs);
-  font-weight: 700;
-  padding: 2px 7px;
+/* Sello: versalitas dentro de un rectángulo con filo y sin relleno, como los
+   del prototipo. Lo llevan la categoría de un evento del Registro y el rol de
+   una cuenta. Sin relleno a propósito: viven en filas que se tiñen de oro
+   bajo el mouse, y un velo propio encima de ese era un parche de otro color
+   en medio de la fila. El filo y la tinta salen del mismo color. */
+.cat-badge,
+.rol {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--veta);
   border-radius: var(--radio-sello);
+  background: none;
+  color: var(--tinta-media);
+  font-size: var(--txt-xxs);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: .12em;
   text-transform: uppercase;
-  letter-spacing: var(--versalita);
-  border: 1px solid transparent;
+  white-space: nowrap;
 }
-.cat-drone { background: var(--info-velo); border-color: color-mix(in srgb, var(--info) 35%, transparent); color: var(--info); }
-.cat-usuarios { background: var(--oro-velo); border-color: color-mix(in srgb, var(--oro) 40%, transparent); color: var(--oro-texto); }
-.cat-sistema { background: var(--ok-velo); border-color: color-mix(in srgb, var(--ok) 35%, transparent); color: var(--ok-texto); }
+.cat-drone { border-color: color-mix(in srgb, var(--info) 45%, transparent); color: var(--info); }
+.cat-sistema { border-color: color-mix(in srgb, var(--ok) 45%, transparent); color: var(--ok-texto); }
+/* Lo de las cuentas y el rol del administrador van en oro: el oro escrito y
+   el filo fuerte de los paneles, que es el --oro-borde del prototipo. */
+.cat-usuarios,
+.rol.admin { border-color: var(--veta-fuerte); color: var(--oro-texto); }
 
 /* Punto de estado + texto */
 .estado {
@@ -546,6 +572,25 @@ button.chip:disabled {
   border-radius: 50%;
   background: currentColor;
   box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 13%, transparent);
+}
+/* En pastilla: el punto y el texto adentro de un filo redondo, como el estado
+   de una cámara del tablero ("● Patrullando") o de una ficha de gestión
+   ("● En línea"). Sin relleno: con un color, el filo toma el del texto; sin
+   él, es la veta de las filas. */
+.estado.pastilla {
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--veta);
+  border-radius: 999px;
+  font-size: var(--txt-xxs);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.estado.pastilla:is(.ok, .warn, .bad, .info, .accent) {
+  border-color: color-mix(in srgb, currentColor 45%, transparent);
 }
 
 /* Aviso en línea (errores de formulario, notas) */

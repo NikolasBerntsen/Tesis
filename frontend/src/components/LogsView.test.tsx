@@ -317,3 +317,34 @@ describe('LogsView', () => {
   });
 });
 
+
+describe('LogsView — filtros en la cabecera', () => {
+  beforeEach(() => {
+    traerLogsMock.mockReset();
+    traerLogsMock.mockResolvedValue(pagina([makeEvent({ id: 1, message: 'arranque del sistema', category: 'sistema' })]));
+  });
+
+  it('las categorías van al medio de la cabecera, donde las otras vistas tienen el buscador', async () => {
+    const { container } = render(<LogsView />);
+    await screen.findByText('arranque del sistema');
+    const filtros = container.querySelector('.vista-cabecera .vista-filtros') as HTMLElement;
+    expect(filtros).toContainElement(screen.getByRole('tablist', { name: 'Categorías del registro' }));
+    // Y siguen gobernando su panel, aunque ya no estén pegadas a él.
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', 'pestania-todos');
+    expect(screen.getByRole('tab', { name: 'Todos' })).toHaveAttribute('id', 'pestania-todos');
+  });
+
+  it('la categoría de cada evento es un sello, y la hora se lee con las cifras del cuerpo', async () => {
+    const { container } = render(<LogsView />);
+    await screen.findByText('arranque del sistema');
+    expect(screen.getByText('Sistema', { selector: '.cat-badge' })).toHaveClass('cat-sistema');
+    expect(container.querySelector('.log-row time')).not.toHaveClass('mono');
+  });
+
+  it('sin registros, el vacío lleva el medallón de la hoja', async () => {
+    traerLogsMock.mockResolvedValue(pagina([]));
+    const { container } = render(<LogsView />);
+    await screen.findByText('Sin registros.');
+    expect(container.querySelector('.con-medalla .medalla svg')).not.toBeNull();
+  });
+});
