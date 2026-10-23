@@ -454,12 +454,15 @@ export class CoordinadorDeRelevos {
   private actualizar(
     r: Relevo,
     cambios: Partial<Relevo>,
-    antes: { estado: EstadoRelevo; relevo: string | null } = { estado: r.estado, relevo: r.relevo },
+    antes?: { estado: EstadoRelevo; relevo: string | null },
   ): void {
+    // Lo de antes se toma ANTES de aplicar los cambios: sin `antes`, es el
+    // relevo tal como llegó.
+    const previo = antes ?? { estado: r.estado, relevo: r.relevo };
     Object.assign(r, cambios, { actualizadoEn: enIso(this.ahora()) });
     this.guardar(r);
     this.difundirRelevo(r);
-    if (antes.estado !== r.estado || antes.relevo !== r.relevo) this.enviarStatus(r);
+    if (previo.estado !== r.estado || previo.relevo !== r.relevo) this.enviarStatus(r);
     if (!this.esActivo(r)) {
       this.ultimoStatusEnviado.delete(r.id);
       this.ultimoTargetEnviado.delete(r.id);

@@ -37,7 +37,9 @@ class AlmacenEnArchivo(private val archivo: File) : AlmacenDeCola {
             temporal.writeText(contenido, Charsets.UTF_8)
             if (!temporal.renameTo(archivo)) {
                 archivo.writeText(contenido, Charsets.UTF_8)
-                temporal.delete()
+                // Un temporal que no se deja borrar no rompe nada (el próximo
+                // guardado lo pisa), pero no tiene por qué quedar en el disco.
+                if (!temporal.delete()) temporal.deleteOnExit()
             }
         }
     }
