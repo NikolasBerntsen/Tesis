@@ -373,33 +373,59 @@
   min-width: 0;
 }
 
-/* La cabecera del detalle lleva la misma línea grabada que la de las demás
-   vistas (.vista-cabecera), con su tramo de oro donde arranca. */
+/* --- Cabecera del detalle de un dron (DroneDetail) -------------------------
+   <header class="detail-head">
+     <div class="detail-titulos">
+       <button class="enlace versal detalle-volver"/> <h2 class="vista-titulo"/>
+       <p class="vista-subtitulo"/></div>
+     <span class="estado pastilla"/> <span class="badge oro"/>
+     <button class="detalle-historial"/>
+   </header>
+   La de las demás vistas (.vista-cabecera, pulido.css): el nombre del dron es
+   el título, en Cormorant con su barra de oro, el modelo va debajo en
+   versalitas anchas y un hilo cierra la fila. Arriba del título, el camino de
+   vuelta; los controles, alineados con el pie del título. */
 .detail-head {
-  position: relative;
   display: flex;
-  align-items: center;
-  gap: var(--e-4);
+  align-items: flex-end;
   flex-wrap: wrap;
-  padding-bottom: var(--e-3);
+  gap: var(--e-3) var(--e-4);
+  padding-bottom: var(--e-4);
   border-bottom: 1px solid var(--veta);
 }
-.detail-head::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  bottom: -1px;
-  width: 38px;
-  height: 1px;
-  background: linear-gradient(90deg, var(--oro-oscuro) 0%, var(--oro-claro) 100%);
+/* Los títulos se quedan con el ancho: lo demás va a la derecha, y en una
+   pantalla angosta baja a su propio renglón. */
+.detail-titulos {
+  flex: 1 1 20rem;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--e-3);
 }
-.detail-head h2 {
-  margin: 0;
-  font-size: var(--txt-xl);
-}
+/* El camino de vuelta, alineado con el nombre: pasada la barra de oro. */
+.detalle-volver { margin-left: 22px; }
+.detail-head > .estado.pastilla { min-height: 32px; }
 /* "Ver historial de eventos" va al final de la cabecera, contra el borde
-   derecho, arriba de la tarjeta de telemetría. */
+   derecho, arriba de la tarjeta de telemetría. Su alto y sus versalitas son
+   los de los botones de cualquier cabecera (pulido.css). */
 .detail-head .detalle-historial { margin-left: auto; }
+/* El nombre se renombra en el título mismo: el campo toma la letra del título
+   (en el cuerpo del texto, el renglón de 150 px de la teja no alcanzaba para
+   un nombre a 46 px) y el lápiz crece hasta poder tocarse con el dedo. */
+.vista-titulo .editable-name input {
+  width: min(9em, 62vw);
+  font-size: inherit;
+  line-height: 1.1;
+}
+.vista-titulo .editable-name button.icon {
+  min-width: var(--alto-tactil);
+  min-height: var(--alto-tactil);
+}
+.vista-titulo .editable-name button.icon svg {
+  width: 20px;
+  height: 20px;
+}
 
 /* Barra de acciones de una vista (título a la izquierda, botones a la derecha) */
 .barra-acciones {
@@ -422,71 +448,71 @@ td.barra-acciones {
 }
 td.barra-acciones > * + * { margin-left: var(--e-2); }
 
-/* --- Login: una placa translúcida sola en el centro ----------------------- */
+/* --- Login: una placa translúcida sola en el centro -----------------------
+   Sobre la piedra con vetas, como el prototipo: el escudo grande, la marca
+   con "Comando de drones" bajo su hilo de oro, los dos campos y "Ingresar"
+   en oro a todo el ancho. Sin filo dorado en el canto: el panel lleva el hilo
+   de oro de todos, y una lámina encima era otra pieza que mirar. */
+/* La columna en `minmax(0, 1fr)`: en una pista `auto` la placa medía sus
+   420 px aunque el teléfono tuviera 375, y la página scrolleaba de costado. */
 .login-wrapper {
   min-height: 100vh;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   place-items: center;
-  padding: var(--e-6);
+  padding: var(--e-6) var(--e-4);
 }
 .login-card {
   position: relative;
-  width: 380px;
+  width: 420px;
   max-width: 100%;
   display: flex;
   flex-direction: column;
   gap: var(--e-4);
-  padding: var(--e-7) var(--e-6) var(--e-6);
+  padding: 36px var(--e-6) var(--e-6);
   border: 1px solid var(--veta-fuerte);
   border-radius: var(--radio-grande);
   background-color: var(--panel);
   background-image: var(--piedra-cara);
   box-shadow: var(--sombra-flotante);
 }
-/* Filo dorado superior: la piedra abierta en el canto de la placa */
-.login-card::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 12%;
-  right: 12%;
-  height: var(--filo);
-  border-radius: 0 0 3px 3px;
-  background: var(--oro-lamina);
-}
-.login-card .regla-ornamental { margin-block: var(--e-2); }
+.login-card .regla-ornamental { margin-block: var(--e-1); }
 .login-escudo {
   display: block;
-  width: 8rem;
+  width: 8.25rem;
   height: auto;
-  margin: 0 auto var(--e-2);
+  margin: 0 auto var(--e-1);
   filter: drop-shadow(var(--sombra-escudo));
 }
 /* La misma marca que la barra (.marca-nombre, .marca-lema), más grande: acá
    es lo único que hay para leer antes de escribir. */
-.login-marca {
-  align-self: center;
-  margin-bottom: var(--e-2);
-}
-.login-marca .marca-nombre { font-size: 29px; }
+.login-marca { align-self: center; }
+.login-marca .marca-nombre { font-size: var(--txt-2xl); }
 .login-marca .marca-lema { font-size: var(--txt-xs); }
+/* Los rótulos son los .rotulo del prototipo, arriba de cada campo. */
 .login-card label {
   display: flex;
   flex-direction: column;
-  gap: var(--e-2);
+  gap: 6px;
   color: var(--tinta-media);
-  font-size: var(--txt-xs);
+  font-size: var(--txt-xxs);
   text-transform: uppercase;
-  letter-spacing: var(--versalita);
+  letter-spacing: .14em;
   font-weight: 600;
 }
 .login-card input {
   font-size: var(--txt-base);
   text-transform: none;
   letter-spacing: normal;
-  padding: 10px 12px;
+  padding: 0 14px;
 }
-.login-card button { margin-top: var(--e-2); }
+/* "Ingresar" ocupa el ancho de la placa (es un ítem de la columna, se estira
+   solo); el oro y las versalitas son los de todo botón dorado. */
+.login-card button { margin-top: var(--e-1); }
+@media (max-width: 480px) {
+  .login-card { padding: var(--e-6) var(--e-5) var(--e-5); }
+  .login-marca .marca-nombre { font-size: var(--txt-xl); }
+}
 /* El color y el recuadro los pone .aviso.malo, como en el resto de la consola:
    acá sólo va lo que es de la placa (centrado y sin margen propio). */
 .login-error {
@@ -577,6 +603,12 @@ td.barra-acciones > * + * { margin-left: var(--e-2); }
 @media (max-height: 900px) {
   .par-video-mapa .video,
   .par-video-mapa .map { height: 340px; min-height: 340px; }
+}
+/* Apilado, el video toma todo el ancho y su alto sale de la proporción de la
+   cámara: con el alto fijo de escritorio, en un teléfono quedaba una franja de
+   imagen entre dos bandas negras más altas que ella. */
+@media (max-width: 900px) {
+  .par-video-mapa .video { height: auto; min-height: 0; }
 }
 /* Sin margen propio: el detalle es una columna con `gap`, y el margen que
    tenían el par video/mapa y la grilla de operación se sumaba a ese hueco

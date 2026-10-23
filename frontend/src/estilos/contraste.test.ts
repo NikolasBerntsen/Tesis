@@ -184,8 +184,11 @@ pares.push(
   { donde: 'botón deshabilitado', texto: '--tinta-suave', base: '--marmol-2', minimo: CONTROL },
   { donde: 'placeholder de un campo', texto: '--tinta-suave', base: '--marmol-0', minimo: TEXTO },
 );
-// Las tablas viven en paneles, y el "Cancelar" de un diálogo ocupado, en el
-// panel firme: el fantasma no tiene hueco, apoya en lo que tenga atrás.
+// Las tablas viven en paneles, y un fantasma ("Quitar" la base elegida en el
+// alta de un dron, "Soltar y reanudar patrullaje") en un panel o en el panel
+// firme de un diálogo: no tiene hueco, apoya en lo que tenga atrás. El
+// "Cancelar" de un diálogo ya no es fantasma: es el botón común, y apagado
+// cae en el hueco de cualquier botón deshabilitado.
 sobreSuperficies('fila eliminada', '--tinta-suave', [], TEXTO, [...PANELES, ...FIRMES]);
 sobreSuperficies('botón fantasma deshabilitado', '--tinta-suave', [], CONTROL, [...PANELES, ...FIRMES]);
 // Bajo el mouse o elegida (Rutas con «Ver eliminadas»), el realce o el velo
@@ -412,6 +415,14 @@ describe('los pares medidos son los que pintan las hojas', () => {
     ['tinta de "En vivo"', vistas, '.visor-vivo', 'color', 'var(--visor-tinta)'],
     // El medallón del vacío flota sobre el panel: es un panel firme.
     ['medallón del vacío', modales, '.medalla', 'background-color', 'var(--panel-firme)'],
+    // Lo destructivo que se confirma en un diálogo, en la placa de Descartar.
+    ['"Eliminar" en el pie de un diálogo', primitivos, '.modal-pie > button.dismiss', 'background-color', 'var(--descarta-fondo)'],
+    ['tinta del "Eliminar" de un diálogo', primitivos, '.modal-pie > button.dismiss', 'color', 'var(--descarta-texto)'],
+    // El tilde del aviso flotante, en el verde que se mide sobre el panel firme.
+    ['tilde del aviso flotante', pulido, '.aviso-flotante > svg', 'color', 'var(--ok-texto)'],
+    // La columna "después" de un cambio es mármol 0 opaco, que se mide arriba
+    // con la tinta: el hilo de oro que la marca no le pone velo encima.
+    ['columna "después" de un cambio', nuevos, '.comparacion-despues', 'background', 'var(--marmol-0)'],
   ])('%s', (_donde, hoja, selector, propiedad, esperado) => {
     expect(valorDe(hoja, selector, propiedad)).toBe(esperado);
   });

@@ -207,7 +207,9 @@ function ColumnaComparada({
   return (
     <div className={despues ? 'comparacion-col comparacion-despues' : 'comparacion-col'}>
       <span className="comparacion-titulo">{titulo}</span>
-      <dl className="datos">
+      {/* Sin los hilos de las demás listas: acá lo que se marca es el campo
+          que cambió, y su resaltado abraza al texto, no a la fila. */}
+      <dl className="datos sin-filetes">
         {claves.map((clave) => (
           <Fragment key={clave}>
             <dt>{etiquetaCampo(clave)}</dt>

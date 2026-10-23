@@ -4,20 +4,8 @@ import { cronometro, time } from '../format';
 import type { Alert, Drone } from '../types';
 import { useCarruselDeAlertas } from '../useCarruselDeAlertas';
 import { useDecisionDeAlerta, type DecidirAlerta, type Decision } from '../useDecisionDeAlerta';
-import {
-  IconoCamara,
-  IconoCheck,
-  IconoChevronDerecha,
-  IconoChevronIzquierda,
-  IconoInfo,
-  IconoPersona,
-  IconoReloj,
-  IconoTacho,
-  IconoVehiculo,
-} from './Iconos';
-
-const TIPO = { PERSON: 'PERSONA', VEHICLE: 'VEHÍCULO' } as const;
-const ICONO_DE_TIPO = { PERSON: IconoPersona, VEHICLE: IconoVehiculo } as const;
+import { IconoChevronDerecha, IconoChevronIzquierda, IconoReloj } from './Iconos';
+import { BotonesDeDecision, ChipDeTipo, ConsecuenciasDeDecidir, VisorDeCaptura } from './PiezasDeAlerta';
 
 type Carrusel = ReturnType<typeof useCarruselDeAlertas>;
 
@@ -171,79 +159,6 @@ function AvisoDeNuevas({ sinVer, onVer }: Readonly<{ sinVer: number; onVer: () =
 }
 
 /**
- * La captura en un visor negro con las escuadras de una cámara, y al pie qué
- * es y a qué hora se tomó. Dice "Captura" y no "En vivo": es la foto que
- * disparó la detección, y lo que está en vivo es justamente el video con el
- * que hay que compararla. Con `onAmpliar`, el visor entero es el botón que la
- * abre en grande (el pop-up de la alerta, con el mapa y el dron al lado).
- */
-function VisorDeCaptura({ alerta, onAmpliar }: Readonly<{ alerta: Alert; onAmpliar?: () => void }>) {
-  const pie = (
-    <span className="visor-pie">
-      <span className="visor-rotulo">
-        <IconoCamara tamano={16} />
-        {alerta.snapshot ? 'Captura' : 'Detección'}
-      </span>
-      <time dateTime={alerta.created_at}>{time(alerta.created_at)}</time>
-    </span>
-  );
-
-  if (!alerta.snapshot) {
-    // Sin escuadras: no hay imagen que encuadrar, y el aviso va en el mismo
-    // alto que tendría la captura para que la tarjeta no salte al recorrerla.
-    return (
-      <div className="visor">
-        <div className="visor-sin-imagen">
-          <p className="vacio">La alerta llegó sin captura</p>
-        </div>
-        {pie}
-      </div>
-    );
-  }
-
-  const cuadro = (
-    <span className="visor-cuadro">
-      <img className="snapshot" src={`data:image/jpeg;base64,${alerta.snapshot}`} alt="Captura que disparó la detección" />
-    </span>
-  );
-  if (!onAmpliar) {
-    return (
-      <div className="visor">
-        {cuadro}
-        {pie}
-      </div>
-    );
-  }
-  // La captura es lo que se mira primero: tocarla la abre en grande. "Ver
-  // detalle" es el mismo camino para la alerta que llegó sin captura.
-  return (
-    <button
-      type="button"
-      className="visor"
-      aria-label={`Ampliar la captura de la alerta #${alerta.id}`}
-      onClick={onAmpliar}
-    >
-      {cuadro}
-      {pie}
-    </button>
-  );
-}
-
-/**
- * Qué vio la detección, con su ícono, en la placa óxido de la alerta. Un tipo
- * que la consola no conoce va crudo y sin dibujo, pero se lee.
- */
-function ChipDeTipo({ tipo }: Readonly<{ tipo: Alert['type'] }>) {
-  const Icono = ICONO_DE_TIPO[tipo] as (typeof ICONO_DE_TIPO)[keyof typeof ICONO_DE_TIPO] | undefined;
-  return (
-    <span className="chip rojo">
-      {Icono && <Icono tamano={20} />}
-      {TIPO[tipo] ?? tipo}
-    </span>
-  );
-}
-
-/**
  * De qué dron es la alerta, en la pastilla de oro: como en la campana, el
  * nombre es el que lleva a la vista del dron, con su video en vivo. Un dron
  * que ya no está queda escrito pero apagado, sin llevar a ningún lado.
@@ -325,33 +240,15 @@ function DecisionDeLaAlerta({
           ? 'El dron está sobre este objetivo: compará la captura con el video en vivo antes de decidir.'
           : 'Compará la captura con el video en vivo antes de decidir.'}
       </p>
-      <div className="alert-actions">
-        <button className="validate" disabled={ocupado} onClick={() => onDecidir('VALIDATED')}>
-          <IconoCheck />
-          Validar
-        </button>
-        <button className="dismiss" disabled={ocupado} onClick={() => onDecidir('DISMISSED')}>
-          <IconoTacho />
-          Descartar
-        </button>
-      </div>
-      {/* Lo que hace cada botón con el dron, dicho antes de apretarlo: validar
-          no lo "libera", y descartar lo saca de encima del objetivo. */}
-      <div className="alerta-consecuencias">
-        <IconoInfo tamano={18} />
-        <p>
-          Validar: el dron se queda sobre el objetivo hasta que lo mandes a patrullar.
-          <br />
-          Descartar: retoma la ruta hacia el próximo nodo.
-        </p>
-      </div>
+      <BotonesDeDecision ocupado={ocupado} onDecidir={onDecidir} />
+      <ConsecuenciasDeDecidir />
       {error && (
         <p className="aviso malo" role="alert">
           {error}
         </p>
       )}
       {onAbrir && (
-        <button type="button" className="enlace alerta-ver-detalle" onClick={onAbrir}>
+        <button type="button" className="enlace versal alerta-ver-detalle" onClick={onAbrir}>
           Ver detalle
           <IconoChevronDerecha tamano={16} />
         </button>

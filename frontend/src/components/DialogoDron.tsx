@@ -1,6 +1,6 @@
 import { useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import type { BaseAsset, Drone } from '../types';
-import IconoCerrar from './IconoCerrar';
+import { IconoCerrar } from './Iconos';
 import Modal from './Modal';
 
 /** Lo que el backend acepta en el alta y en la edición de un dron. */
@@ -262,7 +262,7 @@ export default function DialogoDron({
           <p className="modal-subtitulo">{dron ? dron.displayName : 'Después del alta se abre su sticker con el QR'}</p>
         </div>
         <button type="button" className="modal-cerrar" aria-label="Cerrar" onClick={cerrar} disabled={guardando}>
-          <IconoCerrar />
+          <IconoCerrar tamano={18} />
         </button>
       </header>
 
@@ -321,7 +321,7 @@ export default function DialogoDron({
 
         <footer className="modal-pie">
           {!nombreValido && <p className="pie-nota">Falta el nombre del dron.</p>}
-          <button type="button" className="ghost" onClick={cerrar} disabled={guardando}>
+          <button type="button" onClick={cerrar} disabled={guardando}>
             Cancelar
           </button>
           <button type="submit" className="primario" disabled={!nombreValido || guardando}>

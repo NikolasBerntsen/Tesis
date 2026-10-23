@@ -97,7 +97,14 @@
    "Nuevo dron" y el buscador medían 27, 25 y 35 px en la misma fila. Es el
    alto táctil, como los .btn del prototipo: "Nuevo dron", los filtros y el
    buscador se tocan con el dedo en la tableta de campo, igual que "Cámaras" y
-   "Mapa". El ícono redondo de al lado (actualizar) mide lo mismo. */
+   "Mapa". El ícono redondo de al lado (actualizar) mide lo mismo.
+   Hablan igual los botones del pie de un diálogo ("Cancelar", "Guardar"),
+   "Ver historial de eventos" en la cabecera de un dron e "Ingresar": son el
+   .btn del prototipo, y una acción no puede leerse distinto según la pantalla
+   en la que aparece. */
+.login-card button,
+.detail-head > .detalle-historial,
+.modal-pie > button,
 .vista-cabecera button:not(.icono-boton) {
   min-height: var(--alto-tactil);
   padding-block: 0;
@@ -199,11 +206,12 @@
 
 /* ---------------------------------------------------------------------------
    AVISOS FLOTANTES (AvisosFlotantes.tsx)
-   <div class="avisos-flotantes" role="status"><p class="aviso-flotante">…</p></div>
+   <div class="avisos-flotantes" role="status"><p class="aviso-flotante"><svg/>…</p></div>
    La confirmación de que algo salió bien: abajo a la derecha, chica, sin
    botones, y se va sola. Por encima del velo de los diálogos (el sticker que
    se abre después de un alta no la tapa) pero sin recibir el mouse: nunca se
-   interpone entre el operador y un botón.
+   interpone entre el operador y un botón. Es el .aviso del prototipo: un
+   panel con su hilo de oro y el ícono adelante.
 ------------------------------------------------------------------------------ */
 .avisos-flotantes {
   position: fixed;
@@ -220,31 +228,27 @@
 .aviso-flotante {
   margin: 0;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--e-3);
-  padding: var(--e-3) var(--e-4);
+  padding: 14px var(--e-4);
   border: 1px solid var(--veta-fuerte);
   border-radius: var(--radio);
   background-color: var(--panel-firme);
   background-image: var(--piedra-cara);
-  /* El filo de oro a la izquierda, como la fila seleccionada. */
-  box-shadow: inset var(--filo) 0 0 0 var(--oro), var(--sombra-flotante);
+  box-shadow: var(--sombra-flotante);
   color: var(--tinta);
-  font-size: var(--txt-sm);
-  line-height: var(--interlinea-titulo);
+  font-size: var(--txt-base);
+  line-height: 1.45;
   animation:
     aviso-entra var(--duracion-entrada) var(--curva-entrada),
     aviso-sale var(--duracion) var(--curva) calc(var(--duracion-aviso) - var(--duracion)) forwards;
 }
-/* El punto verde del "listo": el mismo de .estado.ok. */
-.aviso-flotante::before {
-  content: '';
+/* El tilde del "listo", en el verde de .estado.ok: dice que salió bien antes
+   de leer la línea. Va a la altura del primer renglón, no al medio de dos. */
+.aviso-flotante > svg {
   flex: none;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--ok-texto);
-  box-shadow: 0 0 0 2px var(--ok-velo);
+  margin-top: 1px;
+  color: var(--ok-texto);
 }
 @keyframes aviso-entra {
   from { opacity: 0; transform: translateY(8px); }

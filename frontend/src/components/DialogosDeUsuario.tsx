@@ -2,7 +2,7 @@ import { useId, useState, type FormEvent } from 'react';
 import { api } from '../api';
 import { AYUDA_DNI, formatearDni, normalizarDni } from '../dni';
 import type { AltaDeUsuario, CambiosDeUsuario, RolAsignable, RolConsola, UserView } from '../types';
-import IconoCerrar from './IconoCerrar';
+import { IconoCerrar } from './Iconos';
 import Modal from './Modal';
 
 export const ROL: Record<RolConsola, string> = {
@@ -60,7 +60,7 @@ function Cabecera({
         <p className="modal-subtitulo">{subtitulo}</p>
       </div>
       <button type="button" className="modal-cerrar" aria-label="Cerrar sin guardar" onClick={onCerrar}>
-        <IconoCerrar />
+        <IconoCerrar tamano={18} />
       </button>
     </header>
   );
@@ -249,7 +249,7 @@ export function DialogoNuevoUsuario({
           </div>
         </div>
         <footer className="modal-pie">
-          <button type="button" className="ghost" onClick={onCerrar}>
+          <button type="button" onClick={onCerrar}>
             Cancelar
           </button>
           <button type="submit" className="primario" disabled={guardando}>
@@ -455,7 +455,7 @@ export function DialogoEditarUsuario({
           )}
         </div>
         <footer className="modal-pie">
-          <button type="button" className="ghost" onClick={onCerrar}>
+          <button type="button" onClick={onCerrar}>
             Cancelar
           </button>
           <button type="submit" className="primario" disabled={guardando}>

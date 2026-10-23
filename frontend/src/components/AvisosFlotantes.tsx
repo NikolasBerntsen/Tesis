@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { IconoCheck } from './Iconos';
 
 /**
  * Lo que dura en pantalla un aviso. Es el mismo valor que `--duracion-aviso`
@@ -58,7 +59,10 @@ export function ProveedorDeAvisos({ children }: { children: ReactNode }) {
       {children}
       <div className="avisos-flotantes" role="status" aria-live="polite" aria-atomic="true">
         {aviso && (
+          // El tilde dice "listo" antes de leer la línea; el nombre lo pone el
+          // texto, así que el dibujo no se anuncia (ver Iconos.tsx).
           <p key={aviso.id} className="aviso-flotante">
+            <IconoCheck tamano={18} />
             {aviso.texto}
           </p>
         )}

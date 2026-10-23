@@ -4,8 +4,7 @@ import { esc } from '../html';
 import { CENTRO_POR_DEFECTO, TRAZO, etiquetaDeNodo, iconoBase, useFondo, vestirAtribucion } from '../mapa';
 import type { PatrolRoute, Waypoint } from '../types';
 import ConmutadorDeFondo from './ConmutadorDeFondo';
-import IconoCerrar from './IconoCerrar';
-import { IconoChevronAbajo, IconoChevronArriba, IconoTacho } from './Iconos';
+import { IconoCerrar, IconoChevronAbajo, IconoChevronArriba, IconoTacho } from './Iconos';
 import Modal from './Modal';
 
 /** Un nodo con identidad estable, para poder arrastrarlo sin que se confunda. */
@@ -206,7 +205,7 @@ export default function EditorDeRuta({
           <p className="modal-subtitulo">{ruta ? ruta.name : base ? `Desde ${base.name}` : 'Nodos en el orden del recorrido'}</p>
         </div>
         <button type="button" className="modal-cerrar" aria-label="Cerrar" onClick={cerrar} disabled={guardando}>
-          <IconoCerrar />
+          <IconoCerrar tamano={18} />
         </button>
       </header>
 
@@ -328,7 +327,7 @@ export default function EditorDeRuta({
 
         <footer className="modal-pie">
           {faltante && <p className="pie-nota">{faltante}</p>}
-          <button type="button" className="ghost" onClick={cerrar} disabled={guardando}>
+          <button type="button" onClick={cerrar} disabled={guardando}>
             Cancelar
           </button>
           <button

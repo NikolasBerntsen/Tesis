@@ -44,8 +44,9 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  /* Panel firme y no translúcido: atrás del velo puede haber un video o un
-     mapa, y el formulario no tiene que leerse sobre ellos. */
+  /* El panel del prototipo con su hilo de oro, pero firme: atrás del velo
+     puede haber un video o un mapa, y el formulario no tiene que leerse sobre
+     ellos. Lo deja apenas translúcido (--panel-firme), más que una tarjeta. */
   border: 1px solid var(--veta-fuerte);
   border-radius: var(--radio-grande);
   background-color: var(--panel-firme);
@@ -57,58 +58,53 @@
   from { opacity: 0; transform: translateY(10px) scale(.985); }
   to { opacity: 1; transform: none; }
 }
-/* Filo dorado en el canto superior: la piedra abierta donde se corta la caja */
-.modal-caja::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: var(--filo);
-  background: var(--oro-lamina);
-}
 .modal-ancho { width: min(1000px, 100%); }
 
+/* La cabecera: el título en Cormorant, lo que lo acompaña en versalitas
+   debajo, y la cruz en una tecla cuadrada a la derecha. */
 .modal-cabecera {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--e-4);
-  padding: var(--e-5) var(--e-6) var(--e-3);
+  padding: var(--e-5) var(--e-6) var(--e-4);
   border-bottom: 1px solid var(--veta);
 }
 .modal-titulo {
   margin: 0;
   font-family: var(--fuente-serif);
-  font-size: var(--txt-xl);
+  font-size: var(--txt-2xl);
   font-weight: 600;
-  line-height: var(--interlinea-titulo);
+  line-height: 1.1;
 }
 .modal-subtitulo {
-  margin: var(--e-1) 0 0;
+  margin: 6px 0 0;
   font-size: var(--txt-xs);
   text-transform: uppercase;
-  letter-spacing: var(--versalita);
+  letter-spacing: .14em;
   color: var(--tinta-media);
 }
+/* La cruz es el .icono-btn del prototipo: una tecla cuadrada de piedra, al
+   alto táctil (se cierra con el dedo en la tableta de campo), que bajo el
+   mouse enciende el hilo y el trazo en oro. La cara y el fondo son los del
+   botón común. */
 .modal-cerrar {
   flex: none;
-  width: 32px;
-  height: 32px;
+  width: var(--alto-tactil);
+  height: var(--alto-tactil);
   padding: 0;
   display: grid;
   place-items: center;
-  border-radius: 50%;
-  background: transparent;
-  background-image: none;
-  border-color: transparent;
-  box-shadow: none;
+  border-color: var(--veta);
   color: var(--tinta-media);
 }
 .modal-cerrar:hover:not(:disabled) {
   border-color: var(--oro);
-  color: var(--tinta);
-  background: var(--realce-70);
+  color: var(--oro-texto);
+}
+@media (max-width: 640px) {
+  .modal-cabecera { padding: var(--e-4) var(--e-4) var(--e-3); }
+  .modal-titulo { font-size: var(--txt-xl); }
 }
 .modal-cuerpo {
   padding: var(--e-5) var(--e-6);
@@ -123,20 +119,31 @@
   flex-direction: column;
   gap: var(--e-4);
 }
+/* El pie: las acciones a la derecha, "Cancelar" (el botón común) antes que la
+   acción dorada. Sin franja propia: el hilo de oro de arriba alcanza para
+   separarlo del cuerpo. El alto y las versalitas de los botones los pone
+   pulido.css, con los de la cabecera de las vistas. */
 .modal-pie {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: var(--e-3);
   padding: var(--e-4) var(--e-6) var(--e-5);
   border-top: 1px solid var(--veta);
-  background: var(--realce-55);
+}
+@media (max-width: 640px) {
+  .modal-cuerpo { padding: var(--e-4); }
+  .modal-pie { padding: var(--e-3) var(--e-4) var(--e-4); }
 }
 
-/* Lista de clave/valor para el detalle del registro (meta.detalle) */
+/* Lista de clave/valor: el detalle de un evento, de una alerta, del objetivo.
+   Cada fila va sobre un hilo de oro, como los .datos del prototipo; la
+   primera no, porque arriba ya hay un título o el canto de la tarjeta. Los
+   hilos van en las celdas y no en un hueco de la grilla: con hueco entre
+   columnas la línea quedaba cortada entre el rótulo y el valor. */
 .datos {
   display: grid;
   grid-template-columns: minmax(120px, max-content) 1fr;
-  gap: var(--e-2) var(--e-5);
   margin: 0;
 }
 .datos dt {
@@ -145,9 +152,32 @@
   letter-spacing: var(--versalita);
   font-weight: 600;
   color: var(--tinta-media);
-  padding-top: 2px;
 }
-.datos dd { margin: 0; }
+.datos dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.datos:not(.sin-filetes) > :is(dt, dd) {
+  padding-block: 9px;
+  border-top: 1px solid var(--veta);
+}
+/* El rótulo es más chico que el valor: baja un poco para leerse en la misma
+   línea. */
+.datos:not(.sin-filetes) > dt {
+  padding-top: 11px;
+  padding-right: var(--e-5);
+}
+.datos:not(.sin-filetes) > dt:first-of-type,
+.datos:not(.sin-filetes) > dt:first-of-type + dd {
+  border-top: 0;
+  padding-top: 0;
+}
+.datos:not(.sin-filetes) > dt:first-of-type { padding-top: 2px; }
+/* Sin hilos: las columnas del antes y el después, donde lo que se marca es
+   el campo que cambió (y su resaltado abraza al texto, no a la fila). */
+.datos.sin-filetes { gap: var(--e-2) var(--e-5); }
+.datos.sin-filetes dt { padding-top: 2px; }
 
 /* ---------------------------------------------------------------------------
    COMPARACIÓN antes/después — dos columnas con una flecha en el medio.
@@ -176,25 +206,14 @@
   box-shadow: var(--sombra-hundida);
   min-width: 0;
 }
-/* La columna "después" es la que importa: mármol claro y filo dorado */
+/* La columna "después" es la que importa: la piedra más clara y el hilo de
+   oro de lo elegido, con su resplandor (el de la sección abierta). Un hilo y
+   no la lámina gruesa de antes: en un diálogo de hilos finos, el filo de dos
+   píxeles se leía como un botón. */
 .comparacion-despues {
-  position: relative;
   background: var(--marmol-0);
-  border-color: transparent;
-  box-shadow: none;
-}
-.comparacion-despues::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  padding: var(--filo);
-  background: var(--oro-lamina);
-  -webkit-mask: var(--mascara-llena) content-box, var(--mascara-llena);
-  mask: var(--mascara-llena) content-box, var(--mascara-llena);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  pointer-events: none;
+  border-color: var(--oro);
+  box-shadow: var(--resplandor-oro);
 }
 .comparacion-titulo {
   font-size: var(--txt-xs);
@@ -921,3 +940,19 @@
 /* El hover se marca en el subrayado, como en un enlace de verdad. */
 .enlace:hover:not(:disabled) { text-decoration-thickness: 2px; }
 .enlace:disabled { color: var(--tinta-suave); text-decoration: none; cursor: default; }
+/* En versalitas de oro y con su flecha, como el .enlace del prototipo: un
+   camino ("Ver detalle" en la tarjeta de una alerta, "Volver a Operación"
+   arriba del nombre de un dron), no un enlace en medio de un texto. El
+   subrayado aparece recién bajo el mouse. */
+.enlace.versal {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  font-size: var(--txt-sm);
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  text-decoration-color: transparent;
+}
+.enlace.versal:hover:not(:disabled) { text-decoration-color: var(--oro); }

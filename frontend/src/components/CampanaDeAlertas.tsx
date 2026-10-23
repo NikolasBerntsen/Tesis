@@ -3,7 +3,8 @@ import { useAlertasEnVivo } from '../alertasEnVivo';
 import { time } from '../format';
 import type { Alert, Drone } from '../types';
 import { useDecisionDeAlerta, type DecidirAlerta } from '../useDecisionDeAlerta';
-import { IconoCampana, IconoCheck, IconoTacho } from './Iconos';
+import { IconoCampana } from './Iconos';
+import { BotonesDeDecision } from './PiezasDeAlerta';
 
 const TIPO = { PERSON: 'PERSONA', VEHICLE: 'VEHÍCULO' } as const;
 
@@ -134,18 +135,9 @@ export default function CampanaDeAlertas({
               {a.snapshot && !abrirAlerta && (
                 <img className="snapshot" src={`data:image/jpeg;base64,${a.snapshot}`} alt="Detección" />
               )}
-              <div className="alert-actions">
-                {/* Con el tilde y el tacho de la tarjeta del tablero: el mismo
-                    par se reconoce igual en los dos lugares. */}
-                <button className="validate" disabled={decidiendo(a.id)} onClick={() => decidir(a.id, 'VALIDATED')}>
-                  <IconoCheck tamano={18} />
-                  Validar
-                </button>
-                <button className="dismiss" disabled={decidiendo(a.id)} onClick={() => decidir(a.id, 'DISMISSED')}>
-                  <IconoTacho tamano={18} />
-                  Descartar
-                </button>
-              </div>
+              {/* El mismo par de la tarjeta del tablero, con el tilde y el tacho:
+                  se reconoce igual en los dos lugares. */}
+              <BotonesDeDecision ocupado={decidiendo(a.id)} tamanoIcono={18} onDecidir={(d) => decidir(a.id, d)} />
               {/* Pegado a los botones de ESA alerta: con tres pendientes en la
                   lista, un aviso suelto arriba no diría cuál falló. */}
               {errorDe(a.id) && (

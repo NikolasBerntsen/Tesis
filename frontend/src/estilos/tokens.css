@@ -262,6 +262,9 @@
   /* La misma cifra, para tarjetas que cruzan toda la pantalla y tienen que
      dejarle el alto al video y al mapa. */
   --txt-cifra-chica: 27px;
+  /* La batería en la telemetría de un dron: la cifra que se lee de lejos,
+     como el 48 % del prototipo, antes que cualquier otro dato del panel. */
+  --txt-cifra-grande: 48px;
   /* El título de cada vista ("Operación", "Drones"): Cormorant a este cuerpo
      se lee como un nombre tallado, no como un rótulo. */
   --txt-titulo-vista: 46px;

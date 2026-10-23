@@ -75,7 +75,7 @@ describe('AlertaEnCurso', () => {
 
   it('sin captura lo dice en lugar de dejar un hueco', () => {
     montar({ alertas: [makeAlert({ snapshot: null })] });
-    expect(screen.getByText('La alerta llegó sin captura')).toBeInTheDocument();
+    expect(screen.getByText('La detección no dejó captura.')).toBeInTheDocument();
     expect(document.querySelector('.visor-pie')).toHaveTextContent('Detección');
   });
 
@@ -497,8 +497,9 @@ describe('AlertaEnCurso — abrir la alerta en su pop-up', () => {
     expect(screen.queryByRole('button', { name: /Ampliar la captura/ })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Ver detalle' }));
-    expect(screen.getByRole('dialog', { name: 'Alerta de persona #9' })).toBeInTheDocument();
-    expect(screen.getByText('La detección no dejó captura.')).toBeInTheDocument();
+    const dialogo = screen.getByRole('dialog', { name: 'Alerta de persona #9' });
+    // El pop-up lo dice con el mismo visor que la tarjeta de atrás.
+    expect(within(dialogo).getByText('La detección no dejó captura.')).toBeInTheDocument();
   });
 
   it('desde el pop-up se va al video del dron', async () => {

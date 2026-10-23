@@ -3,37 +3,90 @@
    cámaras, mapa y control manual
    ========================================================================= */
 
-/* --- Ficha de estado del dron --------------------------------------------- */
+/* --- Telemetría del dron (DroneStatusCard) ---------------------------------
+   <div class="card telemetria"><h2/>
+     <dl class="status-grid telemetria-datos">
+       <div class="telemetria-bateria"><dt class="rotulo"/><dd> cifra · barra </dd></div>
+       <div><dt class="rotulo"/><dd> … </dd></div> …
+     </dl>
+     <details class="status-segundo-nivel"><dl class="status-grid"> … </dl></details>
+   </div>
+   Cada dato es un rótulo en versalitas (.rotulo) arriba de su valor: la cifra
+   en Cormorant y el texto en negrita, como la placa del prototipo. */
 .status-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  align-items: start;
   gap: var(--e-3) var(--e-4);
+  margin: 0;
 }
 .status-grid > div {
   display: flex;
   flex-direction: column;
   gap: var(--e-1);
+  min-width: 0;
 }
-/* La etiqueta de cada dato va en versalitas y el valor en serif: placa grabada */
-.status-grid > div > span:first-child {
-  font-size: var(--txt-xs);
-  text-transform: uppercase;
-  letter-spacing: var(--versalita);
+.status-grid dd {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-1);
+  margin: 0;
+}
+/* El valor en negrita, en la letra del cuerpo, como el .valor del prototipo.
+   Sin fuente propia: la serif a 12,5 px se leía como una nota al pie, y
+   pisaba la monoespaciada de las coordenadas (.mono). */
+.status-grid dd > strong {
+  font-size: var(--txt-base);
   font-weight: 600;
-  color: var(--tinta-media);
-}
-.status-grid > div > strong {
-  font-family: var(--fuente-serif);
-  font-size: var(--txt-sm);
-  font-weight: 400;
   font-variant-numeric: tabular-nums lining-nums;
 }
 /* Las cifras del estado van más chicas que en el resto de la consola: la
    tarjeta cruza toda la pantalla y lo que se le pide es que deje lugar al
-   video y al mapa, no que grite. */
+   video y al mapa, no que grite. La batería es la excepción (abajo). */
 .status-grid .cifra { font-size: var(--txt-cifra-chica); }
 .status-grid .cifra-chica { font-size: var(--txt-md); }
-.status-grid > div > span:first-child { font-size: var(--txt-xxs); }
+
+/* La fila de la telemetría: la batería primero y más ancha, y la señal, el
+   estado y el nodo al lado, cada uno detrás de un hilo de oro vertical. Los
+   hilos van en las celdas y no en un hueco de la grilla, para que lleguen de
+   punta a punta. */
+.status-grid.telemetria-datos {
+  grid-template-columns: minmax(12rem, 1.3fr) repeat(3, minmax(0, 1fr));
+  gap: 0;
+}
+.telemetria-datos > div {
+  padding: 2px var(--e-5);
+  border-left: 1px solid var(--veta);
+}
+.telemetria-datos > div:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+/* La batería en grande, como en el prototipo: la cifra que se lee de lejos y
+   su barra gruesa, teñida por nivel como la cifra (la de las cámaras). */
+.telemetria-bateria .cifra {
+  font-size: var(--txt-cifra-grande);
+  font-weight: 600;
+  line-height: 1;
+}
+.telemetria-bateria .medidor.barra {
+  height: 10px;
+  margin-top: var(--e-2);
+}
+/* En un teléfono no entran cuatro columnas: las filas se apilan, cada una
+   sobre su hilo, como los .datos del prototipo. */
+@media (max-width: 760px) {
+  .status-grid.telemetria-datos { grid-template-columns: minmax(0, 1fr); }
+  .telemetria-datos > div {
+    padding: var(--e-3) 0;
+    border-left: 0;
+    border-top: 1px solid var(--veta);
+  }
+  .telemetria-datos > div:first-child {
+    padding-top: 0;
+    border-top: 0;
+  }
+}
 /* Medidor: un hairline con relleno de lámina. No es una barra de progreso de
    dashboard, es la línea donde la piedra se abre a lo largo del nivel. */
 .medidor {
@@ -713,6 +766,17 @@ details.meta pre {
 .wp-acciones .wp-continue { border-color: var(--ok); color: var(--ok-texto); }
 
 /* --- Patrullaje y control manual ------------------------------------------- */
+/* Las órdenes de la vista del dron se dan con el dedo en la tableta de campo,
+   como los .btn del prototipo: al alto táctil, con su ícono a la izquierda
+   (el mando en oro para pilotear, la pausa para interrumpir). El pad de las
+   flechas tiene su propia medida, más abajo. */
+.mapa-head > button,
+.ruta-controles > :is(button, select),
+.grid-operacion .card > button,
+.control-panel > button,
+.telemetria > .resume {
+  min-height: var(--alto-tactil);
+}
 .ruta-controles {
   display: flex;
   gap: var(--e-2);
@@ -721,6 +785,11 @@ details.meta pre {
 .ruta-controles select {
   flex: 1;
   min-width: 160px;
+}
+/* En un teléfono el selector ocupa su renglón y "Comenzar" e "Interrumpir" se
+   reparten el de abajo, en vez de quedar cada uno solo y a la izquierda. */
+@media (max-width: 480px) {
+  .ruta-controles > button { flex: 1 1 0; }
 }
 .control-panel {
   display: flex;
@@ -920,7 +989,6 @@ details.meta pre {
    Batería, señal, estado y nodo en una línea; modo y posición plegados. Sin
    esto la tarjeta se comía la altura que necesitan el video y el mapa para
    convivir en la misma pantalla. */
-.status-grid { align-items: start; }
 .status-grid .estado-actual {
   display: block;
   font-family: var(--fuente-serif);

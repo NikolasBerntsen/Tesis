@@ -1,7 +1,7 @@
 import { useId } from 'react';
 import type { EventRow } from '../types';
 import DetalleDeEvento from './DetalleDeEvento';
-import IconoCerrar from './IconoCerrar';
+import { IconoCerrar } from './Iconos';
 import Modal from './Modal';
 
 const CATEGORIA: Record<EventRow['category'], string> = {
@@ -31,7 +31,7 @@ export default function LogDetailModal({ fila, onCerrar }: { fila: EventRow; onC
           </p>
         </div>
         <button type="button" className="modal-cerrar" aria-label="Cerrar el detalle" onClick={onCerrar}>
-          <IconoCerrar />
+          <IconoCerrar tamano={18} />
         </button>
       </header>
 

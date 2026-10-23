@@ -41,7 +41,8 @@
   line-height: var(--interlinea-titulo);
 }
 .card > h2 > svg,
-.carrusel-cabecera > h2 > svg {
+.carrusel-cabecera > h2 > svg,
+.mapa-head > h2 > svg {
   flex: none;
   color: var(--oro-texto);
 }
@@ -234,14 +235,17 @@ button.resume:hover:not(:disabled) {
 
 /* Eliminar se lee igual que Editar o Desactivar: misma cara de piedra y la
    misma tinta, con el filo en óxido. En una tabla con veinte filas, veinte
-   placas rojas gritarían más que el dato. Con el mouse encima, o adentro de
-   una decisión de alerta (donde Descartar pesa lo mismo que Validar), toma
-   la placa teñida y su tinta, medidas juntas en contraste.test.ts. */
+   placas rojas gritarían más que el dato. Con el mouse encima, adentro de
+   una decisión de alerta (donde Descartar pesa lo mismo que Validar) o en el
+   pie de un diálogo (el "Eliminar" que se está por confirmar, el único de la
+   caja), toma la placa teñida y su tinta, medidas juntas en
+   contraste.test.ts. */
 button.dismiss {
   border-color: var(--descarta-filo);
 }
 button.dismiss:hover:not(:disabled),
-.alert-actions button.dismiss {
+.alert-actions button.dismiss,
+.modal-pie > button.dismiss {
   border-color: var(--descarta-filo);
   color: var(--descarta-texto);
   background-color: var(--descarta-fondo);

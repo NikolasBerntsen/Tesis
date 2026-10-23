@@ -4,7 +4,7 @@ import { fechaYHora } from '../format';
 import type { EventRow } from '../types';
 import DetalleDeEvento from './DetalleDeEvento';
 import EventLog from './EventLog';
-import IconoCerrar from './IconoCerrar';
+import { IconoCerrar } from './Iconos';
 import Modal from './Modal';
 
 /** Cuántos eventos trae el historial: los últimos cien del dron. */
@@ -116,7 +116,7 @@ export default function HistorialDeEventos({
           <p className="modal-subtitulo">{`${nombre} · los últimos ${EVENTOS_DEL_HISTORIAL}`}</p>
         </div>
         <button type="button" className="modal-cerrar" aria-label="Cerrar el historial" onClick={onCerrar}>
-          <IconoCerrar />
+          <IconoCerrar tamano={18} />
         </button>
       </header>
 
@@ -174,7 +174,7 @@ export default function HistorialDeEventos({
                 aria-label="Cerrar el detalle del evento"
                 onClick={cerrarDetalle}
               >
-                <IconoCerrar />
+                <IconoCerrar tamano={18} />
               </button>
             </header>
             {/* Por id: cada evento arranca su detalle de cero (su alerta, su mapa). */}

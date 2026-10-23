@@ -39,6 +39,15 @@
 @media (max-width: 640px) {
   .campos { grid-template-columns: 1fr; }
 }
+/* Los campos de un formulario se tocan con el dedo, como sus botones: al alto
+   táctil, como los .campo del prototipo. Vale para los diálogos de alta y
+   edición y para la placa de ingreso; las casillas quedan afuera. El borde
+   sigue siendo --filo-campo, un oro opaco: el hilo translúcido de los paneles
+   no llega a 3:1 contra el campo, y es lo que dice dónde escribir. */
+:is(.campo, .form-usuario label, .form-base label, .login-card label)
+  > :is(input:not([type='checkbox']):not([type='radio']), select) {
+  min-height: var(--alto-tactil);
+}
 
 /* El rótulo grabado del sistema (versalitas), el mismo de la placa de ingreso. */
 .campo-rotulo {
@@ -375,11 +384,14 @@
   justify-content: space-between;
   gap: var(--e-4);
 }
+/* El evento abierto, en Cormorant como el título del pop-up, un escalón más
+   chico: es el título de la columna, no el de la caja. */
 .historial-detalle-titulo {
   margin: 0;
   font-family: var(--fuente-serif);
-  font-size: var(--txt-md);
-  font-weight: 400;
+  font-size: var(--txt-lg);
+  font-weight: 600;
+  line-height: var(--interlinea-titulo);
 }
 
 /* En una pantalla angosta no entran dos columnas: el detalle baja debajo de la

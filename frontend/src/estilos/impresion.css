@@ -91,7 +91,6 @@
     box-shadow: none;
     animation: none;
   }
-  .modal-caja::before { display: none; }
   .modal-cuerpo { padding: 0; overflow: visible; }
 
   .card,
@@ -136,9 +135,6 @@
   .mapa-head::after,
   .visor-cuadro::after,
   .card.activa::after,
-  .comparacion-despues::after,
-  .login-card::before,
-  .modal-caja::before,
   .vista-titulo::before { display: none !important; }
 
   /* Lo dorado que sí lleva información se imprime en blanco y negro */

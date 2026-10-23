@@ -10,8 +10,7 @@ import DialogoConfirmacion, { type PedidoDeConfirmacion } from './DialogoConfirm
 import EditorDeRuta from './EditorDeRuta';
 import EncabezadoDeVista from './EncabezadoDeVista';
 import { EsqueletoDeTabla, EstadoVacio } from './EstadosDeVista';
-import IconoCerrar from './IconoCerrar';
-import { IconoBase, IconoMas, IconoRutas, IconoUbicacion } from './Iconos';
+import { IconoBase, IconoCerrar, IconoMas, IconoRutas, IconoUbicacion } from './Iconos';
 import Modal from './Modal';
 
 type Formulario = { name: string; lat: string; lon: string };
@@ -548,7 +547,7 @@ export default function BasesView({ me }: Readonly<{ me: Me }>) {
               onClick={cerrarFormulario}
               disabled={guardando}
             >
-              <IconoCerrar />
+              <IconoCerrar tamano={18} />
             </button>
           </header>
           <form className="modal-formulario" onSubmit={guardar} noValidate>
@@ -612,7 +611,7 @@ export default function BasesView({ me }: Readonly<{ me: Me }>) {
 
             <footer className="modal-pie">
               {faltante && <p className="pie-nota">{faltante}</p>}
-              <button type="button" className="ghost" onClick={cerrarFormulario} disabled={guardando}>
+              <button type="button" onClick={cerrarFormulario} disabled={guardando}>
                 Cancelar
               </button>
               <button type="submit" className="primario" disabled={!completo || guardando}>
@@ -630,7 +629,7 @@ export default function BasesView({ me }: Readonly<{ me: Me }>) {
               Rutas de {asignando.name}
             </h2>
             <button type="button" className="modal-cerrar" aria-label="Cerrar" onClick={() => setAsignando(null)}>
-              <IconoCerrar />
+              <IconoCerrar tamano={18} />
             </button>
           </header>
           <div className="modal-cuerpo form-base">
@@ -689,7 +688,7 @@ export default function BasesView({ me }: Readonly<{ me: Me }>) {
             </ul>
           </div>
           <div className="modal-pie">
-            <button type="button" className="ghost" onClick={() => setAsignando(null)}>
+            <button type="button" onClick={() => setAsignando(null)}>
               {reciencreada ? 'Después' : 'Cancelar'}
             </button>
             <button type="button" className="primario" onClick={() => guardarRutas(asignando)}>

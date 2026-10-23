@@ -270,7 +270,11 @@ export function IconoVolver(props: PropsDeIcono) {
   );
 }
 
-/** La cruz de cerrar un diálogo o un aviso. */
+/**
+ * La cruz de cerrar un diálogo o un aviso. Es la única de la consola: hubo un
+ * "×" de texto (que cambia de peso con la fuente de cada máquina) y dos cruces
+ * más con su propio trazo, y las cabeceras de los diálogos no se veían iguales.
+ */
 export function IconoCerrar(props: PropsDeIcono) {
   return (
     <Trazo {...props}>
@@ -313,6 +317,43 @@ export function IconoPausa(props: PropsDeIcono) {
   return (
     <Trazo {...props}>
       <path d="M9 5v14M15 5v14" />
+    </Trazo>
+  );
+}
+
+/** El par de la pausa: retomar la ruta, devolver el dron al patrullaje. */
+export function IconoReanudar(props: PropsDeIcono) {
+  return (
+    <Trazo {...props}>
+      <path d="M8 5.5v13l10-6.5z" />
+    </Trazo>
+  );
+}
+
+/** Una flecha que sube desde el suelo: despegar. */
+export function IconoDespegar(props: PropsDeIcono) {
+  return (
+    <Trazo {...props}>
+      <path d="M12 16V4M7 9l5-5 5 5M5 20h14" />
+    </Trazo>
+  );
+}
+
+/** Una flecha que baja hasta el suelo: aterrizar. */
+export function IconoAterrizar(props: PropsDeIcono) {
+  return (
+    <Trazo {...props}>
+      <path d="M12 4v12M7 11l5 5 5-5M5 20h14" />
+    </Trazo>
+  );
+}
+
+/** La impresora del sticker del QR. */
+export function IconoImprimir(props: PropsDeIcono) {
+  return (
+    <Trazo {...props}>
+      <path d="M7 9V3h10v6M7 17H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2" />
+      <path d="M7 14h10v7H7z" />
     </Trazo>
   );
 }

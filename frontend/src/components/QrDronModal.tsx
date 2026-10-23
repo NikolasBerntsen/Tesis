@@ -1,7 +1,7 @@
 import { useEffect, useId, useState } from 'react';
 import { toDataURL } from 'qrcode';
 import type { Drone } from '../types';
-import IconoCerrar from './IconoCerrar';
+import { IconoCerrar, IconoImprimir } from './Iconos';
 import Modal from './Modal';
 
 /**
@@ -43,8 +43,8 @@ export default function QrDronModal({ dron, onCerrar }: { dron: Drone; onCerrar:
           </h2>
           <p className="modal-subtitulo">El código lleva sólo el identificador</p>
         </div>
-        <button className="modal-cerrar" aria-label="Cerrar el sticker" onClick={onCerrar}>
-          <IconoCerrar />
+        <button type="button" className="modal-cerrar" aria-label="Cerrar el sticker" onClick={onCerrar}>
+          <IconoCerrar tamano={18} />
         </button>
       </header>
 
@@ -73,10 +73,11 @@ export default function QrDronModal({ dron, onCerrar }: { dron: Drone; onCerrar:
       </div>
 
       <footer className="modal-pie">
-        <button className="ghost" onClick={onCerrar}>
+        <button type="button" onClick={onCerrar}>
           Cerrar
         </button>
-        <button className="primario" onClick={() => window.print()} disabled={!imagen}>
+        <button type="button" className="primario" onClick={() => window.print()} disabled={!imagen}>
+          <IconoImprimir tamano={18} />
           Imprimir sticker
         </button>
       </footer>
