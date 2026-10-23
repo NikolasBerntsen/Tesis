@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, rutasDeBase } from '../api';
 import { posicionDelDron, stateLabel } from '../format';
 import type { RastroObjetivo } from '../rastro';
-import { avisoDeOrdenesEnRelevo, duenioDeLaAlerta } from '../relevos';
+import { avisoDeOrdenesEnRelevo, avisoDeReanudarEnRelevo, duenioDeLaAlerta, participaDeUnRelevo } from '../relevos';
 import type { Alert, Drone, DroneStatus, EventRow, Me, PatrolRoute, Relevo } from '../types';
 import type { DecidirAlerta } from '../useDecisionDeAlerta';
 import AlertaEnCurso from './AlertaEnCurso';
@@ -77,6 +77,24 @@ const ORDEN_EN_CURSO: Record<OrdenDeVuelo, string> = {
 };
 
 const SIN_RELEVOS: readonly Relevo[] = [];
+
+/**
+ * Lo que hace el dron cuando se lo suelta sin darle una orden (`'none'`): con
+ * objetivo vuelve a él, y en un relevo sigue con el relevo (RELEVOS §3.9).
+ * Sin ninguna de las dos se suelta con `'last'` y vuelve a su ruta.
+ */
+function queHaceAlSoltarSinOrden(conObjetivo: boolean, enRelevo: boolean): string {
+  if (enRelevo) {
+    return conObjetivo ? 'vuelve al objetivo que estaba siguiendo, y el relevo sigue en marcha' : 'sigue con el relevo';
+  }
+  return conObjetivo ? 'vuelve al objetivo que estaba siguiendo' : 'vuelve a patrullar su ruta';
+}
+
+/** El botón de soltar que no pierde nada: dice a qué vuelve el dron. */
+function etiquetaDeSoltarSinOrden(conObjetivo: boolean, enRelevo: boolean): string {
+  if (!enRelevo) return 'Soltar control (el dron vuelve al objetivo)';
+  return conObjetivo ? 'Soltar control (vuelve al objetivo, sigue el relevo)' : 'Soltar control (sigue el relevo)';
+}
 
 export default function DroneDetail({
   me,
@@ -268,6 +286,24 @@ export default function DroneDetail({
   const hayAlerta = pendientes.length > 0;
   /** Qué le hace al relevo en marcha una orden de patrullaje (RELEVOS §3.9). */
   const avisoDeRelevo = avisoDeOrdenesEnRelevo(drone.droneId, relevos);
+  /**
+   * El dron está en un relevo activo, de cualquiera de los dos lados. Soltarle
+   * el control con `'last'` es un `resume_patrol`, que el hub toma como orden
+   * del operador (RELEVOS §3.9): a B lo saca del relevo, y A se queda sin
+   * relevo. Y B en camino no tiene objetivo todavía (su rastreador arranca en
+   * el traspaso, §3.5), así que mirar sólo el objetivo lo soltaba justo así.
+   */
+  const enRelevo = participaDeUnRelevo(drone.droneId, status, relevos);
+  /** Qué le pasa al relevo si igual se suelta con «Soltar y reanudar patrullaje». */
+  const avisoAlReanudar = avisoDeReanudarEnRelevo(drone.droneId, status, relevos);
+  const idAvisoAlReanudar = useId();
+  /**
+   * Con qué se suelta el control cuando no lo elige el operador (la salida de
+   * la vista de pilotaje y el supervisor que lo quita): la regla del hub,
+   * `reanudacionAlSoltar` en ws.ts. Con objetivo o en un relevo, `'none'`: el
+   * dron vuelve a lo que estaba haciendo. Si no, `'last'`: a su ruta.
+   */
+  const reanudacionAlSoltar = objetivo || enRelevo ? 'none' : 'last';
 
   // El aviso de "orden en curso" se va solo cuando el dron confirma: en el aire
   // para el despegue, en el suelo para el aterrizaje. También si se suelta el
@@ -413,27 +449,28 @@ export default function DroneDetail({
   /**
    * Supervisor: mismo endpoint, el backend registra que fue forzado. Con
    * objetivo, el dron vuelve a él: quitarle el control a alguien no es decidir
-   * que el objetivo deja de importar. Va por la confirmación (le corta el vuelo
-   * a otra persona), así que el error sube al diálogo en vez de quedar acá.
+   * que el objetivo deja de importar. En un relevo, el relevo sigue: tampoco es
+   * decidir cancelarlo. Va por la confirmación (le corta el vuelo a otra
+   * persona), así que el error sube al diálogo en vez de quedar acá.
    */
   async function quitarControl() {
     const otro = controlador;
     await api(`/drones/${drone.droneId}/control`, {
       method: 'DELETE',
-      body: JSON.stringify({ resume: objetivo ? 'none' : 'last' }),
+      body: JSON.stringify({ resume: reanudacionAlSoltar }),
     });
     avisar(`Se le quitó el control de ${drone.displayName} a ${otro}.`);
   }
   /**
    * La salida de la vista de pilotaje suelta el control con la misma regla que
-   * el supervisor: con objetivo, el dron vuelve a él. La vista se cierra antes
-   * de soltar, así la pérdida del control que viene después no se lee como que
-   * se lo sacó otro.
+   * el supervisor: con objetivo o en un relevo, el dron vuelve a lo suyo. La
+   * vista se cierra antes de soltar, así la pérdida del control que viene
+   * después no se lee como que se lo sacó otro.
    */
   const salirDelPilotaje = () => {
     setPilotando(false);
     // llamar() ya atrapa el rechazo y lo deja a la vista: no hay nada que esperar acá.
-    void soltarControl(objetivo ? 'none' : 'last');
+    void soltarControl(reanudacionAlSoltar);
   };
 
   // Otro dron en pantalla es otro vuelo: la vista no se queda abierta pilotando
@@ -785,16 +822,27 @@ export default function DroneDetail({
                   Volver a la vista de pilotaje
                 </button>
 
-                {/* Con un objetivo cargado hay dos formas de soltar, y la que
-                    va primero es la que no pierde nada: el dron vuelve a
-                    orbitarlo o a seguirlo. Mandarlo a patrullar es dejar el
-                    objetivo, y eso tiene que ser una decisión explícita. */}
-                {objetivo ? (
+                {/* Con un objetivo cargado o en un relevo hay dos formas de
+                    soltar, y la que va primero es la que no pierde nada: el
+                    dron vuelve a orbitar o seguir el objetivo, o sigue con el
+                    relevo. Mandarlo a patrullar es dejar eso, y tiene que ser
+                    una decisión explícita; en un relevo, con lo que le hace
+                    dicho antes del botón (RELEVOS §3.9). */}
+                {objetivo || enRelevo ? (
                   <>
                     <button className="resume" onClick={() => soltarControl('none')}>
-                      Soltar control (el dron vuelve al objetivo)
+                      {etiquetaDeSoltarSinOrden(!!objetivo, enRelevo)}
                     </button>
-                    <button className="ghost soltar-y-patrullar" onClick={() => soltarControl('last')}>
+                    {avisoAlReanudar && (
+                      <p className="aviso" role="note" id={idAvisoAlReanudar} data-testid="aviso-reanudar-en-relevo">
+                        {avisoAlReanudar}
+                      </p>
+                    )}
+                    <button
+                      className="ghost soltar-y-patrullar"
+                      aria-describedby={avisoAlReanudar ? idAvisoAlReanudar : undefined}
+                      onClick={() => soltarControl('last')}
+                    >
                       Soltar y reanudar patrullaje
                     </button>
                   </>
@@ -847,6 +895,7 @@ export default function DroneDetail({
           avisoDeOrden={ordenEnCurso && ORDEN_EN_CURSO[ordenEnCurso]}
           error={error}
           hayObjetivo={!!objetivo}
+          enRelevo={enRelevo}
           suspendido={aConfirmar !== null}
           onMando={onMando}
           onCamara={onCamara}
@@ -880,9 +929,7 @@ export default function DroneDetail({
         <DialogoConfirmacion
           pedido={{
             titulo: `Quitarle el control a ${controlador}`,
-            consecuencia: objetivo
-              ? `${controlador} deja de pilotear ${drone.displayName} en el acto y el dron vuelve al objetivo que estaba siguiendo.`
-              : `${controlador} deja de pilotear ${drone.displayName} en el acto y el dron vuelve a patrullar su ruta.`,
+            consecuencia: `${controlador} deja de pilotear ${drone.displayName} en el acto y el dron ${queHaceAlSoltarSinOrden(!!objetivo, enRelevo)}.`,
             detalle: 'Queda en el registro que el control se soltó a la fuerza, y quién lo hizo.',
             confirmar: 'Quitar control',
             enCurso: 'Quitando…',

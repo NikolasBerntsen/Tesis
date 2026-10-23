@@ -21,6 +21,7 @@ import {
   sumarFotoEnVivo,
 } from '../emergencias';
 import { sumarAlRastro, type RastroObjetivo } from '../rastro';
+import { crearRecarga } from '../recarga';
 import { aplicarRelevo, duenioDeLaAlerta, esRelevo, reemplazarActivos } from '../relevos';
 import type {
   Alert,
@@ -112,6 +113,11 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
   // la ficha al abrirse: guardarlas todas acá sería cargar imágenes que nadie
   // pidió.
   const [fotosDeEmergencias, setFotosDeEmergencias] = useState<Record<number, FotoDeEmergencia[]>>({});
+  // Lo que trae el WebSocket mientras vuelve cada uno de esos pedidos, y cuál
+  // es el último: la respuesta no puede borrar lo que llegó en vivo después de
+  // que el hub la armó, ni pisarla la de un pedido anterior (ver recarga.ts).
+  const [recargaDeRelevos] = useState(crearRecarga);
+  const [recargaDeEmergencias] = useState(crearRecarga);
 
   // El rol de la sesión sirve para pintar la barra sin esperar a /me; el que
   // manda es el que informa el backend, y si difieren la sección se corrige sola.
@@ -199,10 +205,16 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
       // id. Lo único que se mira es que tengan forma, para que un mensaje roto
       // no tumbe la consola entera.
       case 'relay_updated':
-        if (esRelevo(msg.relay)) setRelevos((prev) => aplicarRelevo(prev, msg.relay));
+        if (esRelevo(msg.relay)) {
+          recargaDeRelevos.anotar(msg.relay.id);
+          setRelevos((prev) => aplicarRelevo(prev, msg.relay));
+        }
         break;
       case 'emergency_updated':
-        if (esEmergencia(msg.emergencia)) setEmergencias((prev) => aplicarEmergencia(prev, msg.emergencia));
+        if (esEmergencia(msg.emergencia)) {
+          recargaDeEmergencias.anotar(msg.emergencia.id);
+          setEmergencias((prev) => aplicarEmergencia(prev, msg.emergencia));
+        }
         break;
       case 'emergency_photo':
         if (esFotoEnVivo(msg)) setFotosDeEmergencias((prev) => sumarFotoEnVivo(prev, msg));
@@ -241,14 +253,16 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
   // buscar el dron. Los relevos no: el backend no se los muestra.
   useEffect(() => {
     if (!me) return;
-    void traerEmergenciasAbiertas()
-      .then((lista) => setEmergencias((prev) => reemplazarAbiertas(prev, lista)))
+    void recargaDeEmergencias
+      .recargar(traerEmergenciasAbiertas, (lista, vistas) =>
+        setEmergencias((prev) => reemplazarAbiertas(prev, lista, vistas)),
+      )
       .catch(console.error);
     if (me.role === 'field_operator') return;
-    void traerRelevosActivos()
-      .then((lista) => setRelevos((prev) => reemplazarActivos(prev, lista)))
+    void recargaDeRelevos
+      .recargar(traerRelevosActivos, (lista, vistos) => setRelevos((prev) => reemplazarActivos(prev, lista, vistos)))
       .catch(console.error);
-  }, [conectado, me]);
+  }, [conectado, me, recargaDeEmergencias, recargaDeRelevos]);
 
   /**
    * Cierra una emergencia. La respuesta se aplica en el acto (el

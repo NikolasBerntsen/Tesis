@@ -91,6 +91,13 @@ describe('aplicarEmergencia y reemplazarAbiertas', () => {
     expect(reemplazarAbiertas(lista, {})).toBe(lista);
   });
 
+  it('no saca la que llegó en vivo mientras el pedido iba y volvía: el aviso sigue hasta que la recuperen', () => {
+    const recienAterrizada = emergencia({ id: 5, ...ATERRIZADA });
+    const seRecupero = emergencia({ id: 2 });
+    const resultado = reemplazarAbiertas([recienAterrizada, seRecupero], [], new Set([5]));
+    expect(resultado).toEqual([recienAterrizada]);
+  });
+
   it('sinFotos deja la cantidad en lugar de la lista', () => {
     const { fotos: _fotos, ...resto } = emergencia();
     expect(sinFotos({ ...resto, fotos: [foto(), foto({ seq: 1 })] }).fotos).toBe(2);

@@ -33,10 +33,34 @@ type Pedido = { metodo: string; ruta: string };
 let pedidos: Pedido[] = [];
 /** Pedidos que el backend rechaza, con su código. */
 let rechazos: Record<string, number> = {};
+/**
+ * Pedidos que el backend contesta recién cuando el test lo dice, en el orden
+ * en que salen. La respuesta se arma al salir el pedido, como la arma el hub:
+ * lo que cambie mientras tanto ya no está en ella.
+ */
+let demoras: Record<string, Promise<void>[]> = {};
+
+/** Demora el próximo pedido `clave` ("GET /ruta"); devuelve con qué soltar su respuesta. */
+function demorar(clave: string): () => void {
+  let soltar = () => {};
+  const puerta = new Promise<void>((ok) => {
+    soltar = ok;
+  });
+  (demoras[clave] ??= []).push(puerta);
+  return soltar;
+}
+
+/**
+ * Deja que termine todo lo que estaba encadenado a una respuesta (el `json()`,
+ * la recarga, el estado). Es un turno del bucle, no una espera: no depende
+ * del reloj.
+ */
+const terminarPendientes = () => act(() => new Promise<void>((listo) => setTimeout(listo, 0)));
 
 let meFix: Me = makeMe({ username: 'oper1', role: 'operator' });
 const ALFA = makeDrone({ droneId: 'a1', hash: 'a1', displayName: 'Alfa', online: true });
 const BRAVO = makeDrone({ droneId: 'b2', hash: 'b2', displayName: 'Bravo', online: true });
+const CHARLIE = makeDrone({ droneId: 'c3', hash: 'c3', displayName: 'Charlie', online: true });
 let dronesFix: Drone[] = [];
 let alertasFix: Alert[] = [];
 let relevosFix: unknown = [];
@@ -76,6 +100,7 @@ beforeEach(() => {
   localStorage.setItem('cc_user', 'oper1');
   pedidos = [];
   rechazos = {};
+  demoras = {};
   conectadoFix = true;
   meFix = makeMe({ username: 'oper1', role: 'operator' });
   dronesFix = [ALFA, BRAVO];
@@ -91,12 +116,12 @@ beforeEach(() => {
       const metodo = init.method ?? 'GET';
       const ruta = String(url).replace(/^\/api/, '');
       pedidos.push({ metodo, ruta });
-      const codigo = rechazos[`${metodo} ${ruta}`];
-      return {
-        ok: codigo === undefined,
-        status: codigo ?? 200,
-        json: async () => (codigo === undefined ? responder(metodo, ruta) : { error: 'El backend dijo que no' }),
-      } as Response;
+      const clave = `${metodo} ${ruta}`;
+      const codigo = rechazos[clave];
+      const cuerpo = codigo === undefined ? responder(metodo, ruta) : { error: 'El backend dijo que no' };
+      const puerta = demoras[clave]?.shift();
+      if (puerta) await puerta;
+      return { ok: codigo === undefined, status: codigo ?? 200, json: async () => cuerpo } as Response;
     }),
   );
 });
@@ -179,6 +204,48 @@ describe('Console — relevos', () => {
     reconectar();
     await waitFor(() => expect(within(alfa).queryByTestId('insignias-relevo')).not.toBeInTheDocument());
     expect(rutas().filter((r) => r === 'GET /relevos?activos=1').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('un relay_updated que llega mientras vuelve la lista no se pierde: la lista salió antes', async () => {
+    dronesFix = [ALFA, BRAVO, CHARLIE];
+    // Lo que el hub tenía al armar la respuesta: el relevo de Charlie.
+    relevosFix = [makeRelevo({ id: 8, origen: { droneId: 'c3', displayName: 'Charlie' } })];
+    const soltar = demorar('GET /relevos?activos=1');
+    render(<Console onLogout={() => {}} />);
+    await waitFor(() => expect(rutas()).toContain('GET /relevos?activos=1'));
+
+    // Después de armarla, Alfa pide uno y no hay nadie: llega por el WebSocket antes que la respuesta.
+    fire({ type: 'relay_updated', relay: makeRelevo({ id: 9, estado: 'SIN_RELEVO', relevo: null }) });
+    const alfa = await mosaico('Alfa');
+    expect(within(alfa).getByText('Sin relevo disponible')).toBeInTheDocument();
+
+    await act(async () => soltar());
+    expect(await within(await mosaico('Charlie')).findByText('Relevo en camino: Bravo')).toBeInTheDocument();
+    // SIN_RELEVO avisa una sola vez: si la lista lo borrara, la insignia no volvería.
+    expect(within(alfa).getByText('Sin relevo disponible')).toBeInTheDocument();
+  });
+
+  it('al reconectar, la lista de un pedido anterior que llega última no pisa a la del último', async () => {
+    dronesFix = [ALFA, BRAVO, CHARLIE];
+    render(<Console onLogout={() => {}} />);
+    const alfa = await mosaico('Alfa');
+    await waitFor(() => expect(rutas()).toContain('GET /relevos?activos=1'));
+
+    // Al caerse el canal sale un pedido que se demora; lo que tenía el hub: el de Charlie.
+    relevosFix = [makeRelevo({ id: 8, origen: { droneId: 'c3', displayName: 'Charlie' } })];
+    const soltarElViejo = demorar('GET /relevos?activos=1');
+    conectadoFix = false;
+    fire({ type: 'drone_renamed', droneId: 'zz', displayName: 'nadie' });
+    // Al volver sale otro, que contesta enseguida: el de Charlie terminó y Alfa pidió uno.
+    relevosFix = [makeRelevo({ id: 9 })];
+    conectadoFix = true;
+    fire({ type: 'drone_renamed', droneId: 'zz', displayName: 'nadie otra vez' });
+    expect(await within(alfa).findByText('Relevo en camino: Bravo')).toBeInTheDocument();
+
+    await act(async () => soltarElViejo());
+    await terminarPendientes();
+    expect(within(alfa).getByText('Relevo en camino: Bravo')).toBeInTheDocument();
+    expect(within(await mosaico('Charlie')).queryByTestId('insignias-relevo')).not.toBeInTheDocument();
   });
 
   it('un backend sin relevos (lista rota o error) deja la consola andando', async () => {
@@ -335,6 +402,26 @@ describe('Console — aterrizajes de emergencia', () => {
       expect(await screen.findByRole('heading', { name: titulo, level: 2 })).toBeInTheDocument();
       expect(screen.getByRole('region', { name: /sin recuperar/ })).toBeInTheDocument();
     }
+  });
+
+  it('una emergencia que llega en vivo mientras vuelve la lista sigue avisada hasta que la recuperen', async () => {
+    // Lo que el hub tenía al armar la respuesta: sólo la de Bravo.
+    emergenciasFix = [makeEmergencia({ id: 4, droneId: 'b2', displayName: 'Bravo' })];
+    const soltar = demorar('GET /emergencias?abiertas=1');
+    render(<Console onLogout={() => {}} />);
+    await waitFor(() => expect(rutas()).toContain('GET /emergencias?abiertas=1'));
+
+    // Alfa toca tierra y ese es su último mensaje hasta que alguien vaya a buscarlo.
+    fire({
+      type: 'emergency_updated',
+      emergencia: makeEmergencia({ aterrizadaEn: '2026-10-23T15:04:30.100Z', aterrizajeLat: -34.87, aterrizajeLon: -56.19 }),
+    });
+    expect(screen.getByRole('region', { name: 'Aterrizaje de emergencia sin recuperar' })).toHaveTextContent('Alfa');
+
+    await act(async () => soltar());
+    const aviso = await screen.findByRole('region', { name: '2 aterrizajes de emergencia sin recuperar' });
+    expect(aviso).toHaveTextContent('Alfa');
+    expect(aviso).toHaveTextContent('Bravo');
   });
 
   it('al reconectar se va el aviso de la que se recuperó mientras tanto', async () => {

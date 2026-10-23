@@ -51,16 +51,27 @@ export function aplicarEmergencia(lista: Emergencia[], emergencia: Emergencia): 
   return lista.map((e) => (e.id === emergencia.id ? fusionarEmergencia(previa, emergencia) : e));
 }
 
+const NINGUNA: ReadonlySet<number> = new Set();
+
 /**
  * La lista de `GET /api/emergencias?abiertas=1`. Una abierta que el hub ya no
  * nombra se recuperó mientras el canal estuvo caído: el aviso se va. Las
  * recuperadas que se conocían se quedan, para la ficha de un evento viejo.
+ *
+ * Salvo las de `vistasEnVivo`: las que trajo un `emergency_updated` mientras
+ * el pedido iba y volvía (ver recarga.ts). La lista pudo salir del hub antes
+ * de que se abrieran, y el aviso tiene que quedar hasta que alguien la marque
+ * recuperada (RELEVOS §6), no hasta la próxima reconexión.
  */
-export function reemplazarAbiertas(lista: Emergencia[], delHub: unknown): Emergencia[] {
+export function reemplazarAbiertas(
+  lista: Emergencia[],
+  delHub: unknown,
+  vistasEnVivo: ReadonlySet<number> = NINGUNA,
+): Emergencia[] {
   if (!Array.isArray(delHub)) return lista;
   const validas = delHub.filter(esEmergencia);
   const nombradas = new Set(validas.map((e) => e.id));
-  let resultado = lista.filter((e) => !emergenciaAbierta(e) || nombradas.has(e.id));
+  let resultado = lista.filter((e) => !emergenciaAbierta(e) || nombradas.has(e.id) || vistasEnVivo.has(e.id));
   for (const e of validas) resultado = aplicarEmergencia(resultado, e);
   return resultado;
 }

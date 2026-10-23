@@ -70,18 +70,31 @@ export function aplicarRelevo(lista: Relevo[], relevo: Relevo): Relevo[] {
   return lista.map((r) => (r.id === relevo.id ? relevo : r));
 }
 
+const NINGUNO: ReadonlySet<number> = new Set();
+
 /**
  * La lista de `GET /api/relevos?activos=1`, que llega al montar y en cada
  * reconexión. Un activo que la consola tenía y el hub ya no nombra terminó
  * mientras el canal estuvo caído: no se sabe cómo, y seguir mostrándolo en la
  * tarjeta sería mentir. Los terminados que ya se conocían se quedan.
+ *
+ * Salvo los de `vistosEnVivo`: los que trajo un `relay_updated` mientras el
+ * pedido iba y volvía (ver recarga.ts). El hub pudo armar la lista ANTES de
+ * crearlos, así que no nombrarlos no dice que terminaron; si terminan, su
+ * propio `relay_updated` lo va a decir. Sin esto, un relevo recién pasado a
+ * SIN_RELEVO perdía «Sin relevo disponible» hasta su próximo cambio, que
+ * puede no llegar nunca.
  */
-export function reemplazarActivos(lista: Relevo[], delHub: unknown): Relevo[] {
+export function reemplazarActivos(
+  lista: Relevo[],
+  delHub: unknown,
+  vistosEnVivo: ReadonlySet<number> = NINGUNO,
+): Relevo[] {
   // Un backend viejo no tiene la ruta y contesta otra cosa: sin lista, nada que reemplazar.
   if (!Array.isArray(delHub)) return lista;
   const validos = delHub.filter(esRelevo);
   const nombrados = new Set(validos.map((r) => r.id));
-  let resultado = lista.filter((r) => !relevoActivo(r) || nombrados.has(r.id));
+  let resultado = lista.filter((r) => !relevoActivo(r) || nombrados.has(r.id) || vistosEnVivo.has(r.id));
   for (const r of validos) resultado = aplicarRelevo(resultado, r);
   return resultado;
 }
@@ -265,6 +278,63 @@ export function avisoDeOrdenesEnRelevo(droneId: string, relevos: readonly Relevo
   if (relevo.motivo !== 'seguimiento') return null;
   const quien = relevo.relevo?.displayName ?? 'Otro dron';
   return `${quien} viene a relevarlo sobre el objetivo: una orden de ruta, de nodo o de retomar lo hace soltarlo antes del traspaso.`;
+}
+
+// ---- Soltar el control de un dron que está en un relevo ----
+
+/** El relevo activo del que participa el dron, de cualquiera de los dos lados. */
+function relevoActivoDe(droneId: string, relevos: readonly Relevo[]): Relevo | undefined {
+  return relevos.find((r) => relevoActivo(r) && (r.origen.droneId === droneId || r.relevo?.droneId === droneId));
+}
+
+/**
+ * Si el dron participa de un relevo activo: es la pregunta que hace el hub
+ * (`reanudacionAlSoltar` en ws.ts) para soltarle el control sin orden. Soltar
+ * con `'last'` es un `resume_patrol`, y eso el hub lo toma como una orden del
+ * operador (RELEVOS §3.9): a B lo saca del relevo y a A lo manda a patrullar
+ * con la batería que lo hizo pedir uno. B en camino todavía no tiene objetivo
+ * (su rastreador arranca en el punto de traspaso, §3.5), así que mirar sólo
+ * `status.target` lo soltaba con `'last'` y cancelaba el relevo.
+ *
+ * Mira también el `status.relevo` del teléfono: la consola puede no conocer el
+ * relevo (la lista por REST falló o todavía no volvió), y el dron sí lo sabe.
+ */
+export function participaDeUnRelevo(
+  droneId: string,
+  status: DroneStatus | null | undefined,
+  relevos: readonly Relevo[],
+): boolean {
+  return typeof status?.relevo?.relayId === 'number' || relevoActivoDe(droneId, relevos) !== undefined;
+}
+
+/**
+ * Lo que hace «Soltar y reanudar patrullaje» con el relevo del que participa
+ * el dron (RELEVOS §3.9), o `null` si no participa de ninguno. Es lo que el
+ * hub hace con esa orden (`ordenDelOperador`): la consola lo dice antes del clic.
+ */
+export function avisoDeReanudarEnRelevo(
+  droneId: string,
+  status: DroneStatus | null | undefined,
+  relevos: readonly Relevo[],
+): string | null {
+  const relevo = relevoActivoDe(droneId, relevos);
+  if (!relevo) {
+    if (!participaDeUnRelevo(droneId, status, relevos)) return null;
+    return 'Está en un relevo: reanudar el patrullaje lo saca del relevo.';
+  }
+  const origen = relevo.origen.displayName;
+  if (relevo.relevo?.droneId === droneId) {
+    // La reserva es tentativa: el hub busca otro candidato, no cancela.
+    if (relevo.estado === 'RESERVADO') {
+      return `Está reservado para relevar a ${origen}: reanudar el patrullaje le quita la reserva.`;
+    }
+    return `Está yendo a relevar a ${origen}: reanudar el patrullaje cancela el relevo y ${origen} se queda sin relevo.`;
+  }
+  if (relevo.motivo === 'seguimiento' && relevo.estado !== 'TRASPASO') {
+    const quien = relevo.relevo?.displayName ?? 'el relevo';
+    return `Pidió un relevo: reanudar el patrullaje le hace soltar el objetivo antes de que llegue ${quien}, y patrullar con la batería que lo hizo pedirlo.`;
+  }
+  return 'Pidió un relevo: reanudar el patrullaje lo manda a patrullar con la batería que lo hizo pedirlo.';
 }
 
 // ---- La alerta cambia de dueño ----

@@ -4,11 +4,13 @@ import {
   TERMINADOS_QUE_SE_GUARDAN,
   aplicarRelevo,
   avisoDeOrdenesEnRelevo,
+  avisoDeReanudarEnRelevo,
   duenioDeLaAlerta,
   esRelevo,
   estadoDelRelevo,
   insigniasDelDron,
   motivoDeFin,
+  participaDeUnRelevo,
   reemplazarActivos,
   relevoActivo,
   tonoDelEstado,
@@ -102,6 +104,14 @@ describe('reemplazarActivos (la lista del hub al reconectar)', () => {
   it('sin una lista (un backend viejo) no toca nada', () => {
     const lista = [relevo()];
     expect(reemplazarActivos(lista, { error: 'no existe' })).toBe(lista);
+  });
+
+  it('no saca el que llegó en vivo mientras el pedido iba y volvía: la lista pudo salir antes', () => {
+    const enVivo = relevo({ id: 5, estado: 'SIN_RELEVO', relevo: null });
+    const perdido = relevo({ id: 2, estado: 'EN_CAMINO' });
+    const resultado = reemplazarActivos([enVivo, perdido], [relevo({ id: 3 })], new Set([5]));
+    expect(resultado.map((r) => r.id).sort()).toEqual([3, 5]);
+    expect(resultado.find((r) => r.id === 5)).toBe(enVivo);
   });
 });
 
@@ -206,6 +216,56 @@ describe('avisoDeOrdenesEnRelevo (RELEVOS §3.9)', () => {
     expect(avisoDeOrdenesEnRelevo('b2', [relevo({ estado: 'RESERVADO' })])).toBeNull();
     expect(avisoDeOrdenesEnRelevo('b2', [relevo({ estado: 'COMPLETADO' })])).toBeNull();
     expect(avisoDeOrdenesEnRelevo('c3', [relevo()])).toBeNull();
+  });
+});
+
+describe('soltar el control de un dron en un relevo (RELEVOS §3.9)', () => {
+  const sinStatus = null;
+
+  it('participa el que lo pidió y el que va, mientras el relevo esté activo', () => {
+    expect(participaDeUnRelevo('a1', sinStatus, [relevo()])).toBe(true);
+    expect(participaDeUnRelevo('b2', sinStatus, [relevo({ estado: 'RESERVADO' })])).toBe(true);
+    expect(participaDeUnRelevo('a1', sinStatus, [relevo({ estado: 'SIN_RELEVO', relevo: null })])).toBe(true);
+    expect(participaDeUnRelevo('b2', sinStatus, [relevo({ estado: 'COMPLETADO' })])).toBe(false);
+    expect(participaDeUnRelevo('c3', sinStatus, [relevo()])).toBe(false);
+    expect(participaDeUnRelevo('c3', undefined, [])).toBe(false);
+  });
+
+  it('también cuenta el relevo que informa el teléfono, aunque la consola no lo conozca', () => {
+    const enUnRelevo = makeStatus({ relevo: enEspera({ enEspera: false, disponible: false, relayId: 9, rol: 'relevo', fase: 'en_camino' }) });
+    expect(participaDeUnRelevo('c3', enUnRelevo, [])).toBe(true);
+    // En espera sin relevo asignado no es estar en uno.
+    expect(participaDeUnRelevo('c3', makeStatus({ relevo: enEspera() }), [])).toBe(false);
+    expect(avisoDeReanudarEnRelevo('c3', enUnRelevo, [])).toBe('Está en un relevo: reanudar el patrullaje lo saca del relevo.');
+  });
+
+  it('al que va: reanudar cancela el relevo, o le quita la reserva si todavía no sabía nada', () => {
+    expect(avisoDeReanudarEnRelevo('b2', sinStatus, [relevo()])).toBe(
+      'Está yendo a relevar a Alfa: reanudar el patrullaje cancela el relevo y Alfa se queda sin relevo.',
+    );
+    expect(avisoDeReanudarEnRelevo('b2', sinStatus, [relevo({ estado: 'RESERVADO' })])).toBe(
+      'Está reservado para relevar a Alfa: reanudar el patrullaje le quita la reserva.',
+    );
+  });
+
+  it('al que pidió un seguimiento: suelta el objetivo antes de que llegue el otro', () => {
+    expect(avisoDeReanudarEnRelevo('a1', sinStatus, [relevo()])).toBe(
+      'Pidió un relevo: reanudar el patrullaje le hace soltar el objetivo antes de que llegue Bravo, y patrullar con la batería que lo hizo pedirlo.',
+    );
+    expect(avisoDeReanudarEnRelevo('a1', sinStatus, [relevo({ estado: 'SIN_RELEVO', relevo: null })])).toMatch(
+      /antes de que llegue el relevo,/,
+    );
+  });
+
+  it('al que pidió uno de patrulla, o ya está en el traspaso: lo manda a patrullar con poca batería', () => {
+    const texto = 'Pidió un relevo: reanudar el patrullaje lo manda a patrullar con la batería que lo hizo pedirlo.';
+    expect(avisoDeReanudarEnRelevo('a1', sinStatus, [relevo({ motivo: 'patrulla', estado: 'SIN_RELEVO', relevo: null })])).toBe(texto);
+    expect(avisoDeReanudarEnRelevo('a1', sinStatus, [relevo({ estado: 'TRASPASO' })])).toBe(texto);
+  });
+
+  it('sin relevo activo no hay nada que avisar', () => {
+    expect(avisoDeReanudarEnRelevo('a1', sinStatus, [relevo({ estado: 'FALLIDO' })])).toBeNull();
+    expect(avisoDeReanudarEnRelevo('a1', makeStatus(), [])).toBeNull();
   });
 });
 
