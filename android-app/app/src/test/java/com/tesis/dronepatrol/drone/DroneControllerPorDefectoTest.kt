@@ -43,13 +43,22 @@ class DroneControllerPorDefectoTest {
     @Test
     fun lasOrdenesSinEquivalenteNoLeDicenNadaAlDron() {
         dron.despegarHasta(60.0)
+        dron.cambiarAltura(80.0)
         dron.girarEnElLugar(90.0)
         dron.cancelarRegreso()
         dron.fijarPuntoDeRetornoAqui()
         dron.permitirRthPropioPorBateria(false)
         dron.fijarFailsafeAterrizar(true)
+        dron.soltarDespegue()
 
-        assertEquals("ni despega, ni gira, ni corta un regreso", emptyList<String>(), dron.ordenes)
+        assertEquals("ni despega, ni sube, ni gira, ni corta un regreso", emptyList<String>(), dron.ordenes)
+    }
+
+    /** Un controlador que no sabe despegar para un relevo no lo acepta: B lo rechaza sin moverse. */
+    @Test
+    fun sinImplementacionElDespegueDeUnRelevoNoSePrepara() = runTest {
+        assertFalse(dron.prepararDespegue())
+        assertEquals(emptyList<String>(), dron.ordenes)
     }
 
     @Test
