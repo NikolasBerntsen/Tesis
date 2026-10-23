@@ -120,8 +120,15 @@ class LectorDelHubTest {
         assertEquals("retirado", retirado.origen)
         assertNull(retirado.aLat)
         assertNull(retirado.aAlt)
+        assertFalse(retirado.aEnTierra)
         val enLinea = valido(ejemplo("relay_target")) as MensajeDelHub.ObjetivoActualizado
         assertEquals(40.0, enLinea.aAlt!!, 0.0)
+        val detenido = valido(ejemplo("relay_target", 2)) as MensajeDelHub.ObjetivoActualizado
+        assertEquals("retirado no es lejos: trae dónde quedó A", "retirado", detenido.origen)
+        assertEquals(-34.8504, detenido.aLat!!, 0.0)
+        assertFalse(detenido.aEnTierra)
+        val enTierra = valido(ejemplo("relay_target", 3)) as MensajeDelHub.ObjetivoActualizado
+        assertTrue(enTierra.aEnTierra)
 
         assertEquals(MensajeDelHub.Despegar(5), valido(ejemplo("relay_go")))
         assertEquals("Bravo", (valido(ejemplo("relay_done")) as MensajeDelHub.Traspaso).relevadoPor.displayName)
@@ -145,6 +152,9 @@ class LectorDelHubTest {
         invalido(ejemplo("relay_status").put("etaS", "74"))
         invalido(ejemplo("relay_status").put("etaS", true))
         invalido(ejemplo("relay_target").put("aAlt", 1_500))
+        invalido(ejemplo("relay_target").put("aEnTierra", "false"))
+        invalido(ejemplo("relay_target").put("aEnTierra", 0))
+        invalido(ejemplo("relay_target").also { it.remove("aEnTierra") })
         invalido(ejemplo("emergency_ack").put("aterrizada", "true"))
         invalido(ejemplo("emergency_photo_ack").put("ref", ""))
         invalido(ejemplo("emergency_photo_ack").put("ref", "x".repeat(65)))

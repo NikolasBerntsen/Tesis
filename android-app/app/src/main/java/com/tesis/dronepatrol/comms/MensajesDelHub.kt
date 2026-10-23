@@ -101,11 +101,13 @@ sealed interface MensajeDelHub {
         val alertId: Long,
         val decision: String,
         val objetivo: ObjetivoDelRelevo,
-        /** `en_linea`, `sin_enlace` o `retirado`. */
+        /** `en_linea`, `sin_enlace` o `retirado`: si A sigue al objetivo, no dónde está. */
         val origen: String,
         val aLat: Double?,
         val aLon: Double?,
         val aAlt: Double?,
+        /** El último status de A dice que está en tierra. */
+        val aEnTierra: Boolean,
         val ts: Long,
     ) : MensajeDelHub
 
@@ -330,6 +332,7 @@ internal object LectorDelHub {
             aLat = aLat,
             aLon = aLon,
             aAlt = if (presenteYNulo(msg, "aAlt")) null else numero(msg, "aAlt", ALTURA_MINIMA_M, ALTURA_MAXIMA_M),
+            aEnTierra = booleano(msg, "aEnTierra"),
             ts = entero(msg, "ts"),
         )
     }

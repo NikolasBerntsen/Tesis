@@ -83,11 +83,16 @@ class RelevoAsignado(
      * `en_linea`, `sin_enlace` o `retirado` del último `relay_target`. Un
      * `retirado` es para siempre: A ya no vuelve al objetivo, y un mensaje
      * posterior que diga otra cosa no lo trae de vuelta (ver [anotarOrigen]).
+     * Dice si A sigue al objetivo, no si está lejos: para bajar, B mira
+     * [aLat]/[aLon] y [aEnTierra] (ver [Aproximacion.puedeBajar]).
      */
     var origen = "en_linea"
         private set
     var aLat: Double? = null
     var aLon: Double? = null
+
+    /** El último `relay_target` dice que A está en tierra (`aEnTierra`). */
+    var aEnTierra = false
 
     /**
      * La última altura de A que se supo. Un `relay_target` sin ella (`aAlt:
@@ -170,7 +175,7 @@ object Aproximacion {
     /** B queda esto por encima de A en el traspaso. */
     const val SEPARACION_VERTICAL_M = 20.0
 
-    /** B baja recién con A a más de esto del objetivo (o retirado). */
+    /** B baja recién con A a más de esto del objetivo (o en tierra). */
     const val A_LEJOS_M = 100.0
 
     /**
@@ -198,11 +203,12 @@ object Aproximacion {
      * encima de 100 m los 20 m de más pasan el techo de 120 m —recortarla
      * dejaría a B a menos de 20 m de A, que es justo lo que no puede pasar—.
      *
-     * Ojo: `aAlt` es la altura de A sobre SU punto de despegue (barómetro,
-     * docs/PROTOCOLS.md §1.b), y la de B es sobre el suyo. Si B sale de otra
-     * base, a otra altura del terreno, las dos no se miden desde el mismo
-     * cero y esta cuenta no lo corrige: el contrato no trae la altura de
-     * ninguna base.
+     * `aAlt` es la altura de A sobre SU punto de despegue (barómetro,
+     * docs/PROTOCOLS.md §1.b), y la de B es sobre el suyo: solo miden desde el
+     * mismo cero si los dos despegaron de la misma base. Por eso el hub manda
+     * a un seguimiento únicamente drones de la base de la que despegó A
+     * (RELEVOS §3.2): esta cuenta no tiene cómo corregir otra altura del
+     * terreno, y el contrato no trae la de ninguna base.
      */
     fun alturaDeTransito(aAlt: Double?): Double? {
         val a = aAlt?.takeIf { it.isFinite() } ?: return null
@@ -261,15 +267,57 @@ object Aproximacion {
         Geo.distanciaM(oLat, oLon, bLat, bLon) <= DISTANCIA_TOMA_M + TOLERANCIA_TOMA_M
 
     /**
-     * B puede bajar a la altura de seguimiento: A ya no sigue al objetivo
-     * (`retirado`) o el último `relay_target` lo muestra a más de [A_LEJOS_M].
+     * B puede bajar a la altura de seguimiento, donde está, para orbitar o
+     * seguir al objetivo que ahora estima en ([oLat], [oLon]): el último
+     * `relay_target` dice que A está en tierra, o lo muestra a más de
+     * [A_LEJOS_M] de esa estimación.
+     *
+     * `retirado` NO alcanza: dice que A ya no sigue al objetivo, no dónde
+     * está. Un A que un operador detuvo queda quieto sobre su órbita, a la
+     * altura a la que B bajaría y en el círculo que B orbitaría; uno que
+     * arranca el regreso del DJI sube primero en vertical, ahí mismo. Sin la
+     * posición de A tampoco: B sigue arriba hasta saber.
      */
-    fun puedeBajar(r: RelevoAsignado): Boolean {
-        if (r.aRetirado) return true
-        val o = r.objetivo ?: return false
+    fun puedeBajar(r: RelevoAsignado, oLat: Double, oLon: Double): Boolean {
+        if (r.aEnTierra) return true
         val lat = r.aLat ?: return false
         val lon = r.aLon ?: return false
-        return Geo.distanciaM(o.lat, o.lon, lat, lon) > A_LEJOS_M
+        return Geo.distanciaM(oLat, oLon, lat, lon) > A_LEJOS_M
+    }
+
+    /**
+     * B no despega para un seguimiento a menos de esto del objetivo ni de A:
+     * sube en vertical por su columna hasta la altura de A + 20 y en el camino
+     * cruza la de A, que orbita a 30 m del objetivo o lo sigue de cerca. Los
+     * mismos 100 m con los que B, en la toma, da a A por lejos.
+     */
+    const val DISTANCIA_MINIMA_DE_DESPEGUE_M = A_LEJOS_M
+
+    /**
+     * Por qué B no puede subir para el seguimiento [r] desde ([bLat], [bLon]),
+     * o null si puede: está a menos de [DISTANCIA_MINIMA_DE_DESPEGUE_M] de
+     * donde se estima ahora el objetivo o de la última posición de A. Sin la
+     * posición propia, o sin un objetivo, no hay contra qué medir y no sube
+     * (ante la duda en el suelo, el dron no despega). Sin la posición de A se
+     * mide solo contra el objetivo, que A tiene cerca.
+     */
+    fun motivoParaNoSubirAca(r: RelevoAsignado, bLat: Double, bLon: Double, ahoraMs: Long): String? {
+        val deA = r.de.displayName
+        val o = r.objetivo ?: return "no se sabe dónde está el objetivo de $deA"
+        if (!Geo.esPosicionValida(bLat, bLon)) return "no se sabe dónde está el dron: no hay cómo medir la distancia a $deA"
+        val minimo = DISTANCIA_MINIMA_DE_DESPEGUE_M.toInt()
+        val (oLat, oLon) = estimacion(o, r.objetivoRecibidoMs, ahoraMs)
+        val alObjetivo = Geo.distanciaM(bLat, bLon, oLat, oLon)
+        if (alObjetivo < DISTANCIA_MINIMA_DE_DESPEGUE_M) {
+            return "el objetivo está a ${alObjetivo.toInt()} m: subir acá cruza la altura de $deA (hacen falta $minimo m)"
+        }
+        val aLat = r.aLat ?: return null
+        val aLon = r.aLon ?: return null
+        val aA = Geo.distanciaM(bLat, bLon, aLat, aLon)
+        if (aA < DISTANCIA_MINIMA_DE_DESPEGUE_M) {
+            return "$deA está a ${aA.toInt()} m: subir acá cruza su altura (hacen falta $minimo m)"
+        }
+        return null
     }
 
     /**

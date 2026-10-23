@@ -107,7 +107,7 @@ const VALIDADORES_HUB_A_LA_APP: Record<string, (m: any) => boolean> = {
     esId(m.relayId) && esId(m.alertId) && ['PENDING', 'VALIDATED'].includes(m.decision) &&
     esObjetivo(m.objetivo, m.alertId, m.decision) && ['en_linea', 'sin_enlace', 'retirado'].includes(m.origen) &&
     esPosicionONull(m.aLat, m.aLon) && (m.aAlt === null || Number.isFinite(m.aAlt)) &&
-    Number.isSafeInteger(m.ts) && m.ts > 0,
+    typeof m.aEnTierra === 'boolean' && Number.isSafeInteger(m.ts) && m.ts > 0,
   relay_go: (m) => esId(m.relayId),
   relay_done: (m) => esId(m.relayId) && esId(m.alertId) && esDron(m.relevadoPor),
   relay_cancel: (m) => esId(m.relayId) && ['alerta_descartada', 'vencido', 'terminado', 'inexistente'].includes(m.motivo),

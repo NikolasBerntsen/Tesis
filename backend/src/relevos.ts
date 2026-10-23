@@ -61,6 +61,13 @@ export const PLAZOS = {
 export const RADIO_DE_BASE_M = 50;
 /** Tope administrativo de la distancia entre B y el objetivo (RELEVOS §3.2). */
 export const RADIO_MAXIMO_RELEVO_M = 1500;
+/**
+ * Un B de seguimiento no despega a menos de esto del objetivo ni de A (RELEVOS
+ * §3.2). Sube en vertical por su columna hasta la altura de A + 20, y en el
+ * camino cruza la de A, que orbita a 30 m del objetivo o lo sigue de cerca.
+ * Son los mismos 100 m con los que B, en la toma, da a A por lejos (§3.5).
+ */
+export const DISTANCIA_MINIMA_DE_DESPEGUE_M = 100;
 /** `etaS = 30 + distancia / 8` (RELEVOS §3.2): despegue y subida, más el crucero de 8 m/s. */
 const ETA_FIJA_S = 30;
 const VELOCIDAD_DE_CRUCERO_MS = 8;
@@ -75,7 +82,12 @@ export const ESTADOS_ACTIVOS: readonly EstadoRelevo[] = ['RESERVADO', 'ORDENADO'
 /** Los estados en los que B ya recibió una orden: su conexión importa. */
 const ESTADOS_CON_B_AVISADO: readonly EstadoRelevo[] = ['ORDENADO', 'EN_CAMINO', 'TRASPASO'];
 
-/** Un dron de A con estos estados ya no sigue al objetivo (`origen: "retirado"`, PROTOCOLS §2.b). */
+/**
+ * Un A con estos estados ya no sigue al objetivo: un pedido de seguimiento
+ * pendiente vence (RELEVOS §3.2). No dice nada de dónde está A: un regreso del
+ * DJI sube primero en vertical, ahí mismo, y por eso no es un `retirado` para B
+ * (ver `enviarTarget`).
+ */
 function estadoRetirado(state: unknown): boolean {
   return typeof state === 'string' &&
     (state.startsWith('RETURNING_HOME') || ['ATERRIZAJE_EMERGENCIA', 'LANDED', 'IDLE'].includes(state));
@@ -282,13 +294,24 @@ export class CoordinadorDeRelevos {
   private readonly ultimoTargetEnviado = new Map<number, number>();
   private readonly desvios = new Map<string, DesvioAbierto>();
   /**
-   * Seguimientos COMPLETADOS sin que A confirmara que se alejó (`origen_sin_confirmar`,
-   * RELEVOS §3.5). B no baja a la altura de seguimiento hasta que A deje de
-   * reportar o pase a regreso, y la única forma que tiene de enterarse es el
-   * `relay_target`: por eso se le sigue mandando, aunque el relevo ya haya
-   * terminado, hasta que salga uno `retirado` o pase `seguimientoPosteriorMs`.
+   * Seguimientos COMPLETADOS, con o sin la confirmación de A (RELEVOS §3.5). B
+   * baja a la altura de seguimiento recién con A a más de 100 m del objetivo o
+   * en tierra, y la única forma que tiene de saberlo es el `relay_target`: por
+   * eso se le sigue mandando, aunque el relevo ya haya terminado, hasta que A
+   * esté en tierra o pase `seguimientoPosteriorMs`. Un `relay_released` no lo
+   * corta: A lo manda a 100 m de SU estimación del objetivo, y la de B puede
+   * dar unos metros menos. Vive en memoria; si el hub se reinicia, lo vuelve a
+   * abrir la reconexión de B (ver `reconciliar`).
    */
   private readonly posteriores = new Map<number, number>();
+  /**
+   * El punto desde donde despegó cada dron: su última posición en tierra. La
+   * altura del status es barométrica, desde ese punto (PROTOCOLS §1.b, `alt`):
+   * la de A y la de B se miden desde el mismo cero solo si despegaron de la
+   * misma base (ver `elegirParaSeguimiento`). Un status en tierra sin posición
+   * lo borra: ya no se sabe de dónde va a despegar.
+   */
+  private readonly despegues = new Map<string, { lat: number; lon: number }>();
   /**
    * Desde cuándo muestra el status de cada dron que está en tierra, en su
    * conexión de ahora (ver `alConectar`). Con A en tierra, un pedido que
@@ -558,7 +581,8 @@ export class CoordinadorDeRelevos {
       lista.push({
         droneId,
         pos,
-        baseId: base?.id ?? getDrone(droneId)?.baseId ?? null,
+        // La base la pone cada elección: la de A en patrulla, la del despegue de A en seguimiento.
+        baseId: null,
         bateria,
         // Disponible implica en espera, y en espera siempre tiene su marca.
         enEsperaDesde: this.enEsperaDesde.get(droneId) as number,
@@ -589,25 +613,42 @@ export class CoordinadorDeRelevos {
   }
 
   /**
-   * Seguimiento (RELEVOS §3.2): entre todos los disponibles, el de menor
-   * `etaS = 30 + distancia / 8`, a 1500 m o menos del objetivo, y solo si llega
-   * antes de que A se vaya. Un relevo tardío sale únicamente con la alerta ya
-   * validada; sin autonomía informada (`segundosDisponibles` null) no se puede
-   * saber si llega, y se lo trata como tardío.
+   * Seguimiento (RELEVOS §3.2): entre los disponibles de la base de la que
+   * despegó A, el de menor `etaS = 30 + distancia / 8`, a 1500 m o menos del
+   * objetivo, y solo si llega antes de que A se vaya. Un relevo tardío sale
+   * únicamente con la alerta ya validada; sin autonomía informada
+   * (`segundosDisponibles` null) no se puede saber si llega, y se lo trata como
+   * tardío.
+   *
+   * Dos reglas cuidan la separación con A, que es solo vertical:
+   * - La altura de A + 20 a la que va B sale de alturas barométricas, cada una
+   *   desde su despegue. Solo con el mismo despegue miden desde el mismo cero:
+   *   un B de una base 20 m más baja quedaría a la altura de A. Sin la altura de
+   *   cada base sobre el nivel del mar no hay cómo corregirlas, así que B sale
+   *   de la base de A, y si el hub no vio a A en tierra antes de volar no sale
+   *   ninguno (ante la duda en el suelo, el dron no despega).
+   * - B sube en vertical y cruza la altura de A: no despega a menos de
+   *   `DISTANCIA_MINIMA_DE_DESPEGUE_M` del objetivo ni de A.
    */
   private elegirParaSeguimiento(r: Relevo, excluir: readonly string[]): Candidato | null {
     // Sin un objetivo válido de A no hay a qué medirle la distancia a nadie.
     if (!r.objetivo) return null;
     const objetivo = r.objetivo;
+    const despegue = this.despegues.get(r.origen);
+    const base = despegue ? this.baseEnPosicion(despegue) : null;
+    if (!base) return null;
+    const posA = this.posicionDe(r.origen);
     const validada = getAlert(r.alertId as number)?.status === 'VALIDATED';
     const segundos = this.segundosRestantes(r);
     const posibles: Candidato[] = [];
     for (const c of this.disponibles(r, excluir)) {
+      if (distanciaM(c.pos, base) >= RADIO_DE_BASE_M) continue;
       const distancia = distanciaM(c.pos, objetivo);
-      if (distancia > RADIO_MAXIMO_RELEVO_M) continue;
+      if (distancia > RADIO_MAXIMO_RELEVO_M || distancia < DISTANCIA_MINIMA_DE_DESPEGUE_M) continue;
+      if (posA && distanciaM(c.pos, posA) < DISTANCIA_MINIMA_DE_DESPEGUE_M) continue;
       const etaS = ETA_FIJA_S + distancia / VELOCIDAD_DE_CRUCERO_MS;
       if (!validada && (segundos === null || etaS > segundos)) continue;
-      posibles.push({ ...c, etaS });
+      posibles.push({ ...c, baseId: base.id, etaS });
     }
     posibles.sort((a, b) => (a.etaS as number) - (b.etaS as number) || CoordinadorDeRelevos.porBateriaYEspera(a, b));
     return posibles[0] ?? null;
@@ -779,7 +820,7 @@ export class CoordinadorDeRelevos {
       // Se completa siempre con un B: lo dice su relay_ready (o el traspaso que lo siguió).
       const b = nombreDeDron(r.relevo as string);
       this.registrar(r, 'RELAY_COMPLETED', `${b} completó el relevo ${this.textoDelRelevo(r)} de ${nombreA}${porque}`);
-      if (motivoFin === 'origen_sin_confirmar') this.posteriores.set(r.id, this.ahora() + PLAZOS.seguimientoPosteriorMs);
+      if (r.motivo === 'seguimiento') this.posteriores.set(r.id, this.ahora() + PLAZOS.seguimientoPosteriorMs);
     } else if (estado === 'CANCELADO') {
       this.registrar(r, 'RELAY_CANCELLED', `Se canceló el relevo ${this.textoDelRelevo(r)} de ${nombreA}${porque}`);
     } else {
@@ -833,6 +874,9 @@ export class CoordinadorDeRelevos {
     }
     if (enTierra(status)) {
       if (!this.enTierraDesde.has(droneId)) this.enTierraDesde.set(droneId, ahora);
+      const pos = posicionValida(status.lat, status.lon);
+      if (pos) this.despegues.set(droneId, pos);
+      else this.despegues.delete(droneId);
       // El desvío terminó con el aterrizaje del desviado, donde haya sido: el
       // landed_at_base es un solo mensaje y no llega si fue un land ordenado o
       // si se perdió, y sin esto un desvío posterior a la misma base no la
@@ -906,17 +950,34 @@ export class CoordinadorDeRelevos {
     }
     const enCurso = r.estado === 'EN_CAMINO' || r.estado === 'TRASPASO';
     if (!enCurso && !this.posteriores.has(r.id)) return;
-    this.enviarTarget(r, r.origenRetirado || estadoRetirado(status.state) ? 'retirado' : 'en_linea');
+    this.enviarTarget(r);
+  }
+
+  /** A está desconectado del hub o sin status hace más de 5 s (`sin_enlace`, PROTOCOLS §2.b). */
+  private aCallado(visto: StatusVisto | undefined, a: string): boolean {
+    return !this.deps.conectado(a) || !visto || this.ahora() - visto.recibidoEn > PLAZOS.aSinStatusParaSinEnlaceMs;
   }
 
   /**
    * `relay_target` a B. Solo se llama con B en camino o en el traspaso (o
-   * después de un traspaso sin confirmar), y para llegar ahí B se eligió con el
+   * después de un traspaso completado), y para llegar ahí B se eligió con el
    * objetivo de A: los dos están siempre. La posición y la altura de A pueden
    * faltar (A sin GPS, o sin ningún status desde que arrancó el hub).
+   *
+   * `origen` es `retirado` si A ya no sigue al objetivo (`relay_released`,
+   * `relay_abandon`) o está en tierra; si no, `en_linea` o `sin_enlace` según
+   * cuándo llegó su último status. NINGUNO le dice a B que puede bajar: un A que
+   * un operador detuvo sobre su órbita está retirado y sigue ahí, y un A que
+   * arranca el regreso del DJI sube en vertical donde está. B baja con la
+   * posición de A lejos del objetivo, o con `aEnTierra` (RELEVOS §3.5). Con A en
+   * tierra el seguimiento posterior termina: B ya sabe lo que necesita.
    */
-  private enviarTarget(r: Relevo, origen: 'en_linea' | 'sin_enlace' | 'retirado'): void {
+  private enviarTarget(r: Relevo): void {
     const visto = this.vistos.get(r.origen);
+    const aEnTierra = visto !== undefined && enTierra(visto.status);
+    let origen: 'en_linea' | 'sin_enlace' | 'retirado' = 'en_linea';
+    if (r.origenRetirado || aEnTierra) origen = 'retirado';
+    else if (this.aCallado(visto, r.origen)) origen = 'sin_enlace';
     const a = visto ? posicionValida(visto.status.lat, visto.status.lon) : null;
     const aAlt = visto && Number.isFinite(visto.status.alt) ? (visto.status.alt as number) : null;
     const decision = this.decisionDe(getAlert(r.alertId as number));
@@ -930,10 +991,11 @@ export class CoordinadorDeRelevos {
       aLat: a?.lat ?? null,
       aLon: a?.lon ?? null,
       aAlt,
+      aEnTierra,
       ts: r.objetivoTs,
     });
     this.ultimoTargetEnviado.set(r.id, this.ahora());
-    if (origen === 'retirado') this.posteriores.delete(r.id);
+    if (aEnTierra) this.posteriores.delete(r.id);
   }
 
   // ---- Reconexión (PROTOCOLS §1.b, "Reconexión") ----
@@ -950,6 +1012,8 @@ export class CoordinadorDeRelevos {
       const r = this.leer(relayId);
       if (!r) {
         this.deps.enviar(droneId, { type: 'relay_cancel', relayId, motivo: 'inexistente' });
+      } else if (this.sigueSiendoDeB(r, droneId)) {
+        this.retomarElPosterior(r);
       } else if (!this.esActivo(r)) {
         this.deps.enviar(droneId, { type: 'relay_cancel', relayId, motivo: 'terminado' });
       } else if (r.relevo === droneId && ESTADOS_CON_B_AVISADO.includes(r.estado)) {
@@ -970,6 +1034,31 @@ export class CoordinadorDeRelevos {
       // Una app que perdió el relevo en el aire ya no está volando hacia él.
       else if (r.estado === 'EN_CAMINO' || r.estado === 'TRASPASO') this.terminar(r, 'FALLIDO', 'relevo_perdio_estado');
     }
+  }
+
+  /**
+   * B vuelve con un seguimiento que el hub ya dio por COMPLETADO (por
+   * `relay_released` o por `origen_sin_confirmar`) y que sigue siendo suyo.
+   * Puede estar todavía en la toma, arriba, esperando saber que A se fue: se
+   * perdió el aviso mientras estaba caído, o el hub se reinició y olvidó el
+   * seguimiento posterior. Un `relay_cancel` le haría soltar el objetivo y
+   * volver, y la alerta, que ya es de B, quedaría sin nadie que la siga.
+   */
+  private sigueSiendoDeB(r: Relevo, droneId: string): boolean {
+    if (r.motivo !== 'seguimiento' || r.estado !== 'COMPLETADO' || r.relevo !== droneId) return false;
+    // Las alertas no se borran: la de un seguimiento siempre está.
+    const alerta = getAlert(r.alertId as number) as Alert;
+    return alerta.status !== 'DISMISSED' && (alerta.seguidaPor ?? alerta.drone_id) === droneId;
+  }
+
+  /**
+   * Le abre a B el seguimiento posterior otra vez, con el plazo entero desde
+   * ahora, y le manda ya dónde está A. Si A está en tierra, ese mismo mensaje
+   * lo dice y el seguimiento posterior se vuelve a cerrar.
+   */
+  private retomarElPosterior(r: Relevo): void {
+    this.posteriores.set(r.id, this.ahora() + PLAZOS.seguimientoPosteriorMs);
+    this.enviarTarget(r);
   }
 
   /** `relay_done` a A: solo en el traspaso de un seguimiento, que siempre tiene alerta y B. */
@@ -1185,7 +1274,10 @@ export class CoordinadorDeRelevos {
 
   private aceptar(b: string, relayId: number): void {
     const r = this.leer(relayId);
-    if (r?.estado === 'EN_CAMINO' && r.relevo === b) return; // repetido: no hace nada
+    // Repetido: no hace nada. También en el traspaso: B que se reconecta en la
+    // toma recibe otra vez su relay_tracking y lo contesta con el mismo accept;
+    // un relay_cancel ahí le haría soltar el objetivo que ya tomó.
+    if ((r?.estado === 'EN_CAMINO' || r?.estado === 'TRASPASO') && r.relevo === b) return;
     if (r?.estado !== 'ORDENADO' || r.relevo !== b) {
       // El único que no se descarta en silencio: B puede estar a segundos de
       // despegar y tiene que enterarse de que este relevo ya no es suyo.
@@ -1205,7 +1297,7 @@ export class CoordinadorDeRelevos {
       r.origenRetirado = true;
       this.guardar(r);
       this.cambiarDueno(r.alertId as number, b);
-      this.enviarTarget(r, 'retirado');
+      this.enviarTarget(r);
     }
   }
 
@@ -1277,7 +1369,7 @@ export class CoordinadorDeRelevos {
       r.origenRetirado = true;
       this.guardar(r);
       this.cambiarDueno(r.alertId as number, r.relevo as string);
-      this.enviarTarget(r, 'retirado');
+      this.enviarTarget(r);
       return;
     }
     this.guardar(r);
@@ -1287,15 +1379,22 @@ export class CoordinadorDeRelevos {
     const r = this.comoOrigen(a, 'relay_released', relayId, 'seguimiento');
     if (!r) return;
     if (r.estado !== 'TRASPASO') {
-      // Tardío: el relevo ya se completó sin confirmación. No cambia nada,
-      // pero B se entera ya de que A se alejó.
-      if (this.posteriores.has(r.id)) this.enviarTarget(r, 'retirado');
+      // Tardío: el relevo ya se completó sin confirmación. No cambia el
+      // estado, pero A ya no sigue al objetivo, y si B todavía lo espera se
+      // entera ya, con la posición de A, que es lo que lo deja bajar.
+      if (this.posteriores.has(r.id)) {
+        r.origenRetirado = true;
+        this.guardar(r);
+        this.enviarTarget(r);
+      }
       return;
     }
-    // Con relay_released A ya está a 100 m y volviendo: el último relay_target
-    // lo dice "retirado" y B baja a la altura de seguimiento (§1.b).
+    // Con relay_released A ya está a 100 m de su estimación del objetivo y
+    // volviendo: el relay_target lo dice "retirado", con la posición de A. B
+    // baja cuando ESA posición queda a más de 100 m de SU estimación; si le da
+    // unos metros menos, el próximo status de A se lo dice (§2.b).
     r.origenRetirado = true;
-    this.enviarTarget(r, 'retirado');
+    this.enviarTarget(r);
     this.terminar(r, 'COMPLETADO', null);
   }
 
@@ -1554,13 +1653,11 @@ export class CoordinadorDeRelevos {
     if (r.motivo === 'seguimiento' && (r.estado === 'EN_CAMINO' || r.estado === 'TRASPASO')) this.targetSinEnlace(r, ahora);
   }
 
-  /** `relay_target` cada 5 s mientras A está desconectado o callado (§2.b). */
+  /** `relay_target` cada 5 s mientras A está desconectado o callado (§2.b): `sin_enlace`, o `retirado` si A ya se fue. */
   private targetSinEnlace(r: Relevo, ahora: number): void {
-    const visto = this.vistos.get(r.origen);
-    const callado = !this.deps.conectado(r.origen) || !visto || ahora - visto.recibidoEn > PLAZOS.aSinStatusParaSinEnlaceMs;
-    if (!callado || ahora - (this.ultimoTargetEnviado.get(r.id) ?? 0) < PLAZOS.relayTargetSinEnlaceMs) return;
-    const retirado = r.origenRetirado || (visto !== undefined && estadoRetirado(visto.status.state));
-    this.enviarTarget(r, retirado ? 'retirado' : 'sin_enlace');
+    if (!this.aCallado(this.vistos.get(r.origen), r.origen)) return;
+    if (ahora - (this.ultimoTargetEnviado.get(r.id) ?? 0) < PLAZOS.relayTargetSinEnlaceMs) return;
+    this.enviarTarget(r);
   }
 }
 

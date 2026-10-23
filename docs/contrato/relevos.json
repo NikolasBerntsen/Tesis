@@ -918,6 +918,7 @@
               "aLat": -34.8507,
               "aLon": -56.1999,
               "aAlt": 40,
+              "aEnTierra": false,
               "ts": 1792767846130
             }
           },
@@ -946,6 +947,65 @@
               "aLat": null,
               "aLon": null,
               "aAlt": null,
+              "aEnTierra": false,
+              "ts": 1792767846130
+            }
+          },
+          {
+            "caso": "A detenido por un operador sobre el objetivo: retirado, pero todavía ahí",
+            "mensaje": {
+              "type": "relay_target",
+              "relayId": 7,
+              "alertId": 12,
+              "decision": "VALIDATED",
+              "objetivo": {
+                "alertId": 12,
+                "type": "VEHICLE",
+                "lat": -34.8506,
+                "lon": -56.1993,
+                "speedMs": 4,
+                "courseDeg": 92,
+                "moving": true,
+                "lost": false,
+                "lastSeenMs": 400,
+                "decision": "VALIDATED",
+                "vNorteMs": -0.14,
+                "vEsteMs": 4
+              },
+              "origen": "retirado",
+              "aLat": -34.8504,
+              "aLon": -56.1996,
+              "aAlt": 40,
+              "aEnTierra": false,
+              "ts": 1792767846130
+            }
+          },
+          {
+            "caso": "A en tierra",
+            "mensaje": {
+              "type": "relay_target",
+              "relayId": 7,
+              "alertId": 12,
+              "decision": "VALIDATED",
+              "objetivo": {
+                "alertId": 12,
+                "type": "VEHICLE",
+                "lat": -34.8506,
+                "lon": -56.1993,
+                "speedMs": 4,
+                "courseDeg": 92,
+                "moving": true,
+                "lost": false,
+                "lastSeenMs": 400,
+                "decision": "VALIDATED",
+                "vNorteMs": -0.14,
+                "vEsteMs": 4
+              },
+              "origen": "retirado",
+              "aLat": -34.8565,
+              "aLon": -56.2075,
+              "aAlt": 0,
+              "aEnTierra": true,
               "ts": 1792767846130
             }
           }
@@ -977,6 +1037,7 @@
               "aLat": -34.8507,
               "aLon": -56.1999,
               "aAlt": 40,
+              "aEnTierra": false,
               "ts": 1792767846130
             }
           },
@@ -1006,6 +1067,66 @@
               "aLat": -34.8507,
               "aLon": -56.1999,
               "aAlt": 40,
+              "aEnTierra": false,
+              "ts": 1792767846130
+            }
+          },
+          {
+            "caso": "aEnTierra ausente",
+            "porque": "aEnTierra es obligatorio y booleano: sin él B no sabe si A ya aterrizó",
+            "mensaje": {
+              "type": "relay_target",
+              "relayId": 7,
+              "alertId": 12,
+              "decision": "VALIDATED",
+              "objetivo": {
+                "alertId": 12,
+                "type": "VEHICLE",
+                "lat": -34.8506,
+                "lon": -56.1993,
+                "speedMs": 4,
+                "courseDeg": 92,
+                "moving": true,
+                "lost": false,
+                "lastSeenMs": 400,
+                "decision": "VALIDATED",
+                "vNorteMs": -0.14,
+                "vEsteMs": 4
+              },
+              "origen": "retirado",
+              "aLat": -34.8507,
+              "aLon": -56.1999,
+              "aAlt": 40,
+              "ts": 1792767846130
+            }
+          },
+          {
+            "caso": "aEnTierra no es booleano",
+            "porque": "aEnTierra es booleano: nada se convierte",
+            "mensaje": {
+              "type": "relay_target",
+              "relayId": 7,
+              "alertId": 12,
+              "decision": "VALIDATED",
+              "objetivo": {
+                "alertId": 12,
+                "type": "VEHICLE",
+                "lat": -34.8506,
+                "lon": -56.1993,
+                "speedMs": 4,
+                "courseDeg": 92,
+                "moving": true,
+                "lost": false,
+                "lastSeenMs": 400,
+                "decision": "VALIDATED",
+                "vNorteMs": -0.14,
+                "vEsteMs": 4
+              },
+              "origen": "retirado",
+              "aLat": -34.8507,
+              "aLon": -56.1999,
+              "aAlt": 0,
+              "aEnTierra": "si",
               "ts": 1792767846130
             }
           }

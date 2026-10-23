@@ -43,6 +43,13 @@ describe('integración — relevos entre drones', () => {
   /** Bravo en el suelo, en espera, en la base de Alfa. */
   const bEnEspera = (c: WsClient, extra: Record<string, unknown> = {}) =>
     manda(c, JSON.parse(mkStatus({ state: 'IDLE', battery: 92, ...NORTE, alt: 0, flying: false, relevo: EN_ESPERA, ...extra })));
+  /**
+   * Alfa en tierra en su base antes de volar: el hub anota ahí su despegue. Un
+   * relevo de seguimiento sale solo de esa base, la de su cero de altura
+   * (RELEVOS §3.2).
+   */
+  const aDespegaDeNorte = (c: WsClient) =>
+    manda(c, JSON.parse(mkStatus({ state: 'IDLE', battery: 95, lat: NORTE.lat + 0.0002, lon: NORTE.lon, alt: 0, flying: false })));
   /** El relevo de la consola por id, vía REST. */
   const relevoPorApi = async (id: number) =>
     (await api(srv.base, '/api/relevos', op)).body.find((r: any) => r.id === id);
@@ -201,9 +208,10 @@ describe('integración — relevos entre drones', () => {
     };
     const statusDeA = (extra: Record<string, unknown> = {}) =>
       manda(a, JSON.parse(mkStatus({ state: 'FOLLOWING', battery: 38, lat: -34.8507, lon: -56.1999, alt: 40, target, ...extra })));
+    aDespegaDeNorte(a);
     statusDeA();
-    // Bravo en su base (Sur, ~1,2 km del objetivo)
-    manda(b, JSON.parse(mkStatus({ state: 'IDLE', battery: 95, lat: -34.86, lon: -56.205, alt: 0, relevo: EN_ESPERA })));
+    // Bravo en la base de la que despegó Alfa (Norte, ~1 km del objetivo)
+    manda(b, JSON.parse(mkStatus({ state: 'IDLE', battery: 95, ...NORTE, alt: 0, relevo: EN_ESPERA })));
     await consola.waitFor((m) => m.type === 'status' && m.droneId === B);
 
     manda(a, { type: 'relay_request', ref: 'seg', motivo: 'seguimiento', alertId, segundosDisponibles: 400 });
@@ -281,9 +289,10 @@ describe('integración — relevos entre drones', () => {
       alertId, type: 'PERSON', lat: -34.85, lon: -56.2, speedMs: 0, courseDeg: 0, moving: false, lost: false,
       lastSeenMs: 0, decision: 'PENDING',
     };
+    aDespegaDeNorte(a);
     manda(a, JSON.parse(mkStatus({ state: 'ORBITING', lat: -34.8503, lon: -56.2, alt: 40, target })));
-    // Bravo tarda unos 180 s y a Alfa le quedan 60: con la alerta pendiente no sale
-    manda(b, JSON.parse(mkStatus({ state: 'IDLE', lat: -34.86, lon: -56.205, alt: 0, relevo: EN_ESPERA })));
+    // Bravo tarda unos 155 s y a Alfa le quedan 60: con la alerta pendiente no sale
+    manda(b, JSON.parse(mkStatus({ state: 'IDLE', ...NORTE, alt: 0, relevo: EN_ESPERA })));
     await consola.waitFor((m) => m.type === 'status' && m.droneId === B);
     manda(a, { type: 'relay_request', ref: 'tarde-r', motivo: 'seguimiento', alertId, segundosDisponibles: 60 });
     const st = await a.waitFor((m) => m.type === 'relay_status' && m.ref === 'tarde-r');
@@ -315,8 +324,9 @@ describe('integración — relevos entre drones', () => {
       alertId, type: 'PERSON', lat: -34.85, lon: -56.2, speedMs: 0, courseDeg: 0, moving: false, lost: false,
       lastSeenMs: 0, decision: 'PENDING',
     };
+    aDespegaDeNorte(a);
     manda(a, JSON.parse(mkStatus({ state: 'ORBITING', lat: -34.8503, lon: -56.2, alt: 40, target })));
-    manda(b, JSON.parse(mkStatus({ state: 'IDLE', lat: -34.86, lon: -56.205, alt: 0, relevo: EN_ESPERA })));
+    manda(b, JSON.parse(mkStatus({ state: 'IDLE', ...NORTE, alt: 0, relevo: EN_ESPERA })));
     await wait(80);
     manda(a, { type: 'relay_request', ref: 'fp-r', motivo: 'seguimiento', alertId, segundosDisponibles: 900 });
     const { relayId: id } = await b.waitFor((m) => m.type === 'relay_tracking');
@@ -354,15 +364,18 @@ describe('integración — relevos entre drones', () => {
       alertId, type: 'VEHICLE', lat: -34.85, lon: -56.2, speedMs: 0, courseDeg: 0, moving: false, lost: false,
       lastSeenMs: 0, decision: 'PENDING',
     };
+    aDespegaDeNorte(a);
     manda(a, JSON.parse(mkStatus({ state: 'ORBITING', lat: -34.8503, lon: -56.2, alt: 40, target })));
-    manda(b, JSON.parse(mkStatus({ state: 'IDLE', lat: -34.86, lon: -56.205, alt: 0, relevo: EN_ESPERA })));
+    manda(b, JSON.parse(mkStatus({ state: 'IDLE', ...NORTE, alt: 0, relevo: EN_ESPERA })));
     await wait(80);
     manda(a, { type: 'relay_request', ref: 'op-s', motivo: 'seguimiento', alertId, segundosDisponibles: 900 });
     const { relayId: idS } = await b.waitFor((m) => m.type === 'relay_tracking');
     manda(b, { type: 'relay_accept', relayId: idS });
     await a.waitFor((m) => m.type === 'relay_status' && m.relayId === idS && m.estado === 'EN_CAMINO');
     await api(srv.base, `/api/drones/${A}/route/stop`, op, { method: 'POST' });
-    await b.waitFor((m) => m.type === 'relay_target' && m.relayId === idS && m.origen === 'retirado');
+    // A queda quieto sobre su órbita: "retirado" no es "lejos", y B lo sabe por la posición
+    const retirado = await b.waitFor((m) => m.type === 'relay_target' && m.relayId === idS && m.origen === 'retirado');
+    expect(retirado).toMatchObject({ aLat: -34.8503, aLon: -56.2, aAlt: 40, aEnTierra: false });
     expect((await api(srv.base, `/api/alerts/${alertId}`, op)).body.seguidaPor).toBe(B);
 
     // forzar a un nodo o reanudar a B también cancelan

@@ -133,7 +133,20 @@ Reglas que se agregan:
 2. El hub toma el objetivo del status de A (no del pedido) y elige, entre todos
    los disponibles, el de menor `etaS = 30 + distancia(posición de B, objetivo)
    / 8`, solo si `etaS ≤ segundosDisponibles` y la distancia ≤
-   `RADIO_MAXIMO_RELEVO_M = 1500` (tope administrativo). Un relevo **tardío**
+   `RADIO_MAXIMO_RELEVO_M = 1500` (tope administrativo). Dos reglas más cuidan
+   la separación con A, que es solo vertical (revisión final):
+   - B tiene que estar **en la base de la que despegó A** (la de su último
+     status en tierra). La altura de cada dron es barométrica desde su propio
+     despegue: con otra base, a otra altura del terreno, "A + 20" no deja a B
+     20 m por encima de A. Hasta que las bases tengan su altura sobre el nivel
+     del mar, B no sale de otra; y si el hub no vio a A en tierra antes de
+     volar, no sale ninguno.
+   - B no despega a menos de `DISTANCIA_MINIMA_DE_DESPEGUE_M = 100` del
+     objetivo ni de A: sube en vertical y cruza la altura de A. La app de B lo
+     vuelve a mirar al despegar, con la última estimación y la última
+     posición de A (si no, `relay_reject no_disponible`).
+
+   Un relevo **tardío**
    (B llegaría después de que A se vaya) solo sale si la alerta ya está
    `VALIDATED`. Sin candidato: `SIN_RELEVO`, el pedido queda pendiente
    mientras A siga por encima de su piso. Un pedido de seguimiento puede quitarle
@@ -146,7 +159,7 @@ Reglas que se agregan:
    que en §2), despega y pasa a `RELEVANDO`.
 4. Mientras dure el relevo, con cada status de A el hub le reenvía a B
    `relay_target {relayId, alertId, decision, objetivo, origen: "en_linea"|
-   "sin_enlace"|"retirado", aLat, aLon, aAlt, ts}` (solo objetivos válidos de
+   "sin_enlace"|"retirado", aLat, aLon, aAlt, aEnTierra, ts}` (solo objetivos válidos de
    esa alerta; ver validación en PROTOCOLS). B vuela a `ALTURA_TRANSITO_M` hacia
    la estimación extrapolada (`speedMs`/`courseDeg`, `lastSeenMs` + tiempo de
    viaje). En `RELEVANDO`, una detección de la misma clase a menos de
@@ -162,11 +175,17 @@ Reglas que se agregan:
    100 m del objetivo en dirección a su base, y recién ahí `regresar()` (estado
    `RETURNING_HOME_BATTERY`: volvió por batería). B baja a la altura de
    seguimiento y empieza a orbitar o seguir recién cuando `relay_target`
-   muestra a A a > 100 m del objetivo o con `origen: "retirado"`.
+   muestra a A a > 100 m de la estimación del objetivo que tiene B, o en
+   tierra (`aEnTierra`). `origen: "retirado"` solo dice que A ya no lo sigue,
+   no dónde está: un A que un operador detuvo queda quieto sobre su órbita, y
+   uno que arranca el regreso del DJI sube primero en vertical, ahí mismo; con
+   A cerca, o sin su posición, B sigue arriba, en la toma.
    El hub reenvía `relay_done` en cada reconexión de A mientras esté en
    `TRASPASO`; a los 30 s sin confirmación (`relay_released` de A) pasa a
-   `COMPLETADO` con `motivoFin: "origen_sin_confirmar"` y B no baja hasta que
-   A deje de reportar o pase a regreso.
+   `COMPLETADO` con `motivoFin: "origen_sin_confirmar"`. Completado con o sin
+   confirmación, el hub le sigue mandando a B dónde está A hasta que A esté en
+   tierra (o 10 minutos), y un B que se reconecta en la toma lo vuelve a
+   recibir en vez de un `relay_cancel`.
    **Ventana de gracia**: si A llega a su umbral de regreso con un relevo
    `EN_CAMINO` (último `relay_status` de hace < 10 s con `etaS` dentro de lo que
    queda), puede seguir hasta `VENTANA_RELEVO_MS`, solo con autonomía
@@ -186,7 +205,9 @@ Reglas que se agregan:
    A avisa `relay_abandon {relayId}` y `TRACKING_ENDED` con la última
    posición; la alerta pasa a `seguida_por = B`; B sigue hacia esa posición e
    intenta reencontrar el objetivo (`TARGET_REACQUIRED`) u orbita la última
-   posición a la espera del operador.
+   posición a la espera del operador. Como en todo traspaso, B baja a orbitar
+   recién con A lejos o en tierra (§3.5): un A que se fue porque un operador lo
+   detuvo puede seguir quieto sobre su órbita.
 9. **Órdenes del operador durante un relevo.** `start_route`, `stop_patrol`,
    `force_goto` y `resume` hacia B cancelan el relevo (`CANCELADO`, `motivoFin:
    "orden_del_operador"`). Las mismas hacia A en un relevo de seguimiento
@@ -265,6 +286,11 @@ Cada paso espera que la telemetría confirme el rumbo (±5°) y la inclinación
 
 Variante sin control de vuelo (el DJI forzó el aterrizaje): solo la cámara
 (−90°, después −30°) con una foto por paso, mientras baja.
+
+Cada foto lleva su lugar en la secuencia (`seq`): con control, 0 la oblicua, 1
+la cenital y 2 a 5 la panorámica; sin control, 6 la cenital y 7 la panorámica.
+Una emergencia que pasa a la variante sin control en el medio (mismo `ref`) no
+repite números, y ninguna foto pisa a otra en la cola ni en el hub.
 
 Mensajes (por una **cola persistente** de la app, con reintento, hasta el acuse):
 - `emergency_landing {ref, motivo: "autonomia"|"bateria_critica_dji", lat, lon,

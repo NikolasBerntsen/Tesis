@@ -208,26 +208,82 @@ class PiezasDeLosRelevosTest {
     }
 
     @Test
-    fun bPuedeBajarConALejosORetirado() {
+    fun bPuedeBajarConALejosDeSuEstimacionOEnTierra() {
+        val (oLat, oLon) = punto(500.0)
         val r = RelevoAsignado(7, ALFA, null, 0, 12, 0)
-        assertFalse("sin objetivo", Aproximacion.puedeBajar(r))
-        r.objetivo = objetivo(500.0)
-        assertFalse("sin la posición de A", Aproximacion.puedeBajar(r))
+        assertFalse("sin la posición de A", Aproximacion.puedeBajar(r, oLat, oLon))
         val (aLat, aLon) = punto(450.0)
         r.aLat = aLat
+        assertFalse("con media posición de A", Aproximacion.puedeBajar(r, oLat, oLon))
         r.aLon = aLon
-        assertFalse("A a 50 m", Aproximacion.puedeBajar(r))
+        assertFalse("A a 50 m", Aproximacion.puedeBajar(r, oLat, oLon))
         val (lejosLat, lejosLon) = punto(390.0)
         r.aLat = lejosLat
         r.aLon = lejosLon
-        assertTrue("A a 110 m", Aproximacion.puedeBajar(r))
+        assertTrue("A a 110 m", Aproximacion.puedeBajar(r, oLat, oLon))
+        // Se mide contra la estimación de B: si el objetivo se corrió hacia A, A está cerca otra vez.
+        val (corridoLat, corridoLon) = punto(430.0)
+        assertFalse("A a 40 m de donde B ve el objetivo", Aproximacion.puedeBajar(r, corridoLat, corridoLon))
+    }
 
-        val retirado = RelevoAsignado(7, ALFA, null, 0, 12, 0)
-        retirado.anotarOrigen("retirado")
-        assertTrue(Aproximacion.puedeBajar(retirado))
-        retirado.anotarOrigen("en_linea")
-        assertEquals("retirado es para siempre", "retirado", retirado.origen)
-        assertTrue(retirado.aRetirado)
+    /**
+     * `retirado` dice que A ya no sigue al objetivo, no dónde está: un A que un
+     * operador detuvo queda quieto sobre su órbita (a 30 m del objetivo, a la
+     * altura a la que B bajaría). Solo la posición de A lejos, o A en tierra,
+     * dejan bajar a B.
+     */
+    @Test
+    fun retiradoNoEsLejos() {
+        val (oLat, oLon) = punto(500.0)
+        val r = RelevoAsignado(7, ALFA, null, 0, 12, 0)
+        r.anotarOrigen("retirado")
+        assertTrue(r.aRetirado)
+        assertFalse("retirado sin la posición de A", Aproximacion.puedeBajar(r, oLat, oLon))
+        val (orbitaLat, orbitaLon) = punto(530.0)
+        r.aLat = orbitaLat
+        r.aLon = orbitaLon
+        assertFalse("retirado y quieto sobre la órbita", Aproximacion.puedeBajar(r, oLat, oLon))
+        r.aEnTierra = true
+        assertTrue("en tierra, aunque esté cerca", Aproximacion.puedeBajar(r, oLat, oLon))
+        r.anotarOrigen("en_linea")
+        assertEquals("retirado es para siempre", "retirado", r.origen)
+    }
+
+    @Test
+    fun bNoSubeAMenosDeCienMetrosDelObjetivoNiDeA() {
+        val r = RelevoAsignado(7, ALFA, null, 0, 12, 0)
+        val (bLat, bLon) = punto(5.0)
+        assertTrue("sin objetivo no hay contra qué medir", Aproximacion.motivoParaNoSubirAca(r, bLat, bLon, 0)!!.contains("objetivo"))
+        r.objetivo = objetivo(600.0)
+        assertTrue(
+            "sin posición propia, tampoco",
+            Aproximacion.motivoParaNoSubirAca(r, Double.NaN, Double.NaN, 0)!!.contains("no se sabe dónde está el dron"),
+        )
+        assertNull("lejos de todo y sin la posición de A: sube", Aproximacion.motivoParaNoSubirAca(r, bLat, bLon, 0))
+
+        r.objetivo = objetivo(85.0)
+        assertEquals(
+            "el objetivo está a 80 m: subir acá cruza la altura de Alfa (hacen falta 100 m)",
+            Aproximacion.motivoParaNoSubirAca(r, bLat, bLon, 0),
+        )
+        // Moviéndose se mide contra donde está ahora: a 2 m/s hacia el norte, 30 s después ya está a 140 m.
+        r.objetivo = objetivo(85.0, vNorte = 2.0)
+        assertNull(Aproximacion.motivoParaNoSubirAca(r, bLat, bLon, 30_000))
+
+        r.objetivo = objetivo(600.0)
+        val (aLat, aLon) = punto(65.0)
+        r.aLat = aLat
+        assertNull("con media posición de A se mide solo el objetivo", Aproximacion.motivoParaNoSubirAca(r, bLat, bLon, 0))
+        r.aLon = aLon
+        assertEquals(
+            "Alfa está a 60 m: subir acá cruza su altura (hacen falta 100 m)",
+            Aproximacion.motivoParaNoSubirAca(r, bLat, bLon, 0),
+        )
+        val (lejosLat, lejosLon) = punto(300.0)
+        r.aLat = lejosLat
+        r.aLon = lejosLon
+        assertNull(Aproximacion.motivoParaNoSubirAca(r, bLat, bLon, 0))
+        assertEquals(Aproximacion.A_LEJOS_M, Aproximacion.DISTANCIA_MINIMA_DE_DESPEGUE_M, 0.0)
     }
 
     @Test

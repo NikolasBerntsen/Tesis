@@ -446,7 +446,12 @@ patrullaje en curso (RELEVOS §3.7). La app lo **repite cada 5 s con el mismo
   objetivo, que A usaría para su ventana de gracia.
 - Si no, crea el relevo (evento `RELAY_REQUESTED`) y busca candidato con las
   reglas de RELEVOS §2.2 (patrulla: reserva, `RESERVADO`) o §3.2
-  (seguimiento: ordena en el acto, `ORDENADO` con `relay_tracking`). Sin
+  (seguimiento: ordena en el acto, `ORDENADO` con `relay_tracking`). En
+  seguimiento B tiene que estar **en la base de la que despegó A** (la de su
+  último status en tierra: las dos alturas barométricas miden desde el mismo
+  cero solo así; si el hub no vio a A en tierra antes de volar, no hay
+  candidato) y a **100 m o más del objetivo y de A** (sube en vertical y cruza
+  la altura de A). Sin
   candidato: `SIN_RELEVO` (evento `RELAY_UNAVAILABLE`), y el pedido queda
   pendiente hasta que aparezca uno o venza (§3, `motivoFin`; ver "Pedidos que
   vencen sin aviso" más abajo).
@@ -470,8 +475,10 @@ corresponde es `relay_abort`.
 `relay_accept` es el único mensaje que **no** se descarta en silencio cuando no
 corresponde (llegó tarde, el relevo se reasignó o terminó): el hub contesta
 `relay_cancel {relayId, motivo: "vencido"}`, porque B puede estar a segundos de
-despegar y tiene que enterarse. Un `relay_accept` repetido en `EN_CAMINO` del
-mismo B no hace nada.
+despegar y tiene que enterarse. Un `relay_accept` repetido en `EN_CAMINO` o en
+`TRASPASO` del mismo B no hace nada: en el traspaso es la respuesta de la app al
+`relay_tracking` que el hub le reenvía al reconectarse (ver "Reconexión"), y un
+`relay_cancel` ahí le haría soltar el objetivo que ya tomó.
 
 #### `relay_ready` y `relay_abort`: B llegó, o no puede seguir
 
@@ -501,17 +508,21 @@ con su `alert_updated`): A ya está soltando y no vuelve al objetivo, pero es el
 `relay_abandon` vale antes del traspaso. A manda además `TRACKING_ENDED` con
 la última posición (§1). Con B `EN_CAMINO`, la alerta pasa a
 `seguida_por = B` (`alert_updated`) y B recibe `relay_target` con `origen:
-"retirado"` y la última estimación válida; con B en `ORDENADO`, la alerta pasa
+"retirado"`, la última estimación válida y **dónde está A**: `retirado` quiere
+decir que A ya no sigue al objetivo, no que se haya ido (un A que un operador
+detuvo queda quieto sobre su órbita); con B en `ORDENADO`, la alerta pasa
 a B cuando acepte (y si rechaza y no hay otro candidato, `CANCELADO`); sin B
 (`SIN_RELEVO`), `CANCELADO`. Los dos `CANCELADO` llevan `motivoFin:
 "origen_se_fue"`. Repetido, no hace nada.
 
 `relay_released` vale en `TRASPASO`: A lo manda cuando **ya se alejó ≥ 100 m
 del objetivo y arranca su regreso** (`regresar()`), no al recibir `relay_done`.
-Con él, el hub marca a A como `retirado` en el `relay_target` siguiente y B baja
-a la altura de seguimiento: mandarlo antes juntaría a los dos sobre el
-objetivo. Deja el relevo `COMPLETADO` (`motivoFin: null`). Repetido o tardío
-(ya `COMPLETADO` por `origen_sin_confirmar`), no hace nada.
+Con él, el hub marca a A como `retirado` en el `relay_target` siguiente, con la
+posición de A, y B baja a la altura de seguimiento cuando esa posición queda a
+más de 100 m de **su** estimación del objetivo (§2.b, `relay_target`): mandarlo
+antes juntaría a los dos sobre el objetivo. Deja el relevo `COMPLETADO`
+(`motivoFin: null`). Repetido, no hace nada; tardío (ya `COMPLETADO` por
+`origen_sin_confirmar`), no cambia el estado pero marca a A como `retirado`.
 
 #### `landing_at_base` y `landed_at_base`: A baja y aterriza en una base
 
@@ -596,7 +607,7 @@ es un **desvío nuevo**: otro evento y otros 10 minutos de bloqueo.
 |---|---|---|---|
 | `ref` | texto | sí | Identifica la emergencia en **todos** sus mensajes: lo inventa la app en `emergency_landing` y lo repite en las fotos y en el aterrizaje |
 | `motivo` | `"autonomia"` \| `"bateria_critica_dji"` | `emergency_landing` | `autonomia`: lo disparó el cálculo de la app (RELEVOS §5). `bateria_critica_dji`: el propio DJI forzó el aterrizaje fuera de base |
-| `seq` | entero | `emergency_photo` | Orden de la foto en la secuencia, `[0, 7]` |
+| `seq` | entero | `emergency_photo` | Lugar de la foto en la secuencia, `[0, 7]`: con control de vuelo, `0` la oblicua, `1` la cenital y `2` a `5` la panorámica; la variante que solo usa la cámara, `6` la cenital y `7` la panorámica. Una emergencia que pasa de una a la otra en el medio (el DJI tomó el vuelo) no repite ningún número |
 | `tipo` | `"oblicua"` \| `"cenital"` \| `"panoramica"` | `emergency_photo` | |
 | `rumbo` | número | `emergency_photo` | Rumbo de la cámara, `[0, 360]` |
 | `inclinacion` | número | `emergency_photo` | Inclinación del gimbal, `[-90, 30]` |
@@ -648,7 +659,13 @@ decide qué hace el hub (RELEVOS §7):
   (más `relay_go` si ya se le había dado). Al origen (A): `relay_status` y, en
   `TRASPASO`, `relay_done`.
 - Un relevo terminado o que no existe: `relay_cancel` con `motivo:
-  "terminado"` o `"inexistente"`.
+  "terminado"` o `"inexistente"`. **Salvo** un seguimiento `COMPLETADO` en el
+  que el dron es B y la alerta sigue siendo suya (no descartada, `seguidaPor`
+  = B): B puede estar todavía en la toma, arriba, esperando saber que A se fue
+  (se perdió el aviso mientras estaba caído, o el hub se reinició y olvidó el
+  seguimiento posterior). A ese B no se le cancela nada: el hub le vuelve a
+  abrir el seguimiento posterior (§2.b, `relay_target`) por otros 10 minutos y
+  le manda en el acto un `relay_target` con lo último que sabe de A.
 - `relayId: null` con el dron como B de un relevo activo: en `ORDENADO`, le
   reenvía la orden; en `EN_CAMINO` o `TRASPASO`, el relevo pasa a `FALLIDO`
   (`motivoFin: "relevo_perdio_estado"`): una app que perdió el relevo en el
@@ -712,7 +729,7 @@ Mismas convenciones que §1.b. Todos van **solo al dron correspondiente**.
 | `relay_status` | A | En respuesta a cada `relay_request` (reintentos incluidos), en cada cambio de estado del relevo y cada 5 s mientras esté `EN_CAMINO` |
 | `relay_start` | B | Al ordenarle un relevo de patrulla (`ORDENADO`); al reconectarse |
 | `relay_tracking` | B | Al ordenarle un relevo de seguimiento (`ORDENADO`); al reconectarse |
-| `relay_target` | B | Desde que acepta un seguimiento hasta que el relevo termina: con cada status de A (aunque su objetivo no pase) y cada 5 s sin él. Si terminó `COMPLETADO` por `origen_sin_confirmar`, sigue hasta el primero `retirado` o 10 minutos: B no baja hasta saber que A se fue (RELEVOS §3.5) |
+| `relay_target` | B | Desde que acepta un seguimiento hasta que el relevo termina: con cada status de A (aunque su objetivo no pase) y cada 5 s sin él. Si terminó `COMPLETADO` (con `relay_released` o por `origen_sin_confirmar`), sigue igual hasta el primero con `aEnTierra: true` o 10 minutos: B no baja hasta ver a A lejos o en tierra (RELEVOS §3.5). La reconexión de ese B lo vuelve a abrir (§1.b, "Reconexión") |
 | `relay_go` | B | Relevo de patrulla aceptado, cuando A está abajo o se desvió; al reconectarse si ya se le había dado |
 | `relay_done` | A | Al pasar a `TRASPASO`, y en cada reconexión de A mientras siga así |
 | `relay_cancel` | B, o el que se reconecta | El relevo se cancela, vence o falla con B asignado; `relay_accept` que no corresponde; reconexión con un relevo terminado o desconocido |
@@ -823,23 +840,26 @@ ordena con la alerta ya `VALIDATED` (RELEVOS §3.2).
 | Campo | Tipo | Obligatorio | Regla |
 |---|---|---|---|
 | `relayId`, `alertId`, `decision`, `objetivo` | | sí | Como en `relay_tracking` |
-| `origen` | `"en_linea"` \| `"sin_enlace"` \| `"retirado"` | sí | `en_linea`: sale con el status de A que acaba de llegar, **traiga o no un objetivo que pase** (en el traspaso A ya soltó su rastreador y lo manda sin `target`); si no trae, va la última estimación válida. `sin_enlace`: A está desconectado del hub o sin status hace más de 5 s; va la última estimación válida, cada 5 s. `retirado`: A ya no sigue al objetivo (`relay_released`, `relay_abandon`, o su estado es `RETURNING_HOME*`, `ATERRIZAJE_EMERGENCIA`, `LANDED` o `IDLE`); va la última estimación válida |
+| `origen` | `"en_linea"` \| `"sin_enlace"` \| `"retirado"` | sí | `en_linea`: sale con el status de A que acaba de llegar, **traiga o no un objetivo que pase** (en el traspaso A ya soltó su rastreador y lo manda sin `target`); si no trae, va la última estimación válida. `sin_enlace`: A está desconectado del hub o sin status hace más de 5 s; va la última estimación válida, cada 5 s. `retirado`: A ya no sigue al objetivo (`relay_released`, `relay_abandon` o una orden que cuenta como tal, §2.b `relay_cancel`) o está en tierra; va la última estimación válida, y sale así también con cada status de A y cada 5 s. **El estado de A no cuenta**: un A en `RETURNING_HOME*` sigue `en_linea`, porque el regreso del DJI sube primero en vertical, ahí mismo. **Ningún `origen` le dice a B que puede bajar** (ver abajo) |
 | `aLat`, `aLon` | posición o `null` | sí | Posición de A en su último status |
 | `aAlt` | número \| null | sí | Altura de A en su último status; `null` si no hay ninguno |
+| `aEnTierra` | boolean | sí | `true` si el último status de A dice que está en tierra (`flying: false`); `false` si dice otra cosa o si no hay ninguno |
 | `ts` | entero | sí | Hora del hub en que llegó el status de A del que sale **`objetivo`**: identifica esa estimación. Cuando el mensaje lleva la última válida (`sin_enlace`, `retirado`, o un `en_linea` cuyo status no traía un objetivo que pase), es el `ts` de esa, y se repite |
 
 El `ts` **ordena solo el objetivo**: B toma el `objetivo` de un `relay_target`
 únicamente si su `ts` es mayor que el del último que tomó (si no, es la misma
 estimación o una más vieja, y se queda con la que tiene). `origen`, `aLat`,
-`aLon` y `aAlt` los toma de **todos**, aunque el `ts` se repita: son del último
+`aLon`, `aAlt` y `aEnTierra` los toma de **todos**, aunque el `ts` se repita: son del último
 status de A, y los mensajes de una misma conexión llegan en orden (el hub no
 reenvía `relay_target` viejos al reconectar). Lo mismo `decision`: es la de la
 alerta en el hub al mandar el mensaje. Un `retirado` con el `ts` del
 último `en_linea` es lo normal. B **nunca compara `ts` con su propio reloj** (no
 están sincronizados). Vuela hacia la estimación extrapolada con
 `speedMs`/`courseDeg` y `lastSeenMs` + su tiempo de viaje, y baja a la altura de
-seguimiento recién con A a más de 100 m del objetivo o `origen: "retirado"`
-(RELEVOS §3.4 y §3.5).
+seguimiento recién con la **posición de A a más de 100 m de su propia
+estimación del objetivo**, o con `aEnTierra: true` (RELEVOS §3.4 y §3.5). Un
+`retirado` con A cerca, o sin la posición de A, no alcanza: B sigue arriba, en
+la toma.
 
 #### Objetivo de un relevo (`objetivo`)
 

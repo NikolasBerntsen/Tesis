@@ -164,6 +164,21 @@ describe('emergencias — emergency_photo', () => {
     expect(b.em.detalle(1)?.fotos.map((f) => f.seq)).toEqual([0, 4]);
   });
 
+  it('una secuencia que pasa a la variante de la cámara guarda todas: 0 y 1 con control, 6 y 7 sin él', () => {
+    const b = new Banco();
+    b.manda(A, aviso());
+    b.manda(A, foto('e1', 0));
+    b.manda(A, foto('e1', 1, { tipo: 'cenital', inclinacion: -90 }));
+    // el DJI tomó el vuelo: la misma emergencia sigue con la cámara, en sus propios números
+    b.manda(A, foto('e1', 6, { tipo: 'cenital', inclinacion: -90 }));
+    b.manda(A, foto('e1', 7, { tipo: 'panoramica', inclinacion: -30 }));
+    expect(b.a(A).filter((m) => m.type === 'emergency_photo_ack').map((m) => m.seq)).toEqual([0, 1, 6, 7]);
+    expect(b.em.detalle(1)?.fotos.map((f) => [f.seq, f.tipo])).toEqual([
+      [0, 'oblicua'], [1, 'cenital'], [6, 'cenital'], [7, 'panoramica'],
+    ]);
+    expect(b.difundidos('emergency_photo')).toHaveLength(4);
+  });
+
   it('con un ref desconocido no hay acuse: la app la reintenta hasta que llegue su aviso', () => {
     const b = new Banco();
     b.manda(A, foto('nadie', 0));

@@ -34,8 +34,12 @@ import kotlinx.coroutines.delay
  * la cámara, −90° y después −30°, una foto en cada uno, mientras baja.
  *
  * Las fotos van numeradas por su lugar en la secuencia (0 la oblicua, 1 la
- * cenital, 2 a 5 la panorámica), así la consola sabe qué es cada una aunque
- * falte alguna.
+ * cenital, 2 a 5 la panorámica; sin control, 6 la cenital y 7 la panorámica),
+ * así la consola sabe qué es cada una aunque falte alguna. Las dos variantes
+ * no comparten ningún número: una emergencia que pasa a la de la cámara en el
+ * medio, cuando el DJI toma el vuelo, sigue con el mismo `ref`, y una foto con
+ * un `seq` repetido se perdería (la cola no la agrega y el hub la acusa sin
+ * guardarla).
  *
  * El tiempo lo dan [reloj] y [pausa], para probar la secuencia entera sin
  * esperar sus 20 segundos. Las órdenes salen por [ordenar], que las da solo si
@@ -67,6 +71,9 @@ class SecuenciaDeUltimaUbicacion(
         const val CENITAL = -90.0
         const val PANORAMICA = -30.0
         val RUMBOS_PANORAMICA = listOf(0.0, 90.0, 180.0, 270.0)
+
+        /** El primer `seq` de la variante sin control: después de los seis de la secuencia con control. */
+        const val PRIMER_SEQ_SOLO_CAMARA = 6
     }
 
     /** Una foto ya sacada, con la pose del instante. */
@@ -117,7 +124,11 @@ class SecuenciaDeUltimaUbicacion(
     /** El DJI ya está bajando por su cuenta: solo la cámara, sin una sola orden de vuelo. */
     suspend fun soloCamara(): Final {
         inicioMs = reloj()
-        for (p in listOf(Paso(0, "cenital", CENITAL, null), Paso(1, "panoramica", PANORAMICA, null))) {
+        val pasos = listOf(
+            Paso(PRIMER_SEQ_SOLO_CAMARA, "cenital", CENITAL, null),
+            Paso(PRIMER_SEQ_SOLO_CAMARA + 1, "panoramica", PANORAMICA, null),
+        )
+        for (p in pasos) {
             if (!sigue()) return Final.CORTADA
             if (reloj() - inicioMs >= TOPE_MS) break
             fotografiar(p)

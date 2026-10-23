@@ -214,7 +214,7 @@ class SecuenciaDeUltimaUbicacionTest {
         assertEquals(SecuenciaDeUltimaUbicacion.Final.ATERRIZO, secuencia().soloCamara())
         assertEquals(listOf("apuntar(-90.0)", "capturarFoto", "apuntar(-30.0)", "capturarFoto"), dron.ordenes)
         assertEquals(listOf("cenital", "panoramica"), fotos.map { it.tipo })
-        assertEquals(listOf(0, 1), fotos.map { it.seq })
+        assertEquals("después de los seis de la secuencia con control: no pisan ninguno", listOf(6, 7), fotos.map { it.seq })
     }
 
     @Test

@@ -97,6 +97,8 @@ describe('integración — conformidad con docs/contrato/relevos.json', () => {
     const b = await conn(tokenDeDron(B));
     manda(a, { type: 'alert_request', alertType: 'VEHICLE', lat: -34.85062, lon: -56.19951, snapshotBase64: null, ref: 'c-obj' });
     const { alertId } = await a.waitFor((m) => m.type === 'alert_ack');
+    // Alfa despegó de su base, la misma de Bravo: el seguimiento solo sale de ahí (RELEVOS §3.2)
+    manda(a, { type: 'status', state: 'IDLE', battery: 96, lat: NORTE.lat + 0.0002, lon: NORTE.lon, alt: 0, flying: false });
     manda(a, {
       type: 'status', state: 'FOLLOWING', battery: 38, lat: -34.8521, lon: -56.2012, alt: 40, flying: true,
       target: { alertId, type: 'VEHICLE', lat: -34.85062, lon: -56.19951, speedMs: 4.2, courseDeg: 90, moving: true, lost: false, lastSeenMs: 600, decision: 'PENDING' },

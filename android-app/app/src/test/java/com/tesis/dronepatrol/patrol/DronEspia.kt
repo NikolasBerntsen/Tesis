@@ -228,8 +228,19 @@ internal class DronEspia(
     override suspend fun capturarFoto(): ByteArray? {
         if (!conRelevos) return super.capturarFoto()
         anotar("capturarFoto")
+        alCapturar?.invoke(capturas.incrementAndGet())
         return foto
     }
+
+    private val capturas = java.util.concurrent.atomic.AtomicInteger()
+
+    /**
+     * Se llama en cada [capturarFoto] con su número (1, 2, …) antes de
+     * devolver la foto: una prueba puede frenar ahí la secuencia de última
+     * ubicación, en un punto exacto, sin depender de cuánto tarda.
+     */
+    @Volatile
+    var alCapturar: (suspend (Int) -> Unit)? = null
 
     /** Si no es null, [prepararDespegue] lo tira: el SDK que falla en vez de contestar. */
     @Volatile

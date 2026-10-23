@@ -123,13 +123,14 @@ internal class BancoDeRelevos(
             origen: String = "en_linea",
             aNorteM: Double? = null,
             aAlt: Double? = 40.0,
+            aEnTierra: Boolean = false,
         ): JSONObject {
             val a = aNorteM?.let { punto(it) }
             return JSONObject()
                 .put("type", "relay_target").put("relayId", relayId).put("alertId", alertId)
                 .put("decision", objetivo.getString("decision")).put("objetivo", objetivo).put("origen", origen)
                 .put("aLat", a?.first ?: JSONObject.NULL).put("aLon", a?.second ?: JSONObject.NULL)
-                .put("aAlt", aAlt ?: JSONObject.NULL).put("ts", ts)
+                .put("aAlt", aAlt ?: JSONObject.NULL).put("aEnTierra", aEnTierra).put("ts", ts)
         }
 
         fun relayGo(relayId: Long): JSONObject = JSONObject().put("type", "relay_go").put("relayId", relayId)

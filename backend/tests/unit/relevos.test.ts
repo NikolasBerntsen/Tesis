@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CoordinadorDeRelevos, PLAZOS } from '../../src/relevos';
-import { createAlert, createDrone, decideAlert, getAlert, softDeleteRoute } from '../../src/store';
+import { createAlert, createBase, createDrone, decideAlert, getAlert, softDeleteRoute } from '../../src/store';
 import { cumpleContrato } from '../contrato';
 import { DRON, limpiarBase, seed } from '../helpers';
 
@@ -16,6 +16,8 @@ const C = DRON.charlie;
 const NORTE = { lat: -34.8565, lon: -56.2075 };
 /** Base Sur de la semilla: la de Bravo (id 2). */
 const SUR = { lat: -34.86, lon: -56.205 };
+/** Base Este de la semilla: la de Charlie (id 3). */
+const ESTE = { lat: -34.8575, lon: -56.201 };
 const T0 = Date.parse('2026-10-23T15:00:00.000Z');
 const EN_ESPERA = { enEspera: true, disponible: true, relayId: null, rol: null, fase: null };
 
@@ -37,6 +39,8 @@ class Banco {
   readonly salidas: { a: string; msg: any }[] = [];
   readonly consolas: any[] = [];
   readonly conectados = new Set<string>();
+  /** Los drones que el hub ya vio en tierra antes de volar (ver `despegaDe`). */
+  readonly despegados = new Set<string>();
   readonly coord: CoordinadorDeRelevos;
 
   constructor() {
@@ -83,6 +87,16 @@ class Banco {
   /** Un dron en el suelo, en espera y disponible, en la posición pedida. */
   enEspera(d: string, pos = NORTE, extra: Record<string, unknown> = {}) {
     this.status(d, { state: 'IDLE', battery: 90, ...pos, alt: 0, flying: false, relevo: EN_ESPERA, ...extra });
+  }
+
+  /**
+   * El dron en tierra en `pos`, antes de volar: el hub anota ahí su despegue,
+   * el cero de su altura. Un relevo de seguimiento sale solo de la base de la
+   * que despegó A (RELEVOS §3.2).
+   */
+  despegaDe(d: string, pos: { lat: number; lon: number }) {
+    this.status(d, { state: 'IDLE', battery: 95, ...pos, alt: 0, flying: false });
+    this.despegados.add(d);
   }
 
   /** A en el aire. */
@@ -526,8 +540,12 @@ describe('relevos — caso A: relevo de patrulla', () => {
 });
 
 describe('relevos — caso B: relevo de seguimiento', () => {
-  /** Alerta de Alfa y Alfa siguiéndola, con el objetivo en su status. */
+  /**
+   * Alerta de Alfa y Alfa siguiéndola, con el objetivo en su status. Si el hub
+   * todavía no vio despegar a Alfa, despega de la base Este, la de Charlie.
+   */
   function aSiguiendo(b: Banco, decision: 'PENDING' | 'VALIDATED' = 'PENDING', extraStatus: Record<string, unknown> = {}) {
+    if (!b.despegados.has(A)) b.despegaDe(A, alNorte(ESTE, 15));
     const alerta = createAlert('VEHICLE', A, -34.85, -56.2, null);
     if (decision === 'VALIDATED') decideAlert(alerta.id, 'VALIDATED', 'operador');
     b.status(A, {
@@ -548,9 +566,10 @@ describe('relevos — caso B: relevo de seguimiento', () => {
     const alertId = aSiguiendo(b);
     const statusDeA = b.t;
     b.avanzar(500);
-    // Bravo en Base Sur (~1,1 km del objetivo) y Charlie en Base Este (~0,13 km)
-    b.enEspera(B, SUR, { battery: 99 });
-    b.enEspera(C, { lat: -34.8575, lon: -56.201 }, { battery: 70 });
+    // Los dos en la base Este, de la que despegó Alfa: Charlie 40 m más cerca
+    // del objetivo (al norte) gana aunque Bravo tenga más batería.
+    b.enEspera(B, ESTE, { battery: 99 });
+    b.enEspera(C, alNorte(ESTE, 40), { battery: 70 });
     const st = pedirSeguimiento(b, alertId);
 
     const orden = b.ultimo(C, 'relay_tracking');
@@ -591,7 +610,7 @@ describe('relevos — caso B: relevo de seguimiento', () => {
       const b = new Banco();
       b.conectar(A, C);
       const alertId = aSiguiendo(b, decision);
-      b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+      b.enEspera(C, ESTE);
       expect(pedirSeguimiento(b, alertId, segundos).estado, `${decision} ${segundos}`).toBe(esperado);
     }
   });
@@ -599,19 +618,80 @@ describe('relevos — caso B: relevo de seguimiento', () => {
   it('a más de 1500 m del objetivo no es candidato, ni con la alerta validada', () => {
     const b = new Banco();
     b.conectar(A, B);
+    // Alfa despegó de una base a ~2,2 km del objetivo, y Bravo está ahí
+    const lejana = { lat: -34.87, lon: -56.2 };
+    createBase({ name: 'Base Lejana', ...lejana }, 'supervisor');
+    b.despegaDe(A, alNorte(lejana, 15));
     const alertId = aSiguiendo(b, 'VALIDATED');
-    b.enEspera(B, { lat: -34.87, lon: -56.2 }); // ~2,2 km
+    b.enEspera(B, lejana);
     expect(pedirSeguimiento(b, alertId).estado).toBe('SIN_RELEVO');
+  });
+
+  it('B sale de la base de la que despegó A: las alturas de dos bases no se miden desde el mismo cero', () => {
+    const b = new Banco();
+    b.conectar(A, B, C);
+    const alertId = aSiguiendo(b, 'VALIDATED');
+    // Bravo en la base Sur, más cerca del objetivo que Charlie y con más batería:
+    // su altura cuenta desde otro suelo, y A + 20 podría dejarlo a la altura de A
+    b.enEspera(B, alNorte(SUR, 40), { battery: 99 });
+    b.enEspera(C, ESTE, { battery: 70 });
+    expect(pedirSeguimiento(b, alertId)).toMatchObject({ estado: 'ORDENADO', relevo: { droneId: C } });
+    expect(b.relevo(1).baseId).toBe(3);
+    // si Charlie no puede, Bravo tampoco: el pedido queda sin relevo
+    b.manda(C, { type: 'relay_reject', relayId: 1, motivo: 'no_disponible' });
+    expect(b.relevo(1)).toMatchObject({ estado: 'SIN_RELEVO', rechazados: [C] });
+    expect(b.a(B)).toEqual([]);
+  });
+
+  it('sin saber de dónde despegó A no sale nadie: ni sin verlo en tierra, ni despegado fuera de toda base', () => {
+    for (const despegue of ['nunca', 'sin_posicion', 'en_el_campo'] as const) {
+      limpiarBase();
+      seed();
+      const b = new Banco();
+      b.conectar(A, C);
+      if (despegue === 'sin_posicion') {
+        b.despegaDe(A, ESTE);
+        // un status en tierra sin GPS borra el despegue anotado
+        b.status(A, { state: 'IDLE', battery: 95, lat: null, lon: null, alt: 0, flying: false });
+      } else if (despegue === 'en_el_campo') {
+        b.despegaDe(A, alNorte(ESTE, 300));
+      } else {
+        b.despegados.add(A);
+      }
+      const alertId = aSiguiendo(b, 'VALIDATED');
+      b.enEspera(C, ESTE);
+      expect(pedirSeguimiento(b, alertId).estado, despegue).toBe('SIN_RELEVO');
+    }
+  });
+
+  it('B no despega a menos de 100 m del objetivo ni de A: su subida vertical cruza la altura de A', () => {
+    for (const cerca of ['objetivo', 'A', 'ninguno'] as const) {
+      limpiarBase();
+      seed();
+      const b = new Banco();
+      b.conectar(A, C);
+      b.despegaDe(A, alNorte(ESTE, 15));
+      const alerta = createAlert('VEHICLE', A, -34.85, -56.2, null);
+      // el objetivo a 60 m de la plataforma de Charlie, o A a 70 m de ella
+      const objetivoEn = cerca === 'objetivo' ? alNorte(ESTE, 60) : { lat: -34.85, lon: -56.2 };
+      const aEn = cerca === 'A' ? alNorte(ESTE, 70) : { lat: -34.8507, lon: -56.1999 };
+      b.status(A, {
+        state: 'FOLLOWING', battery: 38, ...aEn, alt: 40, flying: true, target: objetivo(alerta.id, objetivoEn),
+      });
+      b.enEspera(C, ESTE);
+      const esperado = cerca === 'ninguno' ? 'ORDENADO' : 'SIN_RELEVO';
+      expect(pedirSeguimiento(b, alerta.id).estado, cerca).toBe(esperado);
+    }
   });
 
   it('sin un objetivo válido de A no se puede elegir: queda pendiente hasta que llegue uno', () => {
     const b = new Banco();
     b.conectar(A, C);
     const alertId = aSiguiendo(b, 'PENDING', { target: { ...objetivo(1), alertId: 999 } });
-    b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+    b.enEspera(C, ESTE);
     expect(pedirSeguimiento(b, alertId).estado).toBe('SIN_RELEVO');
     b.status(A, { state: 'FOLLOWING', battery: 37, lat: -34.8507, lon: -56.1999, alt: 40, target: objetivo(alertId) });
-    b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+    b.enEspera(C, ESTE);
     b.coord.barrer();
     expect(b.relevo(1).estado).toBe('ORDENADO');
   });
@@ -647,7 +727,7 @@ describe('relevos — caso B: relevo de seguimiento', () => {
     const b = new Banco();
     b.conectar(A, C);
     const alertId = aSiguiendo(b);
-    b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+    b.enEspera(C, ESTE);
     expect(pedirSeguimiento(b, alertId, 10).estado).toBe('SIN_RELEVO');
     expect(pedirSeguimiento(b, alertId, 400, 's2')).toMatchObject({ ref: 's2', relayId: 1 });
     b.coord.barrer();
@@ -658,7 +738,7 @@ describe('relevos — caso B: relevo de seguimiento', () => {
     const b = new Banco();
     b.conectar(A, C);
     const alertId = aSiguiendo(b, 'VALIDATED');
-    b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+    b.enEspera(C, ESTE);
     pedirSeguimiento(b, alertId);
     b.manda(C, { type: 'relay_accept', relayId: 1 });
     expect(b.eventos().at(-1).type).toBe('RELAY_STARTED');
@@ -699,7 +779,7 @@ describe('relevos — caso B: relevo de seguimiento', () => {
     const b = new Banco();
     b.conectar(A, C);
     const alertId = aSiguiendo(b);
-    b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+    b.enEspera(C, ESTE);
     pedirSeguimiento(b, alertId);
     b.manda(C, { type: 'relay_accept', relayId: 1 });
     b.limpiar();
@@ -726,11 +806,35 @@ describe('relevos — caso B: relevo de seguimiento', () => {
     expect(b.eventos('RELAY_COMPLETED')).toHaveLength(1);
   });
 
-  it('sin relay_released en 30 s: COMPLETADO origen_sin_confirmar, y B sigue sabiendo de A hasta que vuelve', () => {
+  it('en el traspaso, A que arranca el regreso ahí mismo (venció el alejamiento, llegó a su piso, el botón del control) no es "retirado"', () => {
+    for (const estado of ['RETURNING_HOME_BATTERY', 'RETURNING_HOME', 'ATERRIZAJE_EMERGENCIA', 'IDLE'] as const) {
+      limpiarBase();
+      seed();
+      const b = new Banco();
+      b.conectar(A, C);
+      const alertId = aSiguiendo(b);
+      b.enEspera(C, ESTE);
+      pedirSeguimiento(b, alertId);
+      b.manda(C, { type: 'relay_accept', relayId: 1 });
+      b.manda(C, { type: 'relay_ready', relayId: 1 });
+      // sobre el objetivo, todavía en el aire: el regreso del DJI sube primero en vertical, ahí
+      b.status(A, { state: estado, battery: 20, lat: -34.8501, lon: -56.2, alt: 40, flying: true, target: null });
+      expect(b.ultimo(C, 'relay_target'), estado).toMatchObject({
+        origen: 'en_linea', aLat: -34.8501, aAlt: 40, aEnTierra: false,
+      });
+      // callado, tampoco: sin_enlace con la última posición
+      b.avanzar(PLAZOS.aSinStatusParaSinEnlaceMs + 1);
+      b.coord.barrer();
+      expect(b.ultimo(C, 'relay_target'), estado).toMatchObject({ origen: 'sin_enlace', aLat: -34.8501 });
+      expect(b.relevo(1).estado).toBe('TRASPASO');
+    }
+  });
+
+  it('sin relay_released en 30 s: COMPLETADO origen_sin_confirmar, y B sigue sabiendo de A hasta que A está en tierra', () => {
     const b = new Banco();
     b.conectar(A, C);
     const alertId = aSiguiendo(b);
-    b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+    b.enEspera(C, ESTE);
     pedirSeguimiento(b, alertId);
     b.manda(C, { type: 'relay_accept', relayId: 1 });
     b.manda(C, { type: 'relay_ready', relayId: 1 });
@@ -745,47 +849,87 @@ describe('relevos — caso B: relevo de seguimiento', () => {
     b.avanzar(PLAZOS.aSinStatusParaSinEnlaceMs + 1);
     b.coord.barrer();
     expect(b.ultimo(C, 'relay_target').origen).toBe('sin_enlace');
-    // A pasa a regreso: un último "retirado" y se termina
-    b.status(A, { state: 'RETURNING_HOME_BATTERY', battery: 29, lat: -34.852, lon: -56.2, alt: 40, target: null });
-    expect(b.ultimo(C, 'relay_target').origen).toBe('retirado');
+    // A pasa a regreso ahí mismo: el regreso del DJI sube en vertical, así que
+    // no es un "retirado" para B, que sigue viendo dónde está A
+    b.status(A, { state: 'RETURNING_HOME_BATTERY', battery: 29, lat: -34.8502, lon: -56.2, alt: 40, flying: true, target: null });
+    expect(b.ultimo(C, 'relay_target')).toMatchObject({ origen: 'en_linea', aLat: -34.8502, aEnTierra: false });
+    b.status(A, { state: 'RETURNING_HOME_BATTERY', battery: 28, lat: -34.856, lon: -56.2, alt: 70, flying: true, target: null });
+    expect(b.ultimo(C, 'relay_target')).toMatchObject({ origen: 'en_linea', aLat: -34.856, aAlt: 70 });
+    // A en tierra: un último "retirado" con aEnTierra y se termina
+    b.status(A, { state: 'LANDED', battery: 27, ...NORTE, alt: 0, flying: false, target: null });
+    expect(b.ultimo(C, 'relay_target')).toMatchObject({ origen: 'retirado', aEnTierra: true, aAlt: 0 });
     const total = b.a(C, 'relay_target').length;
-    b.status(A, { state: 'RETURNING_HOME_BATTERY', battery: 29, lat: -34.853, lon: -56.2, alt: 40, target: null });
+    b.status(A, { state: 'LANDED', battery: 27, ...NORTE, alt: 0, flying: false, target: null });
     b.avanzar(60_000);
     b.coord.barrer();
     expect(b.a(C, 'relay_target')).toHaveLength(total);
   });
 
-  it('el seguimiento posterior se corta solo: con un relay_released tardío o a los 10 minutos', () => {
-    for (const cortar of ['released', 'tiempo'] as const) {
+  it('el seguimiento posterior se corta con A en tierra o a los 10 minutos; un relay_released tardío no lo corta', () => {
+    for (const cortar of ['en_tierra', 'tiempo'] as const) {
       limpiarBase();
       seed();
       const b = new Banco();
       b.conectar(A, C);
       const alertId = aSiguiendo(b);
-      b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+      b.enEspera(C, ESTE);
       pedirSeguimiento(b, alertId);
       b.manda(C, { type: 'relay_accept', relayId: 1 });
       b.manda(C, { type: 'relay_ready', relayId: 1 });
       b.avanzar(PLAZOS.traspasoSinConfirmarMs);
       b.coord.barrer();
-      if (cortar === 'released') {
-        b.manda(A, { type: 'relay_released', relayId: 1 });
-        expect(b.ultimo(C, 'relay_target').origen).toBe('retirado');
+      // el relay_released tardío marca a A como retirado, con su posición, y sigue
+      b.manda(A, { type: 'relay_released', relayId: 1 });
+      expect(b.ultimo(C, 'relay_target')).toMatchObject({ origen: 'retirado', aLat: -34.8507, aEnTierra: false });
+      b.status(A, { state: 'RETURNING_HOME_BATTERY', battery: 30, lat: -34.852, lon: -56.2, alt: 40, flying: true });
+      expect(b.ultimo(C, 'relay_target')).toMatchObject({ origen: 'retirado', aLat: -34.852 });
+      if (cortar === 'en_tierra') {
+        b.status(A, { state: 'LANDED', battery: 29, ...NORTE, alt: 0, flying: false });
+        expect(b.ultimo(C, 'relay_target').aEnTierra).toBe(true);
       } else {
         b.avanzar(PLAZOS.seguimientoPosteriorMs);
         b.coord.barrer();
       }
       const total = b.a(C, 'relay_target').length;
       b.status(A, { state: 'FOLLOWING', battery: 30, lat: -34.851, lon: -56.2, alt: 40, target: objetivo(alertId) });
+      b.avanzar(PLAZOS.relayTargetSinEnlaceMs + PLAZOS.aSinStatusParaSinEnlaceMs);
+      b.coord.barrer();
       expect(b.a(C, 'relay_target'), cortar).toHaveLength(total);
     }
+  });
+
+  it('un relay_released completa, pero B sigue recibiendo dónde está A hasta que A esté en tierra', () => {
+    const b = new Banco();
+    b.conectar(A, C);
+    const alertId = aSiguiendo(b);
+    b.enEspera(C, ESTE);
+    pedirSeguimiento(b, alertId);
+    b.manda(C, { type: 'relay_accept', relayId: 1 });
+    b.manda(C, { type: 'relay_ready', relayId: 1 });
+    b.status(A, { state: 'PAUSED', battery: 30, lat: -34.8511, lon: -56.2, alt: 40, flying: true });
+    b.manda(A, { type: 'relay_released', relayId: 1 });
+    expect(b.relevo(1)).toMatchObject({ estado: 'COMPLETADO', motivoFin: null });
+    // A a 100 m de SU estimación: a B le puede dar unos metros menos, y el status
+    // siguiente de A, más lejos, es el que lo deja bajar
+    b.status(A, { state: 'RETURNING_HOME_BATTERY', battery: 30, lat: -34.8515, lon: -56.2, alt: 40, flying: true });
+    expect(b.ultimo(C, 'relay_target')).toMatchObject({ relayId: 1, origen: 'retirado', aLat: -34.8515, aEnTierra: false });
+    // callado, la repetición de cada 5 s también llega
+    const antes = b.a(C, 'relay_target').length;
+    b.avanzar(PLAZOS.aSinStatusParaSinEnlaceMs + 1);
+    b.coord.barrer();
+    expect(b.a(C, 'relay_target')).toHaveLength(antes + 1);
+    b.status(A, { state: 'LANDED', battery: 28, ...NORTE, alt: 0, flying: false });
+    expect(b.ultimo(C, 'relay_target').aEnTierra).toBe(true);
+    b.avanzar(PLAZOS.aSinStatusParaSinEnlaceMs + 1);
+    b.coord.barrer();
+    expect(b.a(C, 'relay_target')).toHaveLength(antes + 2);
   });
 
   it('relay_abort en el traspaso: la alerta vuelve a A', () => {
     const b = new Banco();
     b.conectar(A, C);
     const alertId = aSiguiendo(b);
-    b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+    b.enEspera(C, ESTE);
     pedirSeguimiento(b, alertId);
     b.manda(C, { type: 'relay_accept', relayId: 1 });
     b.manda(C, { type: 'relay_ready', relayId: 1 });
@@ -796,11 +940,39 @@ describe('relevos — caso B: relevo de seguimiento', () => {
     expect(b.consolas.filter((m) => m.type === 'alert_updated').at(-1).alert.seguidaPor).toBeNull();
   });
 
+  it('A detenido por el operador sobre el objetivo: "retirado" lleva dónde quedó A, y B lo sigue sabiendo hasta que A baja', () => {
+    const b = new Banco();
+    b.conectar(A, C);
+    const alertId = aSiguiendo(b);
+    b.enEspera(C, ESTE);
+    pedirSeguimiento(b, alertId);
+    b.manda(C, { type: 'relay_accept', relayId: 1 });
+    // un stop_patrol a A: cuenta como relay_abandon, y A queda quieto en su órbita
+    b.coord.ordenDelOperador(A);
+    expect(b.ultimo(C, 'relay_target')).toMatchObject({
+      origen: 'retirado', aLat: -34.8507, aLon: -56.1999, aAlt: 40, aEnTierra: false,
+    });
+    b.status(A, { state: 'PAUSED', battery: 30, lat: -34.8502, lon: -56.2003, alt: 40, flying: true, target: null });
+    expect(b.ultimo(C, 'relay_target')).toMatchObject({ origen: 'retirado', aLat: -34.8502, aEnTierra: false });
+
+    // B llega a la toma; A no confirma nada y el relevo se completa a los 30 s,
+    // pero B sigue sabiendo que A está ahí
+    b.manda(C, { type: 'relay_ready', relayId: 1 });
+    b.avanzar(PLAZOS.traspasoSinConfirmarMs);
+    b.coord.barrer();
+    expect(b.relevo(1)).toMatchObject({ estado: 'COMPLETADO', motivoFin: 'origen_sin_confirmar' });
+    b.status(A, { state: 'PAUSED', battery: 29, lat: -34.8502, lon: -56.2003, alt: 40, flying: true, target: null });
+    expect(b.ultimo(C, 'relay_target')).toMatchObject({ origen: 'retirado', aLat: -34.8502, aEnTierra: false });
+    // y que aterrizó donde estaba: con eso puede bajar
+    b.status(A, { state: 'IDLE', battery: 29, lat: -34.8502, lon: -56.2003, alt: 0, flying: false, target: null });
+    expect(b.ultimo(C, 'relay_target')).toMatchObject({ origen: 'retirado', aLat: -34.8502, aEnTierra: true });
+  });
+
   it('A abandona con B en camino: la alerta pasa a B y B recibe "retirado"; repetido no hace nada', () => {
     const b = new Banco();
     b.conectar(A, C);
     const alertId = aSiguiendo(b);
-    b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+    b.enEspera(C, ESTE);
     pedirSeguimiento(b, alertId);
     b.manda(C, { type: 'relay_accept', relayId: 1 });
     b.manda(A, { type: 'relay_abandon', relayId: 1, motivo: 'piso' });
@@ -828,7 +1000,7 @@ describe('relevos — caso B: relevo de seguimiento', () => {
       const b = new Banco();
       b.conectar(A, C);
       const alertId = aSiguiendo(b, 'VALIDATED');
-      b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+      b.enEspera(C, ESTE);
       pedirSeguimiento(b, alertId);
       b.manda(A, { type: 'relay_abandon', relayId: 1, motivo: 'dji' });
       expect(getAlert(alertId)?.seguidaPor, respuesta).toBeNull();
@@ -855,7 +1027,7 @@ describe('relevos — caso B: relevo de seguimiento', () => {
     expect(b.relevo(1)).toMatchObject({ estado: 'CANCELADO', motivoFin: 'origen_se_fue' });
 
     const otra = aSiguiendo(b);
-    b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+    b.enEspera(C, ESTE);
     pedirSeguimiento(b, otra, 400, 's2');
     b.manda(C, { type: 'relay_accept', relayId: 2 });
     b.manda(C, { type: 'relay_ready', relayId: 2 });
@@ -876,6 +1048,8 @@ describe('relevos — caso B: relevo de seguimiento', () => {
     b.manda(B, { type: 'relay_request', ref: 'pb', motivo: 'patrulla', routeId: 1, fromIndex: 0 });
     expect(b.relevo(1)).toMatchObject({ estado: 'RESERVADO', relevo: { droneId: C } });
 
+    // Alfa despegó de Norte, donde está Charlie
+    b.despegaDe(A, alNorte(NORTE, 25));
     const alertId = aSiguiendo(b, 'VALIDATED');
     pedirSeguimiento(b, alertId);
     expect(b.relevo(2)).toMatchObject({ estado: 'ORDENADO', relevo: { droneId: C } });
@@ -890,6 +1064,7 @@ describe('relevos — caso B: relevo de seguimiento', () => {
     b.enEspera(C, alNorte(NORTE, 10));
     b.manda(B, { type: 'relay_request', ref: 'pb', motivo: 'patrulla', routeId: 1, fromIndex: 0 });
     b.manda(B, { type: 'landing_at_base', ref: 'pb', relayId: 1, baseId: 1, ...NORTE, routeId: 1, fromIndex: 0 });
+    b.despegaDe(A, alNorte(NORTE, 25));
     const alertId = aSiguiendo(b, 'VALIDATED');
     expect(pedirSeguimiento(b, alertId).estado).toBe('SIN_RELEVO');
   });
@@ -898,7 +1073,7 @@ describe('relevos — caso B: relevo de seguimiento', () => {
     const b = new Banco();
     b.conectar(A, C);
     const alertId = aSiguiendo(b);
-    b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+    b.enEspera(C, ESTE);
     pedirSeguimiento(b, alertId);
     b.manda(C, { type: 'relay_accept', relayId: 1 });
     b.coord.alDescartarAlerta(alertId + 100); // otra alerta: nada
@@ -921,7 +1096,7 @@ describe('relevos — caso B: relevo de seguimiento', () => {
     const b = new Banco();
     b.conectar(A, C);
     const primera = aSiguiendo(b, 'VALIDATED');
-    b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+    b.enEspera(C, ESTE);
     pedirSeguimiento(b, primera, 400, 'r1');
     b.manda(C, { type: 'relay_accept', relayId: 1 });
     // el operador manda a A a otro lado: deja la primera, que pasa a Charlie
@@ -947,6 +1122,7 @@ describe('relevos — caso B: relevo de seguimiento', () => {
   it('pedir por otra alerta es dejar la anterior: con B en camino pasa a B, sin B se cancela, en el traspaso sigue', () => {
     const b = new Banco();
     b.conectar(A, B, C);
+    b.despegaDe(A, alNorte(ESTE, 15));
     // un relevo de seguimiento de otro dron y uno de patrulla de A no se tocan
     b.manda(A, { type: 'relay_request', ref: 'pa', motivo: 'patrulla', routeId: 1, fromIndex: 0 });
     const deBravo = createAlert('PERSON', B, -34.85, -56.2, null);
@@ -954,7 +1130,7 @@ describe('relevos — caso B: relevo de seguimiento', () => {
     b.manda(B, { type: 'relay_request', ref: 'sb', motivo: 'seguimiento', alertId: deBravo.id, segundosDisponibles: 5 });
 
     const primera = aSiguiendo(b, 'VALIDATED');
-    b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+    b.enEspera(C, ESTE);
     pedirSeguimiento(b, primera, 400, 'r1');
     b.manda(C, { type: 'relay_accept', relayId: 3 });
     b.limpiar();
@@ -986,7 +1162,7 @@ describe('relevos — caso B: relevo de seguimiento', () => {
     const b = new Banco();
     b.conectar(A, C);
     const alertId = aSiguiendo(b);
-    b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+    b.enEspera(C, ESTE);
     pedirSeguimiento(b, alertId);
     b.manda(C, { type: 'relay_accept', relayId: 1 });
     b.avanzar(1000);
@@ -1016,7 +1192,7 @@ describe('relevos — caso B: relevo de seguimiento', () => {
     const b = new Banco();
     b.conectar(A, C);
     const alertId = aSiguiendo(b);
-    b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+    b.enEspera(C, ESTE);
     pedirSeguimiento(b, alertId);
     b.manda(C, { type: 'relay_accept', relayId: 1 });
     b.manda(C, { type: 'relay_ready', relayId: 1 });
@@ -1042,7 +1218,7 @@ describe('relevos — caso B: relevo de seguimiento', () => {
     const b = new Banco();
     b.conectar(A, C);
     const alertId = aSiguiendo(b);
-    b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+    b.enEspera(C, ESTE);
     pedirSeguimiento(b, alertId);
     b.manda(C, { type: 'relay_accept', relayId: 1 });
     b.manda(C, { type: 'relay_ready', relayId: 1 });
@@ -1259,9 +1435,10 @@ describe('relevos — órdenes del operador', () => {
   it('hacia A en un seguimiento cuentan como relay_abandon; en una patrulla no tocan nada', () => {
     const b = new Banco();
     b.conectar(A, C);
+    b.despegaDe(A, alNorte(ESTE, 15));
     const alerta = createAlert('VEHICLE', A, -34.85, -56.2, null);
     b.status(A, { state: 'FOLLOWING', battery: 38, lat: -34.8507, lon: -56.1999, alt: 40, target: objetivo(alerta.id) });
-    b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+    b.enEspera(C, ESTE);
     b.manda(A, { type: 'relay_request', ref: 's', motivo: 'seguimiento', alertId: alerta.id, segundosDisponibles: 400 });
     b.manda(C, { type: 'relay_accept', relayId: 1 });
     expect(b.coord.participaDeUnRelevoActivo(A)).toBe(true);
@@ -1620,9 +1797,10 @@ describe('relevos — reconexión y desconexión', () => {
   it('A vuelve en el traspaso: relay_status y relay_done', () => {
     const b = new Banco();
     b.conectar(A, C);
+    b.despegaDe(A, alNorte(ESTE, 15));
     const alerta = createAlert('VEHICLE', A, -34.85, -56.2, null);
     b.status(A, { state: 'FOLLOWING', battery: 38, lat: -34.8507, lon: -56.1999, alt: 40, target: objetivo(alerta.id) });
-    b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+    b.enEspera(C, ESTE);
     b.manda(A, { type: 'relay_request', ref: 's', motivo: 'seguimiento', alertId: alerta.id, segundosDisponibles: 400 });
     b.manda(C, { type: 'relay_accept', relayId: 1 });
     b.manda(C, { type: 'relay_ready', relayId: 1 });
@@ -1634,6 +1812,115 @@ describe('relevos — reconexión y desconexión', () => {
     b.conectar(C);
     b.status(C, { state: 'RELEVANDO', battery: 80, lat: -34.8503, lon: -56.1993, alt: 60, relevo: { ...relevoDeB, fase: 'traspaso' } });
     expect(b.ultimo(C, 'relay_tracking').relayId).toBe(1);
+  });
+
+  /** Alfa sigue un objetivo y Charlie lo releva hasta el traspaso. */
+  function traspaso(b: Banco) {
+    b.conectar(A, C);
+    b.despegaDe(A, alNorte(ESTE, 15));
+    const alerta = createAlert('VEHICLE', A, -34.85, -56.2, null);
+    b.status(A, { state: 'FOLLOWING', battery: 38, lat: -34.8507, lon: -56.1999, alt: 40, target: objetivo(alerta.id) });
+    b.enEspera(C, ESTE);
+    b.manda(A, { type: 'relay_request', ref: 's', motivo: 'seguimiento', alertId: alerta.id, segundosDisponibles: 400 });
+    b.manda(C, { type: 'relay_accept', relayId: 1 });
+    b.manda(C, { type: 'relay_ready', relayId: 1 });
+    return alerta.id;
+  }
+
+  const enLaToma = { enEspera: false, disponible: false, relayId: 1, rol: 'relevo', fase: 'traspaso' };
+
+  it('B que vuelve en el traspaso contesta su relay_tracking con el mismo accept: nada se cancela', () => {
+    const b = new Banco();
+    const alertId = traspaso(b);
+    b.desconectar(C);
+    b.conectar(C);
+    b.limpiar();
+    b.status(C, { state: 'RELEVANDO', battery: 80, lat: -34.8503, lon: -56.1993, alt: 60, flying: true, relevo: enLaToma });
+    expect(b.a(C).map((m) => m.type)).toEqual(['relay_tracking']);
+    // la app contesta una orden repetida con la respuesta que guardó
+    b.manda(C, { type: 'relay_accept', relayId: 1 });
+    expect(b.a(C, 'relay_cancel')).toEqual([]);
+    expect(b.relevo(1)).toMatchObject({ estado: 'TRASPASO', relevo: { droneId: C } });
+    expect(getAlert(alertId)?.seguidaPor).toBe(C);
+    expect(b.eventos()).toEqual([]);
+    // y el traspaso sigue su curso
+    b.manda(A, { type: 'relay_released', relayId: 1 });
+    expect(b.relevo(1)).toMatchObject({ estado: 'COMPLETADO', motivoFin: null });
+  });
+
+  it('B que vuelve con un seguimiento ya completado y suyo no recibe relay_cancel: recibe dónde está A', () => {
+    for (const como of ['released', 'sin_confirmar'] as const) {
+      limpiarBase();
+      seed();
+      const b = new Banco();
+      traspaso(b);
+      b.desconectar(C);
+      if (como === 'released') {
+        b.manda(A, { type: 'relay_released', relayId: 1 });
+      } else {
+        b.avanzar(PLAZOS.traspasoSinConfirmarMs);
+        b.coord.barrer();
+      }
+      expect(b.relevo(1).estado, como).toBe('COMPLETADO');
+      b.limpiar();
+      b.conectar(C);
+      b.status(C, { state: 'RELEVANDO', battery: 80, lat: -34.8503, lon: -56.1993, alt: 60, flying: true, relevo: enLaToma });
+      expect(b.a(C, 'relay_cancel'), como).toEqual([]);
+      expect(b.ultimo(C, 'relay_target'), como).toMatchObject({ relayId: 1, aLat: -34.8507, aEnTierra: false });
+      // y los status de A le siguen llegando
+      b.status(A, { state: 'RETURNING_HOME_BATTERY', battery: 30, lat: -34.852, lon: -56.2, alt: 45, flying: true });
+      expect(b.ultimo(C, 'relay_target'), como).toMatchObject({ aLat: -34.852, aAlt: 45 });
+    }
+  });
+
+  it('después de un reinicio del hub, B que vuelve a la toma reabre el seguimiento posterior hasta que A esté en tierra', () => {
+    const b = new Banco();
+    traspaso(b);
+    b.manda(A, { type: 'relay_released', relayId: 1 });
+    // se cae el hub: el coordinador nuevo solo tiene la tabla
+    b.conectados.clear();
+    const nuevo = b.nuevoCoordinador();
+    nuevo.iniciar();
+    b.limpiar();
+    b.conectados.add(C);
+    nuevo.alConectar(C);
+    nuevo.alRecibirStatus(C, { state: 'RELEVANDO', battery: 80, lat: -34.8503, lon: -56.1993, alt: 60, flying: true, relevo: enLaToma });
+    // del A de antes del reinicio no se sabe nada todavía
+    expect(b.a(C)).toEqual([expect.objectContaining({
+      type: 'relay_target', relayId: 1, origen: 'retirado', aLat: null, aAlt: null, aEnTierra: false,
+    })]);
+    b.conectados.add(A);
+    nuevo.alConectar(A);
+    nuevo.alRecibirStatus(A, { state: 'RETURNING_HOME_BATTERY', battery: 30, lat: -34.853, lon: -56.2, alt: 50, flying: true });
+    expect(b.ultimo(C, 'relay_target')).toMatchObject({ aLat: -34.853, aAlt: 50 });
+    nuevo.alRecibirStatus(A, { state: 'LANDED', battery: 28, ...NORTE, alt: 0, flying: false });
+    expect(b.ultimo(C, 'relay_target').aEnTierra).toBe(true);
+    const total = b.a(C, 'relay_target').length;
+    b.avanzar(PLAZOS.aSinStatusParaSinEnlaceMs + PLAZOS.relayTargetSinEnlaceMs);
+    nuevo.barrer();
+    expect(b.a(C, 'relay_target')).toHaveLength(total);
+  });
+
+  it('un seguimiento completado que ya no es de B (descartado o de otro dron), o fallido, se cancela al volver', () => {
+    for (const caso of ['descartada', 'de_otro', 'fallido', 'A'] as const) {
+      limpiarBase();
+      seed();
+      const b = new Banco();
+      const alertId = traspaso(b);
+      if (caso === 'fallido') {
+        b.manda(C, { type: 'relay_abort', relayId: 1, motivo: 'senial' });
+      } else {
+        b.manda(A, { type: 'relay_released', relayId: 1 });
+      }
+      if (caso === 'descartada') decideAlert(alertId, 'DISMISSED', 'operador');
+      if (caso === 'de_otro') b.coord['cambiarDueno'](alertId, A);
+      const quien = caso === 'A' ? A : C;
+      const rol = caso === 'A' ? { ...enLaToma, rol: 'origen', fase: 'soltando' } : enLaToma;
+      b.limpiar();
+      b.conectar(quien);
+      b.status(quien, { state: 'RELEVANDO', battery: 80, lat: -34.8503, lon: -56.1993, alt: 60, flying: true, relevo: rol });
+      expect(b.a(quien), caso).toEqual([{ type: 'relay_cancel', relayId: 1, motivo: 'terminado' }]);
+    }
   });
 
   it('B desconectado más de 20 s: FALLIDO relevo_desconectado; si vuelve antes, sigue', () => {
@@ -1737,9 +2024,10 @@ describe('relevos — mensajes inválidos o que no corresponden', () => {
   it('relay_released fuera del traspaso no completa nada', () => {
     const b = new Banco();
     b.conectar(A, C);
+    b.despegaDe(A, alNorte(ESTE, 15));
     const alerta = createAlert('VEHICLE', A, -34.85, -56.2, null);
     b.status(A, { state: 'FOLLOWING', battery: 38, lat: -34.8507, lon: -56.1999, alt: 40, target: objetivo(alerta.id) });
-    b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+    b.enEspera(C, ESTE);
     b.manda(A, { type: 'relay_request', ref: 's', motivo: 'seguimiento', alertId: alerta.id, segundosDisponibles: 400 });
     b.manda(A, { type: 'relay_released', relayId: 1 });
     expect(b.relevo(1).estado).toBe('ORDENADO');
@@ -1788,31 +2076,34 @@ describe('relevos — bordes', () => {
     expect(pedirPatrulla(b).relevo.droneId).toBe(C);
   });
 
-  it('seguimiento: a igual eta gana la batería; un B fuera de toda base sale con la suya asignada o sin base', () => {
+  it('seguimiento: a igual eta gana la batería; uno fuera de toda base nunca sale', () => {
     const b = new Banco();
     const sinBase = createDrone({ displayName: 'Delta' }, 'supervisor').hash;
     b.conectar(A, B, C, sinBase);
+    b.despegaDe(A, alNorte(ESTE, 15));
     const alerta = createAlert('VEHICLE', A, -34.85, -56.2, null);
     b.status(A, { state: 'FOLLOWING', battery: 38, lat: -34.8507, lon: -56.1999, alt: 40, target: objetivo(alerta.id) });
-    const campo = { lat: -34.852, lon: -56.2 };
-    b.enEspera(B, campo, { battery: 60 });
-    b.enEspera(C, campo, { battery: 70 });
+    // Delta, en el campo entre la base y el objetivo, llegaría antes que nadie
+    b.enEspera(sinBase, { lat: -34.854, lon: -56.2005 }, { battery: 100 });
+    b.enEspera(B, ESTE, { battery: 60 });
+    b.enEspera(C, ESTE, { battery: 70 });
     b.manda(A, { type: 'relay_request', ref: 's', motivo: 'seguimiento', alertId: alerta.id, segundosDisponibles: 400 });
     expect(b.relevo(1)).toMatchObject({ relevo: { droneId: C }, baseId: 3 });
 
     b.manda(C, { type: 'relay_reject', relayId: 1, motivo: 'ocupado' });
-    expect(b.relevo(1)).toMatchObject({ relevo: { droneId: B }, baseId: 2 });
-    b.enEspera(sinBase, campo);
+    expect(b.relevo(1)).toMatchObject({ relevo: { droneId: B }, baseId: 3 });
     b.manda(B, { type: 'relay_reject', relayId: 1, motivo: 'ocupado' });
-    expect(b.relevo(1)).toMatchObject({ relevo: { droneId: sinBase }, baseId: null });
+    expect(b.relevo(1)).toMatchObject({ estado: 'SIN_RELEVO', relevo: null });
+    expect(b.a(sinBase)).toEqual([]);
   });
 
   it('B de seguimiento que vuelve sin relevo en el traspaso: FALLIDO y la alerta vuelve a A; un reservado que vuelve no cambia nada', () => {
     const b = new Banco();
     b.conectar(A, B, C);
+    b.despegaDe(A, alNorte(ESTE, 15));
     const alerta = createAlert('VEHICLE', A, -34.85, -56.2, null);
     b.status(A, { state: 'FOLLOWING', battery: 38, lat: -34.8507, lon: -56.1999, alt: 40, target: objetivo(alerta.id) });
-    b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+    b.enEspera(C, ESTE);
     b.manda(A, { type: 'relay_request', ref: 's', motivo: 'seguimiento', alertId: alerta.id, segundosDisponibles: 400 });
     b.manda(C, { type: 'relay_accept', relayId: 1 });
     b.manda(C, { type: 'relay_ready', relayId: 1 });
@@ -1834,10 +2125,11 @@ describe('relevos — bordes', () => {
   it('en el traspaso, con A callado, B recibe la última estimación cada 5 s', () => {
     const b = new Banco();
     b.conectar(A, C);
+    b.despegaDe(A, alNorte(ESTE, 15));
     const alerta = createAlert('VEHICLE', A, -34.85, -56.2, null);
-    // A sin GPS ni altura en su último status
+    // A sin GPS ni altura en su último status: no hay contra qué medir la distancia a A, solo al objetivo
     b.status(A, { state: 'FOLLOWING', battery: 38, lat: null, lon: null, target: objetivo(alerta.id) });
-    b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+    b.enEspera(C, ESTE);
     b.manda(A, { type: 'relay_request', ref: 's', motivo: 'seguimiento', alertId: alerta.id, segundosDisponibles: 400 });
     b.manda(C, { type: 'relay_accept', relayId: 1 });
     b.manda(C, { type: 'relay_ready', relayId: 1 });
@@ -1849,9 +2141,10 @@ describe('relevos — bordes', () => {
   it('reinicio con un seguimiento en camino: el barrido avisa a A y le manda a B la estimación, aunque A no haya vuelto', () => {
     const b = new Banco();
     b.conectar(A, C);
+    b.despegaDe(A, alNorte(ESTE, 15));
     const alerta = createAlert('VEHICLE', A, -34.85, -56.2, null);
     b.status(A, { state: 'FOLLOWING', battery: 38, lat: -34.8507, lon: -56.1999, alt: 40, target: objetivo(alerta.id) });
-    b.enEspera(C, { lat: -34.8575, lon: -56.201 });
+    b.enEspera(C, ESTE);
     b.manda(A, { type: 'relay_request', ref: 's', motivo: 'seguimiento', alertId: alerta.id, segundosDisponibles: 400 });
     b.manda(C, { type: 'relay_accept', relayId: 1 });
     b.limpiar();

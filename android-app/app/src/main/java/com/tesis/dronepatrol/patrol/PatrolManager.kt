@@ -696,6 +696,13 @@ class PatrolManager(
     private var tareaDelRelevo: Job? = null
 
     /**
+     * El último seguimiento que B cumplió (bajó y adoptó el objetivo). El hub
+     * le sigue mandando dónde está A hasta que A aterriza (docs/PROTOCOLS.md
+     * §2.b): esos `relay_target` ya no le sirven, y no son un error.
+     */
+    private var relevoCumplido: Long? = null
+
+    /**
      * La última respuesta mandada a cada orden de relevo: una orden repetida
      * (el hub reenvía la última al reconectar) se contesta igual sin volver a
      * empezar nada (docs/PROTOCOLS.md §2.b).
@@ -2827,8 +2834,10 @@ class PatrolManager(
 
     /**
      * A que no logra alejarse en [ALEJAMIENTO_MAXIMO_MS] (el dron no avanza, la
-     * orden no salió) vuelve igual, sin `relay_released`: no se alejó, y B no
-     * puede bajar creyendo que sí. El hub lo completa solo a los 30 s.
+     * orden no salió) vuelve igual, sin `relay_released`: no se alejó. El hub
+     * lo completa solo a los 30 s, y su regreso no le dice a B que baje: B
+     * sigue viendo dónde está A (el regreso del DJI sube primero ahí mismo) y
+     * baja recién con A a más de 100 m o en tierra (RELEVOS §3.5).
      */
     private fun vencerElAlejamiento(ahora: Long) {
         val s = soltando ?: return
@@ -3014,6 +3023,13 @@ class PatrolManager(
             rechazarAceptado(r, "no_disponible", Aproximacion.sinSeparacion(r.aAlt, r.de.displayName))
             return
         }
+        // Sube en vertical y cruza la altura de A: no desde al lado del objetivo
+        // ni de A (el hub ya lo eligió así; esto mira lo último que llegó).
+        val (bLat, bLon) = posicionActual()
+        Aproximacion.motivoParaNoSubirAca(r, bLat, bLon, ahora)?.let {
+            rechazarAceptado(r, "no_disponible", it)
+            return
+        }
         empezarElDespegue(r, ahora)
         r.alturaDeTransito = altura
         pasarA(PatrolState.RELEVANDO)
@@ -3171,20 +3187,24 @@ class PatrolManager(
     /**
      * B en el traspaso: sostiene el punto de toma, por encima de A, siguiendo
      * la estimación del objetivo (la suya o la que manda A), y recién con A
-     * lejos o retirado baja EN EL LUGAR a la altura de seguimiento y empieza a
-     * orbitarlo o seguirlo (RELEVOS §3.5). Sin noticias del hub
+     * lejos de esa estimación o en tierra baja EN EL LUGAR a la altura de
+     * seguimiento y empieza a orbitarlo o seguirlo (RELEVOS §3.5). Un A
+     * `retirado` pero cerca (un operador lo detuvo sobre su órbita, arrancó el
+     * regreso del DJI ahí mismo) lo deja arriba, en la toma. Sin noticias del hub
      * ([SILENCIO_DEL_HUB_MS]) no hay quién diga dónde está A, y por eso NO baja:
      * sigue desde la toma, a la altura de A + 20, con el relevo en curso hasta
      * que el hub lo termine.
      */
     private fun sostenerLaToma(r: RelevoAsignado, ahora: Long) {
-        if (seguimiento == null) return
+        val s = seguimiento ?: return
         if (r.bajandoDesdeMs != null) {
             revisarLaBajada(r, ahora)
             return
         }
-        if (Aproximacion.puedeBajar(r)) {
-            bajarASeguir(r, ahora, "${r.de.displayName} ya se alejó")
+        // La estimación de B: es alrededor de ESA que va a orbitar o seguir.
+        val e = s.rastreador.estimar(ahora)
+        if (Aproximacion.puedeBajar(r, e.lat, e.lon)) {
+            bajarASeguir(r, ahora, porQueBaja(r))
             return
         }
         if (!r.silencioAvisado && ahora - r.ultimoTargetMs > SILENCIO_DEL_HUB_MS) {
@@ -3197,10 +3217,13 @@ class PatrolManager(
         if (ahora - r.ultimaOrdenMs < INTERVALO_ORDEN_DE_TRANSITO_MS) return
         val t = lastTelemetry?.takeIf { it.tienePosicion } ?: return
         r.ultimaOrdenMs = ahora
-        val e = seguimiento?.rastreador?.estimar(ahora) ?: return
         val (lat, lon) = Aproximacion.puntoDeToma(e.lat, e.lon, t.lat, t.lon)
         controller.volarHacia(lat, lon)
     }
+
+    /** Por qué B ya puede bajar, para el aviso: A aterrizó o se alejó. */
+    private fun porQueBaja(r: RelevoAsignado): String =
+        if (r.aEnTierra) "${r.de.displayName} ya está en tierra" else "${r.de.displayName} ya se alejó"
 
     /**
      * A ya no está encima: B baja en vertical, donde está, a la altura de
@@ -3226,12 +3249,13 @@ class PatrolManager(
         val desde = r.bajandoDesdeMs ?: return
         val alt = lastTelemetry?.altM ?: Double.NaN
         val llego = alt.isFinite() && alt <= r.alturaDeBajada + Aproximacion.TOLERANCIA_DE_ALTURA_M
-        if (llego || ahora - desde >= BAJADA_MAXIMA_MS) completarElRelevo(r, "${r.de.displayName} ya se alejó")
+        if (llego || ahora - desde >= BAJADA_MAXIMA_MS) completarElRelevo(r, porQueBaja(r))
     }
 
     /** El relevo terminó para B: el seguimiento es suyo (adoptado, sin ruta) y lo orbita o lo sigue. */
     private fun completarElRelevo(r: RelevoAsignado, porque: String) {
         val s = seguimiento ?: return
+        relevoCumplido = r.relayId
         olvidarRelevo(r)
         volverAlObjetivo(s, "Relevo de ${r.de.displayName} completo ($porque): el dron sigue al objetivo")
     }
@@ -3245,24 +3269,28 @@ class PatrolManager(
      * TODOS, aunque el `ts` se repita: los mensajes de una conexión llegan en
      * orden. En el traspaso A ya soltó su rastreador y manda el status sin
      * objetivo, así que el hub repite el `ts` del último con A cada vez más
-     * lejos; descartar esos dejaría a B arriba hasta el `retirado`. Y
-     * `sin_enlace` y `retirado` llevan siempre el `ts` del último objetivo
-     * válido: descartar un `retirado` dejaría a B esperando a un A que ya se fue.
+     * lejos; descartar esos dejaría a B arriba para siempre. Y `sin_enlace` y
+     * `retirado` llevan siempre el `ts` del último objetivo válido: descartar
+     * uno dejaría a B sin la posición de A, o sin saber que A aterrizó
+     * (`aEnTierra`), que es lo que lo deja bajar.
      */
     private fun alObjetivoActualizado(m: MensajeDelHub.ObjetivoActualizado) {
         val r = relevo
         if (r == null || r.relayId != m.relayId || m.alertId != r.alertId) {
-            log("relay_target de un relevo que no es el activo: se ignora")
+            if (m.relayId != relevoCumplido) log("relay_target de un relevo que no es el activo: se ignora")
             return
         }
         val ahora = reloj()
         // El hub sigue hablando de este relevo, aunque sea con un objetivo viejo.
         r.ultimoTargetMs = ahora
         r.silencioAvisado = false
+        // Retirado no es lejos: B baja con la posición de A o con A en tierra (ver Aproximacion.puedeBajar).
         if (m.origen == "retirado" && !r.aRetirado) log("${r.de.displayName} ya no sigue al objetivo")
+        if (m.aEnTierra && !r.aEnTierra) log("${r.de.displayName} ya está en tierra")
         r.anotarOrigen(m.origen)
         r.aLat = m.aLat
         r.aLon = m.aLon
+        r.aEnTierra = m.aEnTierra
         r.decision = m.decision
         val objetivoNuevo = m.ts > r.ultimoTs
         if (objetivoNuevo) {

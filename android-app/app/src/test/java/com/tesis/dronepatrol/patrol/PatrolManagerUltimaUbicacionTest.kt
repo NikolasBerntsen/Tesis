@@ -8,6 +8,7 @@ import com.tesis.dronepatrol.patrol.BancoDeRelevos.Companion.RUTA
 import com.tesis.dronepatrol.patrol.BancoDeRelevos.Companion.emergencyAck
 import com.tesis.dronepatrol.patrol.BancoDeRelevos.Companion.emergencyPhotoAck
 import com.tesis.dronepatrol.patrol.BancoDeRelevos.Companion.punto
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
@@ -281,6 +282,45 @@ class PatrolManagerUltimaUbicacionTest {
             1,
             banco.mensajes("emergency_landing").map { it.getString("ref") }.toSet().size,
         )
+    }
+
+    /**
+     * El DJI toma el vuelo con la secuencia por la mitad (mismo `ref`): las
+     * fotos ya sacadas con control (la oblicua y la cenital) y las de la
+     * variante de la cámara llegan TODAS al Comando Central, con números
+     * distintos. Con los mismos números, la cola descartaba las nuevas y el hub
+     * acusaba sin guardar: justo la cenital del lugar donde baja.
+     */
+    @Test
+    fun siElDjiTomaElVueloConFotosYaSacadasNingunaSePierde() = runBlocking {
+        val frenada = CompletableDeferred<Unit>()
+        // La tercera foto (la primera de la panorámica) queda frenada hasta que el DJI toma el vuelo.
+        dron.alCapturar = { n -> if (n == 3) frenada.await() }
+        enEmergencia()
+        esperarA("la tercera foto, frenada") { dron.ordenes.count { it == "capturarFoto" } == 3 }
+        banco.evento(FlightEvent.ElDronTomoElControl(MotivoDelDron.ATERRIZAJE_BATERIA_CRITICA))
+        esperarA("las dos de la variante de la cámara") { dron.ordenes.count { it == "capturarFoto" } == 5 }
+        // La secuencia de antes ya se canceló: soltarla no saca la foto frenada ni aterriza.
+        frenada.complete(Unit)
+        delay(200)
+        assertFalse("land" in dron.ordenes)
+        assertEquals(5, dron.ordenes.count { it == "capturarFoto" })
+
+        val ref = ref()
+        banco.hub(emergencyAck(ref, 3, aterrizada = false))
+        val enviadas = mutableListOf<JSONObject>()
+        repeat(4) { i ->
+            esperarA("la foto ${i + 1}") { banco.mensajes("emergency_photo").size == i + 1 }
+            val foto = banco.ultimo("emergency_photo")
+            enviadas += foto
+            banco.hub(emergencyPhotoAck(ref, foto.getInt("seq")))
+        }
+        assertEquals(listOf(0, 1, 6, 7), enviadas.map { it.getInt("seq") })
+        assertEquals(listOf("oblicua", "cenital", "cenital", "panoramica"), enviadas.map { it.getString("tipo") })
+        assertEquals("todas de la misma emergencia", setOf(ref), enviadas.map { it.getString("ref") }.toSet())
+        assertEquals(-90.0, enviadas[2].getDouble("inclinacion"), 1e-9)
+        banco.pasar(ColaDeEmergencia.REINTENTO_MAXIMO_MS)
+        assertEquals("ninguna quedó pendiente", 4, banco.mensajes("emergency_photo").size)
     }
 
     @Test
