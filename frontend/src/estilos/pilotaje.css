@@ -265,9 +265,9 @@
   max-height: calc(100vh - 120px);
   overflow-y: auto;
   padding: var(--e-4) var(--e-5);
-  border: 1px solid var(--veta);
+  border: 1px solid var(--veta-fuerte);
   border-radius: var(--radio);
-  background-color: var(--marmol-0);
+  background-color: var(--panel-firme);
   background-image: var(--piedra-cara);
   box-shadow: var(--sombra-flotante);
   /* El texto de la ayuda sí se tiene que poder seleccionar y copiar. */

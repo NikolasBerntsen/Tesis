@@ -13,46 +13,56 @@
      <div class="vista-acciones"><div class="vista-opciones"> … </div> <button class="primario"/></div>
    </header>
    Título a la izquierda, filtros al medio, opciones y acción principal a la
-   derecha. La línea grabada de abajo es la de `.card > h2`, con su tramo de
-   oro: la cabecera se lee como el título de la página entera.
+   derecha. El título es el nombre de la página: Cormorant grande con una
+   barra de oro a la izquierda, y debajo el dato corto en versalitas anchas
+   ("0 EN VUELO · 3 REGISTRADOS"). Un hilo de oro cierra la fila.
 ------------------------------------------------------------------------------ */
 .vista-cabecera {
   position: relative;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   grid-template-areas: 'titulo filtros acciones';
-  align-items: center;
+  /* Los controles se alinean con el pie del título, no con su centro: con un
+     título de 46 px, centrados quedaban flotando a media altura. */
+  align-items: end;
   gap: var(--e-3) var(--e-5);
-  padding-bottom: var(--e-3);
+  padding-bottom: var(--e-4);
   border-bottom: 1px solid var(--veta);
-}
-.vista-cabecera::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  bottom: -1px;
-  width: 38px;
-  height: 1px;
-  background: linear-gradient(90deg, var(--oro-oscuro) 0%, var(--oro-claro) 100%);
 }
 .vista-encabezado {
   grid-area: titulo;
   display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: var(--e-1) var(--e-3);
+  flex-direction: column;
+  gap: var(--e-3);
   min-width: 0;
 }
 .vista-titulo {
+  position: relative;
   margin: 0;
-  font-size: var(--txt-lg);
+  padding-left: 22px;
+  font-family: var(--fuente-serif);
+  font-size: var(--txt-titulo-vista);
+  font-weight: 600;
+  line-height: 1;
+}
+/* La barra de oro: el canto de la piedra abierto al lado del nombre. */
+.vista-titulo::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: .12em;
+  bottom: 0;
+  width: 4px;
+  border-radius: 2px;
+  background: var(--oro);
 }
 .vista-subtitulo {
-  margin: 0;
+  margin: 0 0 0 24px;
   font-size: var(--txt-xs);
-  font-weight: 600;
+  font-weight: 500;
+  line-height: 1.3;
   text-transform: uppercase;
-  letter-spacing: var(--versalita);
+  letter-spacing: var(--versalita-ancha);
   color: var(--tinta-media);
 }
 .vista-filtros {
@@ -90,7 +100,12 @@
   min-height: var(--alto-control);
   padding-block: 0;
   padding-inline: 14px;
-  font-size: var(--txt-sm);
+  /* En versalitas, como "Cámaras" y "Mapa" del prototipo: en la cabecera son
+     rótulos de la vista, no frases. */
+  font-size: var(--txt-xs);
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
 }
 .vista-cabecera input,
 .vista-cabecera select {
@@ -110,6 +125,13 @@
   font-weight: 400;
 }
 
+/* En un teléfono el título achica un escalón y el subtítulo se cierra: a
+   46 px, "Usuarios" ya ocupaba media pantalla. */
+@media (max-width: 760px) {
+  .vista-titulo { font-size: var(--txt-2xl); }
+  .vista-subtitulo { letter-spacing: .18em; }
+}
+
 /* En una tableta el buscador baja a su propia fila, a todo el ancho. */
 @media (max-width: 900px) {
   .vista-cabecera {
@@ -122,6 +144,19 @@
     justify-self: stretch;
     width: auto;
   }
+}
+/* En un teléfono el título de 32 px y dos botones ya no entran en una fila:
+   el título se quedaba debajo de "Ver eliminados". Todo se apila, con las
+   acciones a la izquierda, debajo del título. */
+@media (max-width: 640px) {
+  .vista-cabecera {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'titulo'
+      'acciones'
+      'filtros';
+  }
+  .vista-acciones { justify-content: flex-start; }
 }
 
 /* ---------------------------------------------------------------------------
@@ -170,9 +205,9 @@
   align-items: center;
   gap: var(--e-3);
   padding: var(--e-3) var(--e-4);
-  border: 1px solid var(--veta);
+  border: 1px solid var(--veta-fuerte);
   border-radius: var(--radio);
-  background-color: var(--marmol-0);
+  background-color: var(--panel-firme);
   background-image: var(--piedra-cara);
   /* El filo de oro a la izquierda, como la fila seleccionada. */
   box-shadow: inset var(--filo) 0 0 0 var(--oro), var(--sombra-flotante);

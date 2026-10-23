@@ -227,10 +227,10 @@ details.meta pre {
 .camera-tile {
   position: relative;
   padding: var(--e-3);
-  border: 1px solid var(--veta);
+  border: 1px solid var(--veta-fuerte);
   border-radius: var(--radio);
   cursor: pointer;
-  background-color: var(--marmol-0);
+  background-color: var(--panel);
   background-image: var(--piedra-cara);
   box-shadow: var(--sombra-relieve);
   transition: box-shadow var(--transicion), border-color var(--transicion);

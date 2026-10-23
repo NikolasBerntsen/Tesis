@@ -805,14 +805,14 @@ describe('DronesMap — objetivo', () => {
   it('rojo mientras la alerta espera, oro una vez validada (sin crear otra mira)', () => {
     const { rerender } = render(<DronesMap items={[conObjetivo()]} />);
     const mira = miras()[0];
-    expect(htmlIcono(mira)).toContain('#8E3328');
-    expect(hilos()[0].estilo.color).toBe('#8E3328');
+    expect(htmlIcono(mira)).toContain('#A82D26');
+    expect(hilos()[0].estilo.color).toBe('#A82D26');
 
     rerender(<DronesMap items={[conObjetivo({ decision: 'VALIDATED' })]} />);
     expect(miras()).toHaveLength(1);
-    expect(htmlIcono(mira)).toContain('#B8912F');
-    expect(htmlIcono(mira)).not.toContain('#8E3328');
-    expect(hilos().filter((c) => c.enMapa).map((c) => c.estilo.color)).toEqual(['#B8912F']);
+    expect(htmlIcono(mira)).toContain('#C39A45');
+    expect(htmlIcono(mira)).not.toContain('#A82D26');
+    expect(hilos().filter((c) => c.enMapa).map((c) => c.estilo.color)).toEqual(['#C39A45']);
   });
 
   it('el hilo y el rastro llevan la clase que el tema tiñe, y la cambian al decidirse la alerta', () => {

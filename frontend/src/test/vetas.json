@@ -1,0 +1,10 @@
+{
+  "oscuro": {
+    "clara": "#D8C2A0",
+    "oscura": "#000000"
+  },
+  "claro": {
+    "clara": "#FFFFEE",
+    "oscura": "#B1A57E"
+  }
+}

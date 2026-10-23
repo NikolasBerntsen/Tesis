@@ -3,6 +3,7 @@ import { useAlertasEnVivo } from '../alertasEnVivo';
 import { time } from '../format';
 import type { Alert, Drone } from '../types';
 import { useDecisionDeAlerta, type DecidirAlerta } from '../useDecisionDeAlerta';
+import { IconoCampana } from './Iconos';
 
 const TIPO = { PERSON: 'PERSONA', VEHICLE: 'VEHÍCULO' } as const;
 
@@ -92,10 +93,7 @@ export default function CampanaDeAlertas({
         }
         onClick={() => setAbierta((v) => !v)}
       >
-        <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
-          <path d="M10 2.5a5 5 0 0 0-5 5v3l-1.4 2.6h12.8L15 10.5v-3a5 5 0 0 0-5-5z" strokeLinejoin="round" />
-          <path d="M8 15.2a2 2 0 0 0 4 0" strokeLinecap="round" />
-        </svg>
+        <IconoCampana />
         {pendientes.length > 0 && <span className="badge-count">{pendientes.length}</span>}
       </button>
 

@@ -2,25 +2,41 @@
    PRIMITIVOS — tarjetas, botones, campos, tablas, pastillas
    ========================================================================= */
 
-/* --- Tarjeta: un plano de mármol levemente levantado ---------------------- */
+/* --- Tarjeta: un panel translúcido con filo de oro ------------------------ */
+/* El velo del panel deja asomar la veta de la piedra (tokens.css explica
+   cuánto y por qué); el brillo rasante de --piedra-cara va encima. */
 .card {
   position: relative;
   padding: var(--e-5);
-  border: 1px solid var(--veta);
+  border: 1px solid var(--veta-fuerte);
   border-radius: var(--radio);
   color: var(--tinta);
-  background-color: var(--marmol-0);
+  background-color: var(--panel);
   background-image: var(--piedra-cara);
   box-shadow: var(--sombra-relieve);
 }
 
+/* Título de tarjeta: versalitas anchas en Cinzel, como "Drones activos" del
+   prototipo, sobre un hilo de oro que cruza la tarjeta. Si trae un ícono
+   (<h2><svg/>Drones activos</h2>), va a la izquierda y en oro. */
 .card > h2 {
   position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--e-3);
   margin: 0 0 var(--e-4);
-  font-size: var(--txt-md);
-  /* Título de tarjeta: hairline de veta debajo, como una línea grabada */
-  padding-bottom: var(--e-2);
+  padding-bottom: var(--e-3);
   border-bottom: 1px solid var(--veta);
+  font-family: var(--fuente-marca);
+  font-size: var(--txt-sm);
+  font-weight: 600;
+  letter-spacing: var(--versalita-ancha);
+  text-transform: uppercase;
+  line-height: var(--interlinea-titulo);
+}
+.card > h2 > svg {
+  flex: none;
+  color: var(--oro-texto);
 }
 /* Y donde la línea arranca, la piedra se abre: un tramito de oro */
 .card > h2::after {
@@ -45,7 +61,7 @@
 
 /* Tarjeta seleccionada / destacada */
 .card.activa {
-  background-color: var(--marmol-0);
+  background-color: var(--panel);
   box-shadow: var(--sombra-flotante);
 }
 .card.activa::after {
@@ -72,6 +88,9 @@
 }
 
 /* --- Botones -------------------------------------------------------------- */
+/* El botón común es semitransparente: un velo de piedra con un hilo de oro
+   de borde. Sobre un panel se ve la piedra del panel, sobre el lienzo la del
+   lienzo: el botón no es una tecla pegada encima, es parte de la placa. */
 button {
   font-family: var(--fuente-cuerpo);
   font-size: var(--txt-base);
@@ -81,7 +100,7 @@ button {
   border: 1px solid var(--veta-fuerte);
   border-radius: var(--radio-chico);
   color: var(--tinta);
-  background-color: var(--marmol-1);
+  background-color: var(--boton-fondo);
   background-image: var(--cara-boton);
   box-shadow: inset 0 1px 0 var(--filo-luz), var(--sombra-boton);
   cursor: pointer;
@@ -92,7 +111,7 @@ button {
     box-shadow var(--transicion), color var(--transicion), transform var(--transicion);
 }
 button:hover:not(:disabled) {
-  border-color: var(--oro); /* al pasar el mouse, la veta vira a oro */
+  border-color: var(--oro); /* al pasar el mouse, el hilo se enciende */
   background-image: var(--cara-boton-hover);
 }
 button:active:not(:disabled) {
@@ -111,31 +130,40 @@ button:disabled {
   cursor: default;
 }
 
-/* Primario: relleno de lámina dorada con tinta encima. La tinta es la de
-   encima del oro, que en los dos temas es oscura. */
+/* Dorado: la acción principal ("Nuevo dron", "Guardar", "Ingresar") y lo que
+   está encendido (la vista elegida, "Ver eliminados" apretado). Es el mismo
+   gesto dicho dos veces: el oro marca lo que importa ahora. Velo de oro, filo
+   de oro, tinta de oro y un resplandor corto; nunca un relleno macizo, que en
+   un panel translúcido se leía como un parche. Un botón presionado
+   (aria-pressed) es lo mismo para el lector de pantalla: "Modo mouse"
+   encendido se tiene que ver encendido. */
 button.primario,
 button[type='submit'],
-.login-card button {
-  border-color: var(--oro-oscuro);
-  color: var(--tinta-sobre-oro);
+.login-card button,
+button.active,
+button[aria-pressed='true'] {
+  border-color: var(--oro);
+  color: var(--oro-texto);
   font-weight: 600;
-  background-color: var(--oro);
-  background-image: var(--oro-lamina-relleno);
-  box-shadow: inset 0 1px 0 var(--realce-55), var(--sombra-oro);
+  background-color: var(--boton-fondo);
+  background-image: var(--cara-activa);
+  box-shadow: var(--resplandor-oro);
 }
-/* El hover aclara el mismo relleno, no vuelve a la lámina de los filos: esa,
-   con tinta encima, no llega a AA en su esquina oscura. */
+/* El hover espesa el mismo velo: la regla general le pondría la cara de
+   piedra encima y el oro se apagaba justo bajo el mouse. */
 button.primario:hover:not(:disabled),
 button[type='submit']:hover:not(:disabled),
-.login-card button:hover:not(:disabled) {
-  background-image:
-    linear-gradient(180deg, var(--realce-55), var(--realce-55)),
-    var(--oro-lamina-relleno);
-  border-color: var(--oro-oscuro);
+.login-card button:hover:not(:disabled),
+button.active:hover:not(:disabled),
+button[aria-pressed='true']:hover:not(:disabled) {
+  border-color: var(--oro);
+  background-image: linear-gradient(var(--oro-velo), var(--oro-velo)), var(--cara-activa);
 }
 button.primario:disabled,
 button[type='submit']:disabled,
-.login-card button:disabled {
+.login-card button:disabled,
+button.active:disabled,
+button[aria-pressed='true']:disabled {
   background-image: none;
   background-color: var(--marmol-2);
   border-color: var(--veta);
@@ -162,42 +190,45 @@ button.chico {
   font-size: var(--txt-sm);
 }
 
-/* Botones de decisión de alerta: el color entra por el borde, no por el fondo.
-   .resume (reanudar patrullaje) es el mismo gesto afirmativo: comparte receta.
-   La cara arrancaba en un #FDFEFC escrito acá, y en obsidiana "Validar" y
-   "Devolver al patrullaje" eran una tecla blanca con el verde encima
-   (contraste 1,5). Ahora sale de --cara-afirmativa, que tiene valor por tema,
-   y el hover suma el velo verde a la cara de hover en vez de dejar que la
-   regla general le ponga la suya. */
+/* Validar: el gesto afirmativo de una decisión, en el azul del cielo (de
+   noche, un velo verde agua con filo cian). .resume ("Devolver al
+   patrullaje") es el mismo gesto y comparte receta. Va teñido en reposo: es
+   la mitad de una decisión y tiene que pesar igual que Descartar. El hover
+   no cambia la placa (la cara de piedra encima lo blanqueaba): enciende un
+   halo del color del filo. */
 button.validate,
 button.resume {
-  border-color: var(--ok);
-  color: var(--ok-texto);
-  background-image: var(--cara-afirmativa);
+  border-color: var(--valida-filo);
+  color: var(--valida-texto);
+  background-color: var(--valida-fondo);
+  background-image: none;
 }
 button.validate:hover:not(:disabled),
 button.resume:hover:not(:disabled) {
-  border-color: var(--ok);
-  background-image: linear-gradient(var(--ok-velo), var(--ok-velo)), var(--cara-boton-hover);
+  border-color: var(--valida-filo);
+  background-image: none;
+  box-shadow: 0 0 14px color-mix(in srgb, var(--valida-filo) 32%, transparent);
 }
 
 /* Eliminar se lee igual que Editar o Desactivar: misma cara de piedra y la
-   misma tinta. Lo único que cambia es el filo, en rojo óxido. El relleno
-   rosado que tenía antes bajaba el contraste del texto justo en la acción que
-   más conviene leer bien antes de tocarla. Con el mouse encima el óxido tiñe
-   la cara de reposo: sobre la de hover, más clara, el rojo no llegaba a AA. */
+   misma tinta, con el filo en óxido. En una tabla con veinte filas, veinte
+   placas rojas gritarían más que el dato. Con el mouse encima, o adentro de
+   una decisión de alerta (donde Descartar pesa lo mismo que Validar), toma
+   la placa teñida y su tinta, medidas juntas en contraste.test.ts. */
 button.dismiss {
-  border-color: var(--peligro);
+  border-color: var(--descarta-filo);
 }
-button.dismiss:hover:not(:disabled) {
-  border-color: var(--peligro);
-  color: var(--peligro);
-  background-image: linear-gradient(var(--peligro-velo), var(--peligro-velo)), var(--cara-boton);
+button.dismiss:hover:not(:disabled),
+.alert-actions button.dismiss {
+  border-color: var(--descarta-filo);
+  color: var(--descarta-texto);
+  background-color: var(--descarta-fondo);
+  background-image: none;
 }
 
 /* Las variantes tienen la misma especificidad que `button:disabled` y vienen
    después, así que le pisaban la tinta, el filo y la cara: con una decisión
-   en viaje "Validar" seguía con su cara y su verde, "Descartar" con su filo
+   en viaje "Validar" seguía con su cara y su color, "Descartar" con su filo
    óxido, y el "Cancelar" de un diálogo ocupado con su tinta de siempre: todo
    parecía tocable. Deshabilitadas vuelven al hueco apagado de todos. */
 button.validate:disabled,
@@ -211,33 +242,18 @@ button.dismiss:disabled {
 /* El fantasma no tiene cara que hundir: sólo se le apaga la tinta. */
 button.ghost:disabled { color: var(--tinta-suave); }
 
-/* Activo/seleccionado: filo dorado + velo, nunca relleno macizo. Un botón
-   presionado (aria-pressed) es lo mismo dicho para el lector de pantalla:
-   "Modo mouse" encendido se tiene que ver encendido. */
-button.active,
-button[aria-pressed='true'] {
-  color: var(--tinta);
-  font-weight: 600;
-  border-color: transparent;
-  background-color: var(--marmol-0);
-  background-image: var(--cara-activa);
-  position: relative;
-  box-shadow: none;
+/* Un ícono adentro de un botón con texto ("+ Nuevo dron", "Salir"): va a la
+   izquierda del rótulo, centrado en el renglón, en el color de la tinta. Con
+   :where() la regla no pesa más que `button` a secas: cualquier clase que ya
+   diga cómo se arma su botón (la grilla del ícono redondo, un display:none
+   responsivo) le sigue ganando. */
+button:where(:has(> svg:first-child)) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--e-2);
 }
-button.active::after,
-button[aria-pressed='true']::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  padding: var(--filo);
-  background: var(--oro-lamina);
-  -webkit-mask: var(--mascara-llena) content-box, var(--mascara-llena);
-  mask: var(--mascara-llena) content-box, var(--mascara-llena);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  pointer-events: none;
-}
+button > svg { flex: none; }
 
 /* Botón de ícono heredado del tema viejo (lápiz del nombre editable) */
 button.icon {

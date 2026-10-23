@@ -120,9 +120,9 @@
 }
 .alerta-detalle > p { margin: 0; }
 
-/* "Validar" no lleva arreglo propio acá: su cara sale de --cara-afirmativa
-   (primitivos.css), que tiene valor por tema, igual en la campana que en el
-   carrusel o en el detalle del dron. */
+/* "Validar" y "Descartar" no llevan arreglo propio acá: su placa sale de
+   --valida-* y --descarta-* (primitivos.css), que tienen valor por tema,
+   igual en la campana que en el carrusel o en el detalle del dron. */
 .carrusel-dron { font-weight: 600; }
 
 /* --- Variante apaisada: el tablero ------------------------------------------
