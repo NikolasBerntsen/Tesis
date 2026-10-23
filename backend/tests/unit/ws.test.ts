@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { limpiarBase } from '../helpers';
-import { createDrone, softDeleteDrone } from '../../src/store';
+import { dronNombrado, nombreDeDron } from '../../src/meta';
+import { createBase, createDrone, softDeleteDrone } from '../../src/store';
 import {
   applyRename, broadcastDroneUpdated, bytesDelFrame, droneCard, getController, getLastStatus,
-  isOnline, kickDrone, listDroneCards, metaDron, posicionValida, releaseControl, sendToDrone, textoDelFrame,
+  isOnline, kickDrone, listDroneCards, mensajeDeBases, metaDron, posicionValida, releaseControl, sendToDrone, textoDelFrame,
 } from '../../src/ws';
 
 // El hub sin sockets abiertos: las consultas sobre drones que no existen (o que
@@ -128,5 +129,42 @@ describe('ws — posicionValida', () => {
       expect(posicionValida(malo, -56.2), String(malo)).toBeNull();
       expect(posicionValida(-34.85, malo), String(malo)).toBeNull();
     }
+  });
+});
+
+// El mensaje `bases` (PROTOCOLS §2.b): la app lo descarta entero si algo no
+// cumple, y sin lista no hay desvío posible.
+describe('ws — mensajeDeBases', () => {
+  it('a lo sumo 200 bases, y la propia siempre, aunque la lista se corte antes', () => {
+    for (let i = 0; i < 205; i++) {
+      createBase({ name: `A${String(i).padStart(3, '0')}`, lat: -34 - i / 1000, lon: -56 }, 'supervisor');
+    }
+    const propia = createBase({ name: 'Zeta', lat: -35.5, lon: -56 }, 'supervisor');
+    const dron = createDrone({ displayName: 'Lejano', baseId: propia.id }, 'supervisor');
+    const m = mensajeDeBases(dron.hash) as any;
+    expect(m.bases).toHaveLength(200);
+    expect(m.propiaId).toBe(propia.id);
+    expect(m.bases.at(-1)).toEqual({ id: propia.id, nombre: 'Zeta', lat: -35.5, lon: -56, aterrizajeLat: null, aterrizajeLon: null });
+  });
+
+  it('deja afuera las que no se podrían mandar; sin base propia, propiaId null', () => {
+    const buena = createBase({ name: 'Buena', lat: -34.8, lon: -56.1, aterrizajeLat: -34.7998, aterrizajeLon: -56.1 }, 'supervisor');
+    createBase({ name: 'x'.repeat(61), lat: -34.81, lon: -56.1 }, 'supervisor');
+    const enCero = createBase({ name: 'Cero', lat: 0, lon: 0 }, 'supervisor');
+    const dron = createDrone({ displayName: 'Sin base visible', baseId: enCero.id }, 'supervisor');
+    const m = mensajeDeBases(dron.hash) as any;
+    expect(m.bases).toEqual([{ id: buena.id, nombre: 'Buena', lat: -34.8, lon: -56.1, aterrizajeLat: -34.7998, aterrizajeLon: -56.1 }]);
+    // su base es la de 0,0, que no viaja: la propia tiene que estar en la lista
+    expect(m.propiaId).toBeNull();
+    expect(mensajeDeBases('desconocido')).toMatchObject({ propiaId: null });
+  });
+});
+
+describe('meta — nombres de drones para el registro', () => {
+  it('un dron que no existe se nombra por su hash, sin romper el registro', () => {
+    expect(nombreDeDron('fantasma')).toBe('fantasma');
+    expect(dronNombrado('fantasma')).toEqual({ droneId: 'fantasma', displayName: 'fantasma' });
+    const d = createDrone({ displayName: 'Real' }, 'supervisor');
+    expect(dronNombrado(d.hash)).toEqual({ droneId: d.hash, displayName: 'Real' });
   });
 });

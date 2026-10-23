@@ -1,16 +1,18 @@
 import bcrypt from 'bcryptjs';
 import { Router, type Response } from 'express';
 import { ROLE_RANK, SESION_DE_OTRO_ROL, requireAuth, requireRoles, signDroneToken, type AuthedRequest } from '../auth';
+import { posicionValida } from '../contrato';
 import {
   asignarRutas, contarDronesEnBase, createBase, createDrone, createLog, createRoute, createUser, generarContrasenia, getBase, restoreRoute, rutasDeBase, softDeleteRoute, updateRoute, listBases, restoreBase, softDeleteBase, updateBase, decideAlert, getAlert, getDrone, getDroneIdentity, getRoute, getRoutes,
   getUser, listAlerts, listEvents, listLogs, listUsers, normalizarDni, restoreDrone, restoreUser, setWaypointLabel,
-  softDeleteDrone, softDeleteUser, updateDrone, updateUser, usuarioConDni,
+  softDeleteDrone, softDeleteUser, updateDrone, updateUser, usuarioConDni, distanciaM, seguidorDeAlerta,
   type BasePatch, type BaseView, type DroneAssetView, type DronePatch, type PatrolRoute, type RoutePatch, type Waypoint, type LogCategory, type Role,
   type UserPatch,
 } from '../store';
 import {
-  broadcastDroneUpdated, broadcastOperators, droneCard, getController, kickDrone, kickUser, listDroneCards,
-  metaDron, releaseAllControlledBy, releaseControl, sendToDrone, takeControl,
+  broadcastDroneUpdated, broadcastOperators, droneCard, emergencias, enviarBases, enviarBasesATodos, getController,
+  kickDrone, kickUser, listDroneCards, metaDron, relevos, releaseAllControlledBy, releaseControl, sendToDrone,
+  takeControl,
 } from '../ws';
 
 export const apiRouter = Router();
@@ -410,6 +412,8 @@ apiRouter.patch('/drones/:droneId', requireRoles('field_operator', 'operator', '
     broadcastOperators({ type: 'drone_renamed', droneId, displayName: patch.displayName });
     sendToDrone(droneId, { type: 'renamed', displayName: patch.displayName });
   }
+  // Con otra base asignada cambia `propiaId`: la app tiene que saber a cuál vuelve (§2.b).
+  if (patch.baseId !== undefined && patch.baseId !== before.baseId) enviarBases(droneId);
   if (patch.active === false) {
     releaseControl(droneId, req.user!.sub, { resume: 'none', forced: true, reason: 'el dron fue desactivado' });
     kickDrone(droneId, 'Dron desactivado');
@@ -477,6 +481,9 @@ apiRouter.post('/drones/:droneId/route/start', requireAuth('operator'), (req: Au
   const holder = checkNotControlledByOther(droneId, req.user!);
   if (holder) return res.status(409).json({ error: `El dron está controlado por ${holder}` });
 
+  // Una orden del operador manda sobre un relevo (RELEVOS §3.9): se resuelve
+  // antes de reenviarla, así la app la recibe ya sin relevo de por medio.
+  relevos.ordenDelOperador(droneId);
   const delivered = sendToDrone(droneId, { type: 'start_route', routeId: route.id, fromIndex, orderedBy: req.user!.sub });
   const ev = createLog(
     'drone',
@@ -495,6 +502,7 @@ apiRouter.post('/drones/:droneId/route/stop', requireAuth('operator'), (req: Aut
   const holder = checkNotControlledByOther(droneId, req.user!);
   if (holder) return res.status(409).json({ error: `El dron está controlado por ${holder}` });
 
+  relevos.ordenDelOperador(droneId);
   const delivered = sendToDrone(droneId, { type: 'stop_patrol', orderedBy: req.user!.sub });
   const ev = createLog(
     'drone',
@@ -518,6 +526,7 @@ apiRouter.post('/drones/:droneId/resume', requireAuth('operator'), (req: AuthedR
   if (holder) return res.status(409).json({ error: `El dron está controlado por ${holder}` });
 
   const fromIndex = req.body?.fromIndex;
+  relevos.ordenDelOperador(droneId);
   if (getController(droneId)) {
     releaseControl(droneId, req.user!.sub, { resume: typeof fromIndex === 'number' ? fromIndex : 'last' });
   } else {
@@ -556,6 +565,7 @@ apiRouter.post('/drones/:droneId/goto', requireAuth('operator'), (req: AuthedReq
   const holder = checkNotControlledByOther(droneId, req.user!);
   if (holder) return res.status(409).json({ error: `El dron está controlado por ${holder}` });
 
+  relevos.ordenDelOperador(droneId);
   const delivered = sendToDrone(droneId, { type: 'force_goto', routeId: route.id, index, orderedBy: req.user!.sub });
   const nombre = route.waypoints[index].label || `nodo ${index + 1}`;
   const ev = createLog(
@@ -581,6 +591,12 @@ apiRouter.post('/drones/:droneId/control', requireAuth('operator'), (req: Authed
   res.json(droneCard(droneId));
 });
 
+/** Con qué reanuda el dron al soltarlo: un nodo, 'none' (sin orden) o 'last' (lo de siempre). */
+function reanudacionPedida(resume: unknown): 'last' | 'none' | number {
+  if (typeof resume === 'number') return resume;
+  return resume === 'none' ? 'none' : 'last';
+}
+
 apiRouter.delete('/drones/:droneId/control', requireAuth('operator'), (req: AuthedRequest, res) => {
   const { droneId } = req.params;
   const holder = getController(droneId);
@@ -590,11 +606,12 @@ apiRouter.delete('/drones/:droneId/control', requireAuth('operator'), (req: Auth
   const esSupervisor = esSupervisorOMas(req.user!.role);
   if (!esTitular && !esSupervisor) return res.status(403).json({ error: `El control lo tiene ${holder}` });
 
-  const resume = req.body?.resume;
-  releaseControl(droneId, req.user!.sub, {
-    resume: typeof resume === 'number' ? resume : resume === 'none' ? 'none' : 'last',
-    forced: !esTitular,
-  });
+  const reanudacion = reanudacionPedida(req.body?.resume);
+  // Soltar con reanudación manda un resume_patrol: es la misma orden que
+  // POST /resume y vale lo mismo para un relevo (RELEVOS §3.9). Con 'none' no
+  // hay orden y el relevo sigue: tomar y soltar el control de B no cancela nada.
+  if (reanudacion !== 'none') relevos.ordenDelOperador(droneId);
+  releaseControl(droneId, req.user!.sub, { resume: reanudacion, forced: !esTitular });
   res.json(droneCard(droneId));
 });
 
@@ -689,19 +706,72 @@ function leerDatosDeBase(body: Record<string, unknown>, parcial: boolean) {
 }
 
 function estadoBase(b: BaseView) {
-  return { nombre: b.name, lat: b.lat, lon: b.lon, activa: b.active, eliminada: !!b.deletedAt };
+  return {
+    nombre: b.name, lat: b.lat, lon: b.lon, activa: b.active, eliminada: !!b.deletedAt,
+    aterrizajeLat: b.aterrizajeLat, aterrizajeLon: b.aterrizajeLon,
+  };
+}
+
+/**
+ * Distancia del punto para visitantes a la base (RELEVOS §0, PROTOCOLS §5):
+ * más cerca de 10 m bajaría sobre la plataforma de la base; más lejos de 50 m
+ * ya no está "en la base" (RADIO_DE_BASE_M) y el visitante quedaría afuera.
+ */
+const ATERRIZAJE_MINIMO_M = 10;
+const ATERRIZAJE_MAXIMO_M = 50;
+const ERROR_ATERRIZAJE_JUNTOS = 'aterrizajeLat y aterrizajeLon van juntos';
+const ERROR_ATERRIZAJE_DISTANCIA = 'El punto de aterrizaje para visitantes tiene que estar entre 10 y 50 m de la base';
+
+type LecturaAterrizaje =
+  | { ok: true; punto: { lat: number; lon: number } | null | undefined }
+  | { ok: false; error: string };
+
+/**
+ * El punto para visitantes del cuerpo: `undefined` si no vino (en el alta es
+ * null; en la edición, sin cambios), `null` si vinieron los dos en null (lo
+ * borra), o la posición. Uno solo, o una posición inválida, es un 400: un punto
+ * a medias no ubica nada, y nada se convierte (un texto no es una coordenada).
+ */
+function leerAterrizaje(body: Record<string, unknown>): LecturaAterrizaje {
+  const { aterrizajeLat: lat, aterrizajeLon: lon } = body;
+  if (lat === undefined && lon === undefined) return { ok: true, punto: undefined };
+  if (lat === null && lon === null) return { ok: true, punto: null };
+  if (lat === undefined || lon === undefined || lat === null || lon === null) {
+    return { ok: false, error: ERROR_ATERRIZAJE_JUNTOS };
+  }
+  const punto = posicionValida(lat, lon);
+  if (!punto) return { ok: false, error: 'El punto de aterrizaje para visitantes no es una posición válida' };
+  return { ok: true, punto };
+}
+
+/** Se controla con los valores FINALES de la base y del punto (§5). */
+function aterrizajeEnRango(base: { lat: number; lon: number }, punto: { lat: number; lon: number } | null): boolean {
+  if (!punto) return true;
+  const d = distanciaM(base, punto);
+  return d >= ATERRIZAJE_MINIMO_M && d <= ATERRIZAJE_MAXIMO_M;
 }
 
 apiRouter.post('/bases', requireRoles('field_operator', 'supervisor', 'admin'), (req: AuthedRequest, res) => {
-  const lectura = leerDatosDeBase((req.body ?? {}) as Record<string, unknown>, false);
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const lectura = leerDatosDeBase(body, false);
   if (!lectura.ok) return res.status(400).json({ error: lectura.error });
+  const aterrizaje = leerAterrizaje(body);
+  if (!aterrizaje.ok) return res.status(400).json({ error: aterrizaje.error });
+  const punto = aterrizaje.punto ?? null;
+  if (!aterrizajeEnRango({ lat: lectura.lat!, lon: lectura.lon! }, punto)) {
+    return res.status(400).json({ error: ERROR_ATERRIZAJE_DISTANCIA });
+  }
 
-  const base = createBase({ name: lectura.name, lat: lectura.lat!, lon: lectura.lon! }, req.user!.sub);
+  const base = createBase(
+    { name: lectura.name, lat: lectura.lat!, lon: lectura.lon!, aterrizajeLat: punto?.lat ?? null, aterrizajeLon: punto?.lon ?? null },
+    req.user!.sub,
+  );
   const ev = createLog('drone', 'BASE_CREATED', req.user!.sub, `${req.user!.sub} dio de alta la base "${base.name}"`, {
     meta: { despues: estadoBase(base), ubicacion: { lat: base.lat, lon: base.lon, accuracyM: null } },
   });
   broadcastOperators({ type: 'event', event: ev });
   broadcastOperators({ type: 'base_updated', base });
+  enviarBasesATodos();
   res.status(201).json(base);
 });
 
@@ -710,16 +780,27 @@ apiRouter.patch('/bases/:id', requireAuth('supervisor'), (req: AuthedRequest, re
   const body = (req.body ?? {}) as Record<string, unknown>;
   const lectura = leerDatosDeBase(body, true);
   if (!lectura.ok) return res.status(400).json({ error: lectura.error });
+  const aterrizaje = leerAterrizaje(body);
+  if (!aterrizaje.ok) return res.status(400).json({ error: aterrizaje.error });
 
   const patch: BasePatch = {};
   if (body.name !== undefined) patch.name = lectura.name;
   if (lectura.lat !== undefined) { patch.lat = lectura.lat; patch.lon = lectura.lon; }
   if (body.active !== undefined) patch.active = Boolean(body.active);
+  if (aterrizaje.punto !== undefined) patch.aterrizaje = aterrizaje.punto;
   if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'Nada para modificar' });
 
   const actual = getBase(id);
   if (!actual) return res.status(404).json({ error: 'Base inexistente' });
   if (actual.deletedAt) return res.status(409).json({ error: 'La base está eliminada: restaurala antes de modificarla' });
+
+  // Mover la base sin mandar un punto nuevo puede dejar al de antes fuera de
+  // rango: la consola manda el punto nuevo o null.
+  const puntoActual = posicionValida(actual.aterrizajeLat, actual.aterrizajeLon);
+  const puntoFinal = patch.aterrizaje === undefined ? puntoActual : patch.aterrizaje;
+  if (!aterrizajeEnRango({ lat: patch.lat ?? actual.lat, lon: patch.lon ?? actual.lon }, puntoFinal)) {
+    return res.status(400).json({ error: ERROR_ATERRIZAJE_DISTANCIA });
+  }
 
   const result = updateBase(id, patch)!;
   const ev = createLog('drone', 'BASE_UPDATED', req.user!.sub, `${req.user!.sub} modificó la base "${result.after.name}"`, {
@@ -727,6 +808,7 @@ apiRouter.patch('/bases/:id', requireAuth('supervisor'), (req: AuthedRequest, re
   });
   broadcastOperators({ type: 'event', event: ev });
   broadcastOperators({ type: 'base_updated', base: result.after });
+  enviarBasesATodos();
   res.json(result.after);
 });
 
@@ -751,6 +833,7 @@ apiRouter.delete('/bases/:id', requireAuth('supervisor'), (req: AuthedRequest, r
   });
   broadcastOperators({ type: 'event', event: ev });
   broadcastOperators({ type: 'base_updated', base });
+  enviarBasesATodos();
   res.json(base);
 });
 
@@ -766,6 +849,7 @@ apiRouter.post('/bases/:id/restore', requireAuth('supervisor'), (req: AuthedRequ
   });
   broadcastOperators({ type: 'event', event: ev });
   broadcastOperators({ type: 'base_updated', base });
+  enviarBasesATodos();
   res.json(base);
 });
 
@@ -816,10 +900,54 @@ apiRouter.post('/alerts/:id/decision', requireAuth('operator'), (req: AuthedRequ
 
   broadcastOperators({ type: 'alert_updated', alert });
   broadcastOperators({ type: 'event', event: ev });
-  if (alert.drone_id) {
-    sendToDrone(alert.drone_id, { type: 'alert_decision', alertId: id, decision, decidedBy: req.user!.sub });
+  // La decisión va al dron que SIGUE al objetivo ahora, que después de un
+  // traspaso no es el que creó la alerta (RELEVOS §3.6).
+  const seguidor = seguidorDeAlerta(alert);
+  if (seguidor) {
+    sendToDrone(seguidor, { type: 'alert_decision', alertId: id, decision, decidedBy: req.user!.sub });
   }
+  // Un falso positivo no merece un relevo: B vuelve (RELEVOS §3.10).
+  if (decision === 'DISMISSED') relevos.alDescartarAlerta(id);
   res.json(alert);
+});
+
+// ---- Relevos y emergencias (PROTOCOLS §5) ----
+
+// La consola los pide al montar y en cada reconexión del socket; de ahí en más
+// los mantiene con relay_updated y emergency_updated.
+apiRouter.get('/relevos', requireAuth('operator'), (req, res) => {
+  res.json(relevos.listar(flag(req.query.activos)));
+});
+
+// El operador de campo también: es quien sale a buscar el dron.
+const VEN_EMERGENCIAS = ['field_operator', 'operator', 'supervisor', 'admin'] as const;
+
+apiRouter.get('/emergencias', requireRoles(...VEN_EMERGENCIAS), (req, res) => {
+  res.json(emergencias.listar(flag(req.query.abiertas)));
+});
+
+/** Un id de la URL: un entero seguro ≥ 1 escrito en decimal, o null (y entonces 404). */
+function idDeRuta(raw: string): number | null {
+  if (!/^\d+$/.test(raw)) return null;
+  const id = Number.parseInt(raw, 10);
+  return Number.isSafeInteger(id) && id >= 1 ? id : null;
+}
+
+apiRouter.get('/emergencias/:id', requireRoles(...VEN_EMERGENCIAS), (req, res) => {
+  const id = idDeRuta(req.params.id);
+  const emergencia = id === null ? undefined : emergencias.detalle(id);
+  if (!emergencia) return res.status(404).json({ error: 'Emergencia inexistente' });
+  res.json(emergencia);
+});
+
+apiRouter.post('/emergencias/:id/recuperada', requireRoles(...VEN_EMERGENCIAS), (req: AuthedRequest, res) => {
+  const id = idDeRuta(req.params.id);
+  if (id === null) return res.status(404).json({ error: 'Emergencia inexistente' });
+  const r = emergencias.marcarRecuperada(id, req.user!.sub);
+  if (!r.ok) {
+    return res.status(r.status).json({ error: r.status === 404 ? 'Emergencia inexistente' : 'La emergencia ya estaba recuperada' });
+  }
+  res.json(r.emergencia);
 });
 
 // ---- Logs ----

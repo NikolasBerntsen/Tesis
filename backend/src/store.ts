@@ -57,6 +57,9 @@ export interface DroneBase {
   name: string;
   lat: number;
   lon: number;
+  /** Punto de aterrizaje para visitantes (RELEVOS §0): los dos números o los dos null. */
+  aterrizajeLat: number | null;
+  aterrizajeLon: number | null;
 }
 
 /** Identidad persistente de un dron: lo que no cambia de una conexión a otra. */
@@ -79,6 +82,8 @@ export interface DroneAsset {
   b_name?: string | null;
   b_lat?: number | null;
   b_lon?: number | null;
+  b_aterrizaje_lat?: number | null;
+  b_aterrizaje_lon?: number | null;
   created_at: string;
   created_by: string | null;
   /** Marca de baja lógica. Es lo que se consulta; la fecha es sólo auditoría. */
@@ -154,7 +159,18 @@ export interface Alert {
   snapshot: string | null;
   decided_by: string | null;
   decided_at: string | null;
+  /**
+   * El dron que sigue al objetivo ahora, o null si es el que la creó
+   * (`drone_id`). Cambia en el traspaso de un relevo o cuando el origen
+   * abandona antes (RELEVOS §3.6). Es el único campo de la fila en camelCase
+   * porque así lo usan el diseño y la consola (PROTOCOLS §3).
+   */
+  seguidaPor: string | null;
 }
+
+/** Columnas de una alerta, con `seguida_por` ya con el nombre que lee la consola. */
+const COLUMNAS_ALERTA = `id, created_at, type, status, drone_id, lat, lon, snapshot, decided_by, decided_at,
+                         seguida_por AS seguidaPor`;
 
 export type LogCategory = 'drone' | 'usuarios' | 'sistema';
 
@@ -346,26 +362,37 @@ export interface BaseRow {
   created_at: string; created_by: string | null;
   /** Marca de baja lógica. Es lo que se consulta; la fecha es sólo auditoría. */
   deleted: number; deleted_at: string | null; deleted_by: string | null;
+  aterrizaje_lat: number | null; aterrizaje_lon: number | null;
 }
 
 export interface BaseView {
   id: number; name: string; lat: number; lon: number; active: boolean;
   createdAt: string; createdBy: string | null; deleted: boolean; deletedAt: string | null;
+  /** Punto de aterrizaje para visitantes (RELEVOS §0): los dos números o los dos null. */
+  aterrizajeLat: number | null; aterrizajeLon: number | null;
 }
 
 export function toBaseView(b: BaseRow): BaseView {
   return {
     id: b.id, name: b.name, lat: b.lat, lon: b.lon, active: !!b.active,
     createdAt: b.created_at, createdBy: b.created_by, deleted: !!b.deleted, deletedAt: b.deleted_at,
+    aterrizajeLat: b.aterrizaje_lat ?? null, aterrizajeLon: b.aterrizaje_lon ?? null,
   };
 }
 
-export interface BaseInput { name: string; lat: number; lon: number }
+export interface BaseInput {
+  name: string; lat: number; lon: number;
+  aterrizajeLat?: number | null; aterrizajeLon?: number | null;
+}
 
 export function createBase(input: BaseInput, createdBy: string): BaseView {
   const info = db
-    .prepare('INSERT INTO bases (name, lat, lon, created_at, created_by) VALUES (?, ?, ?, ?, ?)')
-    .run(input.name, input.lat, input.lon, new Date().toISOString(), createdBy);
+    .prepare(
+      `INSERT INTO bases (name, lat, lon, aterrizaje_lat, aterrizaje_lon, created_at, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(input.name, input.lat, input.lon, input.aterrizajeLat ?? null, input.aterrizajeLon ?? null,
+         new Date().toISOString(), createdBy);
   return getBase(Number(info.lastInsertRowid))!;
 }
 
@@ -384,7 +411,11 @@ export function listBases(opts: { includeDeleted?: boolean; soloActivas?: boolea
   return rows.map(toBaseView);
 }
 
-export interface BasePatch { name?: string; lat?: number; lon?: number; active?: boolean }
+export interface BasePatch {
+  name?: string; lat?: number; lon?: number; active?: boolean;
+  /** `null` borra el punto para visitantes; `undefined` lo deja como está. Van juntos. */
+  aterrizaje?: { lat: number; lon: number } | null;
+}
 
 export function updateBase(id: number, patch: BasePatch): { before: BaseView; after: BaseView } | undefined {
   const before = getBase(id);
@@ -394,6 +425,12 @@ export function updateBase(id: number, patch: BasePatch): { before: BaseView; af
                       active = COALESCE(?, active) WHERE id = ?`,
   ).run(patch.name ?? null, patch.lat ?? null, patch.lon ?? null,
         patch.active === undefined ? null : patch.active ? 1 : 0, id);
+  // Aparte por lo mismo que la base de un dron: COALESCE no distingue "no lo
+  // toques" de "borralo".
+  if (patch.aterrizaje !== undefined) {
+    db.prepare('UPDATE bases SET aterrizaje_lat = ?, aterrizaje_lon = ? WHERE id = ?')
+      .run(patch.aterrizaje?.lat ?? null, patch.aterrizaje?.lon ?? null, id);
+  }
   return { before, after: getBase(id)! };
 }
 
@@ -424,11 +461,19 @@ export function contarDronesEnBase(id: number): number {
  * borraron del esquema, así que un dron sin vínculo no tiene base y punto.
  */
 function toDroneBase(d: DroneAsset): DroneBase | null {
-  return d.b_lat != null && d.b_lon != null ? { name: d.b_name ?? 'Base', lat: d.b_lat, lon: d.b_lon } : null;
+  if (d.b_lat == null || d.b_lon == null) return null;
+  return {
+    name: d.b_name ?? 'Base',
+    lat: d.b_lat,
+    lon: d.b_lon,
+    aterrizajeLat: d.b_aterrizaje_lat ?? null,
+    aterrizajeLon: d.b_aterrizaje_lon ?? null,
+  };
 }
 
 /** Los drones se leen siempre unidos a su base. */
-const SELECT_DRON = `SELECT d.*, b.name AS b_name, b.lat AS b_lat, b.lon AS b_lon
+const SELECT_DRON = `SELECT d.*, b.name AS b_name, b.lat AS b_lat, b.lon AS b_lon,
+                            b.aterrizaje_lat AS b_aterrizaje_lat, b.aterrizaje_lon AS b_aterrizaje_lon
                        FROM drones d LEFT JOIN bases b ON b.id = d.base_id`;
 
 export function toDroneAssetView(d: DroneAsset): DroneAssetView {
@@ -795,14 +840,37 @@ export function createAlert(
 }
 
 export function getAlert(id: number): Alert | undefined {
-  return db.prepare('SELECT * FROM alerts WHERE id = ?').get(id) as Alert | undefined;
+  return db.prepare(`SELECT ${COLUMNAS_ALERTA} FROM alerts WHERE id = ?`).get(id) as Alert | undefined;
 }
 
 export function listAlerts(status?: string): Alert[] {
   if (status) {
-    return db.prepare('SELECT * FROM alerts WHERE status = ? ORDER BY id DESC LIMIT 100').all(status) as Alert[];
+    return db
+      .prepare(`SELECT ${COLUMNAS_ALERTA} FROM alerts WHERE status = ? ORDER BY id DESC LIMIT 100`)
+      .all(status) as Alert[];
   }
-  return db.prepare('SELECT * FROM alerts ORDER BY id DESC LIMIT 100').all() as Alert[];
+  return db.prepare(`SELECT ${COLUMNAS_ALERTA} FROM alerts ORDER BY id DESC LIMIT 100`).all() as Alert[];
+}
+
+/** El dron que sigue al objetivo de la alerta ahora: `COALESCE(seguida_por, drone_id)` (RELEVOS §3.6). */
+export function seguidorDeAlerta(a: Pick<Alert, 'drone_id' | 'seguidaPor'>): string | null {
+  return a.seguidaPor ?? a.drone_id;
+}
+
+/**
+ * Le cambia el dueño a la alerta: el dron que sigue al objetivo ahora. Si es el
+ * que la creó se guarda NULL, que es lo que la columna dice para "el creador"
+ * (así `seguidaPor` en la consola vuelve a null y no queda repetido el
+ * `drone_id`). Devuelve la alerta solo si cambió algo, para que el hub difunda
+ * `alert_updated` exactamente cuando hay novedad.
+ */
+export function fijarSeguidaPor(alertId: number, droneId: string): Alert | undefined {
+  const actual = getAlert(alertId);
+  if (!actual) return undefined;
+  const valor = droneId === actual.drone_id ? null : droneId;
+  if (valor === actual.seguidaPor) return undefined;
+  db.prepare('UPDATE alerts SET seguida_por = ? WHERE id = ?').run(valor, alertId);
+  return getAlert(alertId);
 }
 
 /** Lo mínimo de una alerta decidida para volver a avisarle al dron. */
@@ -824,12 +892,17 @@ export type DecisionDeAlerta = Pick<Alert, 'id' | 'status' | 'decided_by' | 'dec
  *
  * No trae la captura a propósito: pesa decenas de KB por alerta y para avisar
  * la decisión alcanza con el id, el estado y quién decidió.
+ *
+ * "Sus" alertas son las que SIGUE ahora, `COALESCE(seguida_por, drone_id)`: un
+ * dron que adoptó un seguimiento por relevo tiene que enterarse del descarte
+ * aunque no haya creado la alerta, y el que la creó y la soltó ya no tiene
+ * nada que hacer con ella (RELEVOS §3.6).
  */
 export function listDecisionsSince(droneId: string, desde: string): DecisionDeAlerta[] {
   return db
     .prepare(
       `SELECT id, status, decided_by, decided_at FROM alerts
-        WHERE drone_id = ? AND status != 'PENDING' AND decided_at >= ?
+        WHERE COALESCE(seguida_por, drone_id) = ? AND status != 'PENDING' AND decided_at >= ?
         ORDER BY decided_at, id`,
     )
     .all(droneId, desde) as DecisionDeAlerta[];
