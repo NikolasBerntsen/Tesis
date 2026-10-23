@@ -34,7 +34,7 @@ export default function LiveVideo({
         {frame && !senalPerdida && (
           <span className="visor-vivo">
             <span className="punto-vivo" aria-hidden="true" />
-            En vivo
+            {'En vivo'}
           </span>
         )}
       </div>

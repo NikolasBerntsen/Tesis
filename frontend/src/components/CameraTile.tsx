@@ -96,7 +96,7 @@ export default function CameraTile({
         {enVivo && (
           <span className="visor-vivo">
             <span className="punto-vivo" aria-hidden="true" />
-            En vivo
+            {'En vivo'}
           </span>
         )}
         {aviso && (

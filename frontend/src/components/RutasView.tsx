@@ -40,7 +40,10 @@ function ItemDeRuta({ ruta, elegida, esSupervisor, onElegir, onEditar, onElimina
   const clases = ['ruta-item', elegida && 'seleccionada', ruta.deleted && 'eliminada'].filter(Boolean).join(' ');
   const nodos = ruta.waypoints.length;
   return (
-    <li className={clases} onClick={onElegir}>
+    <li // NOSONAR(S6847, S1082): el clic en la placa es comodidad del mouse; con el teclado se elige desde el botón del nombre, ver arriba
+      className={clases}
+      onClick={onElegir}
+    >
       <div className="ruta-item-cabecera">
         <button
           type="button"
