@@ -31,7 +31,12 @@ export default function EncabezadoDeVista({
   return (
     <header className="vista-cabecera">
       <div className="vista-encabezado">
-        <h2 className="vista-titulo">{titulo}</h2>
+        {/* Enfocable sólo desde el código: es adonde vuelve el foco cuando lo
+            que lo tenía se fue de la vista (el carrusel de alertas, al decidir
+            la última desde su pop-up). No es un control: no va al tabulador. */}
+        <h2 className="vista-titulo" tabIndex={-1}>
+          {titulo}
+        </h2>
         {subtitulo && <p className="vista-subtitulo">{subtitulo}</p>}
       </div>
       {filtros && <div className="vista-filtros">{filtros}</div>}

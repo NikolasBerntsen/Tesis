@@ -1,10 +1,12 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import L from 'leaflet';
+import { alertaDelEvento } from './DetalleDeEvento';
 import LogDetailModal from './LogDetailModal';
+import { ContextoDeAlertas, SIN_CONSOLA, type AlertasEnVivo } from '../alertasEnVivo';
 import { api } from '../api';
-import { makeAlert, makeEvent } from '../test/fixtures';
+import { makeAlert, makeDrone, makeEvent } from '../test/fixtures';
 import { estadoMapa, fondosPuestos, limpiarEstadoMapa } from '../test/dobleLeaflet';
 
 vi.mock('leaflet', async () => (await import('../test/dobleLeaflet')).dobleLeaflet());
@@ -196,6 +198,26 @@ describe('LogDetailModal', () => {
     expect(screen.getAllByText('Alfa').length).toBeGreaterThan(0);
   });
 
+  it('lista el estado previo cuando el evento sólo trae antes, y lo que no conoce lo muestra tal cual', () => {
+    abrir({
+      type: 'DRONE_DELETED',
+      meta: JSON.stringify({ antes: { displayName: 'Alfa', estado: 'RARO', colorDelCasco: 'rojo' } }),
+    });
+    expect(screen.getByText('Estado previo')).toBeInTheDocument();
+    // Una enumeración que la consola no conoce y un campo sin rótulo: crudos, no en blanco.
+    expect(screen.getByText('RARO')).toBeInTheDocument();
+    expect(screen.getByText('colorDelCasco')).toBeInTheDocument();
+    expect(screen.getByText('rojo')).toBeInTheDocument();
+  });
+
+  it('la ficha del dron pone raya donde el evento no guardó nombre ni modelo', () => {
+    abrir({ meta: JSON.stringify({ drone: { hash: 'c54ae4a0aad98bdc6ae5ab810751335c' } }) });
+    for (const etiqueta of ['Nombre', 'Modelo']) {
+      const dt = [...document.querySelectorAll('dt')].find((n) => n.textContent === etiqueta);
+      expect(dt!.nextElementSibling).toHaveTextContent('—');
+    }
+  });
+
   it('lista el detalle en clave/valor', () => {
     abrir({
       type: 'FIELD_SESSION_CLOSED',
@@ -331,6 +353,82 @@ describe('LogDetailModal', () => {
     unmount();
     expect(fila).toHaveFocus();
     fila.remove();
+  });
+});
+
+describe('LogDetailModal — un evento de alerta', () => {
+  beforeEach(() => {
+    apiMock.mockReset();
+    limpiarEstadoMapa();
+  });
+
+  function abrirConConsola(fila: Parameters<typeof makeEvent>[0], vivo: Partial<AlertasEnVivo> = {}) {
+    const consola: AlertasEnVivo = {
+      ...SIN_CONSOLA,
+      alertas: [makeAlert({ id: 7, drone_id: 'd1', snapshot: 'QUFB' })],
+      drones: [makeDrone({ droneId: 'd1', displayName: 'Alfa' })],
+      decidir: vi.fn(),
+      verDron: vi.fn(),
+      ...vivo,
+    };
+    const cerrar = vi.fn();
+    render(
+      <ContextoDeAlertas.Provider value={consola}>
+        <LogDetailModal fila={makeEvent(fila)} onCerrar={cerrar} />
+      </ContextoDeAlertas.Provider>,
+    );
+    return { consola, cerrar };
+  }
+
+  it('muestra la alerta entera adentro del detalle: captura, mapa, video y decisión', async () => {
+    const { consola, cerrar } = abrirConConsola({
+      type: 'ALERT_CREATED',
+      alert_id: 7,
+      message: 'Alerta de PERSONA generada por Alfa',
+      meta: JSON.stringify({
+        alerta: { id: 7, tipo: 'PERSON', lat: -34.6, lon: -58.4, ts: '2024-01-01T12:00:00.000Z' },
+        drone: { hash: 'd1', displayName: 'Alfa', model: 'DJI Mini 3' },
+      }),
+    });
+
+    const alerta = screen.getByTestId('detalle-alerta');
+    expect(within(alerta).getByRole('heading', { name: /Alerta #7/ })).toBeInTheDocument();
+    expect(within(alerta).getByAltText('Captura de la detección')).toBeInTheDocument();
+    expect(within(alerta).getByTestId('mapa-alerta')).toBeInTheDocument();
+    // La ficha del dron va UNA vez, la de la alerta, con lo que pasa ahora.
+    expect(screen.getAllByRole('heading', { name: 'Dron' })).toHaveLength(1);
+    // La alerta estaba en la consola: no se pidió.
+    expect(apiMock).not.toHaveBeenCalled();
+
+    await userEvent.click(within(alerta).getByRole('button', { name: 'Descartar' }));
+    expect(consola.decidir).toHaveBeenCalledWith(7, 'DISMISSED');
+
+    await userEvent.click(within(alerta).getByRole('button', { name: 'Ver feed en vivo' }));
+    expect(consola.verDron).toHaveBeenCalledWith('d1');
+    expect(cerrar).toHaveBeenCalled();
+  });
+
+  it('una fila vieja que sólo trae la columna alert_id también abre su alerta', async () => {
+    apiMock.mockResolvedValue(makeAlert({ id: 12, type: 'VEHICLE', snapshot: 'QkJC' }));
+    abrirConConsola({ type: 'ALERT_DISMISSED', alert_id: 12, meta: null }, { alertas: [] });
+
+    expect(await screen.findByAltText('Captura de la detección')).toHaveAttribute('src', 'data:image/jpeg;base64,QkJC');
+    expect(apiMock).toHaveBeenCalledWith('/alerts/12');
+    expect(screen.getByText('VEHÍCULO')).toBeInTheDocument();
+  });
+
+  it('sin alerta en el evento no hay bloque de alerta', () => {
+    abrirConConsola({ type: 'DRONE_UPDATED', meta: null });
+    expect(screen.queryByTestId('detalle-alerta')).not.toBeInTheDocument();
+  });
+});
+
+describe('alertaDelEvento', () => {
+  it('prefiere la referencia del meta, cae a la columna y, sin ninguna, no hay alerta', () => {
+    const conMeta = makeEvent({ alert_id: 3, meta: JSON.stringify({ alerta: { id: 3, tipo: 'PERSON' } }) });
+    expect(alertaDelEvento(conMeta)).toEqual({ id: 3, tipo: 'PERSON', lat: null, lon: null, ts: null });
+    expect(alertaDelEvento(makeEvent({ alert_id: 5 }))).toEqual({ id: 5, tipo: '', lat: null, lon: null, ts: null });
+    expect(alertaDelEvento(makeEvent())).toBeNull();
   });
 });
 
