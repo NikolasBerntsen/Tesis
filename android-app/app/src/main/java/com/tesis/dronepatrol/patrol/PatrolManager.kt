@@ -1392,6 +1392,13 @@ class PatrolManager(
                     report("DRONE_PROBLEM", "El dron rechazó una orden: ${e.motivo}")
                 }
             }
+            // Avisos de los relevos y del desvío a otra base (docs/RELEVOS.md
+            // §2.3 y §4). Por ahora solo quedan en el registro local, sin
+            // cambiar nada: la lógica que los usa llega con los relevos, y un
+            // aviso que hoy movería al dron sin esa lógica completa es peor que
+            // uno que solo se anota.
+            is FlightEvent.DescendiendoEnBase -> log("El dron empezó a descender en la base")
+            is FlightEvent.ElDronTomoElControl -> log("El propio dron tomó el control: ${e.motivo.descripcion}")
         }
     }
 

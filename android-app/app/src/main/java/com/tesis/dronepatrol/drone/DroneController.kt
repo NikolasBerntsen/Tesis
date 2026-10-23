@@ -7,13 +7,32 @@ import com.tesis.dronepatrol.model.Telemetry
 import com.tesis.dronepatrol.model.Vinculacion
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Abstracción del dron. La lógica de patrullaje (PatrolManager) habla solo con
  * esta interfaz; detrás puede estar el simulador (flavor mock) o el DJI Mini 4
  * Pro vía MSDK v5 (flavor dji).
+ *
+ * Las órdenes de los relevos, del desvío a otra base y del protocolo de última
+ * ubicación (docs/RELEVOS.md) llegaron después y traen un cuerpo por defecto:
+ * así los dobles de prueba y los dos controladores compilan desde el primer
+ * día, y cada controlador las implementa de verdad a su turno. El cuerpo por
+ * defecto es siempre el lado seguro: no hacer nada, o la orden de siempre que
+ * más se le parece.
  */
 interface DroneController {
+
+    companion object {
+        /**
+         * Cuánto espera [capturarFoto] el próximo cuadro. El detector recibe dos
+         * por segundo, así que en vuelo normal llega en medio segundo; más allá,
+         * la cámara no está mandando y esperar más solo gasta la batería que el
+         * protocolo de última ubicación está tratando de cuidar.
+         */
+        const val ESPERA_FOTO_MS = 2_000L
+    }
     /**
      * Enlace, modelo, GPS, punto de retorno y si está en el aire. Es un
      * StateFlow y no un SharedFlow porque la pantalla necesita el valor actual
@@ -173,4 +192,148 @@ interface DroneController {
     fun cancelarVinculacion()
 
     fun disconnect()
+
+    // ---- Relevos, desvío a otra base y última ubicación (docs/RELEVOS.md) ----
+
+    /**
+     * Despega y sube EN VERTICAL hasta [alturaM] metros sobre el punto de
+     * despegue, y queda suspendido ahí. Es el despegue de B en un relevo
+     * (RELEVOS §2.5 y §3.3): sube por su propia columna —las plataformas están
+     * a 10 m una de otra— y recién arriba va a algún lado.
+     *
+     * Tiene que emitir [FlightEvent.Despegando] al arrancar y
+     * [FlightEvent.EnElAire] al llegar a la altura. Si el despegue o la subida
+     * fallan ya en el aire, avisa con [FlightEvent.Problema] y quien llama
+     * aterriza (`land()`): nunca queda suspendido a media altura. En el aire no
+     * hace nada.
+     *
+     * Real: `KeyStartTakeoff` y la subida con el mando virtual, sin componente
+     * horizontal, hasta [alturaM] ± 1 m. Simulado: sube a su velocidad de
+     * ascenso. Por defecto no hace nada: un controlador que no lo implementa no
+     * despega para un relevo.
+     */
+    fun despegarHasta(alturaM: Double) {
+        // Sin implementación no se despega para un relevo: es el lado seguro.
+    }
+
+    /**
+     * Vuela hasta el punto dado A LA ALTURA EN QUE ESTÁ y queda en vuelo
+     * estacionario al llegar, emitiendo [FlightEvent.GotoArrived]. Es la orden
+     * de B hacia el objetivo de un relevo y la de un desvío hacia el punto de
+     * aterrizaje de visitantes (RELEVOS §3.4 y §4), siempre después de subir a
+     * la altura de tránsito: por eso no la cambia.
+     *
+     * Por defecto es [gotoPoint], que el real ya vuela a su altura actual. El
+     * simulado lleva [gotoPoint] a su altura de crucero, así que tiene que
+     * implementarla aparte para respetar la de tránsito. Con el dron en el
+     * suelo se rechaza, igual que [gotoPoint].
+     */
+    fun volarHacia(lat: Double, lon: Double) = gotoPoint(lat, lon)
+
+    /**
+     * Gira EN EL LUGAR —sin desplazarse ni cambiar de altura— hasta que la nariz
+     * apunte a [rumboGrados] (absoluto, 0..360) y queda estacionario. Es la
+     * panorámica del protocolo de última ubicación (RELEVOS §5, paso 4): quien
+     * llama espera que [Telemetry.heading] lo confirme (± 5°) antes de sacar la
+     * foto.
+     *
+     * Real: guiñada con el mando virtual (solo con el mando virtual habilitado).
+     * Simulado: gira a su velocidad de guiñada. Por defecto no hace nada, y la
+     * panorámica sale con las fotos que se puedan.
+     */
+    fun girarEnElLugar(rumboGrados: Double) {
+        // Sin implementación el dron no gira: la panorámica sale incompleta.
+    }
+
+    /**
+     * Apunta la cámara a [pitchGrados] en ángulo ABSOLUTO (0 horizonte, −90
+     * derecho al suelo) para un modo autónomo: las fotos del protocolo de
+     * última ubicación (−90 la cenital, −30 la panorámica, RELEVOS §5). No es
+     * una orden del operador como [inclinarCamara]: la pide la app, en
+     * cualquier estado.
+     *
+     * Por defecto es [inclinarCamara]. El real la manda por la misma fila del
+     * gimbal que el resto, así que sale después de cualquier inclinación que ya
+     * se estaba cumpliendo y no la pisa una vieja, y la recorta a [−90, 0]
+     * (para un modo autónomo, por arriba del horizonte no sirve); quien llama
+     * espera que [Telemetry.gimbalPitch] la confirme (± 3°).
+     */
+    fun apuntarCamara(pitchGrados: Double) = inclinarCamara(pitchGrados)
+
+    /**
+     * Corta un regreso a base en curso —el que pidió la app con [returnHome] o
+     * el que arrancó el propio DJI por batería— y deja al dron estacionario
+     * donde está, listo para otra orden. Es el primer paso de un desvío a otra
+     * base (RELEVOS §4).
+     *
+     * Real: `KeyStopGoHome` y esperar `GoHomeState = IDLE`, con un tope de 3 s;
+     * si no se corta, lo avisa con [FlightEvent.Problema]. Es UN intento: si el
+     * DJI vuelve a arrancar su regreso, se lo deja seguir y se avisa con
+     * [FlightEvent.ElDronTomoElControl] (no se pelea en lazo con él).
+     * Simulado: sale de su modo de regreso. Sin un regreso en curso no hace
+     * nada. Por defecto no hace nada.
+     */
+    fun cancelarRegreso() {
+        // Sin implementación el regreso sigue: volver a casa es el lado seguro.
+    }
+
+    /**
+     * Fija el punto de retorno del dron en donde está ahora. Se llama al llegar
+     * a la base de un desvío, antes de aterrizar (RELEVOS §4): así cualquier
+     * regreso posterior —el del propio DJI incluido— vuelve acá y no a una base
+     * que no alcanza.
+     *
+     * Real: `KeyHomeLocation` con la posición actual; un rechazo se avisa con
+     * [FlightEvent.Problema] y queda registrado (el desvío sigue igual).
+     * Simulado: mueve su base. El nuevo punto se ve en
+     * [EstadoDelDron.puntoDeRetornoLat]/[EstadoDelDron.puntoDeRetornoLon]. Por
+     * defecto no hace nada.
+     */
+    fun fijarPuntoDeRetornoAqui() {
+        // Sin implementación el punto de retorno queda donde estaba.
+    }
+
+    /**
+     * Prende o apaga el regreso inteligente por batería baja del propio DJI.
+     * Durante un desvío se apaga (`false`): si no, el DJI arrancaría su regreso
+     * hacia una casa que ya no alcanza (RELEVOS §4). Fuera de un desvío queda
+     * prendido: es el respaldo del dron cuando la app no tiene autonomía
+     * informada.
+     *
+     * Real: la llave de confirmación del regreso por batería baja del MSDK
+     * (`KeyLowBatteryRTHConfirm`, ver RELEVOS §8). Simulado: lo anota y lo
+     * respeta si modela un regreso propio. Por defecto no hace nada.
+     */
+    fun permitirRthPropioPorBateria(permitir: Boolean) {
+        // Sin implementación el dron conserva su regreso propio, que es el respaldo.
+    }
+
+    /**
+     * Qué hace el dron si se corta el enlace con el control: con `true`,
+     * aterriza donde está (`KeyFailsafeAction = LANDING`); con `false`, vuelve
+     * a su punto de retorno (el de fábrica). Se prende durante un desvío y en el
+     * protocolo de última ubicación (RELEVOS §4 y §5): volver a una casa que no
+     * se alcanza es peor que bajar donde está.
+     *
+     * Real: `KeyFailsafeAction`. Simulado: lo respeta al perder la señal. Por
+     * defecto no hace nada.
+     */
+    fun fijarFailsafeAterrizar(activo: Boolean) {
+        // Sin implementación queda el failsafe de fábrica (volver a casa).
+    }
+
+    /**
+     * Una foto para el protocolo de última ubicación (RELEVOS §5): un JPEG de lo
+     * que la cámara ve ahora, o null si no llegó ninguno en [ESPERA_FOTO_MS].
+     * No toca la cámara ni el vuelo: quien llama la apunta antes
+     * ([apuntarCamara], [girarEnElLugar]) y espera que la telemetría lo
+     * confirme.
+     *
+     * Por defecto es el PRÓXIMO cuadro para la detección
+     * ([cuadrosParaDeteccion], 1280 px), que es lo que el diseño pide: nunca uno
+     * anterior a la llamada, que sería una foto con la cámara apuntada a otro
+     * lado. Un controlador que saque fotos de verdad tiene que respetar el mismo
+     * plazo.
+     */
+    suspend fun capturarFoto(): ByteArray? = withTimeoutOrNull(ESPERA_FOTO_MS) { cuadrosParaDeteccion.first() }
 }

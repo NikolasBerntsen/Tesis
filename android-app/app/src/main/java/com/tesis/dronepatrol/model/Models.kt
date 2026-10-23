@@ -35,6 +35,22 @@ data class Telemetry(
      * ubicar en el terreno lo que se ve, manda la cámara, no el fuselaje.
      */
     val rumboCamara: Double = heading,
+    // Autonomía: lo que el dron calcula que le cuesta volver y aterrizar
+    // (docs/RELEVOS.md §0, `status.autonomia` en docs/PROTOCOLS.md §1). NaN
+    // mientras no se sepa —el simulado recién arrancado, el real antes de que
+    // el SDK lo informe, o un cero del SDK con el dron lejos de casa, que no es
+    // un dato—, y sin autonomía informada no hay desvío a otra base ni ventana
+    // de gracia: el piso vuelve a ser el umbral fijo de batería. Van al final y
+    // con valor por defecto para que los que arman la telemetría por posición
+    // sigan compilando.
+    /** Batería (%) que necesita para volver a su punto de retorno (`batteryPercentNeededToGoHome`). */
+    val pctParaVolver: Double = Double.NaN,
+    /** Batería (%) que necesita para aterrizar donde está (`batteryPercentNeededToLand`). */
+    val pctParaAterrizar: Double = Double.NaN,
+    /** Radio en metros que puede volar y todavía volver (`maxRadiusCanFlyAndGoHome`). */
+    val alcanceM: Double = Double.NaN,
+    /** Segundos que tarda en volver a su punto de retorno (`timeNeededToGoHome`). */
+    val segundosParaVolver: Double = Double.NaN,
 ) {
     /** Hay una posición GPS real (no NaN). */
     val tienePosicion: Boolean get() = !lat.isNaN() && !lon.isNaN()
@@ -150,6 +166,22 @@ data class EstadoDelDron(
     val serieControl: String = "",
     /** Modo de vuelo que informa la aeronave (`P-GPS`, `ATTI`, …); vacío si no lo informa. */
     val modoDeVuelo: String = "",
+    /**
+     * Dónde quedó fijado el punto de retorno (`KeyHomeLocation`); NaN si no se
+     * sabe. "Fuera de base" (docs/RELEVOS.md §0) se mide contra las bases Y
+     * contra este punto: un dron que despegó en un lugar que no es una base
+     * registrada no está perdido por aterrizar ahí.
+     */
+    val puntoDeRetornoLat: Double = Double.NaN,
+    /** Longitud del punto de retorno; NaN si no se sabe (ver [puntoDeRetornoLat]). */
+    val puntoDeRetornoLon: Double = Double.NaN,
+    /**
+     * Umbral de batería crítica del propio DJI
+     * (`KeySeriousLowBatteryWarningThreshold`), en %; NaN si no se sabe. Por
+     * debajo el dron aterriza donde esté por su cuenta, así que el protocolo de
+     * última ubicación tiene que dispararse antes (RELEVOS §5).
+     */
+    val umbralCriticoPct: Double = Double.NaN,
 ) {
     /** Todo lo que hace falta para que la app ordene un despegue. */
     val listoParaDespegar: Boolean
@@ -241,6 +273,19 @@ enum class PatrolState {
     FORCED,
     /** Vuelve a la base por orden del operador de campo desde la app. */
     RETURNING_HOME,
+    /**
+     * B de un relevo de seguimiento: despegando o volando hacia el objetivo
+     * que A le pasa (docs/RELEVOS.md §3). Es vuelo —valen los failsafes de
+     * batería y señal— pero no alerta ni arranca seguimientos propios: solo
+     * puede tomar el objetivo que vino a relevar.
+     */
+    RELEVANDO,
+    /**
+     * Protocolo de última ubicación (docs/RELEVOS.md §5): fotos del lugar y
+     * aterrizaje donde está porque la batería ya no alcanza para ninguna base.
+     * Es un regreso: los failsafes no lo pisan y no se alerta.
+     */
+    ATERRIZAJE_EMERGENCIA,
 }
 
 sealed class FlightEvent {
@@ -267,4 +312,43 @@ sealed class FlightEvent {
      * Comando Central para que quede en el registro de la salida.
      */
     data class Problema(val motivo: String) : FlightEvent()
+
+    /**
+     * Al final de un regreso a base, el dron empezó a DESCENDER sobre la base
+     * (dron real: `KeyGoHomeStatus = LANDING`; simulado: el comienzo del
+     * descenso del regreso). Es el aviso que dispara `landing_at_base` en un
+     * relevo de patrulla (docs/RELEVOS.md §2.3): el relevo se ordena mientras A
+     * baja, para no perder esos segundos.
+     */
+    object DescendiendoEnBase : FlightEvent()
+
+    /**
+     * El propio DJI le sacó el vuelo a la app con un failsafe suyo: un regreso
+     * o un aterrizaje que nadie le pidió (docs/RELEVOS.md §4). La app no pelea
+     * en lazo con él: lo registra, cede y decide desde ahí (un único intento de
+     * cancelar un regreso propio durante un desvío; si vuelve a arrancar, se lo
+     * deja seguir).
+     */
+    data class ElDronTomoElControl(val motivo: MotivoDelDron) : FlightEvent()
+}
+
+/** Por qué el propio DJI tomó el control (ver [FlightEvent.ElDronTomoElControl]). */
+enum class MotivoDelDron(
+    /** Cómo se dice en el registro, para el operador. */
+    val descripcion: String,
+) {
+    /** Su regreso inteligente por batería baja. */
+    RTH_BATERIA("regreso propio por batería baja"),
+
+    /** Aterrizaje forzado por batería crítica, donde esté. */
+    ATERRIZAJE_BATERIA_CRITICA("aterrizaje forzado por batería crítica"),
+
+    /** Su failsafe por pérdida de señal con el control. */
+    RTH_SENIAL("regreso propio por pérdida de señal"),
+
+    /** Alguien apretó el botón de regreso del control físico. */
+    RTH_DEL_CONTROL("regreso pedido desde el botón del control"),
+
+    /** Cualquier otro motivo que el SDK informe (`FlightControlAuthorityChangeReason`). */
+    OTRO("otro motivo del dron"),
 }

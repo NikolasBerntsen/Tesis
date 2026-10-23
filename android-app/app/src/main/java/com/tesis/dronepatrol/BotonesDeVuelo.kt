@@ -12,11 +12,18 @@ import com.tesis.dronepatrol.model.PatrolState
  */
 internal object BotonesDeVuelo {
 
-    /** Con un regreso a base en curso no se despega ni se arranca nada: el regreso manda. */
-    private val REGRESOS = setOf(
+    /**
+     * Con un regreso a base en curso no se despega ni se arranca nada: el
+     * regreso manda. El aterrizaje de emergencia también es un regreso (el que
+     * baja donde está porque no alcanza ninguna base), y un relevo despega por
+     * su cuenta: "Despegar aquí" en el medio le pisaría el despegue.
+     */
+    private val SIN_DESPEGUE_A_MANO = setOf(
         PatrolState.RETURNING_HOME,
         PatrolState.RETURNING_HOME_BATTERY,
         PatrolState.RETURNING_HOME_SIGNAL,
+        PatrolState.ATERRIZAJE_EMERGENCIA,
+        PatrolState.RELEVANDO,
     )
 
     /**
@@ -29,10 +36,11 @@ internal object BotonesDeVuelo {
 
     /**
      * "Despegar aquí": en el suelo, con enlace con la aeronave, sin un regreso a
-     * base en curso y sin la batería por cambiar (LANDED). No exige GPS.
+     * base ni un relevo en curso y sin la batería por cambiar (LANDED). No exige
+     * GPS.
      */
     fun despegarAquiHabilitado(estado: PatrolState, dron: EstadoDelDron): Boolean =
-        !dron.enVuelo && dron.conectado && estado !in REGRESOS && estado != PatrolState.LANDED
+        !dron.enVuelo && dron.conectado && estado !in SIN_DESPEGUE_A_MANO && estado != PatrolState.LANDED
 
     /** Lo que se explica debajo de los botones de vuelo cuando están apagados. */
     sealed interface Aviso {

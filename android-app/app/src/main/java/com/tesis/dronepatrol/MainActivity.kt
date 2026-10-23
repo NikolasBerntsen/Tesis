@@ -67,7 +67,12 @@ class MainActivity : AppCompatActivity() {
         /** Cuánto queda a la vista un aviso de vuelo que no es un problema. */
         private const val DURACION_AVISO_MS = 8_000L
 
-        private val ETIQUETAS_ESTADO = mapOf(
+        /**
+         * El texto de cada estado del patrullaje. Interno para que el banco de
+         * pruebas verifique que no falta ninguno: un estado sin etiqueta deja en
+         * pantalla la del estado anterior, sin que nada lo delate.
+         */
+        internal val ETIQUETAS_ESTADO = mapOf(
             PatrolState.IDLE to R.string.estado_idle,
             PatrolState.PATROLLING to R.string.estado_patrullando,
             PatrolState.ORBITING to R.string.estado_orbitando,
@@ -79,6 +84,8 @@ class MainActivity : AppCompatActivity() {
             PatrolState.PAUSED to R.string.estado_pausado,
             PatrolState.MANUAL to R.string.estado_manual,
             PatrolState.FORCED to R.string.estado_forzado,
+            PatrolState.RELEVANDO to R.string.estado_relevando,
+            PatrolState.ATERRIZAJE_EMERGENCIA to R.string.estado_aterrizaje_emergencia,
         )
 
         /** Estados en los que "Detener" tiene algo que detener. */

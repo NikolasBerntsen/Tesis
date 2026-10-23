@@ -83,6 +83,67 @@ class RastreadorDeObjetivo(
 
         /** 144 km/h: una velocidad mayor es ruido de la proyección, no un vehículo. */
         const val VELOCIDAD_MAXIMA_CREIBLE_MS = 40.0
+
+        /**
+         * Un rastreador que arranca con la estimación de OTRO dron: el de B en el
+         * traspaso de un relevo de seguimiento (docs/RELEVOS.md §3.5), sembrado
+         * con el `objetivo` que A le pasó por el hub (docs/PROTOCOLS.md §2.b). B
+         * todavía no vio al objetivo con su cámara, pero no puede arrancar de
+         * cero: necesita la velocidad que A ya estimó para no perderlo en los
+         * primeros segundos, y la puerta de asociación tiene que reflejar cuánto
+         * hace que nadie lo ve.
+         *
+         * [lat]/[lon] son la estimación de A tal como sale en `status.target`: la
+         * posición filtrada, ya extrapolada con su velocidad desde la última
+         * vez que la vio, hasta [PREDICCION_MAXIMA_MS]. [vistoHaceMs] es hace
+         * cuánto la vio (`lastSeenMs`; uno negativo cuenta como cero). El estado
+         * se reconstruye como si a B le hubiera llegado esa vista en
+         * `ahoraMs − vistoHaceMs`, en el punto que, extrapolado, da [lat]/[lon].
+         * Así [estimar] en [ahoraMs] devuelve exactamente lo heredado, la
+         * extrapolación total desde la última vista sigue sin pasar de
+         * [PREDICCION_MAXIMA_MS] (no se extrapola dos veces lo que A ya
+         * extrapoló), y "perdido" y la puerta corren desde la última vista de A,
+         * no desde el traspaso.
+         *
+         * Una velocidad que no es un número finito se toma como cero, y una
+         * increíble se recorta a [VELOCIDAD_MAXIMA_CREIBLE_MS], como las
+         * propias. [lat]/[lon] tienen que ser una posición válida: el contrato
+         * solo deja pasar objetivos que lo son. Arranca con cero [detecciones]:
+         * ninguna es de B.
+         */
+        fun heredado(
+            clase: String,
+            lat: Double,
+            lon: Double,
+            vNorteMs: Double,
+            vEsteMs: Double,
+            enMovimiento: Boolean,
+            vistoHaceMs: Long,
+            ahoraMs: Long,
+        ): RastreadorDeObjetivo {
+            val vistoHace = vistoHaceMs.coerceAtLeast(0L)
+            val r = RastreadorDeObjetivo(clase, lat, lon, ahoraMs - vistoHace)
+            var vNorte = if (vNorteMs.isFinite()) vNorteMs else 0.0
+            var vEste = if (vEsteMs.isFinite()) vEsteMs else 0.0
+            val v = hypot(vNorte, vEste)
+            if (v > VELOCIDAD_MAXIMA_CREIBLE_MS) {
+                vNorte *= VELOCIDAD_MAXIMA_CREIBLE_MS / v
+                vEste *= VELOCIDAD_MAXIMA_CREIBLE_MS / v
+            }
+            r.vNorte = vNorte
+            r.vEste = vEste
+            r.enMovimiento = enMovimiento
+            if (enMovimiento) {
+                // Lo que A ya extrapoló se le saca a la posición de partida: así
+                // predecir() lo vuelve a sumar una sola vez.
+                val yaExtrapoladoS = vistoHace.coerceAtMost(PREDICCION_MAXIMA_MS) / 1_000.0
+                r.norte = -vNorte * yaExtrapoladoS
+                r.este = -vEste * yaExtrapoladoS
+            }
+            r.anclarAca()
+            r.detecciones = 0
+            return r
+        }
     }
 
     /** Lo que la app sabe del objetivo en un instante: es lo que va al dron y al Comando Central. */

@@ -1018,8 +1018,12 @@ class DjiDroneController : DroneController {
      * cumpliendo el gimbal, para que ninguna inclinación de la consola le llegue
      * después. Tampoco espera: los lazos de vuelo no pueden frenarse por la
      * cámara.
+     *
+     * Es también la implementación real de [DroneController.apuntarCamara]
+     * (las fotos del protocolo de última ubicación, docs/RELEVOS.md §5): por la
+     * misma fila, así ninguna inclinación vieja la pisa.
      */
-    private fun apuntarCamara(pitchGrados: Double) {
+    override fun apuntarCamara(pitchGrados: Double) {
         filaDelGimbal.apuntarDesdeLaApp(pitchGrados.coerceIn(-90.0, 0.0))
     }
 

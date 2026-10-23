@@ -89,6 +89,18 @@ class BotonesDeVueloTest {
             assertFalse(regreso.name, BotonesDeVuelo.despegarAquiHabilitado(regreso, listo))
         }
     }
+
+    /**
+     * El aterrizaje de emergencia baja donde está porque la batería no alcanza
+     * para ninguna base, y un relevo despega por su cuenta: "Despegar aquí" en
+     * cualquiera de los dos le pisaría al dron lo que está haciendo.
+     */
+    @Test
+    fun despegarAquiNiEnUnAterrizajeDeEmergenciaNiEnUnRelevo() {
+        assertFalse(BotonesDeVuelo.despegarAquiHabilitado(PatrolState.ATERRIZAJE_EMERGENCIA, listo))
+        assertFalse(BotonesDeVuelo.despegarAquiHabilitado(PatrolState.RELEVANDO, listo))
+        assertFalse("tampoco se comienza una ruta", BotonesDeVuelo.comenzarHabilitado(true, PatrolState.RELEVANDO, listo))
+    }
 }
 
 /** Los textos de los avisos salen de los recursos: hace falta un Context de verdad. */

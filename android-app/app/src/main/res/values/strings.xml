@@ -215,6 +215,8 @@
     <string name="estado_pausado">Patrulla interrumpida</string>
     <string name="estado_manual">Control manual</string>
     <string name="estado_forzado">Desvío a nodo</string>
+    <string name="estado_relevando">Relevando a otro dron</string>
+    <string name="estado_aterrizaje_emergencia">Aterrizaje de emergencia</string>
 
     <plurals name="main_rutas_conectado">
         <item quantity="one">Comando Central: conectado · %1$d ruta</item>
