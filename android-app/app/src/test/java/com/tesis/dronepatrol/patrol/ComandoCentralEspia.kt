@@ -14,7 +14,20 @@ import org.junit.Assert.fail
  */
 internal class ComandoCentralEspia(alcance: CoroutineScope) : CommandCenterClient(alcance) {
 
+    init {
+        // Conectado de entrada: lo que la app guarda para cuando vuelva el
+        // enlace (la cola de la emergencia, los avisos de aterrizaje) sale en
+        // el acto. Las pruebas de la reconexión lo apagan y lo prenden a mano.
+        connected.value = true
+    }
+
     private val enviados = mutableListOf<JSONObject>()
+
+    /** Todo lo que salió, en orden. */
+    val todos: List<JSONObject> get() = synchronized(enviados) { enviados.toList() }
+
+    /** Lo que el Comando Central le manda a la app: pasa por la misma validación que el socket. */
+    fun recibir(mensaje: JSONObject) = manejarMensaje(mensaje.toString())
 
     override fun send(obj: JSONObject) {
         synchronized(enviados) { enviados += JSONObject(obj.toString()) }

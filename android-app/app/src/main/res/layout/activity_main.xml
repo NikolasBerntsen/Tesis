@@ -206,6 +206,99 @@
                     tools:text="Despegando"
                     tools:visibility="visible" />
 
+                <!-- Cuenta regresiva de un despegue de relevo: audible, con
+                     «Cancelar» (docs/RELEVOS.md §2.4). Va arriba de todo porque
+                     el dron está por encender los motores solo. -->
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/cardCuentaRegresiva"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/espacio_medio"
+                    android:visibility="gone"
+                    app:strokeColor="@color/estado_alerta"
+                    tools:visibility="visible">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="@dimen/espacio">
+
+                        <TextView
+                            style="@style/TituloTarjeta"
+                            android:text="@string/main_relevo_titulo"
+                            android:textColor="@color/estado_alerta" />
+
+                        <TextView
+                            android:id="@+id/txtCuentaRegresiva"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:textAppearance="@style/TextAppearance.DronePatrol.Cuerpo"
+                            android:textSize="22sp"
+                            android:textStyle="bold"
+                            tools:text="Despega en 7 s" />
+
+                        <TextView
+                            android:id="@+id/txtCuentaRegresivaDetalle"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:textAppearance="@style/TextAppearance.DronePatrol.Apagado"
+                            tools:text="Va a tomar el objetivo que sigue Alfa." />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnCancelarRelevo"
+                            style="@style/Widget.DronePatrol.Boton.Peligro"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="@dimen/espacio_medio"
+                            android:text="@string/main_relevo_cancelar" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <!-- Última posición de un aterrizaje de emergencia: queda fija
+                     para que el equipo de tierra vaya a buscar el dron
+                     (docs/RELEVOS.md §5). -->
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/cardUltimaUbicacion"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/espacio_medio"
+                    android:visibility="gone"
+                    app:strokeColor="@color/estado_peligro"
+                    tools:visibility="visible">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="@dimen/espacio">
+
+                        <TextView
+                            style="@style/TituloTarjeta"
+                            android:text="@string/main_emergencia_titulo"
+                            android:textColor="@color/estado_peligro" />
+
+                        <TextView
+                            android:id="@+id/txtUltimaUbicacionEstado"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:textAppearance="@style/TextAppearance.DronePatrol.Apagado"
+                            tools:text="@string/main_emergencia_aterrizo" />
+
+                        <TextView
+                            android:id="@+id/txtUltimaUbicacion"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:textAppearance="@style/TextAppearance.DronePatrol.Cuerpo"
+                            android:textIsSelectable="true"
+                            android:textSize="20sp"
+                            android:textStyle="bold"
+                            tools:text="-34.870210, -56.190180" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
                 <!-- Telemetría -->
                 <com.google.android.material.card.MaterialCardView
                     android:layout_width="match_parent"
@@ -440,6 +533,24 @@
                             android:text="@string/main_despegar_aqui"
                             app:icon="@drawable/ic_despegar"
                             app:iconGravity="textStart" />
+
+                        <!-- Sin este interruptor el dron nunca despega solo para un
+                             relevo (docs/RELEVOS.md §0) -->
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/switchEnEspera"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="@dimen/espacio_medio"
+                            android:enabled="false"
+                            android:text="@string/main_en_espera"
+                            android:textColor="@color/texto" />
+
+                        <TextView
+                            android:id="@+id/txtEnEsperaAyuda"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/main_en_espera_ayuda"
+                            android:textAppearance="@style/TextAppearance.DronePatrol.Apagado" />
 
                         <LinearLayout
                             android:layout_width="match_parent"

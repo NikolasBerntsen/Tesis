@@ -1,8 +1,13 @@
 package com.tesis.dronepatrol.patrol
 
 import android.util.Base64
+import com.tesis.dronepatrol.comms.AutonomiaReportada
+import com.tesis.dronepatrol.comms.BaseDelHub
 import com.tesis.dronepatrol.comms.CommandCenterClient
 import com.tesis.dronepatrol.comms.DetectionClient
+import com.tesis.dronepatrol.comms.MensajeDelHub
+import com.tesis.dronepatrol.comms.MensajesDeLaApp
+import com.tesis.dronepatrol.comms.RelevoReportado
 import com.tesis.dronepatrol.drone.AnotadorDeCuadros
 import com.tesis.dronepatrol.drone.DroneController
 import com.tesis.dronepatrol.drone.Geo
@@ -13,25 +18,31 @@ import com.tesis.dronepatrol.drone.RastreadorDeObjetivo
 import com.tesis.dronepatrol.drone.ZonasDescartadas
 import com.tesis.dronepatrol.model.Caja
 import com.tesis.dronepatrol.model.Deteccion
+import com.tesis.dronepatrol.model.EstadoDelDron
 import com.tesis.dronepatrol.model.FlightEvent
+import com.tesis.dronepatrol.model.MotivoDelDron
 import com.tesis.dronepatrol.model.ObjetivoReportado
 import com.tesis.dronepatrol.model.PatrolRoute
 import com.tesis.dronepatrol.model.PatrolState
 import com.tesis.dronepatrol.model.Telemetry
 import java.util.UUID
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 
 /**
  * Máquina de estados del patrullaje. Toda la lógica de la entrega vive acá:
@@ -44,6 +55,23 @@ import kotlinx.coroutines.withContext
  * una detección") vive entre ORBITING —el objetivo está quieto y el dron lo
  * orbita— y FOLLOWING —se mueve y el dron lo sigue—; el operador puede tomar el
  * control en el medio (MANUAL) y al soltarlo el dron vuelve al objetivo.
+ *
+ * Los relevos entre drones, el desvío a otra base y el protocolo de última
+ * ubicación (docs/RELEVOS.md) se suman así:
+ *
+ *   IDLE (en espera) → orden de relevo → cuenta regresiva → PATROLLING (patrulla de A)
+ *                                                       → RELEVANDO → ORBITING/FOLLOWING (seguimiento de A)
+ *   ORBITING/FOLLOWING → batería bajo el umbral de relevo → relay_request → relay_done → PAUSED (se aleja) → regreso
+ *   regreso por batería → regresar(): base propia | otra base (RETURNING_HOME_BATTERY) | ATERRIZAJE_EMERGENCIA
+ *
+ * **El regreso a tiempo manda** (RELEVOS, regla de oro): ninguna lógica de
+ * relevo o de desvío puede dejar al dron sin batería para volver, y el dron
+ * vuelve SIEMPRE a su propia base salvo que de verdad no llegue.
+ *
+ * Todo lo que cambia el estado entra por [enSerie]: los avisos del dron, los
+ * mensajes del Comando Central y el lazo de los relevos llegan por corrutinas
+ * distintas y, sin una sola puerta, una orden de relevo podía cruzarse con el
+ * regreso por batería que la anulaba.
  */
 class PatrolManager(
     private val controller: DroneController,
@@ -66,6 +94,19 @@ class PatrolManager(
      * les corta el seguimiento en el medio.
      */
     private val relojDeLaSenial: () -> Long = System::currentTimeMillis,
+    /**
+     * Dónde guarda la cola de la emergencia lo que tiene pendiente: tiene que
+     * sobrevivir a un reinicio de la app (docs/PROTOCOLS.md §1.b). La pantalla
+     * le pasa un archivo; las pruebas, memoria.
+     */
+    almacenDeEmergencias: AlmacenDeCola = AlmacenEnMemoria(),
+    /**
+     * Las esperas de la secuencia de última ubicación (los 1,5 s de asentar
+     * cada foto). Es un parámetro por lo mismo que [reloj]: con una que
+     * adelanta el reloj falso, la secuencia entera se prueba sin esperar sus
+     * 20 segundos.
+     */
+    private val pausaDeEmergencia: suspend (Long) -> Unit = { delay(it) },
 ) {
     // internal y no private: el banco de pruebas necesita los límites exactos
     // —el del watchdog del mando, el del reparto de cuadros y el de la repetición
@@ -158,12 +199,16 @@ class PatrolManager(
 
         /**
          * Volviendo a base (por batería, señal u orden) no se alerta: el dron no
-         * puede quedarse, y la alerta pediría algo que no va a hacer.
+         * puede quedarse, y la alerta pediría algo que no va a hacer. Tampoco
+         * relevando (B solo puede tomar el objetivo que vino a relevar) ni en el
+         * aterrizaje de emergencia.
          */
         val ESTADOS_SIN_ALERTAS = setOf(
             PatrolState.RETURNING_HOME,
             PatrolState.RETURNING_HOME_BATTERY,
             PatrolState.RETURNING_HOME_SIGNAL,
+            PatrolState.RELEVANDO,
+            PatrolState.ATERRIZAJE_EMERGENCIA,
         )
 
         /** Si la estimación del objetivo quieto se corre más que esto, la órbita la acompaña. */
@@ -176,7 +221,8 @@ class PatrolManager(
         const val INTERVALO_SEGUIMIENTO_MS = 500L
 
         // PAUSED/MANUAL/FORCED también son vuelo: batería baja y pérdida de
-        // señal disparan el RTH igual que patrullando
+        // señal disparan el RTH igual que patrullando. RELEVANDO también: B
+        // yendo hacia el objetivo de otro vuelve igual si se le acaba la batería.
         val ESTADOS_EN_VUELO = setOf(
             PatrolState.PATROLLING,
             PatrolState.ORBITING,
@@ -184,13 +230,90 @@ class PatrolManager(
             PatrolState.PAUSED,
             PatrolState.MANUAL,
             PatrolState.FORCED,
+            PatrolState.RELEVANDO,
         )
-        /** Volviendo a base: ahí ya hay un regreso en curso y los failsafes no lo pisan. */
+        /**
+         * Volviendo a base: ahí ya hay un regreso en curso y los failsafes no lo
+         * pisan. El aterrizaje de emergencia también es un regreso: el que baja
+         * donde está porque no alcanza ninguna base.
+         */
         val ESTADOS_DE_REGRESO = setOf(
             PatrolState.RETURNING_HOME,
             PatrolState.RETURNING_HOME_BATTERY,
             PatrolState.RETURNING_HOME_SIGNAL,
+            PatrolState.ATERRIZAJE_EMERGENCIA,
         )
+
+        /** Cada cuánto corre el lazo de los relevos (reintentos, cuenta regresiva, tránsito, cola). */
+        const val INTERVALO_RELEVOS_MS = 200L
+
+        /** La cuenta regresiva audible de B antes de despegar, con «Cancelar» en el teléfono. */
+        const val CUENTA_REGRESIVA_MS = 10_000L
+
+        /** Si B no llega a la altura en este tiempo después de despegar, aterriza y aborta. */
+        const val SUBIDA_MAXIMA_MS = 40_000L
+
+        /**
+         * B en tierra esperando `relay_go` más que esto: el hub ya lo dio por
+         * fallido a los 120 s (`sin_despegue`); se olvida por si el aviso no llegó.
+         */
+        const val ESPERA_DEL_GO_MAXIMA_MS = 130_000L
+
+        /**
+         * B en el traspaso sin un solo `relay_target` durante esto: el relevo ya
+         * terminó para el hub (los manda cada 5 s mientras dura), y no queda
+         * nadie que pueda decirle dónde está A. Baja a seguir al objetivo.
+         */
+        const val SILENCIO_DEL_HUB_MS = 30_000L
+
+        /** Después de un relevo de seguimiento que terminó sin traspaso, esto antes de volver a pedir otro. */
+        const val REINTENTO_TRAS_FIN_MS = 30_000L
+
+        /** Las órdenes de tránsito de B se renuevan una vez por segundo, no en cada vuelta del lazo. */
+        const val INTERVALO_ORDEN_DE_TRANSITO_MS = 1_000L
+
+        /**
+         * REACQUIRE_GATE_M de docs/RELEVOS.md §3.4: una detección de la misma
+         * clase a menos de esto de la estimación adelanta la toma. Es la puerta
+         * con la que el rastreador reengancha un objetivo perdido.
+         */
+        const val PUERTA_DE_TOMA_M = RastreadorDeObjetivo.PUERTA_DE_REENGANCHE_M
+
+        /** Llegar al punto de visitantes de un desvío: a menos de esto ya se fija el retorno y se aterriza. */
+        const val LLEGADA_AL_DESVIO_M = 3.0
+
+        /**
+         * Con el aviso de llegada del controlador alcanza con estar a esto del
+         * punto de visitantes: el GPS del dron y el del lazo de navegación no
+         * miden igual.
+         */
+        const val LLEGADA_POR_AVISO_M = 15.0
+
+        /**
+         * A soltando el objetivo (después del `relay_done`) que no logra
+         * alejarse en este tiempo vuelve igual: alejarse es para no juntarse con
+         * B, pero no puede costar el regreso.
+         */
+        const val ALEJAMIENTO_MAXIMO_MS = 30_000L
+
+        /** B bajando en el lugar a la altura de seguimiento, después del traspaso: si no llega en esto, sigue igual. */
+        const val BAJADA_MAXIMA_MS = 20_000L
+
+        /** Cuánto se corre el dron para reintentar un aterrizaje que pidió confirmación (RELEVOS §4). */
+        const val CORRIMIENTO_PARA_ATERRIZAR_M = 10.0
+
+        /** Hasta cuántas veces se corre y reintenta antes de esperar el crítico + 1. */
+        const val REINTENTOS_DE_ATERRIZAJE = 2
+
+        /** Con la batería en el crítico del DJI más esto, el aterrizaje se confirma donde esté. */
+        const val CONFIRMAR_SOBRE_EL_CRITICO_PCT = 1.0
+
+        /** Una lectura en el suelo que sube esto o más es otra batería. */
+        const val SALTO_DE_BATERIA_PCT = 10.0
+
+        /** Lo que dura un paso de la secuencia de última ubicación, para el consumo estimado. */
+        const val DURACION_DE_UN_PASO_MS =
+            SecuenciaDeUltimaUbicacion.ASENTAR_MS + SecuenciaDeUltimaUbicacion.CONFIRMACION_MAXIMA_MS
 
         /**
          * Con la batería por cambiar (aterrizó por batería baja), una lectura
@@ -209,6 +332,14 @@ class PatrolManager(
             PatrolState.PAUSED,
             PatrolState.MANUAL,
             PatrolState.FORCED,
+        )
+
+        /** Desde el regreso por batería, los únicos estados a los que se pasa sin abandonar un desvío. */
+        val ESTADOS_QUE_CONSERVAN_EL_DESVIO = setOf(
+            PatrolState.RETURNING_HOME_BATTERY,
+            PatrolState.ATERRIZAJE_EMERGENCIA,
+            PatrolState.LANDED,
+            PatrolState.IDLE,
         )
 
         /** Los dos estados en los que el dron está ocupándose del objetivo por su cuenta. */
@@ -339,6 +470,12 @@ class PatrolManager(
         /** Dónde se lo detectó primero: también se marca como zona descartada si es un falso positivo. */
         val origenLat: Double,
         val origenLon: Double,
+        /**
+         * Lo adoptó por un relevo (B, docs/RELEVOS.md §3.7): el dron no tiene
+         * ruta propia a la que volver, así que un descarte, un `resume_patrol` o
+         * un `relay_cancel` lo mandan a su base y nunca a patrullar.
+         */
+        val adoptado: Boolean = false,
     ) {
         /** Id de la alerta, cuando llega el alert_ack. */
         var alertId: Long? = null
@@ -484,6 +621,153 @@ class PatrolManager(
      */
     private var problemasEnLaVentana = 0
 
+    // ---- Relevos, desvío a otra base y última ubicación (docs/RELEVOS.md) ----
+
+    /**
+     * La puerta de todo lo que cambia el estado (ver [enSerie]). Es un monitor
+     * y no un Mutex de corrutinas a propósito: es reentrante —un regreso por
+     * batería que aborta un relevo que vuelve a pasar por el regreso no se
+     * traba contra sí mismo— y nada de lo que corre adentro suspende. El mando
+     * manual NO pasa por acá: tiene su propio cerrojo ([cerrojoDelMando]) y no
+     * puede quedar esperando detrás de una transición.
+     */
+    private val cerrojoDeLaPatrulla = Any()
+
+    /** Las bases del último `bases` (docs/PROTOCOLS.md §2.b); null hasta el primero, y sin lista no hay desvío. */
+    @Volatile
+    private var bases: MensajeDelHub.Bases? = null
+
+    /** Lo que [Autonomia.decidirRegreso] recuerda entre una telemetría y la siguiente. */
+    private var memoriaDelRegreso = Autonomia.Memoria()
+
+    private val consumo = ConsumoMedido()
+
+    private val espera = EsperaParaRelevos()
+
+    /** El interruptor «En espera para relevos», para la pantalla. */
+    val enEspera: StateFlow<Boolean> get() = espera.prendido
+
+    /** Los pedidos de relevo de A, uno por motivo (`patrulla`, `seguimiento`). */
+    private val pedidos = HashMap<String, PedidoDeRelevo>()
+
+    /** Final de la ventana de gracia abierta; null si no hay ninguna (RELEVOS §3.5). */
+    private var ventanaHastaMs: Long? = null
+
+    /** La ventana de gracia se abre una sola vez por seguimiento. */
+    private var ventanaUsada = false
+
+    /** Cuándo terminó, sin traspaso, el último relevo de seguimiento pedido (para no repedir enseguida). */
+    private var finDelUltimoPedidoDeSeguimientoMs = Long.MIN_VALUE / 2
+
+    /** A soltando el objetivo después del `relay_done`. */
+    private var soltando: Soltando? = null
+
+    /** El relevo que este dron atiende como B; null si ninguno. */
+    @Volatile
+    private var relevo: RelevoAsignado? = null
+
+    /** La habilitación del mando virtual de B en tierra. */
+    private var tareaDelRelevo: Job? = null
+
+    /**
+     * La última respuesta mandada a cada orden de relevo: una orden repetida
+     * (el hub reenvía la última al reconectar) se contesta igual sin volver a
+     * empezar nada (docs/PROTOCOLS.md §2.b).
+     */
+    private val respuestas = object : LinkedHashMap<Long, JSONObject>() {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, JSONObject>?) = size > 16
+    }
+
+    /** Un desvío a otra base en curso (RELEVOS §4). */
+    private class Desvio(val base: BaseDelHub) {
+        /** Ya llegó al punto de visitantes y se le ordenó aterrizar. */
+        var llego = false
+    }
+
+    private var desvio: Desvio? = null
+
+    /** Ya se gastó el único intento de cortarle al DJI su regreso propio (RELEVOS §4: nunca se pelea en lazo). */
+    private var regresoDelDjiCortado = false
+
+    /**
+     * Por qué el propio DJI tiene el vuelo ([FlightEvent.ElDronTomoElControl]);
+     * null si lo tiene la app. Mientras tanto la app no le da ninguna orden de
+     * vuelo por su cuenta —cada una volvería a habilitar el mando virtual y a
+     * pelearle el control— hasta que aterrice o una persona dé una orden. El
+     * motivo importa: su regreso por batería se puede cortar UNA vez para un
+     * desvío o para el §5; el del botón del control es una persona pidiendo el
+     * dron de vuelta, y ese no se corta nunca.
+     */
+    @Volatile
+    private var tomaDelDron: MotivoDelDron? = null
+
+    private val dronAlMando: Boolean get() = tomaDelDron != null
+
+    /**
+     * El aterrizaje en un lugar que nadie revisó (el de un desvío o el del §5)
+     * no se confirma solo (RELEVOS §4): si el dron lo pide, se corre
+     * [CORRIMIENTO_PARA_ATERRIZAR_M] y reintenta, hasta
+     * [REINTENTOS_DE_ATERRIZAJE] veces; recién con la batería en el crítico + 1
+     * se confirma. Cuántos reintentos van, si el dron está esperando la
+     * confirmación y si se está corriendo para el próximo intento.
+     */
+    private var reintentosDeAterrizaje = 0
+    private var confirmacionPendiente = false
+    private var corriendoseParaAterrizar = false
+
+    /** La app le pidió al controlador que no confirme solo (ver [confirmarAterrizajesALaMano]). */
+    private var confirmacionManual = false
+
+    /** Ya se anotó que el §5 tocaba pero el DJI tiene el vuelo (para no repetirlo en cada telemetría). */
+    private var ultimaUbicacionPostergada = false
+
+    /** B perdió la señal en un relevo: al recuperarla no lo retoma, vuelve a su base. */
+    private var volverAlRecuperarLaSenial = false
+
+    /** El protocolo de última ubicación en curso: el `ref` de la emergencia y si la app tiene el vuelo. */
+    private class EmergenciaEnCurso(val ref: String, @Volatile var conControl: Boolean)
+
+    /** La lee también la secuencia de fotos, que corre en su propia corrutina: de ahí el volátil. */
+    @Volatile
+    private var emergencia: EmergenciaEnCurso? = null
+
+    /** El Job de la secuencia de fotos; [pasarA] lo cancela al salir de ATERRIZAJE_EMERGENCIA. */
+    private var tareaDeEmergencia: Job? = null
+
+    private val cola = ColaDeEmergencia(almacenDeEmergencias)
+
+    /** `landing_at_base` y `landed_at_base` que no pudieron salir: salen al reconectar. */
+    private val pendientesDeEnvio = ArrayDeque<JSONObject>()
+
+    /** El `rth_diverted` del desvío o la emergencia en curso: se repite en cada reconexión mientras dure. */
+    private var rthDivertedVigente: JSONObject? = null
+
+    /** La última telemetría con una posición de verdad: es la que sale en `emergency_landed`. */
+    private var ultimaPosicionValida: Telemetry? = null
+
+    /** Batería de la lectura anterior en el suelo, para notar un cambio de batería. */
+    private var bateriaAnteriorEnTierra = Double.NaN
+
+    /** El Comando Central estaba conectado en el último aviso (para notar la reconexión). */
+    private var conectadoAntes = false
+
+    private val _ultimaUbicacion = MutableStateFlow<UbicacionFijada?>(
+        cola.ultimaPosicion()?.let { UbicacionFijada(it.lat, it.lon, Double.NaN, it.aterrizada) },
+    )
+
+    /** La última posición de una emergencia, fija en la pantalla del teléfono (RELEVOS §5). */
+    val ultimaUbicacion: StateFlow<UbicacionFijada?> = _ultimaUbicacion
+
+    private val _cuentaRegresiva = MutableStateFlow<CuentaRegresiva?>(null)
+
+    /** La cuenta regresiva de B antes de despegar para un relevo; null si no hay ninguna. */
+    val cuentaRegresiva: StateFlow<CuentaRegresiva?> = _cuentaRegresiva
+
+    private val _avisos = MutableSharedFlow<String>(extraBufferCapacity = 16)
+
+    /** Avisos de los relevos para mostrar en la pantalla (además del registro local). */
+    val avisos: SharedFlow<String> = _avisos
+
     private var started = false
 
     fun start() {
@@ -506,9 +790,7 @@ class PatrolManager(
         commandCenter.onAlertAck = { ref, alertId -> scope.launch { onAlertAck(ref, alertId) } }
         commandCenter.onTakeoff = { by -> scope.launch { onTakeoff(by) } }
         commandCenter.onLand = { by -> scope.launch { onLand(by) } }
-        commandCenter.onResumePatrol = { fromIndex ->
-            scope.launch { resumePatrol("orden del operador", fromIndex) }
-        }
+        commandCenter.onResumePatrol = { fromIndex -> scope.launch { onResumePatrol(fromIndex) } }
         commandCenter.onStartRoute = { routeId, fromIndex, orderedBy ->
             scope.launch { onStartRoute(routeId, fromIndex, orderedBy) }
         }
@@ -532,10 +814,17 @@ class PatrolManager(
         // podría pisar a la nueva.
         commandCenter.onManualGimbal = { pitch, _ -> onManualGimbal(pitch) }
         commandCenter.onControlReleased = { by -> scope.launch { onControlReleased(by) } }
+        // Los relevos, desvíos y emergencias (§2.b) llegan ya validados y con
+        // tipo; uno inválido solo queda en el registro local.
+        commandCenter.onMensajeDelHub = { mensaje -> scope.launch { alMensajeDelHub(mensaje) } }
+        commandCenter.onMensajeInvalido = { motivo -> log("Mensaje del Comando Central ignorado por no cumplir el contrato: $motivo") }
+        scope.launch { controller.estado.collect { alCambiarElDron(it) } }
+        scope.launch { commandCenter.connected.collect { alCambiarLaConexion(it) } }
         scope.launch { signalWatchdog() }
         scope.launch { mandoWatchdog() }
         scope.launch { statusTicker() }
         scope.launch { seguimientoTicker() }
+        scope.launch { relevosTicker() }
     }
 
     /**
@@ -594,11 +883,13 @@ class PatrolManager(
         }
     }
 
-    fun startPatrol(route: PatrolRoute) {
+    fun startPatrol(route: PatrolRoute) = enSerie {
+        ordenDeCampo("arrancó un patrullaje")
         // En el suelo, el controlador despega solo (ver DroneController.startRoute),
         // pero solo si el dron está en condiciones: sin GPS o sin punto de retorno
         // un despegue automático es un dron que no sabe volver.
-        if (!puedeArrancarUnaRuta()) return
+        if (!puedeArrancarUnaRuta()) return@enSerie
+        ordenDeUnaPersona()
         terminarSeguimiento("empezó otro patrullaje")
         this.route = route
         patrullaEnCurso = true
@@ -619,22 +910,32 @@ class PatrolManager(
     // nadie en la consola que lo haga.
 
     /** Interrumpe el patrullaje: el dron queda en vuelo estacionario. */
-    fun detenerPatrullaje() = onStopPatrol("el operador de campo")
+    fun detenerPatrullaje() = enSerie {
+        ordenDeCampo("detuvo el patrullaje")
+        detener("el operador de campo")
+    }
 
     /** Retoma la ruta desde el último nodo alcanzado. */
     fun reanudarPatrullaje() {
-        scope.launch { resumePatrol("orden del operador de campo") }
+        scope.launch {
+            enSerie {
+                ordenDeCampo("ordenó reanudar")
+                if (!volverSiNoTieneRutaPropia("el operador de campo ordenó reanudar")) resumePatrol("orden del operador de campo")
+            }
+        }
     }
 
     /**
      * Regreso a base ordenado desde el campo. Pisa cualquier otra orden, incluido
      * el control manual de la consola: el que está al lado del dron manda.
      */
-    fun volverABase() {
+    fun volverABase() = enSerie {
         if (!controller.estado.value.enVuelo) {
             log("El dron está en el suelo: no hay a dónde volver")
-            return
+            return@enSerie
         }
+        ordenDeCampo("ordenó volver a la base")
+        ordenDeUnaPersona()
         if (_state.value == PatrolState.PATROLLING) resumeWaypoint = proximoWaypoint
         controlTomado = false
         terminarSeguimiento("el operador de campo ordenó volver a la base")
@@ -651,20 +952,21 @@ class PatrolManager(
      * después desde la consola. Queda en IDLE en el aire: desde ahí se puede
      * comenzar un patrullaje sin volver a despegar.
      */
-    fun despegarAqui() {
+    fun despegarAqui() = enSerie {
         val dron = controller.estado.value
         if (dron.enVuelo) {
             log("El dron ya está en el aire")
-            return
+            return@enSerie
         }
         if (!dron.conectado) {
             report("DRONE_PROBLEM", "No se puede despegar: ${dron.detalle.ifBlank { "sin enlace con la aeronave" }}")
-            return
+            return@enSerie
         }
-        if (laBateriaSiguePorCambiar()) return
+        ordenDeCampo("despegó en el lugar")
+        if (laBateriaSiguePorCambiar()) return@enSerie
         bateriaParaDespegar()?.let { pct ->
             report("DRONE_PROBLEM", "No se despega con la batería al ${pct.toInt()}%: hace falta más del ${LOW_BATTERY_PCT.toInt()}%")
-            return
+            return@enSerie
         }
         olvidarElUltimoProblema()
         val sinGps = lastTelemetry?.tienePosicion != true
@@ -678,11 +980,13 @@ class PatrolManager(
     }
 
     /** Aterriza donde está. Al tocar el suelo (FlightEvent.Aterrizado) queda en base. */
-    fun aterrizar() {
+    fun aterrizar() = enSerie {
         if (!controller.estado.value.enVuelo) {
             log("El dron ya está en el suelo")
-            return
+            return@enSerie
         }
+        ordenDeCampo("ordenó aterrizar")
+        ordenDeUnaPersona()
         if (_state.value == PatrolState.PATROLLING) resumeWaypoint = proximoWaypoint
         controlTomado = false
         terminarSeguimiento("el operador de campo ordenó aterrizar")
@@ -703,10 +1007,17 @@ class PatrolManager(
     private suspend fun onStartRoute(routeId: Int, fromIndex: Int, orderedBy: String) {
         val r = buscarRuta(routeId) ?: run {
             log("Se ordenó patrullar la ruta $routeId pero no existe: se ignora")
+            enSerie { ordenDelOperador() }
             return
         }
+        enSerie { arrancarRuta(r, fromIndex, orderedBy) }
+    }
+
+    private fun arrancarRuta(r: PatrolRoute, fromIndex: Int, orderedBy: String) {
+        ordenDelOperador()
         // Desde la consola también se puede ordenar con el dron en el suelo
         if (!puedeArrancarUnaRuta()) return
+        ordenDeUnaPersona()
         val desde = fromIndex.coerceIn(0, r.waypoints.size - 1)
         terminarSeguimiento("se ordenó patrullar otra ruta")
         route = r
@@ -722,8 +1033,14 @@ class PatrolManager(
         report("PATROL_STARTED", "Patrullaje iniciado en ruta \"${r.name}\" desde el nodo ${desde + 1} (orden de $orderedBy)")
     }
 
-    private fun onStopPatrol(orderedBy: String) {
+    private fun onStopPatrol(orderedBy: String) = enSerie {
+        ordenDelOperador()
+        detener(orderedBy)
+    }
+
+    private fun detener(orderedBy: String) {
         if (_state.value !in ESTADOS_EN_VUELO || _state.value == PatrolState.PAUSED) return
+        ordenDeUnaPersona()
         if (_state.value == PatrolState.PATROLLING) resumeWaypoint = proximoWaypoint
         terminarSeguimiento("se interrumpió el patrullaje (orden de $orderedBy)")
         // Primero el estado y después la orden, como en pasarA(): si no, un
@@ -734,10 +1051,19 @@ class PatrolManager(
     }
 
     private suspend fun onForceGoto(routeId: Int, index: Int, orderedBy: String) {
-        val wp = buscarRuta(routeId)?.waypoints?.getOrNull(index) ?: run {
-            log("Se ordenó desviar al nodo ${index + 1} de la ruta $routeId pero no existe: se ignora")
-            return
+        val wp = buscarRuta(routeId)?.waypoints?.getOrNull(index)
+        enSerie {
+            // La orden cancela el relevo en el hub aunque no se pueda cumplir.
+            ordenDelOperador()
+            if (wp == null) {
+                log("Se ordenó desviar al nodo ${index + 1} de la ruta $routeId pero no existe: se ignora")
+            } else {
+                desviarAlNodo(wp.lat, wp.lon, index, orderedBy)
+            }
         }
+    }
+
+    private fun desviarAlNodo(lat: Double, lon: Double, index: Int, orderedBy: String) {
         // Un resume posterior retoma el patrullaje normal hacia el nodo que tenía
         // por delante: si se sale de PATROLLING se anota ese nodo, como en todas
         // las demás salidas. Sin anotarlo, resumeWaypoint quedaba con un valor
@@ -745,16 +1071,24 @@ class PatrolManager(
         // primer nodo a repetir la ruta entera. Desde otro estado (MANUAL, un
         // desvío anterior) el nodo ya quedó anotado al salir del patrullaje.
         if (_state.value == PatrolState.PATROLLING) resumeWaypoint = proximoWaypoint
+        ordenDeUnaPersona()
         terminarSeguimiento("desvío forzado a un nodo (orden de $orderedBy)")
         forcedIndex = index
         // El estado antes que la orden (ver pasarA()): también se llega acá desde
         // MANUAL, y un mando colado en el medio abandona el desvío recién pedido.
         pasarA(PatrolState.FORCED)
-        controller.gotoPoint(wp.lat, wp.lon)
+        controller.gotoPoint(lat, lon)
         report("FORCED_GOTO", "Desvío forzado hacia el nodo ${index + 1} (orden de $orderedBy)")
     }
 
-    private fun onControlTaken(by: String) {
+    /**
+     * Tomar el control no cancela ningún relevo (docs/RELEVOS.md §3.9): B en el
+     * aire queda en MANUAL y, al soltarlo, retoma el relevo donde estaba. Sí le
+     * devuelve el vuelo a la app si el propio DJI lo había tomado: es una
+     * persona la que decide.
+     */
+    private fun onControlTaken(by: String) = enSerie {
+        ordenDeUnaPersona()
         if (_state.value == PatrolState.PATROLLING) resumeWaypoint = proximoWaypoint
         // Acá el orden es el inverso del resto de las transiciones a propósito: esta
         // ABRE la puerta del mando en vez de cerrarla, así que el vuelo estacionario
@@ -916,6 +1250,19 @@ class PatrolManager(
      * del estado esté cerrada.
      */
     private fun pasarA(nuevo: PatrolState, frenar: Boolean = false) {
+        // La secuencia de última ubicación corre en un Job que se corta al salir
+        // de su estado: una persona que toma el control o aterriza el dron manda
+        // sobre las fotos que faltaban (docs/RELEVOS.md §1).
+        if (_state.value == PatrolState.ATERRIZAJE_EMERGENCIA && nuevo != PatrolState.ATERRIZAJE_EMERGENCIA) {
+            tareaDeEmergencia?.cancel()
+            tareaDeEmergencia = null
+        }
+        // El desvío a otra base vive en el regreso por batería: salir de ahí
+        // por cualquier cosa que no sea tocar tierra o bajar en emergencia es
+        // una persona que dio otra orden, y la orden manda (RELEVOS §3.9).
+        if (_state.value == PatrolState.RETURNING_HOME_BATTERY && nuevo !in ESTADOS_QUE_CONSERVAN_EL_DESVIO) {
+            abandonarElDesvio("Otra orden")
+        }
         synchronized(cerrojoDelMando) {
             val salimosDeManual = _state.value == PatrolState.MANUAL && nuevo != PatrolState.MANUAL
             _state.value = nuevo
@@ -1000,7 +1347,9 @@ class PatrolManager(
         }
     }
 
-    private fun onControlReleased(by: String) {
+    private fun onControlReleased(by: String) = enSerie { soltarElControl(by) }
+
+    private fun soltarElControl(by: String) {
         // El guard es el control y ya no el estado: se puede haber salido de
         // MANUAL por pérdida de señal o batería baja con el control todavía
         // tomado, y soltarlo ahí igual tiene que dejar al dron quieto y desarmar
@@ -1023,6 +1372,15 @@ class PatrolManager(
             pasarA(enReposo())
             return
         }
+        // B en un relevo: soltar el control lo devuelve al relevo donde estaba
+        // (en el traspaso todavía no baja al objetivo: A puede estar encima).
+        val r = relevo
+        if (r != null && (r.fase == FaseDelRelevo.EN_CAMINO || r.fase == FaseDelRelevo.TRASPASO)) {
+            r.ultimaOrdenMs = Long.MIN_VALUE / 2
+            pasarA(PatrolState.RELEVANDO)
+            log("$by soltó el control: el dron retoma el relevo de ${r.de.displayName}")
+            return
+        }
         val s = seguimiento
         // Con un objetivo en seguimiento, el dron vuelve a él: es lo que el
         // operador espera al soltar el control después de mirar de cerca.
@@ -1040,7 +1398,9 @@ class PatrolManager(
      * enciende los motores) y con el dron en el suelo. No exige GPS: es la
      * prueba de mandos en interior, despegar, girar y aterrizar.
      */
-    private fun onTakeoff(by: String) {
+    private fun onTakeoff(by: String) = enSerie { despegarPorLaConsola(by) }
+
+    private fun despegarPorLaConsola(by: String) {
         // Los rechazos van al Comando Central y no solo al log del teléfono: el
         // que apretó "Despegar" está en la consola y tiene que saber por qué no
         // pasa nada.
@@ -1076,7 +1436,9 @@ class PatrolManager(
     }
 
     /** Aterrizaje pedido desde la consola por el titular del control. */
-    private fun onLand(by: String) {
+    private fun onLand(by: String) = enSerie { aterrizarPorLaConsola(by) }
+
+    private fun aterrizarPorLaConsola(by: String) {
         if (!controlTomado || _state.value != PatrolState.MANUAL) {
             log("$by pidió aterrizar sin el control manual tomado: se ignora")
             return
@@ -1085,6 +1447,10 @@ class PatrolManager(
             log("$by pidió aterrizar pero el dron ya está en el suelo")
             return
         }
+        ordenDeUnaPersona()
+        // Bajar a B en medio de un relevo lo termina; a A, es soltar el objetivo antes de tiempo.
+        relevo?.let { abortarRelevo(it, "otro", "$by ordenó aterrizar desde la consola") }
+        abandonarRelevoDeSeguimiento("orden_del_operador")
         terminarSeguimiento("$by ordenó aterrizar")
         controller.land()
         report("LANDING", "Aterrizaje ordenado por $by desde el Comando Central: el dron desciende donde está")
@@ -1170,25 +1536,48 @@ class PatrolManager(
     private suspend fun signalWatchdog() {
         while (true) {
             delay(1_000)
-            val flying = enVueloParaLosFailsafes()
-            val silent = lastTelemetryAt > 0 && relojDeLaSenial() - lastTelemetryAt > SIGNAL_TIMEOUT_MS
-            if (flying && silent) {
-                _signalOk.value = false
-                _signalPct.value = 0
-                if (_state.value == PatrolState.PATROLLING) resumeWaypoint = proximoWaypoint
-                terminarSeguimiento("se perdió la señal con el dron")
-                // Frena: acá nadie más le habla al dron. Sin esto quedaba con la
-                // última velocidad del operador (hasta 5 m/s) y el lazo de
-                // Virtual Stick repitiéndosela a 10 Hz, así que apenas el enlace
-                // se reenganchaba retomaba la marcha con nadie al mando.
-                pasarA(PatrolState.RETURNING_HOME_SIGNAL, frenar = true)
-                report("SIGNAL_LOST", "Se perdió la señal con el dron (sin telemetría hace ${SIGNAL_TIMEOUT_MS / 1000} s)")
-                report("RTH_SIGNAL_LOSS", "El dron vuelve a la base por pérdida de señal (failsafe RTH)")
-            }
+            enSerie { vigilarLaSenial() }
         }
     }
 
-    private suspend fun onTelemetry(t: Telemetry) {
+    private fun vigilarLaSenial() {
+        val silent = lastTelemetryAt > 0 && relojDeLaSenial() - lastTelemetryAt > SIGNAL_TIMEOUT_MS
+        if (enVueloParaLosFailsafes() && silent) alPerderLaSenial("sin telemetría hace ${SIGNAL_TIMEOUT_MS / 1000} s")
+    }
+
+    /**
+     * La señal con el dron se perdió: lo nota el vigía (la telemetría se calló)
+     * o lo cuenta el propio DJI, que arrancó su regreso por pérdida de señal
+     * (`ElDronTomoElControl(RTH_SENIAL)`, que llega recién cuando el enlace
+     * vuelve). Las dos salen igual: el estado espera la señal y, al volver,
+     * [alRecuperarLaSenial] decide con su regla de siempre.
+     */
+    private fun alPerderLaSenial(porque: String, frenar: Boolean = true) {
+        _signalOk.value = false
+        _signalPct.value = 0
+        if (_state.value == PatrolState.PATROLLING) resumeWaypoint = proximoWaypoint
+        // B sin señal en un relevo no lo retoma al recuperarla: vuelve a su
+        // base (RELEVOS §3.10). A sin señal suelta el objetivo.
+        relevo?.let { r ->
+            if (r.fase == FaseDelRelevo.EN_CAMINO || r.fase == FaseDelRelevo.TRASPASO || r.fase == FaseDelRelevo.DESPEGANDO) {
+                abortarRelevo(r, "senial", porque)
+                volverAlRecuperarLaSenial = true
+            }
+        }
+        if (seguimiento?.adoptado == true) volverAlRecuperarLaSenial = true
+        abandonarRelevoDeSeguimiento("senial")
+        terminarSeguimiento("se perdió la señal con el dron")
+        // Frena: acá nadie más le habla al dron. Sin esto quedaba con la última
+        // velocidad del operador (hasta 5 m/s) y el lazo de Virtual Stick
+        // repitiéndosela a 10 Hz, así que apenas el enlace se reenganchaba
+        // retomaba la marcha con nadie al mando. Si lo cuenta el DJI ya está en
+        // su regreso, y frenarlo sería cortárselo.
+        pasarA(PatrolState.RETURNING_HOME_SIGNAL, frenar = frenar)
+        report("SIGNAL_LOST", "Se perdió la señal con el dron ($porque)")
+        report("RTH_SIGNAL_LOSS", "El dron vuelve a la base por pérdida de señal (failsafe RTH)")
+    }
+
+    private fun onTelemetry(t: Telemetry) = enSerie {
         val recovering = _state.value == PatrolState.RETURNING_HOME_SIGNAL
         lastTelemetry = t
         lastTelemetryAt = relojDeLaSenial()
@@ -1196,14 +1585,37 @@ class PatrolManager(
         while (poses.isNotEmpty() && t.ts - poses.first().ts > HISTORIA_DE_POSES_MS) poses.removeFirst()
         _signalOk.value = true
         _signalPct.value = t.signalPct
+        if (Geo.esPosicionValida(t.lat, t.lon)) ultimaPosicionValida = t
+        val enVuelo = controller.estado.value.enVuelo
+        consumo.registrar(t, enVuelo)
+        verSiCambioLaBateriaEnTierra(t, enVuelo)
 
         if (recovering) {
             report("SIGNAL_RECOVERED", "Señal con el dron recuperada")
             alRecuperarLaSenial()
-            return
+            return@enSerie
         }
         verSiSeCambioLaBateria(t)
         checkLowBattery(t)
+        revisarSoltando(t)
+        revisarRegreso(t)
+        confirmarSiNoQuedaBateria(t)
+    }
+
+    /**
+     * Una lectura en el suelo que salta [SALTO_DE_BATERIA_PCT] o más es otra
+     * batería: el interruptor «En espera» se apaga, porque el operador revisó
+     * el dron con la anterior (RELEVOS §0).
+     */
+    private fun verSiCambioLaBateriaEnTierra(t: Telemetry, enVuelo: Boolean) {
+        if (enVuelo || !t.batteryPct.isFinite()) {
+            bateriaAnteriorEnTierra = Double.NaN
+            return
+        }
+        if (bateriaAnteriorEnTierra.isFinite() && t.batteryPct >= bateriaAnteriorEnTierra + SALTO_DE_BATERIA_PCT) {
+            apagarEspera("se cambió la batería")
+        }
+        bateriaAnteriorEnTierra = t.batteryPct
     }
 
     /**
@@ -1218,6 +1630,7 @@ class PatrolManager(
         // Sin dato de batería (NaN) no hay cambio que confirmar: sigue por cambiar
         if (t.batteryPct.isNaN() || t.batteryPct < BATERIA_CAMBIADA_PCT) return
         bateriaPorCambiar = false
+        apagarEspera("se cambió la batería")
         if (_state.value == PatrolState.LANDED) pasarA(PatrolState.IDLE)
         report("BATTERY_RECHARGED", "Batería al ${t.batteryPct.toInt()}%: se cambió la batería y el dron queda listo para volar")
     }
@@ -1236,8 +1649,14 @@ class PatrolManager(
      * IDLE en el aire —un "Despegar aquí"— o desde LANDED. Retomarla ahí era
      * mandar al dron, que estaba suspendido al lado del operador, a volar una
      * ruta vieja que nadie le pidió.
+     *
+     * Con los relevos se suman tres guardas (docs/RELEVOS.md §1 y §3.10): nunca
+     * se retoma una ruta con la batería en el umbral de regreso (el regreso
+     * manda), un B que perdió la señal en un relevo no lo retoma (vuelve a su
+     * base), y si el propio DJI tomó el control se lo deja terminar su regreso.
      */
-    private suspend fun alRecuperarLaSenial() {
+    private fun alRecuperarLaSenial() {
+        val t = lastTelemetry
         when {
             // El operador nunca soltó el control: sigue siendo suyo. El dron ya
             // quedó estacionario al perderse la señal, así que vuelve a la
@@ -1246,6 +1665,19 @@ class PatrolManager(
                 pasarA(PatrolState.MANUAL)
                 report("CONTROL_RESUMED", "Vuelve la señal con el control manual todavía tomado: el dron espera órdenes del operador")
             }
+            // El DJI está en su propio regreso: no se le pelea el control. Sale
+            // de RETURNING_HOME_SIGNAL para no tomar cada telemetría como otra
+            // recuperación.
+            dronAlMando -> {
+                pasarA(PatrolState.RETURNING_HOME)
+                log("Vuelve la señal con el propio dron volviendo a su base: la app no le da órdenes")
+            }
+            volverAlRecuperarLaSenial -> {
+                volverAlRecuperarLaSenial = false
+                regresar("Señal recuperada después de un relevo: el dron vuelve a su base", PatrolState.RETURNING_HOME)
+            }
+            route != null && patrullaEnCurso && t != null && t.batteryPct <= Autonomia.umbralDeRegreso(t.pctParaVolver) ->
+                regresar("Señal recuperada con la batería al ${t.batteryPct.toInt()}%: el dron vuelve a la base en vez de retomar la ruta")
             // Requisito: al recuperar la señal, el patrullaje continúa donde quedó
             route != null && patrullaEnCurso -> resumePatrol("señal recuperada")
             // Sin patrullaje y sin control tomado no hay nada que reanudar:
@@ -1259,19 +1691,34 @@ class PatrolManager(
     }
 
     // ---- Detección de batería baja ----
-    // Si la batería cae del umbral en pleno vuelo, se ordena RTH y se avisa al
+    // Si la batería cae del umbral en pleno vuelo, el dron vuelve y se avisa al
     // Comando Central. No hay reanudación automática: hace falta cambiar batería.
-    private suspend fun checkLowBattery(t: Telemetry) {
-        val flying = enVueloParaLosFailsafes()
-        if (flying && t.batteryPct <= LOW_BATTERY_PCT) {
-            terminarSeguimiento("batería al ${t.batteryPct.toInt()}%: el dron vuelve a la base")
-            // Sin frenar: el regreso a base de abajo ya es la orden que manda y
-            // un vuelo estacionario acá se la comería. Lo que importa es soltar
-            // el mando, para que el watchdog no le corte el RTH a los 1,5 s.
-            pasarA(PatrolState.RETURNING_HOME_BATTERY)
-            controller.returnHome()
-            report("RTH_LOW_BATTERY", "Batería al ${t.batteryPct.toInt()}%: el dron vuelve a la base")
-        }
+    // El umbral es el fijo o, con autonomía informada, lo que el propio DJI dice
+    // que le cuesta volver más la reserva (docs/RELEVOS.md §1); adónde vuelve
+    // lo decide regresar().
+    private fun checkLowBattery(t: Telemetry) {
+        if (!enVueloParaLosFailsafes()) return
+        pedirRelevoDeSeguimientoSiHaceFalta(t)
+        // NaN no es batería baja: sin dato no se dispara nada (decide el propio dron).
+        if (!(t.batteryPct <= Autonomia.umbralDeRegreso(t.pctParaVolver))) return
+        // Siguiendo un objetivo con el relevo en camino, A puede estirar un
+        // poco (la ventana de gracia); si no, suelta y vuelve.
+        if (sigueEnLaVentana(t)) return
+        // B ya está en la toma (TRASPASO) y el relay_done viene en camino: A no
+        // vuelve con el regreso del DJI, que subiría justo donde B espera, sino
+        // que suelta y se aleja como si ya hubiera llegado.
+        if (soltarSiYaLoTomaron()) return
+        // A recién relevado se está alejando del objetivo, en dirección a su
+        // base: ya es el comienzo del regreso, y la reserva se puede gastar en
+        // él (RELEVOS §4). Volver desde ahí con el regreso del DJI lo haría
+        // subir encima de B (RELEVOS §3.5), así que termina de alejarse salvo
+        // que la batería baje 3 puntos del piso, que manda.
+        if (alejandoseDelObjetivo() && t.batteryPct > pisoDelAlejamiento(t.pctParaVolver)) return
+        val motivo = "Batería al ${t.batteryPct.toInt()}%: el dron vuelve a la base"
+        relevo?.let { abortarRelevo(it, "bateria", "batería al ${t.batteryPct.toInt()} %") }
+        abandonarRelevoDeSeguimiento("piso")
+        terminarSeguimiento("batería al ${t.batteryPct.toInt()}%: el dron vuelve a la base")
+        regresar(motivo)
     }
 
     /**
@@ -1299,13 +1746,17 @@ class PatrolManager(
      * Se cambió/recargó la batería. Si el dron había aterrizado por batería baja,
      * vuelve a quedar disponible para arrancar un patrullaje.
      */
-    fun onBatteryRecharged() {
+    fun onBatteryRecharged() = enSerie {
         bateriaPorCambiar = false
+        apagarEspera("se cambió la batería")
         if (_state.value == PatrolState.LANDED) pasarA(PatrolState.IDLE)
         report("BATTERY_RECHARGED", "Batería recargada al 100%: el dron queda listo para volar")
     }
 
-    private suspend fun onFlightEvent(e: FlightEvent) {
+    private fun onFlightEvent(e: FlightEvent) = enSerie {
+        // Al tocar tierra, lo que dependía del vuelo se cierra antes que nada:
+        // la emergencia, el desvío, el aviso de aterrizaje al hub.
+        val llegada = if (e is FlightEvent.Aterrizado || e is FlightEvent.ArrivedHome) alTocarTierra() else null
         when (e) {
             is FlightEvent.WaypointReached -> {
                 lastReachedWaypoint = e.index
@@ -1315,10 +1766,11 @@ class PatrolManager(
                 // El failsafe de batería salta también con el control tomado y
                 // termina acá (returnHome() → ArrivedHome), no en Aterrizado.
                 controlTomado -> aterrizoConElControlTomado()
+                llegada?.enEmergencia == true -> aterrizoEnEmergencia()
                 _state.value == PatrolState.RETURNING_HOME_BATTERY -> {
                     bateriaPorCambiar = true
                     pasarA(PatrolState.LANDED)
-                    report("LANDED", "Dron aterrizado en base (batería baja)")
+                    report("LANDED", llegada?.desvio?.let { "Dron aterrizado en la base \"${it.nombre}\" (desvío por batería baja)" } ?: "Dron aterrizado en base (batería baja)")
                 }
                 _state.value == PatrolState.RETURNING_HOME || _state.value == PatrolState.RETURNING_HOME_SIGNAL -> {
                     pasarA(enReposo())
@@ -1328,12 +1780,21 @@ class PatrolManager(
             }
             is FlightEvent.Despegando -> {
                 enAlturaDeTrabajo = false
+                // Un despegue es un vuelo nuevo: el interruptor de espera vale
+                // una sola vez, y lo que el DJI hizo en el vuelo anterior ya no cuenta.
+                apagarEspera("el dron despegó")
+                tomaDelDron = null
+                regresoDelDjiCortado = false
+                val r = relevo
                 // El despegue en el lugar ya quedó registrado con quién lo pidió
                 // (onTakeoff() o despegarAqui()).
-                if (despegueEnElLugar) {
-                    log("Despegando en el lugar")
-                } else {
-                    report("TAKEOFF", "Despegue automático: el dron sube a la altura de trabajo")
+                when {
+                    despegueEnElLugar -> log("Despegando en el lugar")
+                    r != null && r.esSeguimiento && r.fase == FaseDelRelevo.DESPEGANDO -> report(
+                        "TAKEOFF",
+                        "Despegue de relevo: el dron sube a ${r.alturaDeTransito.toInt()} m para tomar el seguimiento de ${r.de.displayName}",
+                    )
+                    else -> report("TAKEOFF", "Despegue automático: el dron sube a la altura de trabajo")
                 }
             }
             is FlightEvent.EnElAire -> {
@@ -1346,6 +1807,7 @@ class PatrolManager(
                     },
                 )
                 despegueEnElLugar = false
+                relevo?.let { if (it.fase == FaseDelRelevo.DESPEGANDO) alLlegarArriba(it) }
             }
             is FlightEvent.Aterrizado -> {
                 terminarSeguimiento("el dron aterrizó")
@@ -1353,12 +1815,18 @@ class PatrolManager(
                     // Con el control tomado sigue siendo del operador, en el
                     // suelo: puede volver a despegar sin soltarlo y retomarlo.
                     controlTomado -> aterrizoConElControlTomado()
+                    llegada?.enEmergencia == true -> aterrizoEnEmergencia()
                     // Aterrizó volviendo por batería baja (el propio dron, o un
                     // regreso que terminó en otro lado): hay que cambiarla.
                     _state.value == PatrolState.RETURNING_HOME_BATTERY -> {
                         bateriaPorCambiar = true
                         pasarA(PatrolState.LANDED)
-                        report("LANDED", "Dron aterrizado con la batería baja: hay que cambiarla antes de volver a volar")
+                        report(
+                            "LANDED",
+                            llegada?.desvio?.let {
+                                "Dron aterrizado en la base \"${it.nombre}\" (desvío por batería baja): hay que cambiarle la batería"
+                            } ?: "Dron aterrizado con la batería baja: hay que cambiarla antes de volver a volar",
+                        )
                     }
                     else -> {
                         pasarA(enReposo())
@@ -1370,9 +1838,7 @@ class PatrolManager(
                 // El salto puntual terminó: desde acá el mando vuelve a mandar
                 // sin condiciones (ver onManualStick()).
                 saltoManualEnCurso = false
-                if (_state.value == PatrolState.FORCED) {
-                    report("GOTO_ARRIVED", "El dron llegó al nodo ${forcedIndex + 1} y queda en vuelo estacionario")
-                }
+                alLlegarAlPunto()
             }
             // Un rechazo del dron no puede quedar mudo: el operador mueve la
             // palanca, el dron no se mueve y sin esto no hay ni una pista. Pero
@@ -1381,6 +1847,8 @@ class PatrolManager(
             // veces por segundo, cada una una fila en `events` y un broadcast a
             // cada consola (ver hayQueAvisarElProblema()).
             is FlightEvent.Problema -> {
+                // B despegando para un relevo: un rechazo es la subida que falló.
+                relevo?.let { if (it.fase == FaseDelRelevo.DESPEGANDO) fallaLaSubida(it, e.motivo) }
                 val ahora = System.currentTimeMillis()
                 if (hayQueAvisarElProblema(e.motivo, ultimoProblemaAvisado, ahora, ultimoProblemaAvisadoMs, problemasEnLaVentana)) {
                     // Si el aviso sale después de un silencio de un minuto, empieza
@@ -1393,12 +1861,37 @@ class PatrolManager(
                 }
             }
             // Avisos de los relevos y del desvío a otra base (docs/RELEVOS.md
-            // §2.3 y §4). Por ahora solo quedan en el registro local, sin
-            // cambiar nada: la lógica que los usa llega con los relevos, y un
-            // aviso que hoy movería al dron sin esa lógica completa es peor que
-            // uno que solo se anota.
-            is FlightEvent.DescendiendoEnBase -> log("El dron empezó a descender en la base")
-            is FlightEvent.ElDronTomoElControl -> log("El propio dron tomó el control: ${e.motivo.descripcion}")
+            // §2.3 y §4).
+            is FlightEvent.DescendiendoEnBase -> {
+                log("El dron empezó a descender en la base")
+                avisarQueBajaEnSuBase()
+            }
+            is FlightEvent.ElDronTomoElControl -> alTomarElControlElDron(e.motivo)
+            is FlightEvent.AterrizajePideConfirmacion -> alPedirConfirmarElAterrizaje()
+        }
+    }
+
+    /**
+     * El dron llegó al punto de una orden de vuelo y quedó estacionario. Qué
+     * orden era lo dice lo que está en curso: el corrimiento para reintentar un
+     * aterrizaje, la bajada de B después del traspaso, un desvío forzado a un
+     * nodo, o el punto de visitantes de la base de un desvío.
+     */
+    private fun alLlegarAlPunto() {
+        val r = relevo
+        when {
+            corriendoseParaAterrizar -> {
+                corriendoseParaAterrizar = false
+                controller.land()
+                log("Se corrió para aterrizar: lo vuelve a intentar")
+            }
+            r?.bajandoDesdeMs != null -> completarElRelevo(r, "${r.de.displayName} ya se alejó")
+            _state.value == PatrolState.FORCED ->
+                report("GOTO_ARRIVED", "El dron llegó al nodo ${forcedIndex + 1} y queda en vuelo estacionario")
+            // Un aviso viejo de otra orden (el alejamiento de A, por ejemplo) no
+            // puede aterrizarlo antes de llegar: se mira que de verdad esté ahí.
+            _state.value == PatrolState.RETURNING_HOME_BATTERY ->
+                desvio?.takeIf { cercaDelPuntoDeVisitantes(it, lastTelemetry, LLEGADA_POR_AVISO_M) }?.let { llegarAlDesvio() }
         }
     }
 
@@ -1425,7 +1918,9 @@ class PatrolManager(
      *      en el terreno (la cámara al horizonte), alerta sin seguimiento, con
      *      un techo de una por minuto.
      */
-    private suspend fun onDetection(d: Deteccion) {
+    private fun onDetection(d: Deteccion) = enSerie { detectar(d) }
+
+    private fun detectar(d: Deteccion) {
         _cajasRecientes.value = d.cajas
         val ahora = reloj()
         cajasHastaMs = ahora + VIGENCIA_CAJAS_MS
@@ -1438,7 +1933,16 @@ class PatrolManager(
             return
         }
         val estado = _state.value
+        // B yendo a relevar: solo le importa el objetivo que viene a tomar
+        // (una detección suya adelanta la toma); cualquier otra se descarta,
+        // sin alerta (RELEVOS §3.4).
+        if (estado == PatrolState.RELEVANDO) {
+            tomarAntesSiLoVe(d, pose, ahora)
+            return
+        }
         if (estado in ESTADOS_SIN_ALERTAS) return
+        // A alejándose del objetivo que acaba de soltar: no arranca otro seguimiento ahí mismo.
+        if (soltando?.liberado == false && estado == PatrolState.PAUSED) return
         // Despegando, lo que se ve es el equipo de tierra al lado del dron.
         if (!enAlturaDeTrabajo) return
         if (ahora < silencioHastaMs) return
@@ -1566,6 +2070,8 @@ class PatrolManager(
     private fun iniciarSeguimiento(p: Punto, d: Deteccion, pose: Telemetry, ahora: Long) {
         val nuevo = Seguimiento(RastreadorDeObjetivo(p.clase, p.lat, p.lon, ahora), UUID.randomUUID().toString(), p.lat, p.lon)
         seguimiento = nuevo
+        // Un objetivo nuevo tiene su propia ventana de gracia (RELEVOS §3.5).
+        ventanaUsada = false
         val distancia = Geo.distanciaM(pose.lat, pose.lon, p.lat, p.lon)
         val detectado = "Detección de ${p.clase} (confianza ${"%.2f".format(p.confianza)}) a ${distancia.toInt()} m"
         if (_state.value == PatrolState.MANUAL) {
@@ -1695,7 +2201,7 @@ class PatrolManager(
     private suspend fun seguimientoTicker() {
         while (true) {
             delay(INTERVALO_SEGUIMIENTO_MS)
-            evaluarSeguimiento(reloj())
+            enSerie { evaluarSeguimiento(reloj()) }
         }
     }
 
@@ -1712,15 +2218,19 @@ class PatrolManager(
             perdido = e.perdido,
             vistoHaceMs = e.vistoHaceMs,
             decision = s.decision,
+            // Con la velocidad en componentes, B siembra su rastreador sin
+            // perder lo que A ya estimó (docs/PROTOCOLS.md §1, `target`).
+            vNorteMs = e.vNorteMs,
+            vEsteMs = e.vEsteMs,
         )
     }
 
     private fun coordenadas(lat: Double, lon: Double) = "%.6f, %.6f".format(lat, lon)
 
     /** El hub registró la alerta: si es la del objetivo en curso, queda asociada. */
-    private fun onAlertAck(ref: String, alertId: Long) {
-        val s = seguimiento ?: return
-        if (s.ref != ref) return
+    private fun onAlertAck(ref: String, alertId: Long) = enSerie {
+        val s = seguimiento ?: return@enSerie
+        if (s.ref != ref) return@enSerie
         s.alertId = alertId
         log("La alerta del objetivo quedó registrada como #$alertId")
     }
@@ -1734,7 +2244,10 @@ class PatrolManager(
      * decisiones de los últimos minutos, de alertas que pueden ser viejas, y
      * solo se aplican si son exactamente la alerta del objetivo en curso.
      */
-    private suspend fun onAlertDecision(alertId: Long?, decision: String, decidedBy: String, reenvio: Boolean = false) {
+    private fun onAlertDecision(alertId: Long?, decision: String, decidedBy: String, reenvio: Boolean) =
+        enSerie { decidirLaAlerta(alertId, decision, decidedBy, reenvio) }
+
+    private fun decidirLaAlerta(alertId: Long?, decision: String, decidedBy: String, reenvio: Boolean) {
         val s = seguimiento
         if (s == null) {
             log("Llegó la decisión de una alerta pero el dron no está siguiendo ningún objetivo: no cambia nada")
@@ -1756,7 +2269,20 @@ class PatrolManager(
             zonasDescartadas.agregar(e.lat, e.lon, ahora)
             zonasDescartadas.agregar(s.origenLat, s.origenLon, ahora)
             silencioHastaMs = ahora + SILENCIO_TRAS_DESCARTE_MS
+            // El hub cancela por su cuenta el relevo de una alerta descartada:
+            // A solo lo olvida (no hay nada que abandonar).
+            pedidos.remove(PedidoDeRelevo.SEGUIMIENTO)
+            cerrarLaVentana()
             terminarSeguimiento("la alerta se descartó como falso positivo (por $decidedBy)")
+            // Un seguimiento adoptado por un relevo no tiene ruta a la que
+            // volver: el dron vuelve a su base (RELEVOS §3.7).
+            if (s.adoptado) {
+                relevo?.let { olvidarRelevo(it) }
+                if (controller.estado.value.enVuelo && _state.value != PatrolState.MANUAL) {
+                    regresar("Alerta descartada por $decidedBy: el dron vuelve a su base", PatrolState.RETURNING_HOME)
+                }
+                return
+            }
             // Con el control tomado el dron sigue siendo del operador; si no,
             // retoma la ruta hacia el nodo que tenía por delante.
             if (_state.value in ESTADOS_DE_SEGUIMIENTO) resumePatrol("alerta descartada por $decidedBy")
@@ -1768,12 +2294,45 @@ class PatrolManager(
         }
     }
 
-    private suspend fun resumePatrol(reason: String, fromIndex: Int? = null) {
+    /**
+     * `resume_patrol` de la consola. Hacia B cancela el relevo (el hub ya lo
+     * hizo de su lado, sin `relay_cancel`), y si B adoptó un seguimiento no
+     * tiene ruta propia: vuelve a su base. Hacia A en un relevo de seguimiento
+     * es un abandono (RELEVOS §3.9).
+     */
+    private fun onResumePatrol(fromIndex: Int?) = enSerie {
+        ordenDelOperador()
+        if (!volverSiNoTieneRutaPropia("el operador ordenó reanudar")) resumePatrol("orden del operador", fromIndex)
+    }
+
+    /**
+     * Un dron que adoptó un seguimiento por un relevo, o que estaba yendo a
+     * tomarlo, no tiene una ruta propia que retomar: vuelve a su base. Devuelve
+     * true si fue así.
+     */
+    private fun volverSiNoTieneRutaPropia(motivo: String): Boolean {
+        val adoptado = seguimiento?.adoptado == true
+        if (!adoptado && _state.value != PatrolState.RELEVANDO) return false
+        if (!controller.estado.value.enVuelo) return false
+        terminarSeguimiento("$motivo: el dron no tiene ruta propia y vuelve a su base")
+        regresar("${motivo.replaceFirstChar { it.uppercase() }}: el dron no tiene ruta propia y vuelve a su base", PatrolState.RETURNING_HOME)
+        return true
+    }
+
+    private fun resumePatrol(reason: String, fromIndex: Int? = null) {
         val r = route ?: return
         if (_state.value !in ESTADOS_REANUDABLES) return
+        // Solo se retoma un patrullaje que estaba en curso: una ruta que quedó
+        // cargada de un vuelo anterior no es una que nadie le pidió volar ahora
+        // (docs/RELEVOS.md §1).
+        if (!patrullaEnCurso) {
+            log("No hay un patrullaje en curso que reanudar ($reason)")
+            return
+        }
         // MANUAL es reanudable y se puede estar en el suelo (aterrizó con el
         // control tomado): ahí retomar la ruta es despegar solo.
         if (!puedeArrancarUnaRuta()) return
+        ordenDeUnaPersona()
         terminarSeguimiento("se reanudó el patrullaje ($reason)")
         val desde = (fromIndex ?: resumeWaypoint).coerceIn(0, r.waypoints.size - 1)
         resumeWaypoint = desde
@@ -1792,7 +2351,13 @@ class PatrolManager(
     private suspend fun statusTicker() {
         while (true) {
             delay(1_000)
-            val t = lastTelemetry ?: continue
+            enSerie { mandarStatus() }
+        }
+    }
+
+    private fun mandarStatus() {
+        run {
+            val t = lastTelemetry ?: return
             val dron = controller.estado.value
             commandCenter.sendStatus(
                 state = _state.value.name,
@@ -1814,8 +2379,1437 @@ class PatrolManager(
                 // NaN mientras el dron real no la informó: así no sale, y la
                 // consola supone su valor en vez de creerle a uno inventado.
                 gimbalPitch = t.gimbalPitch,
+                relevo = relevoReportado(),
+                autonomia = AutonomiaReportada(t.pctParaVolver, t.pctParaAterrizar, t.alcanceM, t.segundosParaVolver),
             )
         }
+    }
+
+    // ======================================================================
+    // Relevos, desvío a otra base y protocolo de última ubicación
+    // (docs/RELEVOS.md; los mensajes, docs/PROTOCOLS.md §1.b y §2.b)
+    // ======================================================================
+
+    /** Todo lo que cambia el estado pasa por acá (ver [cerrojoDeLaPatrulla]). */
+    private fun <T> enSerie(bloque: () -> T): T = synchronized(cerrojoDeLaPatrulla, bloque)
+
+    /** Hay una ruta en curso que "Reanudar" puede retomar (un seguimiento adoptado por un relevo no tiene). */
+    val puedeReanudar: Boolean get() = route != null && patrullaEnCurso && seguimiento?.adoptado != true
+
+    // ---- El interruptor «En espera para relevos» (RELEVOS §0) ----
+
+    /**
+     * El operador prende o apaga «En espera para relevos». Prenderlo pide el
+     * dron en el suelo y enlazado, y el Comando Central conectado: es lo que el
+     * operador acaba de revisar. Devuelve si quedó como se pidió.
+     */
+    fun ponerEnEspera(prender: Boolean): Boolean = enSerie {
+        if (!prender) {
+            if (espera.apagar()) log("El operador apagó «En espera para relevos»")
+            return@enSerie true
+        }
+        val dron = controller.estado.value
+        val motivo = when {
+            dron.enVuelo -> "el dron está en el aire"
+            !dron.conectado -> "sin enlace con la aeronave"
+            !commandCenter.connected.value -> "sin enlace con el Comando Central"
+            // Lo que el operador revisó es un dron en reposo: ni con una orden en curso ni con la batería por cambiar.
+            _state.value != PatrolState.IDLE -> "el dron no está en reposo (${_state.value})"
+            else -> null
+        }
+        if (motivo != null) {
+            aviso("No se puede poner en espera para relevos: $motivo")
+            return@enSerie false
+        }
+        if (espera.prender(reloj())) {
+            log(
+                "En espera para relevos: el dron puede despegar solo para relevar a otro " +
+                    "(se apaga solo a los ${EsperaParaRelevos.VENCIMIENTO_MS / 60_000} minutos)",
+            )
+            Disponibilidad.motivoParaNo(condicionesParaRelevar())?.let { aviso("En espera, pero todavía no disponible: $it") }
+        }
+        true
+    }
+
+    /** La pantalla de operación se cierra: el interruptor no puede quedar prendido sin nadie mirando. */
+    fun alCerrarLaPantalla() = enSerie { apagarEspera("se cerró la pantalla de operación") }
+
+    private fun apagarEspera(motivo: String) {
+        if (espera.apagar()) aviso("«En espera para relevos» se apagó: $motivo")
+    }
+
+    private fun condicionesParaRelevar(enUnRelevo: Boolean = relevo != null || participaComoOrigen()): Disponibilidad.Condiciones {
+        val t = lastTelemetry
+        return Disponibilidad.Condiciones(
+            enEspera = espera.prendido.value,
+            dron = controller.estado.value,
+            estado = _state.value,
+            controlTomado = controlTomado,
+            bateriaPorCambiar = bateriaPorCambiar,
+            bateriaPct = t?.batteryPct ?: Double.NaN,
+            lat = t?.lat ?: Double.NaN,
+            lon = t?.lon ?: Double.NaN,
+            basePropia = bases?.propia,
+            enUnRelevo = enUnRelevo,
+        )
+    }
+
+    private fun participaComoOrigen(): Boolean = pedidos.isNotEmpty() || soltando?.liberado == false
+
+    /** `status.relevo` (docs/PROTOCOLS.md §1): B primero; de A, el seguimiento antes que la patrulla. */
+    private fun relevoReportado(): RelevoReportado {
+        val enEspera = espera.prendido.value
+        val disponible = enEspera && Disponibilidad.disponible(condicionesParaRelevar())
+        val r = relevo
+        val s = soltando
+        val seguimientoPedido = pedidos[PedidoDeRelevo.SEGUIMIENTO]?.takeIf { it.relayId != null }
+        val patrullaPedida = pedidos[PedidoDeRelevo.PATRULLA]?.takeIf { it.relayId != null }
+        return when {
+            r != null -> RelevoReportado(enEspera, disponible, r.relayId, "relevo", r.fase.texto)
+            s != null && !s.liberado -> RelevoReportado(enEspera, disponible, s.relayId, "origen", FaseDelOrigen.SOLTANDO.texto)
+            seguimientoPedido != null ->
+                RelevoReportado(enEspera, disponible, seguimientoPedido.relayId, "origen", seguimientoPedido.fase.texto)
+            patrullaPedida != null -> RelevoReportado(enEspera, disponible, patrullaPedida.relayId, "origen", patrullaPedida.fase.texto)
+            else -> RelevoReportado(enEspera, disponible)
+        }
+    }
+
+    // ---- Los enlaces ----
+
+    /**
+     * Perder el dron apaga «En espera para relevos». Los umbrales de batería
+     * mal puestos del propio DJI (RELEVOS §0) no se revisan acá: los revisa el
+     * controlador real, que los lee, y los avisa como un problema del dron.
+     */
+    private fun alCambiarElDron(d: EstadoDelDron) = enSerie {
+        if (!d.conectado) apagarEspera("se perdió el enlace con el dron")
+    }
+
+    private fun alCambiarLaConexion(ok: Boolean) = enSerie {
+        if (ok && !conectadoAntes) reconectado()
+        if (!ok && conectadoAntes) apagarEspera("se perdió el enlace con el Comando Central")
+        conectadoAntes = ok
+    }
+
+    /**
+     * Volvió el Comando Central (docs/PROTOCOLS.md §1.b, "Reconexión"): sale lo
+     * que quedó esperando, el desvío en curso se vuelve a avisar, los pedidos
+     * sin contestar se repiten ya y la cola de la emergencia no espera su
+     * próximo reintento.
+     */
+    private fun reconectado() {
+        while (pendientesDeEnvio.isNotEmpty()) commandCenter.enviar(pendientesDeEnvio.removeFirst())
+        rthDivertedVigente?.let { commandCenter.enviar(it) }
+        pedidos.values.forEach { it.reenviarYa() }
+        cola.reconectado()
+    }
+
+    /** Un aviso que no se puede perder (`landing_at_base`, `landed_at_base`): sin conexión, sale al reconectar. */
+    private fun enviarOGuardar(mensaje: JSONObject) {
+        if (commandCenter.connected.value) commandCenter.enviar(mensaje) else pendientesDeEnvio.addLast(mensaje)
+    }
+
+    // ---- Las órdenes de las personas durante un relevo (RELEVOS §3.9) ----
+
+    /**
+     * Una orden de una persona que se va a cumplir le devuelve el vuelo a la
+     * app: si el propio DJI lo había tomado, ya no, y un aterrizaje que ordene
+     * una persona se confirma como siempre. La llama cada orden recién cuando
+     * pasó sus guardas: una que no se cumple (detener un regreso, por ejemplo)
+     * no puede soltar al DJI. El desvío en curso lo abandona [pasarA] al salir
+     * del regreso por batería.
+     */
+    private fun ordenDeUnaPersona() {
+        tomaDelDron = null
+        olvidarLaConfirmacion()
+    }
+
+    /** Fuera de un desvío o de una emergencia, el DJI conserva su regreso propio y su failsafe de fábrica. */
+    private fun restaurarFailsafes() {
+        controller.permitirRthPropioPorBateria(true)
+        controller.fijarFailsafeAterrizar(false)
+    }
+
+    /**
+     * Una orden del operador de campo desde el teléfono. A B en tierra le
+     * cancela el relevo (como «Cancelar»); en el aire se lo aborta. A A con un
+     * relevo de seguimiento pedido le hace soltar el objetivo.
+     */
+    private fun ordenDeCampo(que: String) {
+        relevo?.let { r ->
+            if (r.fase == FaseDelRelevo.CUENTA_REGRESIVA || r.fase == FaseDelRelevo.ESPERANDO_DESPEGUE) {
+                rechazarAceptado(r, "cancelado_en_campo", "el operador de campo $que")
+            } else {
+                abortarRelevo(r, "orden_de_campo", "el operador de campo $que")
+            }
+        }
+        abandonarRelevoDeSeguimiento("orden_de_campo")
+    }
+
+    /**
+     * Una orden de la consola que cancela un relevo (`start_route`,
+     * `stop_patrol`, `force_goto`, `resume_patrol`): hacia B el hub ya lo
+     * canceló de su lado, sin `relay_cancel`, así que la app lo olvida y cumple
+     * la orden; hacia A en un seguimiento es un `relay_abandon`.
+     */
+    private fun ordenDelOperador() {
+        relevo?.let { r ->
+            olvidarRelevo(r)
+            log("La orden del operador cancela el relevo de ${r.de.displayName}")
+        }
+        abandonarRelevoDeSeguimiento("orden_del_operador")
+    }
+
+    // ---- Los mensajes del hub (docs/PROTOCOLS.md §2.b) ----
+
+    private fun alMensajeDelHub(m: MensajeDelHub) = enSerie {
+        when (m) {
+            is MensajeDelHub.Bases -> {
+                bases = m
+                log("Bases del Comando Central: ${m.bases.size}" + (m.propia?.let { ", la propia es \"${it.nombre}\"" } ?: ", sin base propia"))
+            }
+            is MensajeDelHub.EstadoDelPedido -> alEstadoDelPedido(m)
+            is MensajeDelHub.OrdenDePatrulla -> alOrdenDeRelevo(m.relayId) { RelevoAsignado.de(m, it) }
+            is MensajeDelHub.OrdenDeSeguimiento -> alOrdenDeRelevo(m.relayId) { RelevoAsignado.de(m, it) }
+            is MensajeDelHub.OrdenInvalida -> alOrdenInvalida(m)
+            is MensajeDelHub.ObjetivoActualizado -> alObjetivoActualizado(m)
+            is MensajeDelHub.Despegar -> alDespegar(m)
+            is MensajeDelHub.Traspaso -> alTraspaso(m)
+            is MensajeDelHub.Cancelacion -> alCancelacion(m)
+            is MensajeDelHub.AcuseDeEmergencia -> if (cola.alAcuse(m)) enviarLaCola()
+            is MensajeDelHub.AcuseDeFoto -> if (cola.alAcuseDeFoto(m)) enviarLaCola()
+        }
+    }
+
+    // ---- A: el que pide el relevo ----
+
+    /**
+     * Al entrar en regreso por batería con un patrullaje en curso, A pide que
+     * otro dron siga la ruta desde el nodo hacia el que volaba (RELEVOS §2.1).
+     */
+    private fun pedirRelevoDePatrullaSiHaceFalta() {
+        if (!patrullaEnCurso || pedidos.containsKey(PedidoDeRelevo.PATRULLA)) return
+        val r = route ?: return
+        val desde = (if (_state.value == PatrolState.PATROLLING) proximoWaypoint else resumeWaypoint)
+            .coerceIn(0, r.waypoints.size - 1)
+        val p = PedidoDeRelevo(UUID.randomUUID().toString(), PedidoDeRelevo.PATRULLA, routeId = r.id, fromIndex = desde)
+        pedidos[PedidoDeRelevo.PATRULLA] = p
+        enviarPedido(p, reloj())
+        log("Pidió un relevo para seguir la ruta \"${r.name}\" desde el nodo ${desde + 1}")
+    }
+
+    /**
+     * Siguiendo un objetivo con la alerta ya acusada, por debajo del umbral de
+     * relevo A pide que otro dron venga a tomarlo (RELEVOS §3.1).
+     */
+    private fun pedirRelevoDeSeguimientoSiHaceFalta(t: Telemetry) {
+        if (_state.value !in ESTADOS_DE_SEGUIMIENTO) return
+        val s = seguimiento ?: return
+        val alertId = s.alertId ?: return
+        if (s.decision != "PENDING" && s.decision != "VALIDATED") return
+        if (pedidos.containsKey(PedidoDeRelevo.SEGUIMIENTO) || soltando?.liberado == false) return
+        if (!(t.batteryPct < Autonomia.umbralDeRelevo(t.pctParaVolver))) return
+        val ahora = reloj()
+        if (ahora - finDelUltimoPedidoDeSeguimientoMs < REINTENTO_TRAS_FIN_MS) return
+        val p = PedidoDeRelevo(UUID.randomUUID().toString(), PedidoDeRelevo.SEGUIMIENTO, alertId = alertId)
+        pedidos[PedidoDeRelevo.SEGUIMIENTO] = p
+        enviarPedido(p, ahora)
+        aviso("Batería al ${t.batteryPct.toInt()}%: se pidió un relevo para el objetivo de la alerta #$alertId")
+    }
+
+    private fun enviarPedido(p: PedidoDeRelevo, ahora: Long) {
+        val mensaje = if (p.motivo == PedidoDeRelevo.PATRULLA) {
+            MensajesDeLaApp.relayRequestPatrulla(p.ref, p.routeId ?: return, p.fromIndex ?: 0)
+        } else {
+            val t = lastTelemetry
+            p.segundosDisponibles = t?.let { Autonomia.segundosDisponibles(it.batteryPct, it.pctParaVolver, consumo.pctPorS) }
+            MensajesDeLaApp.relayRequestSeguimiento(p.ref, p.alertId ?: return, p.segundosDisponibles)
+        }
+        p.enviado(ahora)
+        commandCenter.enviar(mensaje)
+    }
+
+    /** `relay_status`: solo el que trae el `ref` de un pedido propio. Uno terminal hace olvidar el pedido. */
+    private fun alEstadoDelPedido(m: MensajeDelHub.EstadoDelPedido) {
+        val p = pedidos.values.firstOrNull { it.ref == m.ref } ?: run {
+            log("relay_status de un pedido que no es el vigente: se ignora")
+            return
+        }
+        val antes = p.estado
+        p.aplicar(m, reloj())
+        if (antes != m.estado) aviso(textoDelEstado(p, m))
+        if (m.terminal) {
+            pedidos.remove(p.motivo)
+            if (p.motivo == PedidoDeRelevo.SEGUIMIENTO) {
+                finDelUltimoPedidoDeSeguimientoMs = reloj()
+                cerrarLaVentana()
+            }
+        }
+    }
+
+    private fun textoDelEstado(p: PedidoDeRelevo, m: MensajeDelHub.EstadoDelPedido): String {
+        val que = if (p.motivo == PedidoDeRelevo.PATRULLA) "de patrulla" else "de seguimiento"
+        val quien = m.relevo?.displayName ?: "otro dron"
+        return when (m.estado) {
+            "RESERVADO", "ORDENADO" -> "Relevo $que: $quien asignado"
+            "EN_CAMINO" -> "Relevo $que en camino: $quien" + (m.etaS?.let { " (llega en unos ${it.toInt()} s)" } ?: "")
+            "TRASPASO" -> "Relevo $que: $quien tomó el objetivo"
+            "SIN_RELEVO" -> "Relevo $que: por ahora no hay ningún dron disponible"
+            "COMPLETADO" -> "Relevo $que completado"
+            else -> "Relevo $que terminado: ${m.estado.lowercase()}" + (m.motivoFin?.let { " ($it)" } ?: "")
+        }
+    }
+
+    /**
+     * La ventana de gracia (RELEVOS §3.5): con un relevo en camino que llega a
+     * tiempo, A sigue sobre el objetivo hasta [VentanaDeGracia.DURACION_MS]
+     * aunque haya llegado a su umbral de regreso. true si sigue.
+     */
+    private fun sigueEnLaVentana(t: Telemetry): Boolean {
+        if (_state.value !in ESTADOS_DE_SEGUIMIENTO) return false
+        val p = pedidos[PedidoDeRelevo.SEGUIMIENTO]
+        val ahora = reloj()
+        val abierta = ventanaHastaMs
+        if (abierta == null && ventanaUsada) return false
+        if (p == null || !VentanaDeGracia.puedeSeguir(p, ahora, t.batteryPct, t.pctParaVolver, consumo.pctPorS, abierta)) {
+            if (abierta != null) log("Se cierra la ventana de gracia: el relevo no llegó a tiempo")
+            cerrarLaVentana()
+            return false
+        }
+        if (abierta == null) {
+            ventanaHastaMs = ahora + VentanaDeGracia.DURACION_MS
+            ventanaUsada = true
+            p.fase = FaseDelOrigen.VENTANA
+            aviso(
+                "Batería al ${t.batteryPct.toInt()}%: espera a ${p.relevo?.displayName ?: "su relevo"} sobre el objetivo " +
+                    "hasta ${VentanaDeGracia.DURACION_MS / 1000} s más",
+            )
+        }
+        return true
+    }
+
+    private fun cerrarLaVentana() {
+        ventanaHastaMs = null
+        pedidos[PedidoDeRelevo.SEGUIMIENTO]?.let { if (it.fase == FaseDelOrigen.VENTANA) it.fase = FaseDelOrigen.PEDIDO }
+    }
+
+    /**
+     * A deja el objetivo antes del traspaso (RELEVOS §3.8): llegó a su piso, el
+     * DJI tomó el control, una orden lo sacó o perdió la señal. El hub le pasa
+     * la alerta a B si viene en camino. Quien llama manda además el
+     * TRACKING_ENDED con la última posición (terminarSeguimiento).
+     */
+    private fun abandonarRelevoDeSeguimiento(motivo: String) {
+        val p = pedidos.remove(PedidoDeRelevo.SEGUIMIENTO) ?: return
+        cerrarLaVentana()
+        finDelUltimoPedidoDeSeguimientoMs = reloj()
+        val relayId = p.relayId ?: return
+        if (p.estado == "TRASPASO") return
+        commandCenter.enviar(MensajesDeLaApp.relayAbandon(relayId, motivo))
+        log("Suelta el objetivo antes del traspaso ($motivo): se avisa al Comando Central")
+    }
+
+    /**
+     * `relay_done` (RELEVOS §3.5): B ya tomó el objetivo. A lo suelta SIN
+     * TRACKING_ENDED de pérdida (el hub registra el traspaso), se aleja en
+     * horizontal a su altura, hacia su base, y recién lejos arranca el regreso
+     * y manda `relay_released` (ver [revisarSoltando]). Con el control tomado
+     * el dron es del operador: solo suelta el objetivo.
+     */
+    private fun alTraspaso(m: MensajeDelHub.Traspaso) {
+        val previo = soltando
+        if (previo != null && previo.relayId == m.relayId) {
+            // Ya atendido (el hub lo reenvía al reconectar): si ya se alejó, lo vuelve a confirmar.
+            if (previo.alejado) commandCenter.enviar(MensajesDeLaApp.relayReleased(previo.relayId))
+            return
+        }
+        val p = pedidos[PedidoDeRelevo.SEGUIMIENTO]
+        val s = seguimiento
+        if (p == null || p.relayId != m.relayId || s == null || s.alertId != m.alertId) {
+            log("relay_done que no es del seguimiento en curso: se ignora")
+            return
+        }
+        soltarElObjetivo(p, s, m.relevadoPor.displayName)
+    }
+
+    /**
+     * A llegó a su umbral de regreso con B ya en la toma (el último
+     * `relay_status` dice TRASPASO): suelta como con el `relay_done`, que está
+     * por llegar. true si fue así.
+     */
+    private fun soltarSiYaLoTomaron(): Boolean {
+        val p = pedidos[PedidoDeRelevo.SEGUIMIENTO]?.takeIf { it.estado == "TRASPASO" && it.relayId != null } ?: return false
+        val s = seguimiento?.takeIf { _state.value in ESTADOS_DE_SEGUIMIENTO } ?: return false
+        soltarElObjetivo(p, s, p.relevo?.displayName ?: "su relevo")
+        return true
+    }
+
+    private fun soltarElObjetivo(p: PedidoDeRelevo, s: Seguimiento, relevadoPor: String) {
+        val relayId = p.relayId ?: return
+        val ahora = reloj()
+        val e = s.rastreador.estimar(ahora)
+        seguimiento = null
+        candidato = null
+        cerrarLaVentana()
+        p.fase = FaseDelOrigen.SOLTANDO
+        soltando = Soltando(relayId, e.lat, e.lon, ahora)
+        aviso("Relevado por $relevadoPor: se aleja del objetivo y vuelve a la base")
+        val t = lastTelemetry
+        if (!controlTomado) {
+            val dron = controller.estado.value
+            val (lat, lon) = Alejamiento.punto(
+                e.lat, e.lon, t?.lat ?: Double.NaN, t?.lon ?: Double.NaN, dron.puntoDeRetornoLat, dron.puntoDeRetornoLon,
+            )
+            pasarA(PatrolState.PAUSED)
+            // En horizontal y a su altura: volarHacia no la cambia.
+            if (!dronAlMando) controller.volarHacia(lat, lon)
+        }
+        t?.let(::revisarSoltando)
+    }
+
+    /** Hasta dónde puede bajar la batería mientras A termina de alejarse del objetivo. */
+    private fun pisoDelAlejamiento(pctParaVolver: Double): Double =
+        Autonomia.piso(pctParaVolver) - Autonomia.MARGEN_SOBRE_EL_PISO_PCT
+
+    /** A se está alejando del objetivo que soltó (PAUSED, todavía sin liberarlo). */
+    private fun alejandoseDelObjetivo(): Boolean = soltando?.liberado == false && _state.value == PatrolState.PAUSED
+
+    /** A soltando: a [Alejamiento.DISTANCIA_M] del objetivo lo libera y, si seguía alejándose, vuelve. */
+    private fun revisarSoltando(t: Telemetry) {
+        val s = soltando ?: return
+        if (s.liberado || !Alejamiento.seAlejo(s.objetivoLat, s.objetivoLon, t.lat, t.lon)) return
+        s.liberado = true
+        s.alejado = true
+        pedidos.remove(PedidoDeRelevo.SEGUIMIENTO)
+        commandCenter.enviar(MensajesDeLaApp.relayReleased(s.relayId))
+        log("Ya está a más de ${Alejamiento.DISTANCIA_M.toInt()} m del objetivo: lo libera")
+        if (_state.value == PatrolState.PAUSED && controller.estado.value.enVuelo) {
+            regresar("Relevado: el dron se alejó del objetivo y vuelve a la base")
+        }
+    }
+
+    /**
+     * A que no logra alejarse en [ALEJAMIENTO_MAXIMO_MS] (el dron no avanza, la
+     * orden no salió) vuelve igual, sin `relay_released`: no se alejó, y B no
+     * puede bajar creyendo que sí. El hub lo completa solo a los 30 s.
+     */
+    private fun vencerElAlejamiento(ahora: Long) {
+        val s = soltando ?: return
+        if (!alejandoseDelObjetivo() || ahora - s.desdeMs < ALEJAMIENTO_MAXIMO_MS) return
+        if (!controller.estado.value.enVuelo) return
+        s.liberado = true
+        pedidos.remove(PedidoDeRelevo.SEGUIMIENTO)
+        regresar(
+            "Relevado, pero no logró alejarse del objetivo en ${ALEJAMIENTO_MAXIMO_MS / 1000} s: el dron vuelve a la base",
+        )
+    }
+
+    /**
+     * `landing_at_base` (RELEVOS §2.3): A empezó a bajar en SU base al final de
+     * un regreso por batería con un relevo de patrulla pedido. Sale una vez; sin
+     * conexión, al reconectar. En otra base no: ese relevo ya salió con el
+     * `rth_diverted`.
+     */
+    private fun avisarQueBajaEnSuBase() {
+        if (_state.value != PatrolState.RETURNING_HOME_BATTERY || desvio != null || emergencia != null) return
+        val p = pedidos[PedidoDeRelevo.PATRULLA] ?: return
+        if (p.aterrizajeAvisado) return
+        val routeId = p.routeId ?: return
+        p.aterrizajeAvisado = true
+        p.fase = FaseDelOrigen.ATERRIZANDO
+        val (lat, lon) = posicionActual()
+        enviarOGuardar(MensajesDeLaApp.landingAtBase(p.ref, p.relayId, bases?.propiaId, lat, lon, routeId, p.fromIndex ?: 0))
+    }
+
+    // ---- B: el que va a relevar ----
+
+    /**
+     * Una orden de relevo (`relay_start` o `relay_tracking`). La repetida se
+     * contesta igual, sin volver a empezar la cuenta; otra con un relevo ya en
+     * curso se rechaza (`ocupado`); si no, la disponibilidad se reevalúa ENTERA
+     * y se acepta o se rechaza. Al aceptar, el mando virtual se habilita en el
+     * suelo antes de arrancar la cuenta regresiva (RELEVOS §2.4).
+     */
+    private fun alOrdenDeRelevo(relayId: Long, crear: (Long) -> RelevoAsignado) {
+        val activo = relevo
+        if (activo?.relayId == relayId || (activo == null && respuestas.containsKey(relayId))) {
+            respuestas[relayId]?.let { commandCenter.enviar(it) }
+            log("Orden repetida del relevo #$relayId: se contesta igual que antes")
+            return
+        }
+        if (activo != null || participaComoOrigen()) {
+            val detalle = activo?.let { "ya está en el relevo #${it.relayId}" } ?: "es el origen de otro relevo"
+            responder(relayId, MensajesDeLaApp.relayReject(relayId, "ocupado", detalle))
+            return
+        }
+        val r = crear(reloj())
+        val motivo = motivoParaNoDespegar()
+        if (motivo != null) {
+            responder(relayId, MensajesDeLaApp.relayReject(relayId, "no_disponible", motivo))
+            aviso("Se rechazó el relevo de ${r.de.displayName}: $motivo")
+            return
+        }
+        relevo = r
+        responder(relayId, MensajesDeLaApp.relayAccept(relayId))
+        publicarCuenta(r, reloj())
+        aviso(
+            if (r.esSeguimiento) {
+                "Relevo: ${r.de.displayName} necesita que este dron tome el objetivo que sigue"
+            } else {
+                "Relevo: ${r.de.displayName} vuelve a base y este dron va a seguir su ruta"
+            },
+        )
+        tareaDelRelevo = scope.launch { habilitarMandoVirtual(r) }
+    }
+
+    private fun responder(relayId: Long, mensaje: JSONObject) {
+        respuestas[relayId] = mensaje
+        commandCenter.enviar(mensaje)
+    }
+
+    /** Una orden inválida con un `relayId` válido: `relay_reject mensaje_invalido`, salvo que sea la que ya se cumple. */
+    private fun alOrdenInvalida(m: MensajeDelHub.OrdenInvalida) {
+        log("Orden de relevo #${m.relayId} que no cumple el contrato: ${m.detalle}")
+        if (relevo?.relayId == m.relayId) return
+        responder(m.relayId, MensajesDeLaApp.relayReject(m.relayId, "mensaje_invalido", m.detalle))
+    }
+
+    /**
+     * Con el dron en el suelo, antes de encender los motores (RELEVOS §2.4): un
+     * mando virtual que no se habilita se descubre acá y B contesta
+     * `relay_reject` sin despegar.
+     */
+    private suspend fun habilitarMandoVirtual(r: RelevoAsignado) {
+        val habilitado = try {
+            controller.habilitarMandoVirtualEnTierra()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log("El mando virtual no se pudo habilitar: ${e.message}")
+            false
+        }
+        enSerie {
+            if (relevo !== r) return@enSerie
+            if (!habilitado) {
+                rechazarAceptado(r, "virtual_stick", "la aeronave no habilitó el mando virtual en el suelo")
+                return@enSerie
+            }
+            r.cuentaDesdeMs = reloj()
+            publicarCuenta(r, reloj())
+            log("Mando virtual habilitado en el suelo: arranca la cuenta regresiva de ${CUENTA_REGRESIVA_MS / 1000} s")
+        }
+    }
+
+    private fun motivoParaNoDespegar(): String? = Disponibilidad.motivoParaNo(condicionesParaRelevar(enUnRelevo = false))
+
+    /** Lo que hace B en cada vuelta del lazo, según la fase. */
+    private fun avanzarRelevo(r: RelevoAsignado, ahora: Long) {
+        when (r.fase) {
+            FaseDelRelevo.CUENTA_REGRESIVA -> {
+                val desde = r.cuentaDesdeMs ?: return
+                // Mientras corre la cuenta todo se sigue mirando: el operador
+                // pudo apagar el interruptor, tomar el control o cambiar la batería.
+                motivoParaNoDespegar()?.let {
+                    rechazarAceptado(r, "no_disponible", it)
+                    return
+                }
+                publicarCuenta(r, ahora)
+                if (ahora - desde < CUENTA_REGRESIVA_MS) return
+                if (r.esSeguimiento) {
+                    // A está en el aire sobre el objetivo: B no espera ninguna orden más.
+                    despegarParaRelevar(r, ahora)
+                } else {
+                    r.fase = FaseDelRelevo.ESPERANDO_DESPEGUE
+                    publicarCuenta(r, ahora)
+                    if (r.goRecibido) despegarParaRelevar(r, ahora) else log("Cuenta terminada: espera que ${r.de.displayName} esté abajo para despegar")
+                }
+            }
+            // El relay_go despega en el acto (ver alDespegar); acá solo se
+            // sigue mirando que no haya dejado de estar disponible, y el tope.
+            FaseDelRelevo.ESPERANDO_DESPEGUE -> {
+                motivoParaNoDespegar()?.let {
+                    rechazarAceptado(r, "no_disponible", it)
+                    return
+                }
+                if (ahora - r.aceptadoMs > ESPERA_DEL_GO_MAXIMA_MS) {
+                    olvidarRelevo(r)
+                    aviso("El relevo de ${r.de.displayName} venció sin la orden de despegar: el dron no despega")
+                }
+            }
+            FaseDelRelevo.DESPEGANDO -> if (ahora - (r.despegueDesdeMs ?: ahora) > SUBIDA_MAXIMA_MS) {
+                fallaLaSubida(r, "no terminó de subir en ${SUBIDA_MAXIMA_MS / 1000} s")
+            }
+            FaseDelRelevo.EN_CAMINO -> if (_state.value == PatrolState.RELEVANDO && !dronAlMando) transitar(r, ahora)
+            FaseDelRelevo.TRASPASO -> if (_state.value == PatrolState.RELEVANDO && !dronAlMando) sostenerLaToma(r, ahora)
+        }
+    }
+
+    /**
+     * El despegue de B: la única orden de un relevo que sale sin una persona que
+     * la apriete en ese momento, así que antes se reevalúa la disponibilidad
+     * ENTERA y el interruptor de espera se apaga (vale una sola vez). Patrulla:
+     * la ruta de A desde su nodo, con el mismo camino que `start_route`.
+     * Seguimiento: sube en vertical, por su propia columna, a la altura de tránsito.
+     */
+    private fun despegarParaRelevar(r: RelevoAsignado, ahora: Long) {
+        motivoParaNoDespegar()?.let {
+            rechazarAceptado(r, "no_disponible", it)
+            return
+        }
+        apagarEspera("despegó para relevar a ${r.de.displayName}")
+        r.fase = FaseDelRelevo.DESPEGANDO
+        r.despegueDesdeMs = ahora
+        _cuentaRegresiva.value = null
+        olvidarElUltimoProblema()
+        val ruta = r.ruta
+        if (ruta != null) {
+            route = ruta
+            patrullaEnCurso = true
+            lastReachedWaypoint = r.fromIndex
+            proximoWaypoint = r.fromIndex
+            resumeWaypoint = r.fromIndex
+            pasarA(PatrolState.PATROLLING)
+            controller.startRoute(ruta, r.fromIndex)
+            report("PATROL_STARTED", "Relevo de ${r.de.displayName}: patrullaje de la ruta \"${ruta.name}\" desde el nodo ${r.fromIndex + 1}")
+        } else {
+            r.alturaDeTransito = Aproximacion.alturaDeTransito(r.aAlt)
+            pasarA(PatrolState.RELEVANDO)
+            controller.despegarHasta(r.alturaDeTransito)
+            log("Despega para relevar a ${r.de.displayName}: sube a ${r.alturaDeTransito.toInt()} m")
+        }
+    }
+
+    /** B llegó arriba: en patrulla ya está volando la ruta (`relay_ready`); en seguimiento arranca el tránsito. */
+    private fun alLlegarArriba(r: RelevoAsignado) {
+        if (r.esSeguimiento) {
+            r.fase = FaseDelRelevo.EN_CAMINO
+            r.ultimaOrdenMs = Long.MIN_VALUE / 2
+            aviso("En el aire: va hacia el objetivo de ${r.de.displayName}")
+            transitar(r, reloj())
+        } else {
+            commandCenter.enviar(MensajesDeLaApp.relayReady(r.relayId))
+            olvidarRelevo(r)
+            aviso("Relevo de ${r.de.displayName}: patrullando su ruta")
+        }
+    }
+
+    /**
+     * La subida de B falló (un rechazo del dron o el tiempo): nunca queda
+     * suspendido a media altura. En el aire aterriza y avisa `relay_abort`; si
+     * todavía no despegó, es un `relay_reject` (RELEVOS §2.6).
+     */
+    private fun fallaLaSubida(r: RelevoAsignado, detalle: String) {
+        if (controller.estado.value.enVuelo) {
+            abortarRelevo(r, "subida", detalle)
+            pasarA(PatrolState.PAUSED)
+            controller.land()
+            report("LANDING", "Falló la subida del relevo ($detalle): el dron aterriza donde está")
+        } else {
+            rechazarAceptado(r, "no_disponible", detalle)
+            pasarA(enReposo())
+        }
+    }
+
+    /** B en tránsito: hacia el punto de toma de donde va a estar el objetivo; al llegar, lo toma. */
+    private fun transitar(r: RelevoAsignado, ahora: Long) {
+        val o = r.objetivo ?: return
+        val t = lastTelemetry?.takeIf { it.tienePosicion } ?: return
+        val (eLat, eLon) = Aproximacion.estimacion(o, r.objetivoRecibidoMs, ahora)
+        if (Aproximacion.llegoALaToma(eLat, eLon, t.lat, t.lon)) {
+            tomarElObjetivo(r, ahora, null)
+            return
+        }
+        if (ahora - r.ultimaOrdenMs < INTERVALO_ORDEN_DE_TRANSITO_MS) return
+        r.ultimaOrdenMs = ahora
+        val (lat, lon) = Aproximacion.destinoDeTransito(o, r.objetivoRecibidoMs, ahora, t.lat, t.lon)
+        controller.volarHacia(lat, lon)
+    }
+
+    /**
+     * En RELEVANDO, una detección de la misma clase a menos de
+     * [PUERTA_DE_TOMA_M] de la estimación adelanta la toma (RELEVOS §3.4).
+     */
+    private fun tomarAntesSiLoVe(d: Deteccion, pose: Telemetry, ahora: Long) {
+        val r = relevo ?: return
+        if (r.fase != FaseDelRelevo.EN_CAMINO) return
+        val o = r.objetivo ?: return
+        val (eLat, eLon) = Aproximacion.estimacion(o, r.objetivoRecibidoMs, ahora)
+        val visto = puntosEnElTerreno(d, pose)
+            .filter { it.clase == o.tipo && !it.sinPosicion }
+            .minByOrNull { Geo.distanciaM(eLat, eLon, it.lat, it.lon) } ?: return
+        if (Geo.distanciaM(eLat, eLon, visto.lat, visto.lon) > PUERTA_DE_TOMA_M) return
+        log("Vio al objetivo de ${r.de.displayName} antes de llegar: adelanta la toma")
+        tomarElObjetivo(r, ahora, visto)
+    }
+
+    /**
+     * La toma (RELEVOS §3.5): B siembra su rastreador con la estimación de A
+     * (más su propia detección, si la tiene), adopta el seguimiento de la misma
+     * alerta y avisa `relay_ready`. Queda a la distancia de toma y por encima de
+     * A hasta que A se aleje (ver [sostenerLaToma]).
+     */
+    private fun tomarElObjetivo(r: RelevoAsignado, ahora: Long, visto: Punto?) {
+        val o = r.objetivo ?: return
+        val rastreador = Aproximacion.sembrar(o, r.objetivoRecibidoMs, ahora)
+        if (visto != null) rastreador.actualizar(visto.lat, visto.lon, ahora)
+        val e = rastreador.estimar(ahora)
+        seguimiento = Seguimiento(rastreador, "relevo-${r.relayId}", e.lat, e.lon, adoptado = true).also {
+            it.alertId = r.alertId
+            it.decision = r.decision
+        }
+        candidato = null
+        r.fase = FaseDelRelevo.TRASPASO
+        r.ultimaOrdenMs = Long.MIN_VALUE / 2
+        // La altura a la que A lo venía siguiendo es a la que B baja después.
+        r.alturaDeA = r.aAlt
+        commandCenter.enviar(MensajesDeLaApp.relayReady(r.relayId))
+        aviso("Llegó al objetivo de ${r.de.displayName}: espera que se aleje para bajar a seguirlo")
+        sostenerLaToma(r, ahora)
+    }
+
+    /**
+     * B en el traspaso: sostiene el punto de toma, por encima de A, y recién
+     * con A lejos o retirado baja EN EL LUGAR a la altura de seguimiento y
+     * empieza a orbitarlo o seguirlo (RELEVOS §3.5). Si el hub deja de mandar
+     * `relay_target` ([SILENCIO_DEL_HUB_MS]) el relevo ya terminó de su lado y
+     * no queda quién le diga dónde está A: baja igual.
+     */
+    private fun sostenerLaToma(r: RelevoAsignado, ahora: Long) {
+        if (seguimiento == null) return
+        if (r.bajandoDesdeMs != null) {
+            revisarLaBajada(r, ahora)
+            return
+        }
+        val silencio = ahora - r.ultimoTargetMs > SILENCIO_DEL_HUB_MS
+        if (Aproximacion.puedeBajar(r) || silencio) {
+            val porque = if (silencio) "sin noticias de ${r.de.displayName}" else "${r.de.displayName} ya se alejó"
+            bajarASeguir(r, ahora, porque)
+            return
+        }
+        if (ahora - r.ultimaOrdenMs < INTERVALO_ORDEN_DE_TRANSITO_MS) return
+        val t = lastTelemetry?.takeIf { it.tienePosicion } ?: return
+        r.ultimaOrdenMs = ahora
+        val e = seguimiento?.rastreador?.estimar(ahora) ?: return
+        val (lat, lon) = Aproximacion.puntoDeToma(e.lat, e.lon, t.lat, t.lon)
+        controller.volarHacia(lat, lon)
+    }
+
+    /**
+     * A ya no está encima: B baja en vertical, donde está, a la altura de
+     * seguimiento. Sin posición o ya a esa altura, empieza a seguir en el acto.
+     */
+    private fun bajarASeguir(r: RelevoAsignado, ahora: Long, porque: String) {
+        val t = lastTelemetry
+        val h = Aproximacion.alturaDeSeguimiento(r.alturaDeA, r.alturaDeTransito)
+        r.alturaDeBajada = h
+        if (t == null || !t.tienePosicion || !t.altM.isFinite() || t.altM <= h + Aproximacion.TOLERANCIA_DE_ALTURA_M) {
+            completarElRelevo(r, porque)
+            return
+        }
+        r.bajandoDesdeMs = ahora
+        controller.volarHaciaA(t.lat, t.lon, h)
+        aviso("${porque.replaceFirstChar { it.uppercase() }}: el dron baja a ${h.toInt()} m para seguir al objetivo")
+    }
+
+    /** B bajando: llegó a la altura (o se venció la bajada) y empieza a seguir. */
+    private fun revisarLaBajada(r: RelevoAsignado, ahora: Long) {
+        val desde = r.bajandoDesdeMs ?: return
+        val alt = lastTelemetry?.altM ?: Double.NaN
+        val llego = alt.isFinite() && alt <= r.alturaDeBajada + Aproximacion.TOLERANCIA_DE_ALTURA_M
+        if (llego || ahora - desde >= BAJADA_MAXIMA_MS) completarElRelevo(r, "${r.de.displayName} ya se alejó")
+    }
+
+    /** El relevo terminó para B: el seguimiento es suyo (adoptado, sin ruta) y lo orbita o lo sigue. */
+    private fun completarElRelevo(r: RelevoAsignado, porque: String) {
+        val s = seguimiento ?: return
+        olvidarRelevo(r)
+        volverAlObjetivo(s, "Relevo de ${r.de.displayName} completo ($porque): el dron sigue al objetivo")
+    }
+
+    /**
+     * `relay_target`: la estimación nueva del objetivo y dónde está A. Uno con
+     * un `ts` del hub que no es más nuevo que el último deja la estimación
+     * anterior (nunca se compara con el reloj propio, docs/PROTOCOLS.md §2.b),
+     * pero su `origen` se lee igual: `sin_enlace` y `retirado` llevan el `ts`
+     * del último objetivo válido, y descartar un `retirado` por eso dejaría a B
+     * esperando arriba a un A que ya se fue.
+     */
+    private fun alObjetivoActualizado(m: MensajeDelHub.ObjetivoActualizado) {
+        val r = relevo
+        if (r == null || r.relayId != m.relayId || m.alertId != r.alertId) {
+            log("relay_target de un relevo que no es el activo: se ignora")
+            return
+        }
+        val ahora = reloj()
+        // El hub sigue hablando de este relevo, aunque sea con un objetivo viejo.
+        r.ultimoTargetMs = ahora
+        if (m.origen != "en_linea") {
+            if (m.origen == "retirado" && !r.aRetirado) log("${r.de.displayName} ya no sigue al objetivo")
+            r.anotarOrigen(m.origen)
+        }
+        if (m.ts <= r.ultimoTs) return
+        r.ultimoTs = m.ts
+        r.objetivo = m.objetivo
+        r.objetivoRecibidoMs = ahora
+        r.decision = m.decision
+        r.anotarOrigen(m.origen)
+        r.aLat = m.aLat
+        r.aLon = m.aLon
+        r.aAlt = m.aAlt
+        val s = seguimiento
+        if (s != null && s.adoptado) {
+            s.decision = m.decision
+            // Mientras B no lo vio con su cámara, la estimación de A es la mejor que hay.
+            if (s.rastreador.detecciones == 0) {
+                seguimiento = Seguimiento(Aproximacion.sembrar(m.objetivo, ahora, ahora), s.ref, s.origenLat, s.origenLon, adoptado = true)
+                    .also {
+                        it.alertId = s.alertId
+                        it.decision = s.decision
+                    }
+            }
+        }
+    }
+
+    /** `relay_go`: A ya está abajo. Si la cuenta terminó despega ya; si no, al terminarla. */
+    private fun alDespegar(m: MensajeDelHub.Despegar) {
+        val r = relevo
+        if (r == null || r.relayId != m.relayId || r.esSeguimiento) {
+            log("relay_go de un relevo que no es el activo: no despega")
+            return
+        }
+        r.goRecibido = true
+        log("${r.de.displayName} ya está abajo: el dron puede despegar")
+        if (r.fase == FaseDelRelevo.ESPERANDO_DESPEGUE) despegarParaRelevar(r, reloj())
+    }
+
+    /** `relay_cancel`: a B le corta el relevo; a A (en una reconexión), le hace olvidar el pedido. */
+    private fun alCancelacion(m: MensajeDelHub.Cancelacion) {
+        val r = relevo
+        if (r != null && r.relayId == m.relayId) {
+            cancelarComoRelevo(r, m.motivo)
+            return
+        }
+        val p = pedidos.values.firstOrNull { it.relayId == m.relayId }
+        if (p != null) {
+            pedidos.remove(p.motivo)
+            if (p.motivo == PedidoDeRelevo.SEGUIMIENTO) cerrarLaVentana()
+            log("El Comando Central dio por terminado el relevo #${m.relayId} (${m.motivo}): se olvida")
+            return
+        }
+        log("relay_cancel de un relevo que no es el activo: se ignora")
+    }
+
+    /**
+     * B ya no va: en tierra corta la cuenta o la espera y no despega; en el
+     * aire vuelve a SU base, nunca a patrullar (docs/PROTOCOLS.md §2.b).
+     */
+    private fun cancelarComoRelevo(r: RelevoAsignado, motivo: String) {
+        olvidarRelevo(r)
+        val texto = "Se canceló el relevo de ${r.de.displayName} ($motivo)"
+        if (r.fase == FaseDelRelevo.CUENTA_REGRESIVA || r.fase == FaseDelRelevo.ESPERANDO_DESPEGUE) {
+            aviso("$texto: el dron no despega")
+            return
+        }
+        if (seguimiento?.adoptado == true) terminarSeguimiento("se canceló el relevo ($motivo)")
+        regresar("$texto: el dron vuelve a su base", PatrolState.RETURNING_HOME)
+    }
+
+    private fun olvidarRelevo(r: RelevoAsignado) {
+        if (relevo !== r) return
+        relevo = null
+        _cuentaRegresiva.value = null
+        tareaDelRelevo?.cancel()
+        tareaDelRelevo = null
+    }
+
+    /** B todavía en tierra deja de ir: `relay_reject` (vale en ORDENADO o EN_CAMINO, siempre antes de despegar). */
+    private fun rechazarAceptado(r: RelevoAsignado, motivo: String, detalle: String) {
+        olvidarRelevo(r)
+        responder(r.relayId, MensajesDeLaApp.relayReject(r.relayId, motivo, detalle))
+        aviso("El dron no despega para el relevo de ${r.de.displayName}: $detalle")
+    }
+
+    /** B en el aire deja de ir: `relay_abort`. Qué hace el dron lo decide quien llama. */
+    private fun abortarRelevo(r: RelevoAsignado, motivo: String, detalle: String?) {
+        olvidarRelevo(r)
+        commandCenter.enviar(MensajesDeLaApp.relayAbort(r.relayId, motivo, detalle))
+        aviso("Se abortó el relevo de ${r.de.displayName}" + (detalle?.let { ": $it" } ?: ""))
+    }
+
+    private fun publicarCuenta(r: RelevoAsignado, ahora: Long) {
+        val desde = r.cuentaDesdeMs
+        val restanteMs = if (desde == null) CUENTA_REGRESIVA_MS else (CUENTA_REGRESIVA_MS - (ahora - desde)).coerceAtLeast(0L)
+        _cuentaRegresiva.value = CuentaRegresiva(
+            relayId = r.relayId,
+            de = r.de.displayName,
+            segundos = ceil(restanteMs / 1_000.0).toInt(),
+            esSeguimiento = r.esSeguimiento,
+            habilitando = desde == null,
+            esperandoQueBajeA = r.fase == FaseDelRelevo.ESPERANDO_DESPEGUE,
+        )
+    }
+
+    /** «Cancelar» en la cuenta regresiva del teléfono: el dron no despega (`relay_reject cancelado_en_campo`). */
+    fun cancelarRelevoEnCampo() = enSerie {
+        val r = relevo ?: return@enSerie
+        if (r.fase != FaseDelRelevo.CUENTA_REGRESIVA && r.fase != FaseDelRelevo.ESPERANDO_DESPEGUE) return@enSerie
+        rechazarAceptado(r, "cancelado_en_campo", "Cancelado desde el teléfono")
+    }
+
+    // ---- El regreso: base propia, otra base o última ubicación ----
+
+    /**
+     * Todo regreso pasa por acá (docs/RELEVOS.md §1): elige la base propia, otra
+     * base o el protocolo de última ubicación según [Autonomia.decidirRegreso].
+     * Por batería, además, pide el relevo de la patrulla que deja.
+     *
+     * Sin frenar: el regreso a base ya es la orden que manda y un vuelo
+     * estacionario se la comería. Lo que importa es soltar el mando, para que el
+     * watchdog no le corte el RTH a los 1,5 s.
+     */
+    private fun regresar(motivo: String, estado: PatrolState = PatrolState.RETURNING_HOME_BATTERY) {
+        val porBateria = estado == PatrolState.RETURNING_HOME_BATTERY
+        if (porBateria) pedirRelevoDePatrullaSiHaceFalta()
+        val t = lastTelemetry
+        val destino = if (porBateria && t != null) evaluarRegreso(t).destino else Autonomia.Destino.BasePropia
+        // Si el desvío o el §5 no se pueden (el DJI tiene el vuelo y no se le
+        // puede cortar), queda el regreso de siempre: el suyo.
+        val resuelto = when (destino) {
+            Autonomia.Destino.UltimaUbicacion -> dispararUltimaUbicacion()
+            is Autonomia.Destino.OtraBase -> iniciarDesvio(destino.base, destino.alcanzable)
+            Autonomia.Destino.BasePropia -> false
+        }
+        if (resuelto) return
+        pasarA(estado)
+        if (!dronAlMando) controller.returnHome()
+        report(if (porBateria) "RTH_LOW_BATTERY" else "RTH_MANUAL", motivo)
+    }
+
+    private fun evaluarRegreso(t: Telemetry): Autonomia.Decision {
+        val dron = controller.estado.value
+        val b = bases
+        val decision = Autonomia.decidirRegreso(
+            Autonomia.Situacion.desde(
+                reloj(), t, dron.umbralCriticoPct, dron.puntoDeRetornoLat, dron.puntoDeRetornoLon,
+                b?.bases.orEmpty(), b?.propiaId, consumo.pctPorKm, consumo.pctPorS,
+            ),
+            memoriaDelRegreso,
+        )
+        memoriaDelRegreso = decision.memoria
+        return decision
+    }
+
+    /**
+     * Con cada telemetría de un regreso: ¿sigue llegando a su base? ¿llegó al
+     * desvío? ¿hay que bajar ya? El regreso por batería se revisa siempre; el
+     * que pidió una persona (o el de B al terminar un relevo), recién con la
+     * batería en el umbral de regreso, que desde ahí es uno por batería como
+     * cualquier otro: el regreso a tiempo manda.
+     */
+    private fun revisarRegreso(t: Telemetry) {
+        if (emergencia != null || !controller.estado.value.enVuelo) return
+        when (_state.value) {
+            PatrolState.RETURNING_HOME_BATTERY -> Unit
+            PatrolState.RETURNING_HOME -> if (!(t.batteryPct <= Autonomia.umbralDeRegreso(t.pctParaVolver))) return
+            else -> return
+        }
+        val d = desvio
+        // Bajando en la base del desvío: ya está en una base.
+        if (d?.llego == true) return
+        if (d != null && cercaDelPuntoDeVisitantes(d, t, LLEGADA_AL_DESVIO_M)) {
+            llegarAlDesvio()
+            return
+        }
+        when (val destino = evaluarRegreso(t).destino) {
+            Autonomia.Destino.UltimaUbicacion -> dispararUltimaUbicacion()
+            is Autonomia.Destino.OtraBase -> if (d?.base?.id != destino.base.id) iniciarDesvio(destino.base, destino.alcanzable)
+            Autonomia.Destino.BasePropia -> Unit
+        }
+    }
+
+    private fun cercaDelPuntoDeVisitantes(d: Desvio, t: Telemetry?, radioM: Double): Boolean {
+        if (t == null || !Geo.esPosicionValida(t.lat, t.lon)) return false
+        val (lat, lon) = Autonomia.puntoDeVisitantes(d.base)
+        return Geo.distanciaM(t.lat, t.lon, lat, lon) <= radioM
+    }
+
+    /**
+     * Si el propio DJI tiene el vuelo, el único intento de quitárselo para un
+     * desvío o para el §5 (RELEVOS §4): solo a su regreso por batería —el del
+     * botón del control es una persona pidiendo el dron, y el aterrizaje
+     * crítico no se discute— y una sola vez por vuelo; si lo vuelve a arrancar,
+     * se lo deja seguir. null si no se puede; true si se le acaba de cortar;
+     * false si la app ya tenía el vuelo.
+     */
+    private fun tomarElVueloDelDji(): Boolean? {
+        val toma = tomaDelDron ?: return false
+        if (toma != MotivoDelDron.RTH_BATERIA || regresoDelDjiCortado) return null
+        regresoDelDjiCortado = true
+        tomaDelDron = null
+        controller.cancelarRegreso()
+        log("El dron venía en su propio regreso por batería: se lo corta, una sola vez, para elegir dónde bajar")
+        return true
+    }
+
+    /**
+     * Desvío a otra base (RELEVOS §4), el caso extremo: se apaga y se corta el
+     * regreso propio del DJI (un solo intento), el failsafe pasa a "aterrizar"
+     * (si se corta el enlace, mejor bajar donde está que volver a una casa que
+     * no alcanza), el aterrizaje deja de confirmarse solo, se prueba fijar el
+     * punto de retorno en la base destino, y el dron sube a la altura de
+     * tránsito y vuela al punto de visitantes de [base]. Al llegar fija ahí el
+     * punto de retorno y aterriza ([llegarAlDesvio]).
+     *
+     * Devuelve false si no se pudo: el DJI tiene el vuelo y no se le puede
+     * cortar (se lo deja seguir y el §5 lo baja cuando corresponda).
+     */
+    private fun iniciarDesvio(base: BaseDelHub, alcanzable: Boolean): Boolean {
+        val cortadoRecien = tomarElVueloDelDji() ?: return false
+        val primero = desvio == null
+        desvio = Desvio(base)
+        if (primero) {
+            controller.permitirRthPropioPorBateria(false)
+            // El regreso que pidió la app (el del DJI, si hacía falta, ya se cortó).
+            if (!cortadoRecien) controller.cancelarRegreso()
+            controller.fijarFailsafeAterrizar(true)
+            confirmarAterrizajesALaMano()
+        }
+        val (lat, lon) = Autonomia.puntoDeVisitantes(base)
+        // El rechazo es lo esperado (el MSDK limita la distancia) y queda registrado.
+        controller.fijarPuntoDeRetornoEn(lat, lon)
+        if (_state.value != PatrolState.RETURNING_HOME_BATTERY) pasarA(PatrolState.RETURNING_HOME_BATTERY)
+        // Sube a la altura de tránsito antes de ir: es un camino que nunca voló.
+        controller.volarHaciaA(lat, lon, alturaDelDesvio())
+        val p = pedidos[PedidoDeRelevo.PATRULLA]
+        p?.fase = FaseDelOrigen.DESVIADO
+        val (aquiLat, aquiLon) = posicionActual()
+        val mensaje = MensajesDeLaApp.rthDiverted(p?.relayId, base.id, aquiLat, aquiLon, "otra_base")
+        rthDivertedVigente = mensaje
+        commandCenter.enviar(mensaje)
+        report(
+            "RTH_LOW_BATTERY",
+            "La batería no alcanza para volver a su base: se desvía a la base \"${base.nombre}\"" +
+                if (alcanzable) "" else " (la más cercana; si no llega, aterriza antes donde esté)",
+        )
+        _avisos.tryEmit("Desvío a la base \"${base.nombre}\": la batería no alcanza para volver a la propia")
+        return true
+    }
+
+    /** Un desvío sube a la altura de tránsito, nunca baja: si ya viene más alto, sigue a esa. */
+    private fun alturaDelDesvio(): Double = maxOf(alturaActual(), Autonomia.ALTURA_TRANSITO_M)
+
+    /**
+     * Dónde está el dron para los avisos al hub: la última posición GPS de
+     * verdad (sin fix, la de antes de perderlo, que es la que sirve para ir a
+     * buscarlo). NaN si nunca tuvo una: los mensajes la mandan como null.
+     */
+    private fun posicionActual(): Pair<Double, Double> {
+        val t = ultimaPosicionValida ?: return Double.NaN to Double.NaN
+        return t.lat to t.lon
+    }
+
+    /** La altura de la última telemetría; 0 si no hay o no es un número. */
+    private fun alturaActual(): Double = lastTelemetry?.altM?.takeIf { it.isFinite() } ?: 0.0
+
+    /** Llegó al punto de visitantes del desvío: fija ahí el punto de retorno y aterriza. */
+    private fun llegarAlDesvio() {
+        val d = desvio ?: return
+        if (d.llego || dronAlMando) return
+        d.llego = true
+        controller.fijarPuntoDeRetornoAqui()
+        controller.land()
+        log("Llegó al punto de visitantes de la base \"${d.base.nombre}\": fija ahí el punto de retorno y aterriza")
+    }
+
+    /**
+     * Una persona dio una orden, o apretó el regreso en el control: el desvío
+     * en curso se abandona (manda la orden) y el DJI recupera su regreso propio
+     * y su failsafe de fábrica.
+     */
+    private fun abandonarElDesvio(porque: String) {
+        val d = desvio ?: return
+        log("$porque: se abandona el desvío a la base \"${d.base.nombre}\"")
+        desvio = null
+        rthDivertedVigente = null
+        memoriaDelRegreso = Autonomia.Memoria()
+        restaurarFailsafes()
+    }
+
+    /** Las bases conocidas, incluida la del desvío aunque ya no esté en la lista. */
+    private fun todasLasBases(): List<BaseDelHub> =
+        (bases?.bases.orEmpty() + listOfNotNull(desvio?.base, memoriaDelRegreso.comprometida)).distinctBy { it.id }
+
+    // ---- La confirmación del aterrizaje en un lugar sin revisar (RELEVOS §4) ----
+
+    /** Desde acá el controlador no confirma solo: el pedido llega como [FlightEvent.AterrizajePideConfirmacion]. */
+    private fun confirmarAterrizajesALaMano() {
+        if (confirmacionManual) return
+        confirmacionManual = true
+        reintentosDeAterrizaje = 0
+        controller.fijarConfirmacionDeAterrizaje(false)
+    }
+
+    /**
+     * El dron pide confirmar el aterrizaje. En la base de un desvío o en el §5
+     * —un lugar que nadie revisó— no se confirma solo: se corre
+     * [CORRIMIENTO_PARA_ATERRIZAR_M] y reintenta, hasta
+     * [REINTENTOS_DE_ATERRIZAJE] veces, y recién con la batería en el crítico +
+     * [CONFIRMAR_SOBRE_EL_CRITICO_PCT] se confirma donde esté. Fuera de eso se
+     * confirma como siempre.
+     */
+    private fun alPedirConfirmarElAterrizaje() {
+        if (!confirmacionManual) {
+            controller.confirmarAterrizaje()
+            return
+        }
+        confirmacionPendiente = true
+        if (confirmarSiNoQuedaBateria(lastTelemetry)) return
+        val t = lastTelemetry?.takeIf { it.tienePosicion }
+        if (reintentosDeAterrizaje >= REINTENTOS_DE_ATERRIZAJE || t == null || dronAlMando) {
+            aviso(
+                "El dron pide confirmar el aterrizaje en un lugar sin revisar: queda estacionario y se confirma " +
+                    "recién con la batería en el crítico",
+            )
+            return
+        }
+        reintentosDeAterrizaje++
+        confirmacionPendiente = false
+        corriendoseParaAterrizar = true
+        // Cada reintento hacia otro lado: primero al norte, después al este.
+        val rumbo = if (reintentosDeAterrizaje == 1) 0.0 else 90.0
+        val (lat, lon) = puntoA(t.lat, t.lon, rumbo, CORRIMIENTO_PARA_ATERRIZAR_M)
+        controller.volarHacia(lat, lon)
+        aviso(
+            "El dron pidió confirmar el aterrizaje: se corre ${CORRIMIENTO_PARA_ATERRIZAR_M.toInt()} m y lo vuelve " +
+                "a intentar ($reintentosDeAterrizaje de $REINTENTOS_DE_ATERRIZAJE)",
+        )
+    }
+
+    /** Con la batería en el crítico + 1, el aterrizaje pendiente se confirma donde esté. true si lo confirmó. */
+    private fun confirmarSiNoQuedaBateria(t: Telemetry?): Boolean {
+        if (!confirmacionPendiente || t == null) return false
+        val critico = controller.estado.value.umbralCriticoPct
+        if (!critico.isFinite() || !(t.batteryPct <= critico + CONFIRMAR_SOBRE_EL_CRITICO_PCT)) return false
+        confirmacionPendiente = false
+        controller.confirmarAterrizaje()
+        aviso("Batería al ${t.batteryPct.toInt()}%: se confirma el aterrizaje donde está")
+        return true
+    }
+
+    /** Vuelve a que el controlador confirme solo, y olvida los reintentos (al tocar tierra o por una orden). */
+    private fun olvidarLaConfirmacion() {
+        reintentosDeAterrizaje = 0
+        confirmacionPendiente = false
+        corriendoseParaAterrizar = false
+        if (!confirmacionManual) return
+        confirmacionManual = false
+        controller.fijarConfirmacionDeAterrizaje(true)
+    }
+
+    /** El punto a [distanciaM] de ([lat], [lon]) con rumbo [rumboGrados]. */
+    private fun puntoA(lat: Double, lon: Double, rumboGrados: Double, distanciaM: Double): Pair<Double, Double> {
+        val rad = Math.toRadians(rumboGrados)
+        return (lat + distanciaM * cos(rad) / Geo.METROS_POR_GRADO_LAT) to
+            (lon + distanciaM * sin(rad) / Geo.metrosPorGradoLon(lat))
+    }
+
+    // ---- El protocolo de última ubicación (RELEVOS §5) ----
+
+    /**
+     * El §5 por la cuenta de la app. false si el DJI tiene el vuelo y no se le
+     * puede cortar: se lo deja seguir y, si fuerza el aterrizaje, corre la
+     * variante que solo usa la cámara.
+     */
+    private fun dispararUltimaUbicacion(): Boolean {
+        if (tomarElVueloDelDji() == null) {
+            if (!ultimaUbicacionPostergada) {
+                ultimaUbicacionPostergada = true
+                log("La batería ya no alcanza para ninguna base, pero el propio dron tiene el vuelo: se lo deja seguir")
+            }
+            return false
+        }
+        iniciarUltimaUbicacion("autonomia", conControl = true)
+        return true
+    }
+
+    /**
+     * Protocolo de última ubicación (RELEVOS §5): ya no llega a ninguna base, o
+     * el propio DJI fuerza el aterrizaje fuera de base. Avisa al hub
+     * (`rth_diverted` con `emergencia`, y `emergency_landing` por la cola
+     * persistente), fija la posición en la pantalla y corre la secuencia de
+     * fotos: con el vuelo si la app lo tiene, solo la cámara si no.
+     */
+    private fun iniciarUltimaUbicacion(motivo: String, conControl: Boolean) {
+        val actual = emergencia
+        if (actual != null) {
+            // Ya en curso: si el DJI tomó el vuelo, sigue solo con la cámara.
+            if (!conControl && actual.conControl) {
+                actual.conControl = false
+                tareaDeEmergencia?.cancel()
+                tareaDeEmergencia = lanzarSecuencia(actual)
+            }
+            return
+        }
+        val porAutonomia = motivo == "autonomia"
+        val (lat, lon) = posicionActual()
+        val alt = alturaActual()
+        relevo?.let { abortarRelevo(it, if (porAutonomia) "bateria" else "dji", "aterrizaje de emergencia") }
+        abandonarRelevoDeSeguimiento(if (porAutonomia) "piso" else "dji")
+        terminarSeguimiento("aterrizaje de emergencia: la batería ya no alcanza para ninguna base")
+        // El failsafe "aterrizar" del desvío queda: ahora es justo lo que se quiere.
+        desvio = null
+        if (conControl) confirmarAterrizajesALaMano()
+        val p = pedidos[PedidoDeRelevo.PATRULLA]
+        p?.fase = FaseDelOrigen.DESVIADO
+        val desviado = MensajesDeLaApp.rthDiverted(p?.relayId, null, lat, lon, "emergencia")
+        rthDivertedVigente = desviado
+        commandCenter.enviar(desviado)
+        val e = EmergenciaEnCurso(UUID.randomUUID().toString(), conControl)
+        emergencia = e
+        cola.abrir(
+            MensajesDeLaApp.emergencyLanding(e.ref, motivo, lat, lon, alt, lastTelemetry?.batteryPct ?: 0.0, horaDelTelefono()),
+        )
+        enviarLaCola()
+        val conPosicion = Geo.esPosicionValida(lat, lon)
+        if (conPosicion) _ultimaUbicacion.value = UbicacionFijada(lat, lon, alt, aterrizado = false)
+        pasarA(PatrolState.ATERRIZAJE_EMERGENCIA)
+        report(
+            "LANDING",
+            (if (porAutonomia) "La batería ya no alcanza para ninguna base" else "El propio dron fuerza el aterrizaje por batería crítica") +
+                ": aterrizaje de emergencia en ${if (conPosicion) coordenadas(lat, lon) else "una posición sin GPS"}, con fotos del lugar",
+            lat = lat.takeIf { conPosicion },
+            lon = lon.takeIf { conPosicion },
+        )
+        tareaDeEmergencia = lanzarSecuencia(e)
+    }
+
+    /**
+     * La secuencia de fotos corre en su propio Job (que [pasarA] cancela al
+     * salir del estado), pero cada orden al dron pasa por la puerta de la
+     * patrulla y solo sale si el estado sigue en la emergencia: cancelar un Job
+     * no frena una orden que ya estaba saliendo.
+     */
+    private fun lanzarSecuencia(e: EmergenciaEnCurso): Job = scope.launch {
+        // El Job propio entra en la cuenta: uno reemplazado (el DJI tomó el
+        // vuelo y sigue la variante de la cámara) no da ni una orden más.
+        val yo = coroutineContext.job
+        val sigue = { yo.isActive && emergencia === e && _state.value == PatrolState.ATERRIZAJE_EMERGENCIA }
+        val secuencia = SecuenciaDeUltimaUbicacion(
+            dron = controller,
+            telemetria = { lastTelemetry },
+            sigue = sigue,
+            alcanzaParaOtroPaso = ::alcanzaParaOtroPaso,
+            alFotografiar = { foto -> enSerie { alFotografiar(e, foto) } },
+            reloj = reloj,
+            pausa = pausaDeEmergencia,
+            ordenar = { orden ->
+                enSerie {
+                    val puede = sigue()
+                    if (puede) controller.orden()
+                    puede
+                }
+            },
+        )
+        if (e.conControl) secuencia.conControl(puedeGirar = true) else secuencia.soloCamara()
+    }
+
+    /** Cada paso de la secuencia, solo si después queda batería ≥ disparo − 3 (RELEVOS §5). */
+    private fun alcanzaParaOtroPaso(): Boolean {
+        val t = lastTelemetry ?: return false
+        val disparo = Autonomia.disparoDeUltimaUbicacion(t.pctParaAterrizar, controller.estado.value.umbralCriticoPct)
+        if (!disparo.isFinite() || !t.batteryPct.isFinite()) return false
+        val porSegundo = consumo.pctPorS.takeIf { it.isFinite() && it > 0.0 } ?: Autonomia.CONSUMO_POR_DEFECTO_PCT_POR_S
+        val despues = t.batteryPct - porSegundo * DURACION_DE_UN_PASO_MS / 1_000.0
+        return despues >= disparo - Autonomia.MARGEN_SOBRE_EL_CRITICO_PCT
+    }
+
+    private fun alFotografiar(e: EmergenciaEnCurso, foto: SecuenciaDeUltimaUbicacion.Foto) {
+        val jpeg = FotoDeEmergencia.aBase64(foto.jpeg) ?: run {
+            log("La foto ${foto.seq + 1} de la emergencia no es un JPEG que se pueda mandar: no sale")
+            return
+        }
+        val t = foto.telemetria ?: lastTelemetry
+        cola.agregarFoto(
+            e.ref,
+            MensajesDeLaApp.emergencyPhoto(
+                e.ref, foto.seq, foto.tipo, foto.rumbo, foto.inclinacion,
+                t?.lat ?: Double.NaN, t?.lon ?: Double.NaN, t?.altM ?: 0.0, jpeg, horaDelTelefono(),
+            ),
+        )
+        log("Foto ${foto.tipo} (${foto.seq + 1}) del lugar del aterrizaje de emergencia")
+        enviarLaCola()
+    }
+
+    /** La cola de la emergencia sale solo con el Comando Central conectado: sin él no se gastan los reintentos. */
+    private fun enviarLaCola() {
+        if (!commandCenter.connected.value) return
+        cola.aEnviar(reloj()).forEach { commandCenter.enviar(it) }
+    }
+
+    private fun cerrarEmergencia(e: EmergenciaEnCurso) {
+        val (lat, lon) = posicionActual()
+        val alt = alturaActual()
+        cola.agregarAterrizaje(e.ref, MensajesDeLaApp.emergencyLanded(e.ref, lat, lon, alt, horaDelTelefono()))
+        enviarLaCola()
+        if (Geo.esPosicionValida(lat, lon)) _ultimaUbicacion.value = UbicacionFijada(lat, lon, alt, aterrizado = true)
+        emergencia = null
+        tareaDeEmergencia?.cancel()
+        tareaDeEmergencia = null
+        bateriaPorCambiar = true
+    }
+
+    private fun aterrizoEnEmergencia() {
+        pasarA(PatrolState.LANDED)
+        val u = _ultimaUbicacion.value
+        report(
+            "LANDED",
+            "Aterrizaje de emergencia: el dron quedó en ${u?.let { coordenadas(it.lat, it.lon) } ?: "una posición sin GPS"}. " +
+                "Hay que ir a buscarlo y cambiarle la batería",
+            lat = u?.lat,
+            lon = u?.lon,
+        )
+    }
+
+    /** Qué se cerró al tocar tierra (ver [alTocarTierra]). */
+    private class Llegada(val enEmergencia: Boolean, val desvio: BaseDelHub?)
+
+    /**
+     * Lo que se cierra al tocar tierra: la emergencia (sale `emergency_landed`
+     * con la última posición), el aviso `landed_at_base` al final de un regreso
+     * a una base (nunca por un `land` de una persona), el desvío, los pedidos
+     * de A y el interruptor de espera.
+     */
+    private fun alTocarTierra(): Llegada {
+        val estado = _state.value
+        val enEmergencia = emergencia
+        val baseDelDesvio = desvio?.base
+        apagarEspera("el dron aterrizó")
+        relevo?.let { r ->
+            if (r.fase != FaseDelRelevo.CUENTA_REGRESIVA && r.fase != FaseDelRelevo.ESPERANDO_DESPEGUE) {
+                abortarRelevo(r, "otro", "el dron aterrizó")
+            }
+        }
+        if (enEmergencia != null) {
+            cerrarEmergencia(enEmergencia)
+        } else if (estado in ESTADOS_DE_REGRESO) {
+            val (lat, lon) = posicionActual()
+            val base = baseDelDesvio?.id ?: bases?.propiaId
+            enviarOGuardar(MensajesDeLaApp.landedAtBase(pedidos[PedidoDeRelevo.PATRULLA]?.relayId, base, lat, lon))
+        }
+        if (baseDelDesvio != null || enEmergencia != null) restaurarFailsafes()
+        olvidarLaConfirmacion()
+        desvio = null
+        rthDivertedVigente = null
+        memoriaDelRegreso = Autonomia.Memoria()
+        pedidos.clear()
+        cerrarLaVentana()
+        soltando = null
+        tomaDelDron = null
+        regresoDelDjiCortado = false
+        volverAlRecuperarLaSenial = false
+        ultimaUbicacionPostergada = false
+        return Llegada(enEmergencia != null, baseDelDesvio)
+    }
+
+    /**
+     * El propio DJI le sacó el vuelo a la app ([FlightEvent.ElDronTomoElControl]).
+     * Se corta todo lo que le daba órdenes (el relevo, el desvío, la secuencia
+     * de fotos) y no se le vuelve a dar ninguna por cuenta propia —cada una
+     * volvería a habilitar el mando virtual y a pelearle el control—; un
+     * seguimiento termina con TRACKING_ENDED y, con relevo pedido,
+     * `relay_abandon`. Si es su aterrizaje por batería crítica fuera de base,
+     * corre la variante del §5 que solo usa la cámara.
+     *
+     * Dos excepciones: su regreso por pérdida de señal no le saca el vuelo a la
+     * app para siempre (al volver el enlace decide la regla de siempre, ver
+     * [alRecuperarLaSenial]); y durante un desvío, UN intento de cortar su
+     * regreso por batería (RELEVOS §4); si lo vuelve a arrancar, se lo deja
+     * seguir.
+     */
+    private fun alTomarElControlElDron(motivo: MotivoDelDron) {
+        log("El propio dron tomó el control: ${motivo.descripcion}")
+        if (motivo == MotivoDelDron.RTH_SENIAL) {
+            if (controller.estado.value.enVuelo && _state.value !in ESTADOS_DE_REGRESO) {
+                alPerderLaSenial("el propio dron arrancó su regreso por pérdida de señal", frenar = false)
+            }
+            return
+        }
+        val d = desvio
+        if (motivo == MotivoDelDron.RTH_BATERIA && d != null && !d.llego && !regresoDelDjiCortado && !dronAlMando) {
+            regresoDelDjiCortado = true
+            controller.cancelarRegreso()
+            val (lat, lon) = Autonomia.puntoDeVisitantes(d.base)
+            controller.volarHaciaA(lat, lon, alturaDelDesvio())
+            log("Durante el desvío el dron arrancó su propio regreso: se lo corta una sola vez y sigue hacia \"${d.base.nombre}\"")
+            return
+        }
+        tomaDelDron = motivo
+        val deCampo = motivo == MotivoDelDron.RTH_DEL_CONTROL
+        relevo?.let { r ->
+            if (r.fase == FaseDelRelevo.CUENTA_REGRESIVA || r.fase == FaseDelRelevo.ESPERANDO_DESPEGUE) {
+                rechazarAceptado(r, "no_disponible", "el propio dron tomó el control (${motivo.descripcion})")
+            } else {
+                abortarRelevo(r, if (deCampo) "orden_de_campo" else "dji", motivo.descripcion)
+            }
+        }
+        abandonarRelevoDeSeguimiento(if (deCampo) "orden_de_campo" else "dji")
+        terminarSeguimiento("el propio dron tomó el control (${motivo.descripcion})")
+        // El botón del control es una persona pidiendo el dron de vuelta: manda sobre el desvío.
+        if (deCampo) abandonarElDesvio("Se apretó el regreso en el control")
+        if (!controller.estado.value.enVuelo) return
+        val estado = _state.value
+        when (motivo) {
+            MotivoDelDron.ATERRIZAJE_BATERIA_CRITICA -> {
+                val (lat, lon) = posicionActual()
+                val dron = controller.estado.value
+                val fuera = Autonomia.fueraDeBase(lat, lon, todasLasBases(), dron.puntoDeRetornoLat, dron.puntoDeRetornoLon)
+                if (fuera) {
+                    iniciarUltimaUbicacion("bateria_critica_dji", conControl = false)
+                } else if (estado !in ESTADOS_DE_REGRESO) {
+                    pasarA(PatrolState.RETURNING_HOME_BATTERY)
+                }
+                return
+            }
+            MotivoDelDron.RTH_BATERIA -> if (estado != PatrolState.RETURNING_HOME_BATTERY && emergencia == null) {
+                pedirRelevoDePatrullaSiHaceFalta()
+                pasarA(PatrolState.RETURNING_HOME_BATTERY)
+                report("RTH_LOW_BATTERY", "El propio dron arrancó su regreso por batería baja")
+            }
+            MotivoDelDron.RTH_DEL_CONTROL -> if (estado != PatrolState.RETURNING_HOME && emergencia == null) {
+                pasarA(PatrolState.RETURNING_HOME)
+                report("RTH_MANUAL", "Se apretó el regreso a base en el control físico: el dron vuelve solo")
+            }
+            // Un regreso que el dron arrancó sin que se sepa por qué: se lo deja volver.
+            else -> if (estado !in ESTADOS_DE_REGRESO) pasarA(PatrolState.RETURNING_HOME)
+        }
+        // Una emergencia que la app volaba sigue solo con la cámara.
+        emergencia?.let { if (it.conControl) iniciarUltimaUbicacion("bateria_critica_dji", conControl = false) }
+    }
+
+    /** La hora del teléfono para los `ts` de la emergencia: dato para el registro, nunca para ordenar. */
+    private fun horaDelTelefono(): Long = reloj()
+
+    // ---- El lazo de los relevos ----
+
+    private suspend fun relevosTicker() {
+        while (true) {
+            delay(INTERVALO_RELEVOS_MS)
+            enSerie { avanzarLosRelevos(reloj()) }
+        }
+    }
+
+    private fun avanzarLosRelevos(ahora: Long) {
+        if (espera.vencido(ahora)) apagarEspera("pasaron ${EsperaParaRelevos.VENCIMIENTO_MS / 60_000} minutos")
+        pedidos.values.toList().forEach { if (it.debeEnviar(ahora)) enviarPedido(it, ahora) }
+        relevo?.let { avanzarRelevo(it, ahora) }
+        vencerElAlejamiento(ahora)
+        enviarLaCola()
+    }
+
+    /** Un aviso de los relevos: al registro local y a la pantalla. */
+    private fun aviso(texto: String) {
+        log(texto)
+        _avisos.tryEmit(texto)
     }
 
     /**

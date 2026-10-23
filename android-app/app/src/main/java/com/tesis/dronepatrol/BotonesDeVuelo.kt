@@ -42,6 +42,23 @@ internal object BotonesDeVuelo {
     fun despegarAquiHabilitado(estado: PatrolState, dron: EstadoDelDron): Boolean =
         !dron.enVuelo && dron.conectado && estado !in SIN_DESPEGUE_A_MANO && estado != PatrolState.LANDED
 
+    /**
+     * "Volver a base": en el aire y sin otro regreso en curso. El aterrizaje de
+     * emergencia también es uno —el que baja donde está porque la batería no
+     * alcanza para ninguna base—, y mandarlo a volver sería tirarlo en el camino.
+     */
+    fun volverABaseHabilitado(estado: PatrolState, dron: EstadoDelDron): Boolean =
+        dron.enVuelo && estado != PatrolState.RETURNING_HOME && estado != PatrolState.RETURNING_HOME_BATTERY &&
+            estado != PatrolState.ATERRIZAJE_EMERGENCIA
+
+    /**
+     * «En espera para relevos» (docs/RELEVOS.md §0): se prende con el dron en
+     * el suelo, enlazado y en reposo, que es lo que el operador acaba de
+     * revisar; apagarlo se puede siempre.
+     */
+    fun enEsperaHabilitado(prendido: Boolean, estado: PatrolState, dron: EstadoDelDron): Boolean =
+        prendido || (!dron.enVuelo && dron.conectado && estado == PatrolState.IDLE)
+
     /** Lo que se explica debajo de los botones de vuelo cuando están apagados. */
     sealed interface Aviso {
         /** Falta GPS o punto de retorno para volar una ruta; [detalle] es lo que dice el controlador. */
