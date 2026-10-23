@@ -41,7 +41,11 @@ export default function MapaDeAlerta({
   dron,
 }: {
   deteccion: Punto | null;
-  /** El objetivo en seguimiento de ESTA alerta (`status.target` con su `alertId`), o `null`. */
+  /**
+   * El objetivo en seguimiento de ESTA alerta (`status.target` con su
+   * `alertId`), o `null`. Con posición ya revisada por quien lo pasa: Leaflet
+   * no acepta un null ni un NaN, y el hub reenvía `target` sin mirarlo.
+   */
   objetivo: ObjetivoEnSeguimiento | null;
   /** El dron y su posición actual, o `null` si no la informa. */
   dron: { nombre: string; posicion: Punto } | null;

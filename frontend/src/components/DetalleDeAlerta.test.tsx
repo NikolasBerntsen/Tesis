@@ -194,6 +194,38 @@ describe('DetalleDeAlerta', () => {
     expect(screen.queryByText('Objetivo ahora')).not.toBeInTheDocument();
   });
 
+  // El hub reenvía `target` tal cual lo manda la app: una posición en null o
+  // NaN rompía el render (`null.toFixed`) o a Leaflet ("Invalid LatLng"), y sin
+  // un límite de errores la consola entera quedaba en blanco.
+  it.each([
+    ['null', null],
+    ['NaN', Number.NaN],
+  ])('un objetivo con la latitud en %s no rompe el pop-up: se lo nombra sin posición y no va al mapa', (_, lat) => {
+    const target = { ...OBJETIVO, lat: lat as unknown as number };
+    montar({}, consola({ statuses: { d1: makeStatus({ droneId: 'd1', target }) } }));
+
+    expect(screen.getByTestId('detalle-alerta')).toBeInTheDocument();
+    // El seguimiento sigue siendo un dato: se dice qué hace, aunque no dónde está.
+    expect(dato('Objetivo ahora')).toHaveTextContent('Sin posición estimada · En movimiento');
+    // En el mapa quedan la detección y el dron; la mira del objetivo no se pone.
+    const marcadores = estadoMapa.puestas.filter((c) => c.clase === 'marker');
+    expect(marcadores.map((m) => m.etiqueta)).toEqual(['Detección', 'Alfa']);
+    expect(within(screen.getByTestId('leyenda-mapa-alerta')).queryByText('Objetivo ahora')).not.toBeInTheDocument();
+  });
+
+  it('si lo único con coordenadas era un objetivo sin posición válida, no se arma el mapa', () => {
+    const target = { ...OBJETIVO, lat: null as unknown as number, lon: null as unknown as number };
+    montar(
+      {},
+      consola({
+        alertas: [makeAlert({ id: 7, drone_id: 'd1', lat: null, lon: null })],
+        statuses: { d1: makeStatus({ droneId: 'd1', gpsFix: false, target }) },
+      }),
+    );
+    expect(screen.getByText('No hay coordenadas para ubicarla en el mapa.')).toBeInTheDocument();
+    expect(estadoMapa.mapasCreados).toBe(0);
+  });
+
   it('sin GPS dice cuántos satélites tiene, y una batería que no es número queda en raya', () => {
     montar(
       {},

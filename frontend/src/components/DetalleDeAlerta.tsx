@@ -130,7 +130,12 @@ export default function DetalleDeAlerta({
   const dron = vivo.drones.find((d) => d.droneId === droneId) ?? null;
   const status = droneId ? (vivo.statuses[droneId] ?? null) : null;
   // El objetivo de ESTA alerta: el dron puede estar sobre otro, más nuevo.
-  const objetivo = status?.target?.alertId === alertaId ? status.target : null;
+  const seguido = status?.target?.alertId === alertaId ? status.target : null;
+  // El hub reenvía `target` tal cual lo manda la app (ver ws.ts): una posición
+  // en null rompía el render con `toFixed` y una en NaN, a Leaflet con "Invalid
+  // LatLng"; sin un límite de errores, la consola entera quedaba en blanco.
+  // Sin posición válida el seguimiento sigue siendo un dato, pero no se dibuja.
+  const objetivo = seguido && posicionValida(seguido.lat, seguido.lon) ? seguido : null;
   const posicionDron = posicionDelDron(status);
   const deteccion: [number, number] | null = posicionValida(lat, lon) ? [lat as number, lon as number] : null;
   const nombre = dron?.displayName || dronDeRespaldo?.displayName || '';
@@ -187,12 +192,16 @@ export default function DetalleDeAlerta({
         <dd>{momento ? <time dateTime={momento}>{fechaHoraLarga(momento)}</time> : '—'}</dd>
         <dt>Coordenadas</dt>
         <dd className="mono">{coordenadasODato(lat, lon)}</dd>
-        {objetivo && (
+        {seguido && (
           <>
             <dt>Objetivo ahora</dt>
             <dd>
-              <span className="mono">{coordenadas(objetivo.lat, objetivo.lon)}</span>
-              {` · ${situacionDelObjetivo(objetivo)}`}
+              {objetivo ? (
+                <span className="mono">{coordenadas(objetivo.lat, objetivo.lon)}</span>
+              ) : (
+                <span className="muted">Sin posición estimada</span>
+              )}
+              {` · ${situacionDelObjetivo(seguido)}`}
             </dd>
           </>
         )}
