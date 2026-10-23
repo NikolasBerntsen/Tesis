@@ -29,10 +29,11 @@ import org.robolectric.annotation.Config
 
 /**
  * B, el dron que sale a relevar (docs/RELEVOS.md §2 y §3): acepta o rechaza
- * cada orden reevaluando su disponibilidad entera, habilita el mando virtual en
- * el suelo antes de los motores, corre la cuenta regresiva de 10 s con
- * «Cancelar», despega solo cuando corresponde, y en un seguimiento se detiene a
- * la distancia de toma, por encima de A, y baja recién con A lejos.
+ * cada orden reevaluando su disponibilidad entera, prepara el despegue (el
+ * mando virtual) en el suelo antes de los motores, corre la cuenta regresiva
+ * de 10 s con «Cancelar», despega solo cuando corresponde, y en un seguimiento
+ * se detiene a la distancia de toma, 20 m por encima de A, y baja recién con A
+ * lejos.
  *
  * Los mensajes del hub pasan por la misma validación que el socket, y los
  * tiempos (la cuenta, la subida) corren con el reloj falso.
@@ -60,12 +61,26 @@ class PatrolManagerRelevadorTest {
     private fun motivoDelRechazo(relayId: Long): String =
         banco.mensajes("relay_reject").last { it.getLong("relayId") == relayId }.getString("motivo")
 
+    private fun detalleDelRechazo(relayId: Long): String =
+        banco.mensajes("relay_reject").last { it.getLong("relayId") == relayId }.getString("detalle")
+
     private suspend fun aceptado(relayId: Long) {
         esperarA("el relay_accept del relevo #$relayId") {
             banco.mensajes("relay_accept").any { it.getLong("relayId") == relayId }
         }
         esperarA("la cuenta regresiva") { patrulla.cuentaRegresiva.value?.habilitando == false }
     }
+
+    private suspend fun tomarElControl() {
+        banco.comando.recibir(JSONObject().put("type", "control_taken").put("by", "op"))
+        esperarA("el control manual") { patrulla.state.value == PatrolState.MANUAL }
+    }
+
+    private fun soltarElControl() {
+        banco.comando.recibir(JSONObject().put("type", "control_released").put("by", "op"))
+    }
+
+    private fun enElRegistro(texto: String): Boolean = patrulla.localLog.replayCache.any { it.contains(texto) }
 
     // ---- Relevo de patrulla ----
 
@@ -75,7 +90,7 @@ class PatrolManagerRelevadorTest {
         banco.hub(relayStart(5, fromIndex = 1))
         aceptado(5)
         val ordenes = dron.ordenes
-        assertTrue("el mando virtual se habilita en el suelo, antes de los motores", "habilitarMandoVirtual" in ordenes)
+        assertTrue("el despegue (el mando virtual) se prepara en el suelo, antes de los motores", "prepararDespegue" in ordenes)
         assertEquals(10, patrulla.cuentaRegresiva.value!!.segundos)
 
         banco.pasar(9_000)
@@ -96,6 +111,7 @@ class PatrolManagerRelevadorTest {
         esperarA("el relay_ready en el aire") { banco.mensajes("relay_ready").size == 1 }
         assertEquals(5L, banco.ultimo("relay_ready").getLong("relayId"))
         assertTrue("es patrulla de verdad: Reanudar la retoma", patrulla.puedeReanudar)
+        assertFalse("despegó: el mando no vuelve a las palancas", "soltarDespegue" in dron.ordenes)
     }
 
     @Test
@@ -120,7 +136,7 @@ class PatrolManagerRelevadorTest {
         esperarA("el rechazo") { banco.mensajes("relay_reject").isNotEmpty() }
         assertEquals("no_disponible", motivoDelRechazo(5))
         assertTrue(banco.ultimo("relay_reject").getString("detalle").contains("En espera para relevos"))
-        assertFalse("ni intenta el mando virtual", "habilitarMandoVirtual" in dron.ordenes)
+        assertFalse("ni intenta el mando virtual", "prepararDespegue" in dron.ordenes)
         assertTrue(banco.mensajes("relay_accept").isEmpty())
     }
 
@@ -193,7 +209,7 @@ class PatrolManagerRelevadorTest {
     }
 
     @Test
-    fun cancelarEnElTelefonoNoDespega() = runBlocking {
+    fun cancelarEnElTelefonoNoDespegaYLeDevuelveElMandoALasPalancas() = runBlocking {
         disponible()
         banco.hub(relayStart(5))
         aceptado(5)
@@ -202,6 +218,7 @@ class PatrolManagerRelevadorTest {
         assertEquals("cancelado_en_campo", motivoDelRechazo(5))
         assertEquals("Cancelado desde el teléfono", banco.ultimo("relay_reject").getString("detalle"))
         assertNull(patrulla.cuentaRegresiva.value)
+        assertTrue("el mando virtual preparado se suelta", "soltarDespegue" in dron.ordenes)
         banco.hub(relayGo(5))
         banco.pasar(11_000)
         assertFalse(dron.ordenes.any { it.startsWith("startRoute") })
@@ -229,6 +246,7 @@ class PatrolManagerRelevadorTest {
         aceptado(5)
         banco.hub(relayCancel(5, "vencido"))
         esperarA("el fin de la cuenta") { patrulla.cuentaRegresiva.value == null }
+        assertTrue("soltarDespegue" in dron.ordenes)
         banco.hub(relayGo(5))
         banco.pasar(11_000)
         assertFalse(dron.ordenes.any { it.startsWith("startRoute") })
@@ -269,8 +287,8 @@ class PatrolManagerRelevadorTest {
     /** El objetivo de la alerta 12: una persona quieta a 600 m al norte de la base. */
     private val quieto = objetivo(12, 600.0)
 
-    /** B despegó para un seguimiento y ya está arriba, en camino. */
-    private suspend fun enCamino(aAlt: Double = 40.0) {
+    /** B aceptó un seguimiento y terminó la cuenta: en la plataforma, subiendo ([despegarHasta] ya salió). */
+    private suspend fun despegando(aAlt: Double? = 40.0) {
         disponible()
         banco.hub(relayTracking(7, 12, quieto, ts = 1_000))
         aceptado(7)
@@ -278,10 +296,23 @@ class PatrolManagerRelevadorTest {
         banco.pasar(10_000)
         esperarA("el despegue sin esperar ningún go") { dron.ordenes.any { it.startsWith("despegarHasta") } }
         assertEquals(PatrolState.RELEVANDO, patrulla.state.value)
+    }
+
+    /** B despegó para un seguimiento y ya está arriba, en camino. */
+    private suspend fun enCamino(aAlt: Double = 40.0) {
+        despegando(aAlt)
         dron.estado.value = dron.estado.value.copy(enVuelo = true)
         banco.evento(FlightEvent.Despegando)
         banco.telemetria(norteM = 5.0, bateria = 94.0, alt = 60.0)
         banco.evento(FlightEvent.EnElAire)
+    }
+
+    /** B llegó a la distancia de toma, 20 m por encima de A: mandó `relay_ready` y espera que A se aleje. */
+    private suspend fun enLaToma() {
+        enCamino()
+        banco.telemetria(norteM = 545.0, bateria = 90.0, alt = 60.0)
+        banco.pasar(200)
+        esperarA("el relay_ready") { banco.mensajes("relay_ready").isNotEmpty() }
     }
 
     @Test
@@ -290,6 +321,7 @@ class PatrolManagerRelevadorTest {
         assertTrue("sube 20 m por encima de A: 50 + 20", "despegarHasta(70.0)" in dron.ordenes)
         assertEquals(1, banco.comando.eventos("TAKEOFF").count { it.getString("message").contains("relevar") || it.getString("message").contains("relevo") })
         esperarA("la orden de tránsito") { dron.ultimoDestino != null }
+        assertTrue("el tránsito sostiene la altura pedida", "cambiarAltura(70)" in dron.ordenes)
         val (lat, lon) = dron.ultimoDestino!!
         val (oLat, oLon) = punto(600.0)
         assertEquals("se detiene a 60 m del objetivo, del lado por el que llega", 60.0, Geo.distanciaM(oLat, oLon, lat, lon), 1.0)
@@ -298,10 +330,7 @@ class PatrolManagerRelevadorTest {
 
     @Test
     fun alLlegarALaTomaSembraElRastreadorYAvisaQueEstaListo() = runBlocking {
-        enCamino()
-        banco.telemetria(norteM = 545.0, bateria = 90.0, alt = 60.0)
-        banco.pasar(200)
-        esperarA("el relay_ready") { banco.mensajes("relay_ready").isNotEmpty() }
+        enLaToma()
         assertEquals(7L, banco.ultimo("relay_ready").getLong("relayId"))
         val objetivoDeB = patrulla.objetivo!!
         assertEquals("la misma alerta", 12L, objetivoDeB.alertId)
@@ -314,15 +343,17 @@ class PatrolManagerRelevadorTest {
         banco.pasar(1_100)
         assertEquals(PatrolState.RELEVANDO, patrulla.state.value)
 
-        // A ya está a más de 100 m: B baja EN EL LUGAR a la altura a la que A
-        // lo seguía (40 m) y recién ahí lo sigue; el relevo terminó para él.
+        // A ya está a más de 100 m: B baja EN EL LUGAR, en vertical, a la altura
+        // a la que A lo seguía (40 m) y recién ahí lo sigue; el relevo terminó.
         banco.hub(relayTarget(7, 12, quieto, ts = 4_000, aNorteM = 720.0))
         banco.pasar(300)
-        esperarA("la bajada") { "volarHaciaA(40)" in dron.ordenes }
-        val (bLat, bLon) = punto(545.0)
-        assertEquals("baja donde está, sin ir a ningún lado", 0.0, Geo.distanciaM(bLat, bLon, dron.ultimoDestino!!.first, dron.ultimoDestino!!.second), 0.5)
+        esperarA("la bajada") { "cambiarAltura(40)" in dron.ordenes }
+        val despuesDeLaBajada = dron.ordenes.dropWhile { it != "cambiarAltura(40)" }
+        assertFalse("baja donde está, sin ir a ningún lado", "volarHacia" in despuesDeLaBajada)
         assertEquals(PatrolState.RELEVANDO, patrulla.state.value)
-        banco.evento(FlightEvent.GotoArrived)
+        // Llegó a la altura de seguimiento (40 + la tolerancia): empieza a seguir.
+        banco.telemetria(norteM = 545.0, bateria = 90.0, alt = 41.5)
+        banco.pasar(300)
         esperarA("la órbita") { patrulla.state.value == PatrolState.ORBITING }
         assertTrue("startOrbit" in dron.ordenes)
         assertTrue(banco.comando.eventos("TRACKING_RESUMED").last().getString("message").contains("Alfa"))
@@ -336,14 +367,10 @@ class PatrolManagerRelevadorTest {
 
     @Test
     fun conAJubiladoBajaAunqueEsteCerca() = runBlocking {
-        enCamino()
-        banco.telemetria(norteM = 545.0, bateria = 90.0, alt = 60.0)
-        banco.pasar(200)
-        esperarA("el relay_ready") { banco.mensajes("relay_ready").isNotEmpty() }
+        enLaToma()
         banco.hub(relayTarget(7, 12, quieto, ts = 3_000, origen = "retirado", aNorteM = null, aAlt = null))
         banco.pasar(300)
-        esperarA("la bajada") { "volarHaciaA(40)" in dron.ordenes }
-        // Llegó a la altura de seguimiento (40 + la tolerancia): empieza a seguir.
+        esperarA("la bajada") { "cambiarAltura(40)" in dron.ordenes }
         banco.telemetria(norteM = 545.0, bateria = 90.0, alt = 41.5)
         banco.pasar(300)
         esperarA("la órbita") { patrulla.state.value == PatrolState.ORBITING }
@@ -356,61 +383,88 @@ class PatrolManagerRelevadorTest {
      */
     @Test
     fun unRetiradoConElTsDelUltimoObjetivoIgualHaceBajar() = runBlocking {
-        enCamino()
-        banco.telemetria(norteM = 545.0, bateria = 90.0, alt = 60.0)
-        banco.pasar(200)
-        esperarA("el relay_ready") { banco.mensajes("relay_ready").isNotEmpty() }
+        enLaToma()
         // El mismo ts que el último aplicado (2000), con un objetivo corrido que no se tiene que tomar.
         banco.hub(relayTarget(7, 12, objetivo(12, 900.0), ts = 2_000, origen = "retirado", aNorteM = null, aAlt = null))
         banco.pasar(300)
-        esperarA("la bajada") { "volarHaciaA(40)" in dron.ordenes }
+        esperarA("la bajada") { "cambiarAltura(40)" in dron.ordenes }
         assertEquals("el objetivo viejo no pisó la estimación", quieto.getDouble("lat"), patrulla.objetivo!!.lat, 1e-6)
 
         // `retirado` es para siempre: un en_linea posterior con A cerca no lo vuelve a frenar.
         banco.hub(relayTarget(7, 12, quieto, ts = 5_000, aNorteM = 600.0))
         banco.pasar(300)
-        assertEquals("sigue bajando, sin volver al punto de toma", 1, dron.ordenes.count { it.startsWith("volarHaciaA") })
-        banco.evento(FlightEvent.GotoArrived)
-        esperarA("la órbita") { patrulla.state.value == PatrolState.ORBITING }
-    }
-
-    @Test
-    fun unSinEnlaceViejoSoloAnotaElOrigen() = runBlocking {
-        enCamino()
-        banco.telemetria(norteM = 545.0, bateria = 90.0, alt = 60.0)
-        banco.pasar(200)
-        esperarA("el relay_ready") { banco.mensajes("relay_ready").isNotEmpty() }
-        banco.hub(relayTarget(7, 12, quieto, ts = 2_000, origen = "sin_enlace", aNorteM = 600.0))
-        banco.pasar(1_100)
-        assertEquals("sin_enlace no deja bajar: A puede seguir encima", PatrolState.RELEVANDO, patrulla.state.value)
-        assertTrue(dron.ordenes.none { it.startsWith("volarHaciaA") })
-    }
-
-    @Test
-    fun sinNoticiasDelHubBajaIgualPasadoElSilencio() = runBlocking {
-        enCamino()
-        banco.telemetria(norteM = 545.0, bateria = 90.0, alt = 60.0)
-        banco.pasar(200)
-        esperarA("el relay_ready") { banco.mensajes("relay_ready").isNotEmpty() }
-        banco.pasar(PatrolManager.SILENCIO_DEL_HUB_MS)
-        esperarA("la bajada") { "volarHaciaA(40)" in dron.ordenes }
-        // El dron no llega a la altura (ni avisa): pasado el tope, sigue igual desde donde está.
+        assertEquals("sigue bajando, sin volver a subir", 1, dron.ordenes.count { it == "cambiarAltura(40)" })
+        assertEquals("ni al punto de toma", 0, dron.ordenes.dropWhile { it != "cambiarAltura(40)" }.count { it == "volarHacia" })
+        // La bajada no se confirma (el dron no avisa su altura): pasado el tope, sigue igual desde donde está.
         banco.pasar(PatrolManager.BAJADA_MAXIMA_MS)
         esperarA("la órbita") { patrulla.state.value == PatrolState.ORBITING }
     }
 
     @Test
-    fun sinLaAlturaDeAYaAbajoSigueEnElActo() = runBlocking {
+    fun unSinEnlaceViejoSoloAnotaElOrigen() = runBlocking {
+        enLaToma()
+        banco.hub(relayTarget(7, 12, quieto, ts = 2_000, origen = "sin_enlace", aNorteM = 600.0))
+        banco.pasar(1_100)
+        assertEquals("sin_enlace no deja bajar: A puede seguir encima", PatrolState.RELEVANDO, patrulla.state.value)
+        assertTrue(dron.ordenes.none { it == "cambiarAltura(40)" })
+    }
+
+    /**
+     * Sin un solo `relay_target` lo más probable es que B haya perdido el enlace
+     * con el hub: nadie le puede decir si A se fue, así que NO baja (RELEVOS
+     * §3.5). Sigue al objetivo desde la toma, a la altura de A + 20, con el
+     * relevo en curso —el status lo sigue diciendo, y una reconexión no lo da
+     * por perdido—, y baja recién cuando el hub vuelve y dice que A se fue.
+     */
+    @Test
+    fun sinNoticiasDelHubNoBajaYSigueEnElRelevo() = runBlocking {
+        enLaToma()
+        banco.pasar(PatrolManager.SILENCIO_DEL_HUB_MS + 1_000)
+        esperarA("el aviso del silencio") { enElRegistro("Sin noticias de Alfa") }
+        val tomas = dron.ordenes.count { it == "volarHacia" }
+        banco.pasar(1_100)
+        esperarA("sigue sosteniendo la toma") { dron.ordenes.count { it == "volarHacia" } > tomas }
+        assertEquals(PatrolState.RELEVANDO, patrulla.state.value)
+        assertTrue("no baja a la altura de A", dron.ordenes.none { it == "cambiarAltura(40)" })
+        assertTrue("ni lo da por completo", banco.comando.eventos("TRACKING_RESUMED").isEmpty())
+        esperarA("el status con el relevo en curso") {
+            banco.mensajes("status").lastOrNull()?.optJSONObject("relevo")?.let {
+                it.optLong("relayId") == 7L && it.optString("fase") == "traspaso"
+            } == true
+        }
+        assertEquals("se avisa una sola vez", 1, patrulla.localLog.replayCache.count { it.contains("Sin noticias de Alfa") })
+
+        // El hub vuelve y dice que A se fue: recién ahí baja.
+        banco.hub(relayTarget(7, 12, quieto, ts = 4_000, origen = "retirado", aNorteM = null, aAlt = null))
+        banco.pasar(300)
+        esperarA("la bajada") { "cambiarAltura(40)" in dron.ordenes }
+    }
+
+    @Test
+    fun unaAlturaDeAQueNoVieneNoBorraLaUltima() = runBlocking {
         enCamino(aAlt = 30.0)
-        // Llega a la toma a la altura de seguimiento por defecto (la de A no se supo: el último target no la trae).
+        assertTrue("despegarHasta(60.0)" in dron.ordenes)
+        // El hub manda un target sin la altura de A: la de 30 m sigue valiendo.
         banco.hub(relayTarget(7, 12, quieto, ts = 3_000, aNorteM = 600.0, aAlt = null))
-        banco.telemetria(norteM = 545.0, bateria = 90.0, alt = 40.0)
+        banco.telemetria(norteM = 545.0, bateria = 90.0, alt = 60.0)
+        banco.pasar(200)
+        esperarA("el relay_ready") { banco.mensajes("relay_ready").isNotEmpty() }
+        banco.hub(relayTarget(7, 12, quieto, ts = 4_000, origen = "retirado", aNorteM = null, aAlt = null))
+        banco.pasar(300)
+        esperarA("la bajada a la altura de A, no a la de por defecto") { "cambiarAltura(30)" in dron.ordenes }
+    }
+
+    @Test
+    fun yaALaAlturaDeSeguimientoSigueEnElActo() = runBlocking {
+        enCamino(aAlt = 30.0)
+        // El dron quedó a 31 m (la de A, 30, más la tolerancia): no hay bajada.
+        banco.telemetria(norteM = 545.0, bateria = 90.0, alt = 31.0)
         banco.pasar(200)
         esperarA("el relay_ready") { banco.mensajes("relay_ready").isNotEmpty() }
         banco.hub(relayTarget(7, 12, quieto, ts = 4_000, origen = "retirado", aNorteM = null, aAlt = null))
         banco.pasar(300)
         esperarA("la órbita") { patrulla.state.value == PatrolState.ORBITING }
-        assertTrue("ya estaba a la altura: no hay bajada", dron.ordenes.none { it.startsWith("volarHaciaA") })
+        assertTrue("ya estaba a la altura: no hay bajada", dron.ordenes.none { it == "cambiarAltura(30)" })
     }
 
     @Test
@@ -424,6 +478,124 @@ class PatrolManagerRelevadorTest {
         esperarA("otra orden de tránsito") { dron.ordenes.count { it == "volarHacia" } >= 2 }
         val despues = dron.ultimoDestino!!
         assertEquals(antes.second, despues.second, 1e-6)
+    }
+
+    // ---- La separación con A (RELEVOS §3.5) ----
+
+    @Test
+    fun sinLaAlturaDeANoDespega() = runBlocking {
+        disponible()
+        banco.hub(relayTracking(7, 12, quieto, ts = 1_000))
+        aceptado(7)
+        // Ningún relay_target trajo la altura de A.
+        banco.hub(relayTarget(7, 12, quieto, ts = 2_000, aNorteM = 600.0, aAlt = null))
+        banco.pasar(10_000)
+        esperarA("el rechazo") { banco.mensajes("relay_reject").isNotEmpty() }
+        assertEquals("no_disponible", motivoDelRechazo(7))
+        assertTrue(detalleDelRechazo(7).contains("no se sabe a qué altura vuela Alfa"))
+        assertFalse(dron.ordenes.any { it.startsWith("despegarHasta") })
+        assertTrue("el mando vuelve a las palancas", "soltarDespegue" in dron.ordenes)
+        assertEquals(PatrolState.IDLE, patrulla.state.value)
+    }
+
+    @Test
+    fun conAPorEncimaDeCienMetrosNoDespega() = runBlocking {
+        disponible()
+        banco.hub(relayTracking(7, 12, quieto, ts = 1_000))
+        aceptado(7)
+        banco.hub(relayTarget(7, 12, quieto, ts = 2_000, aNorteM = 600.0, aAlt = 105.0))
+        banco.pasar(10_000)
+        esperarA("el rechazo") { banco.mensajes("relay_reject").isNotEmpty() }
+        assertTrue("125 m no se recorta a 120: B quedaría a 15 m de A", detalleDelRechazo(7).contains("pasa el techo de 120 m"))
+        assertFalse(dron.ordenes.any { it.startsWith("despegarHasta") })
+    }
+
+    @Test
+    fun siASubeEnElCaminoBSubeTambienYSiBajaNo() = runBlocking {
+        enCamino(aAlt = 40.0)
+        esperarA("la orden de tránsito") { dron.ultimoDestino != null }
+        banco.hub(relayTarget(7, 12, quieto, ts = 3_000, aNorteM = 600.0, aAlt = 55.0))
+        esperarA("la subida") { "cambiarAltura(75)" in dron.ordenes }
+        val cambios = dron.ordenes.count { it.startsWith("cambiarAltura") }
+        banco.hub(relayTarget(7, 12, quieto, ts = 4_000, aNorteM = 600.0, aAlt = 30.0))
+        delay(100)
+        assertEquals("si A baja, B no se le acerca", cambios, dron.ordenes.count { it.startsWith("cambiarAltura") })
+    }
+
+    @Test
+    fun siASubeDemasiadoEnElAireDejaElRelevoYVuelve() = runBlocking {
+        enCamino()
+        banco.hub(relayTarget(7, 12, quieto, ts = 3_000, aNorteM = 600.0, aAlt = 101.0))
+        esperarA("el relay_abort") { banco.mensajes("relay_abort").isNotEmpty() }
+        assertEquals("otro", banco.ultimo("relay_abort").getString("motivo"))
+        assertTrue(banco.ultimo("relay_abort").getString("detalle").contains("120"))
+        esperarA("el regreso a su base") { patrulla.state.value == PatrolState.RETURNING_HOME }
+        assertEquals("returnHome", dron.ultimaOrden)
+    }
+
+    /** En la plataforma no se le cambia la altura: la nueva sale al llegar arriba. */
+    @Test
+    fun siASubeMientrasBDespegaLaSubeAlLlegarArriba() = runBlocking {
+        despegando()
+        banco.hub(relayTarget(7, 12, quieto, ts = 3_000, aNorteM = 600.0, aAlt = 55.0))
+        delay(100)
+        assertTrue("en el suelo no se cambia la altura", dron.ordenes.none { it.startsWith("cambiarAltura") })
+        dron.estado.value = dron.estado.value.copy(enVuelo = true)
+        banco.telemetria(norteM = 5.0, bateria = 94.0, alt = 60.0)
+        banco.evento(FlightEvent.EnElAire)
+        esperarA("la altura nueva antes del tránsito") { "cambiarAltura(75)" in dron.ordenes }
+    }
+
+    /** Con el control tomado tampoco: la persona tiene el dron, y al soltarlo sube a la nueva. */
+    @Test
+    fun siASubeConElControlTomadoLaSubeAlSoltarlo() = runBlocking {
+        enCamino()
+        tomarElControl()
+        banco.hub(relayTarget(7, 12, quieto, ts = 3_000, aNorteM = 600.0, aAlt = 55.0))
+        delay(100)
+        assertFalse("cambiarAltura(75)" in dron.ordenes)
+        soltarElControl()
+        esperarA("la altura nueva al soltarlo") { "cambiarAltura(75)" in dron.ordenes }
+    }
+
+    @Test
+    fun siASubeDemasiadoEnElTraspasoSueltaElObjetivoYVuelve() = runBlocking {
+        enLaToma()
+        banco.hub(relayTarget(7, 12, quieto, ts = 3_000, aNorteM = 610.0, aAlt = 110.0))
+        esperarA("el relay_abort") { banco.mensajes("relay_abort").isNotEmpty() }
+        assertTrue("suelta el objetivo que había tomado", banco.comando.eventos("TRACKING_ENDED").isNotEmpty())
+        assertNull(patrulla.objetivo)
+        esperarA("el regreso a su base") { patrulla.state.value == PatrolState.RETURNING_HOME }
+    }
+
+    @Test
+    fun siASubeDemasiadoMientrasDespegaNoDespega() = runBlocking {
+        despegando()
+        banco.hub(relayTarget(7, 12, quieto, ts = 3_000, aNorteM = 600.0, aAlt = 105.0))
+        esperarA("el rechazo: todavía no dejó la plataforma") { banco.mensajes("relay_reject").isNotEmpty() }
+        assertEquals("no_disponible", motivoDelRechazo(7))
+        assertEquals("el despegue en curso se aborta", "land", dron.ultimaOrden)
+        assertEquals(PatrolState.IDLE, patrulla.state.value)
+        assertTrue(banco.mensajes("relay_abort").isEmpty())
+    }
+
+    // ---- La toma adelantada y la estimación del objetivo (RELEVOS §3.4) ----
+
+    private val persona = Deteccion(listOf("PERSON"), 0.9, listOf(Caja("PERSON", 0.9, 0.5, 0.5, 0.02, 0.05)), null, 2L)
+
+    /**
+     * B lo ve con su cámara antes de llegar: a 400 m al norte, a 60 m, mirando
+     * al norte con la cámara a −30°, y A lo ve 20 m más allá de donde B mira.
+     */
+    private suspend fun tomaAdelantada() {
+        enCamino()
+        banco.telemetria(norteM = 400.0, bateria = 90.0, alt = 60.0, gimbal = -30.0)
+        val (pLat, pLon) = punto(400.0)
+        val visto = Georreferencia.proyectar(pLat, pLon, 60.0, 0.0, -30.0, 0.5, 0.5)!!
+        val cerca = objetivo(12, (visto.lat - BancoDeRelevos.BASE_LAT) * Geo.METROS_POR_GRADO_LAT + 20.0)
+        banco.hub(relayTarget(7, 12, cerca, ts = 3_000, aNorteM = 600.0))
+        banco.deteccion.onDetection?.invoke(persona)
+        esperarA("la toma adelantada") { banco.mensajes("relay_ready").isNotEmpty() }
     }
 
     @Test
@@ -444,19 +616,56 @@ class PatrolManagerRelevadorTest {
         assertTrue("otra clase se descarta", banco.mensajes("relay_ready").isEmpty())
         assertTrue("sin alertas propias", banco.comando.alertas.isEmpty())
 
-        val persona = Deteccion(listOf("PERSON"), 0.9, listOf(Caja("PERSON", 0.9, 0.5, 0.5, 0.02, 0.05)), null, 2L)
         banco.deteccion.onDetection?.invoke(persona)
         esperarA("la toma adelantada") { banco.mensajes("relay_ready").isNotEmpty() }
         assertTrue(banco.comando.alertas.isEmpty())
     }
 
+    /** En el traspaso las detecciones de B siguen alimentando su rastreador: no se tiran. */
+    @Test
+    fun enElTraspasoSusDeteccionesSiguenActualizandoAlObjetivo() = runBlocking {
+        tomaAdelantada()
+        banco.reloj.adelantar(3_000)
+        assertTrue("hace 3 s que no lo ve", patrulla.objetivo!!.vistoHaceMs >= 3_000)
+        banco.deteccion.onDetection?.invoke(persona)
+        esperarA("la detección propia en el rastreador") { patrulla.objetivo!!.vistoHaceMs == 0L }
+        assertEquals(PatrolState.RELEVANDO, patrulla.state.value)
+        assertTrue("sin alertas propias", banco.comando.alertas.isEmpty())
+    }
+
+    /**
+     * Una sola detección propia (la que adelantó la toma) no puede dejar a B
+     * sin la estimación de A: si A lo vio después, la de A manda.
+     */
+    @Test
+    fun siALoVioDespuesQueBLaEstimacionDeAManda() = runBlocking {
+        tomaAdelantada()
+        banco.reloj.adelantar(6_000)
+        val corrido = objetivo(12, 520.0, esteM = 30.0, vistoHaceMs = 400)
+        banco.hub(relayTarget(7, 12, corrido, ts = 4_000, aNorteM = 600.0))
+        esperarA("la estimación de A") { kotlin.math.abs(patrulla.objetivo!!.lon - corrido.getDouble("lon")) < 1e-9 }
+        assertEquals(corrido.getDouble("lat"), patrulla.objetivo!!.lat, 1e-9)
+        assertEquals(400L, patrulla.objetivo!!.vistoHaceMs)
+    }
+
+    @Test
+    fun siBLoVioDespuesQueASuEstimacionSeQueda() = runBlocking {
+        tomaAdelantada()
+        val antes = patrulla.objetivo!!
+        val corrido = objetivo(12, 520.0, esteM = 30.0, vistoHaceMs = 2_000)
+        banco.hub(relayTarget(7, 12, corrido, ts = 4_000, aNorteM = 600.0))
+        delay(100)
+        val ahora = patrulla.objetivo!!
+        assertEquals(antes.lat, ahora.lat, 1e-9)
+        assertEquals(antes.lon, ahora.lon, 1e-9)
+        assertTrue(Geo.distanciaM(ahora.lat, ahora.lon, corrido.getDouble("lat"), corrido.getDouble("lon")) > 20.0)
+    }
+
+    // ---- Bordes de la subida ----
+
     @Test
     fun siNoTerminaDeSubirAterrizaYAborta() = runBlocking {
-        disponible()
-        banco.hub(relayTracking(7, 12, quieto))
-        aceptado(7)
-        banco.pasar(10_000)
-        esperarA("el despegue") { dron.ordenes.any { it.startsWith("despegarHasta") } }
+        despegando()
         dron.estado.value = dron.estado.value.copy(enVuelo = true)
         banco.pasar(PatrolManager.SUBIDA_MAXIMA_MS + 1)
         esperarA("el relay_abort") { banco.mensajes("relay_abort").isNotEmpty() }
@@ -466,16 +675,139 @@ class PatrolManagerRelevadorTest {
 
     @Test
     fun unRechazoDelDronAlDespegarEnTierraEsUnRelayReject() = runBlocking {
-        disponible()
-        banco.hub(relayTracking(7, 12, quieto))
-        aceptado(7)
-        banco.pasar(10_000)
-        esperarA("el despegue") { dron.ordenes.any { it.startsWith("despegarHasta") } }
+        despegando()
         banco.evento(FlightEvent.Problema("los motores no arrancaron"))
         esperarA("el rechazo") { banco.mensajes("relay_reject").isNotEmpty() }
         assertEquals("no_disponible", motivoDelRechazo(7))
         esperarA("el reposo") { patrulla.state.value == PatrolState.IDLE }
     }
+
+    // ---- Una persona con el control de B (RELEVOS §3.9: tomar el control no cancela nada) ----
+
+    /**
+     * El operador toma el control de B a media subida: la app no se lo saca.
+     * Ni el tope de la subida, ni un rechazo del dron, ni el aviso de que llegó
+     * arriba lo aterrizan o lo mandan hacia el objetivo.
+     */
+    @Test
+    fun conElControlTomadoDuranteLaSubidaNoSeLoSacan() = runBlocking {
+        despegando()
+        dron.estado.value = dron.estado.value.copy(enVuelo = true)
+        banco.telemetria(norteM = 5.0, bateria = 94.0, alt = 25.0)
+        tomarElControl()
+        banco.pasar(PatrolManager.SUBIDA_MAXIMA_MS + 1)
+        banco.evento(FlightEvent.Problema("el dron rechazó el mando virtual"))
+        banco.evento(FlightEvent.EnElAire)
+        delay(200)
+        assertTrue("el relevo sigue", banco.mensajes("relay_abort").isEmpty())
+        assertFalse("land" in dron.ordenes)
+        assertFalse("ni lo lleva hacia el objetivo", "volarHacia" in dron.ordenes)
+        assertEquals(PatrolState.MANUAL, patrulla.state.value)
+    }
+
+    @Test
+    fun alSoltarloRetomaLaSubidaYSigueHaciaElObjetivo() = runBlocking {
+        despegando()
+        dron.estado.value = dron.estado.value.copy(enVuelo = true)
+        banco.telemetria(norteM = 5.0, bateria = 94.0, alt = 25.0)
+        tomarElControl()
+        banco.pasar(PatrolManager.SUBIDA_MAXIMA_MS + 1)
+        soltarElControl()
+        esperarA("de vuelta al relevo") { patrulla.state.value == PatrolState.RELEVANDO }
+        esperarA("vuelve a subir, en vertical") { "cambiarAltura(60)" in dron.ordenes }
+        assertFalse("todavía no va a ningún lado", "volarHacia" in dron.ordenes)
+        // El tope de la subida cuenta desde que lo soltó: no aterriza por lo que tardó la persona.
+        banco.pasar(1_000)
+        assertTrue(banco.mensajes("relay_abort").isEmpty())
+
+        banco.telemetria(norteM = 5.0, bateria = 94.0, alt = 59.0)
+        banco.pasar(300)
+        esperarA("en camino hacia el objetivo") { "volarHacia" in dron.ordenes }
+        esperarA("el status en camino") {
+            banco.mensajes("status").lastOrNull()?.optJSONObject("relevo")?.optString("fase") == "en_camino"
+        }
+    }
+
+    @Test
+    fun soltadoYSinTerminarDeSubirAterrizaComoSiempre() = runBlocking {
+        despegando()
+        dron.estado.value = dron.estado.value.copy(enVuelo = true)
+        tomarElControl()
+        soltarElControl()
+        esperarA("de vuelta al relevo") { patrulla.state.value == PatrolState.RELEVANDO }
+        banco.pasar(PatrolManager.SUBIDA_MAXIMA_MS + 1)
+        esperarA("el relay_abort") { banco.mensajes("relay_abort").isNotEmpty() }
+        assertEquals("subida", banco.ultimo("relay_abort").getString("motivo"))
+        esperarA("aterriza") { dron.ultimaOrden == "land" }
+    }
+
+    @Test
+    fun soltadoEnTierraAMediaSubidaNoDespegaSolo() = runBlocking {
+        despegando()
+        tomarElControl()
+        soltarElControl()
+        esperarA("el rechazo") { banco.mensajes("relay_reject").isNotEmpty() }
+        assertEquals("no_disponible", motivoDelRechazo(7))
+        assertTrue(detalleDelRechazo(7).contains("antes de que despegara"))
+        esperarA("el reposo") { patrulla.state.value == PatrolState.IDLE }
+    }
+
+    @Test
+    fun enUnRelevoDePatrullaAlSoltarloSigueLaRutaDeA() = runBlocking {
+        disponible()
+        banco.hub(relayStart(5, fromIndex = 1))
+        aceptado(5)
+        banco.pasar(10_000)
+        banco.hub(relayGo(5))
+        esperarA("el despegue") { "startRoute(1, 1)" in dron.ordenes }
+        dron.estado.value = dron.estado.value.copy(enVuelo = true)
+        banco.evento(FlightEvent.Despegando)
+        tomarElControl()
+        banco.pasar(PatrolManager.SUBIDA_MAXIMA_MS + 1)
+        assertFalse("land" in dron.ordenes)
+        soltarElControl()
+        esperarA("la ruta de A") { dron.ordenes.count { it == "startRoute(1, 1)" } == 2 }
+        assertEquals(PatrolState.PATROLLING, patrulla.state.value)
+        esperarA("el relay_ready con la ruta arrancada") { banco.mensajes("relay_ready").size == 1 }
+    }
+
+    @Test
+    fun tomarYSoltarElControlRetomaElRelevoALaAlturaDelTransito() = runBlocking {
+        enCamino()
+        tomarElControl()
+        val antes = dron.ordenes.count { it == "cambiarAltura(60)" }
+        soltarElControl()
+        esperarA("de vuelta al relevo") { patrulla.state.value == PatrolState.RELEVANDO }
+        assertTrue("tomar el control no canceló nada", banco.mensajes("relay_abort").isEmpty())
+        assertEquals("la persona lo pudo dejar a cualquier altura", antes + 1, dron.ordenes.count { it == "cambiarAltura(60)" })
+    }
+
+    @Test
+    fun tomarYSoltarElControlEnLaBajadaSigueBajando() = runBlocking {
+        enLaToma()
+        banco.hub(relayTarget(7, 12, quieto, ts = 3_000, origen = "retirado", aNorteM = null, aAlt = null))
+        banco.pasar(300)
+        esperarA("la bajada") { "cambiarAltura(40)" in dron.ordenes }
+        tomarElControl()
+        soltarElControl()
+        esperarA("de vuelta al relevo") { patrulla.state.value == PatrolState.RELEVANDO }
+        assertEquals("sigue hacia la de seguimiento, no vuelve a la de A + 20", 2, dron.ordenes.count { it == "cambiarAltura(40)" })
+        banco.telemetria(norteM = 545.0, bateria = 90.0, alt = 41.0)
+        banco.pasar(300)
+        esperarA("la órbita") { patrulla.state.value == PatrolState.ORBITING }
+    }
+
+    @Test
+    fun unRelayCancelConElControlTomadoNoLoMandaACasa() = runBlocking {
+        enCamino()
+        tomarElControl()
+        banco.hub(relayCancel(7, "alerta_descartada"))
+        esperarA("el aviso") { enElRegistro("sigue en manos de quien tiene el control") }
+        assertEquals(PatrolState.MANUAL, patrulla.state.value)
+        assertFalse("returnHome" in dron.ordenes)
+    }
+
+    // ---- Otras salidas de B ----
 
     @Test
     fun sinSenialEnElRelevoAbortaYAlRecuperarlaVuelveASuBase() = runBlocking {
@@ -501,14 +833,12 @@ class PatrolManagerRelevadorTest {
 
     /** B ya tomó el objetivo y lo está siguiendo por su cuenta. */
     private suspend fun siguiendoLoAdoptado() {
-        enCamino()
-        banco.telemetria(norteM = 545.0, bateria = 90.0, alt = 60.0)
-        banco.pasar(200)
-        esperarA("el relay_ready") { banco.mensajes("relay_ready").isNotEmpty() }
+        enLaToma()
         banco.hub(relayTarget(7, 12, quieto, ts = 4_000, origen = "retirado", aNorteM = null, aAlt = null))
         banco.pasar(300)
-        esperarA("la bajada") { "volarHaciaA(40)" in dron.ordenes }
-        banco.evento(FlightEvent.GotoArrived)
+        esperarA("la bajada") { "cambiarAltura(40)" in dron.ordenes }
+        banco.telemetria(norteM = 545.0, bateria = 90.0, alt = 41.0)
+        banco.pasar(300)
         esperarA("la órbita") { patrulla.state.value == PatrolState.ORBITING }
     }
 
@@ -537,16 +867,7 @@ class PatrolManagerRelevadorTest {
         esperarA("la pausa") { patrulla.state.value == PatrolState.PAUSED }
         assertTrue("el hub ya lo canceló de su lado", banco.mensajes("relay_abort").isEmpty() && banco.mensajes("relay_reject").isEmpty())
         esperarA("el status sin relevo") { banco.mensajes("status").lastOrNull()?.getJSONObject("relevo")?.isNull("relayId") == true }
-    }
-
-    @Test
-    fun tomarYSoltarElControlRetomaElRelevo() = runBlocking {
-        enCamino()
-        banco.comando.recibir(JSONObject().put("type", "control_taken").put("by", "op"))
-        esperarA("el control manual") { patrulla.state.value == PatrolState.MANUAL }
-        banco.comando.recibir(JSONObject().put("type", "control_released").put("by", "op"))
-        esperarA("de vuelta al relevo") { patrulla.state.value == PatrolState.RELEVANDO }
-        assertTrue("tomar el control no canceló nada", banco.mensajes("relay_abort").isEmpty())
+        assertFalse("en el aire no hay despegue que soltar", "soltarDespegue" in dron.ordenes)
     }
 
     @Test
@@ -592,6 +913,7 @@ class PatrolManagerRelevadorTest {
         banco.pasar(PatrolManager.ESPERA_DEL_GO_MAXIMA_MS)
         esperarA("el fin de la espera") { patrulla.cuentaRegresiva.value == null }
         assertTrue("el hub ya lo dio por fallido: no se contesta nada", banco.mensajes("relay_reject").isEmpty())
+        assertTrue("el mando vuelve a las palancas", "soltarDespegue" in dron.ordenes)
         banco.hub(relayGo(5))
         delay(100)
         assertFalse(dron.ordenes.any { it.startsWith("startRoute") })
@@ -604,8 +926,11 @@ class PatrolManagerRelevadorTest {
         aceptado(5)
         banco.pasar(10_000)
         esperarA("la espera del go") { patrulla.cuentaRegresiva.value?.esperandoQueBajeA == true }
-        // El operador toma el control y el go llega enseguida, sin que el lazo vuelva a mirar.
-        banco.comando.recibir(JSONObject().put("type", "control_taken").put("by", "op"))
+        // El operador toma el control y el go llega enseguida. Las dos órdenes
+        // van en corrutinas propias: se espera que la toma esté hecha para que
+        // el go no le gane la carrera (lo rechaza el go o el lazo, el que mire
+        // primero).
+        tomarElControl()
         banco.comando.recibir(relayGo(5))
         esperarA("el rechazo") { banco.mensajes("relay_reject").isNotEmpty() }
         assertEquals("no_disponible", motivoDelRechazo(5))
@@ -613,7 +938,7 @@ class PatrolManagerRelevadorTest {
     }
 
     @Test
-    fun siElSdkFallaAlHabilitarElMandoVirtualRechazaSinDespegar() = runBlocking {
+    fun siElSdkFallaAlPrepararElDespegueRechazaSinDespegar() = runBlocking {
         disponible()
         dron.fallaDelMandoVirtual = IllegalStateException("el SDK no contestó")
         banco.hub(relayStart(5))

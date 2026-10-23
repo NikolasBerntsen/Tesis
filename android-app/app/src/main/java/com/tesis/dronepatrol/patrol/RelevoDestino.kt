@@ -88,10 +88,36 @@ class RelevoAsignado(
         private set
     var aLat: Double? = null
     var aLon: Double? = null
-    var aAlt: Double? = null
 
-    /** La altura a la que sube para ir hacia el objetivo. */
+    /**
+     * La última altura de A que se supo. Un `relay_target` sin ella (`aAlt:
+     * null`) no la borra: que el hub no la tenga ahora no quiere decir que A
+     * haya bajado, y sin ella B no tiene contra qué medir la separación.
+     */
+    var aAlt: Double? = null
+        private set
+
+    fun anotarAlturaDeA(nueva: Double?) {
+        if (nueva != null && nueva.isFinite()) aAlt = nueva
+    }
+
+    /**
+     * La altura a la que sube para ir hacia el objetivo y espera en la toma: la
+     * de A + [Aproximacion.SEPARACION_VERTICAL_M] más alta que se supo desde
+     * el despegue. Solo sube: si A baja, B no se le acerca.
+     */
     var alturaDeTransito = Autonomia.ALTURA_TRANSITO_M
+
+    /**
+     * B vuelve a subir en el aire a [alturaDeTransito] después de que una
+     * persona le soltó el control durante la subida (RELEVOS §3.9): esta vez
+     * no hay [com.tesis.dronepatrol.model.FlightEvent.EnElAire] que avise la
+     * llegada, así que se mira la telemetría.
+     */
+    var subiendoEnElAire = false
+
+    /** Ya se avisó que el hub se calló en el traspaso (se vuelve a avisar si habla y se calla de nuevo). */
+    var silencioAvisado = false
 
     /**
      * La altura de A en el momento de la toma: es la de seguimiento, a la que
@@ -167,13 +193,32 @@ object Aproximacion {
 
     /**
      * La altura del tránsito: [Autonomia.ALTURA_TRANSITO_M], o más si hace falta
-     * para quedar [SEPARACION_VERTICAL_M] por encima de A, dentro de 15..120.
+     * para quedar [SEPARACION_VERTICAL_M] por encima de A. null si no hay una
+     * que la garantice: sin la altura de A no hay contra qué medir, y con A por
+     * encima de 100 m los 20 m de más pasan el techo de 120 m —recortarla
+     * dejaría a B a menos de 20 m de A, que es justo lo que no puede pasar—.
+     *
+     * Ojo: `aAlt` es la altura de A sobre SU punto de despegue (barómetro,
+     * docs/PROTOCOLS.md §1.b), y la de B es sobre el suyo. Si B sale de otra
+     * base, a otra altura del terreno, las dos no se miden desde el mismo
+     * cero y esta cuenta no lo corrige: el contrato no trae la altura de
+     * ninguna base.
      */
-    fun alturaDeTransito(aAlt: Double?): Double {
-        val sobreA = aAlt?.takeIf { it.isFinite() }?.plus(SEPARACION_VERTICAL_M) ?: Autonomia.ALTURA_TRANSITO_M
+    fun alturaDeTransito(aAlt: Double?): Double? {
+        val a = aAlt?.takeIf { it.isFinite() } ?: return null
+        val sobreA = a + SEPARACION_VERTICAL_M
+        if (sobreA > Autonomia.ALTURA_TRANSITO_MAXIMA_M) return null
         return maxOf(Autonomia.ALTURA_TRANSITO_M, sobreA)
-            .coerceIn(Autonomia.ALTURA_TRANSITO_MINIMA_M, Autonomia.ALTURA_TRANSITO_MAXIMA_M)
     }
+
+    /** Por qué no hay una [alturaDeTransito] para [aAlt], en palabras para el registro y el `detalle`. */
+    fun sinSeparacion(aAlt: Double?, deA: String): String =
+        if (aAlt?.isFinite() != true) {
+            "no se sabe a qué altura vuela $deA: no hay cómo quedar ${SEPARACION_VERTICAL_M.toInt()} m por encima"
+        } else {
+            "$deA vuela a ${aAlt.toInt()} m: ${SEPARACION_VERTICAL_M.toInt()} m por encima pasa el techo de " +
+                "${Autonomia.ALTURA_TRANSITO_MAXIMA_M.toInt()} m"
+        }
 
     /**
      * Dónde se espera al objetivo dentro de [adelantoMs] desde [ahoraMs]: la

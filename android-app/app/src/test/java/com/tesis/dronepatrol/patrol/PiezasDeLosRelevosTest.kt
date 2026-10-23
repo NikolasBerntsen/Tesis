@@ -124,11 +124,41 @@ class PiezasDeLosRelevosTest {
 
     @Test
     fun laAlturaDeTransitoQuedaVeinteMetrosSobreA() {
-        assertEquals(60.0, Aproximacion.alturaDeTransito(null), 1e-9)
-        assertEquals(60.0, Aproximacion.alturaDeTransito(30.0), 1e-9)
-        assertEquals(75.0, Aproximacion.alturaDeTransito(55.0), 1e-9)
-        assertEquals("tope de 120", 120.0, Aproximacion.alturaDeTransito(110.0), 1e-9)
-        assertEquals(60.0, Aproximacion.alturaDeTransito(Double.NaN), 1e-9)
+        assertEquals(60.0, Aproximacion.alturaDeTransito(30.0)!!, 1e-9)
+        assertEquals(75.0, Aproximacion.alturaDeTransito(55.0)!!, 1e-9)
+        assertEquals("justo en el techo", 120.0, Aproximacion.alturaDeTransito(100.0)!!, 1e-9)
+        assertEquals("una base más baja que la de A", 60.0, Aproximacion.alturaDeTransito(-15.0)!!, 1e-9)
+    }
+
+    /**
+     * Sin una altura que deje a B 20 m por encima de A no hay altura de tránsito:
+     * ni sin la de A, ni con A tan alto que 20 m más pasan el techo. Recortarla a
+     * 120 m dejaba a B a 10 m de un A a 110 m.
+     */
+    @Test
+    fun sinSeparacionPosibleNoHayAlturaDeTransito() {
+        assertNull("sin la altura de A", Aproximacion.alturaDeTransito(null))
+        assertNull(Aproximacion.alturaDeTransito(Double.NaN))
+        assertNull("110 + 20 pasa el techo", Aproximacion.alturaDeTransito(110.0))
+        assertNull(Aproximacion.alturaDeTransito(100.5))
+        assertTrue(Aproximacion.sinSeparacion(null, "Alfa").contains("no se sabe a qué altura vuela Alfa"))
+        assertTrue(Aproximacion.sinSeparacion(Double.NaN, "Alfa").contains("no se sabe"))
+        assertEquals(
+            "Alfa vuela a 110 m: 20 m por encima pasa el techo de 120 m",
+            Aproximacion.sinSeparacion(110.0, "Alfa"),
+        )
+    }
+
+    @Test
+    fun unaAlturaDeAQueNoVieneNoBorraLaQueSeSabia() {
+        val r = RelevoAsignado(7, ALFA, null, 0, 12, 0L)
+        assertNull(r.aAlt)
+        r.anotarAlturaDeA(45.0)
+        r.anotarAlturaDeA(null)
+        r.anotarAlturaDeA(Double.NaN)
+        assertEquals(45.0, r.aAlt!!, 1e-9)
+        r.anotarAlturaDeA(50.0)
+        assertEquals(50.0, r.aAlt!!, 1e-9)
     }
 
     @Test

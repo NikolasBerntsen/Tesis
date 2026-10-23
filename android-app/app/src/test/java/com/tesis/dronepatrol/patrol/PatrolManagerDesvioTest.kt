@@ -1,5 +1,6 @@
 package com.tesis.dronepatrol.patrol
 
+import com.tesis.dronepatrol.drone.DroneController
 import com.tesis.dronepatrol.drone.Geo
 import com.tesis.dronepatrol.model.FlightEvent
 import com.tesis.dronepatrol.model.MotivoDelDron
@@ -25,8 +26,10 @@ import org.robolectric.annotation.Config
  * El desvío a otra base (docs/RELEVOS.md §4) en la máquina de estados: el caso
  * extremo, cuando de verdad no llega a la propia —confirmado 10 s—, nunca porque
  * otra esté más cerca; de una sola vía, con el destino comprometido aunque la
- * base salga de la lista; el único corte del regreso propio del DJI; y el
- * aterrizaje en un lugar sin revisar, que no se confirma solo.
+ * base salga de la lista; el único corte del regreso propio del DJI; la
+ * subida en vertical a la altura de tránsito antes de salir; y el failsafe en
+ * "aterrizar", con el que el controlador tampoco confirma solo el aterrizaje
+ * en un lugar sin revisar.
  *
  * El DJI informa que volver le cuesta 20 % y aterrizar 2 %; el dron está a
  * 1500 m al norte de su base y la base "Sur" (la 2) está a 900 m al norte de la
@@ -43,8 +46,8 @@ class PatrolManagerDesvioTest {
     @After
     fun desarmar() = banco.desarmar()
 
-    private suspend fun telemetria(norteM: Double = 1_500.0, bateria: Double, pctParaVolver: Double = 20.0) =
-        banco.telemetria(norteM = norteM, bateria = bateria, pctParaVolver = pctParaVolver, pctParaAterrizar = 2.0)
+    private suspend fun telemetria(norteM: Double = 1_500.0, bateria: Double, pctParaVolver: Double = 20.0, alt: Double = 40.0) =
+        banco.telemetria(norteM = norteM, bateria = bateria, pctParaVolver = pctParaVolver, pctParaAterrizar = 2.0, alt = alt)
 
     /** Patrullando a 1500 m de su base con autonomía informada. */
     private suspend fun lejosDeCasa() {
@@ -57,19 +60,19 @@ class PatrolManagerDesvioTest {
     }
 
     /** Ya volviendo por batería, con la batería (21 %) por debajo de lo que cuesta volver + 2. */
-    private suspend fun noLlega() {
+    private suspend fun noLlega(alt: Double = 40.0) {
         lejosDeCasa()
-        telemetria(bateria = 21.0)
+        telemetria(bateria = 21.0, alt = alt)
         esperarA("el regreso") { patrulla.state.value == PatrolState.RETURNING_HOME_BATTERY }
     }
 
-    /** No llega, sostenido 10 s: se desvía a "Sur". */
-    private suspend fun desviado() {
-        noLlega()
+    /** No llega, sostenido 10 s: se desvía a "Sur". Viene a [alt] metros (por defecto, debajo de la de tránsito). */
+    private suspend fun desviado(alt: Double = 40.0) {
+        noLlega(alt)
         esperarA("el pedido de patrulla") { banco.mensajes("relay_request").isNotEmpty() }
         banco.hub(relayStatus(banco.ultimo("relay_request").getString("ref"), 5, "RESERVADO"))
         banco.reloj.adelantar(Autonomia.CONFIRMAR_NO_LLEGA_MS)
-        telemetria(bateria = 21.0)
+        telemetria(bateria = 21.0, alt = alt)
         esperarA("el desvío") { banco.mensajes("rth_diverted").isNotEmpty() }
     }
 
@@ -132,18 +135,20 @@ class PatrolManagerDesvioTest {
     }
 
     @Test
-    fun alDesviarseApagaElRegresoDelDjiYVuelaAlPuntoDeVisitantesALaAlturaDeTransito() = runBlocking {
+    fun alDesviarseApagaElRegresoDelDjiSubeYRecienAhiVaAlPuntoDeVisitantes() = runBlocking {
         desviado()
         val ordenes = dron.ordenes
         val desde = ordenes.indexOf("permitirRthPropio(false)")
         assertTrue("apaga el regreso propio por batería", desde >= 0)
         assertEquals(
-            listOf(
-                "permitirRthPropio(false)", "cancelarRegreso", "failsafeAterrizar(true)", "confirmacionAutomatica(false)",
-                "fijarPuntoDeRetornoEn", "volarHaciaA(60)",
-            ),
-            ordenes.subList(desde, desde + 6),
+            listOf("permitirRthPropio(false)", "cancelarRegreso", "failsafeAterrizar(true)", "fijarPuntoDeRetornoEn", "cambiarAltura(60)"),
+            ordenes.subList(desde, desde + 5),
         )
+        assertFalse("es un camino que nunca voló: primero sube, en vertical", "volarHacia" in ordenes.subList(desde, ordenes.size))
+
+        // La telemetría confirma la altura de tránsito: recién ahí sale hacia la base.
+        telemetria(bateria = 21.0, alt = 59.0)
+        esperarA("la salida hacia la base") { "volarHacia" in dron.ordenes }
         val (lat, lon) = dron.ultimoDestino!!
         assertEquals(0.0, Geo.distanciaM(puntoDeVisitantesDeSur.first, puntoDeVisitantesDeSur.second, lat, lon), 0.5)
 
@@ -174,6 +179,9 @@ class PatrolManagerDesvioTest {
         esperarA("el aterrizaje") { dron.ultimaOrden == "land" }
         val ordenes = dron.ordenes
         assertEquals("fijarPuntoDeRetornoAqui", ordenes[ordenes.size - 2])
+        // Llegó subiendo todavía (el punto estaba a 1 m): vencido el tope no sale hacia ningún lado.
+        banco.pasar(PatrolManager.SUBIDA_DEL_DESVIO_MAXIMA_MS)
+        assertFalse("volarHacia" in dron.ordenes)
 
         dron.estado.value = dron.estado.value.copy(enVuelo = false)
         banco.evento(FlightEvent.Aterrizado)
@@ -186,11 +194,26 @@ class PatrolManagerDesvioTest {
             banco.comando.eventos("LANDED").any { it.getString("message").contains("\"Sur\"") }
         }
         assertEquals(PatrolState.LANDED, patrulla.state.value)
-        esperarA("la confirmación automática de vuelta") { dron.ultimaOrden == "confirmacionAutomatica(true)" }
-        val fin = dron.ordenes.takeLast(4)
+        val fin = dron.ordenes.takeLast(2)
         assertTrue("vuelve el regreso propio", "permitirRthPropio(true)" in fin)
-        assertTrue("y el failsafe de fábrica", "failsafeAterrizar(false)" in fin)
-        assertTrue("y la confirmación automática", "confirmacionAutomatica(true)" in fin)
+        assertTrue("y el failsafe de fábrica (con él, la confirmación de siempre)", "failsafeAterrizar(false)" in fin)
+    }
+
+    @Test
+    fun siLaSubidaNoSeConfirmaSaleIgualAlVencerElTope() = runBlocking {
+        desviado()
+        banco.pasar(PatrolManager.SUBIDA_DEL_DESVIO_MAXIMA_MS - 1_000)
+        assertFalse("todavía espera la altura", "volarHacia" in dron.ordenes)
+        banco.pasar(1_000)
+        esperarA("la salida a la altura que tiene") { "volarHacia" in dron.ordenes }
+        assertTrue(patrulla.localLog.replayCache.any { it.contains("No terminó de subir") })
+    }
+
+    @Test
+    fun siYaVieneMasAltoSaleEnElActoASuAltura() = runBlocking {
+        desviado(alt = 70.0)
+        esperarA("la salida hacia la base") { "volarHacia" in dron.ordenes }
+        assertTrue("nunca baja para desviarse", dron.ordenes.none { it.startsWith("cambiarAltura") })
     }
 
     @Test
@@ -232,7 +255,7 @@ class PatrolManagerDesvioTest {
         desviado()
         banco.evento(FlightEvent.ElDronTomoElControl(MotivoDelDron.RTH_BATERIA))
         esperarA("el corte") { dron.ordenes.count { it == "cancelarRegreso" } == 2 }
-        esperarA("y sigue hacia la base del desvío") { dron.ultimaOrden == "volarHaciaA(60)" }
+        esperarA("y vuelve a subir para seguir hacia la base del desvío") { dron.ultimaOrden == "cambiarAltura(60)" }
 
         val antes = dron.ordenes.size
         banco.evento(FlightEvent.ElDronTomoElControl(MotivoDelDron.RTH_BATERIA))
@@ -256,7 +279,6 @@ class PatrolManagerDesvioTest {
         esperarA("el control manual") { patrulla.state.value == PatrolState.MANUAL }
         assertTrue("permitirRthPropio(true)" in dron.ordenes)
         assertTrue("failsafeAterrizar(false)" in dron.ordenes)
-        assertTrue("confirmacionAutomatica(true)" in dron.ordenes)
         // Ya no hay desvío que repetir al reconectar.
         banco.comando.connected.value = false
         delay(100)
@@ -309,55 +331,54 @@ class PatrolManagerDesvioTest {
         assertFalse("cancelarRegreso" in dron.ordenes)
     }
 
-    // ---- La confirmación del aterrizaje en un lugar sin revisar (RELEVOS §4) ----
+    // ---- El aterrizaje en un lugar sin revisar y el regreso que no se corta ----
 
+    /**
+     * Con el failsafe en "aterrizar" el controlador no confirma solo un
+     * aterrizaje (se corre y reintenta, RELEVOS §4). Uno que ordena una persona
+     * deja el desvío, y con él vuelve el failsafe de fábrica ANTES del `land`:
+     * ese aterrizaje se confirma como siempre.
+     */
     @Test
-    fun siPideConfirmarSeCorreDosVecesYRecienEnElCriticoMasUnoConfirma() = runBlocking {
-        desviado()
-        telemetria(norteM = 915.0, bateria = 15.0)
-        esperarA("el aterrizaje") { dron.ultimaOrden == "land" }
-
-        banco.evento(FlightEvent.AterrizajePideConfirmacion)
-        esperarA("el primer corrimiento") { dron.ultimaOrden == "volarHacia" }
-        val (lat1, lon1) = dron.ultimoDestino!!
-        val (aquiLat, aquiLon) = punto(915.0)
-        assertEquals(10.0, Geo.distanciaM(aquiLat, aquiLon, lat1, lon1), 0.2)
-        assertTrue("hacia el norte", lat1 > aquiLat)
-        banco.evento(FlightEvent.GotoArrived)
-        esperarA("el reintento") { dron.ultimaOrden == "land" }
-
-        banco.evento(FlightEvent.AterrizajePideConfirmacion)
-        esperarA("el segundo corrimiento") { dron.ultimaOrden == "volarHacia" }
-        assertTrue("hacia el este", dron.ultimoDestino!!.second > aquiLon)
-        banco.evento(FlightEvent.GotoArrived)
-        esperarA("el segundo reintento") { dron.ultimaOrden == "land" }
-
-        banco.evento(FlightEvent.AterrizajePideConfirmacion)
-        delay(100)
-        assertEquals("ya no se corre más: espera", "land", dron.ultimaOrden)
-        telemetria(norteM = 915.0, bateria = 12.0)
-        delay(100)
-        assertFalse("confirmarAterrizaje" in dron.ordenes)
-        telemetria(norteM = 915.0, bateria = 11.0)
-        esperarA("la confirmación en el crítico + 1") { "confirmarAterrizaje" in dron.ordenes }
-    }
-
-    @Test
-    fun conLaBateriaEnElCriticoMasUnoConfirmaSinCorrerse() = runBlocking {
-        desviado()
-        telemetria(norteM = 915.0, bateria = 11.0)
-        esperarA("el aterrizaje") { dron.ultimaOrden == "land" }
-        banco.evento(FlightEvent.AterrizajePideConfirmacion)
-        esperarA("la confirmación") { dron.ultimaOrden == "confirmarAterrizaje" }
-    }
-
-    @Test
-    fun unAterrizajeQueOrdenaUnaPersonaSeConfirmaComoSiempre() = runBlocking {
+    fun unAterrizajeQueOrdenaUnaPersonaDevuelveElFailsafeAntesDeBajar() = runBlocking {
         desviado()
         patrulla.aterrizar()
         esperarA("el aterrizaje ordenado") { dron.ultimaOrden == "land" }
-        assertTrue("confirmacionAutomatica(true)" in dron.ordenes)
-        banco.evento(FlightEvent.AterrizajePideConfirmacion)
-        esperarA("la confirmación") { dron.ultimaOrden == "confirmarAterrizaje" }
+        val ordenes = dron.ordenes
+        assertTrue(ordenes.lastIndexOf("failsafeAterrizar(false)") in 0 until ordenes.lastIndexOf("land"))
+    }
+
+    /**
+     * El controlador no pudo cortar el regreso (el dron no volvió a IDLE): el
+     * dron sigue volviendo y no se le pelea (RELEVOS §4). El desvío se deja con
+     * el failsafe de fábrica, el único corte queda gastado y no sale ni otro
+     * desvío ni el §5 con el vuelo, aunque la batería siga bajando.
+     */
+    @Test
+    fun siNoSeCortaElRegresoDejaElDesvioYNoLoPelea() = runBlocking {
+        desviado()
+        banco.evento(FlightEvent.Problema("${DroneController.NO_SE_CORTO_EL_REGRESO}: el dron no volvió a IDLE en 3 s"))
+        esperarA("el failsafe de fábrica") { "failsafeAterrizar(false)" in dron.ordenes }
+        assertTrue("permitirRthPropio(true)" in dron.ordenes)
+        val antes = dron.ordenes.size
+        repeat(3) {
+            banco.reloj.adelantar(5_000)
+            telemetria(norteM = 1_300.0, bateria = 19.0, alt = 60.0)
+        }
+        telemetria(norteM = 1_200.0, bateria = 12.0)
+        banco.pasar(PatrolManager.SUBIDA_DEL_DESVIO_MAXIMA_MS)
+        assertEquals("ni otro desvío, ni la salida, ni el §5 con el vuelo: el regreso es del dron", antes, dron.ordenes.size)
+        assertEquals(1, banco.mensajes("rth_diverted").size)
+        assertEquals(PatrolState.RETURNING_HOME_BATTERY, patrulla.state.value)
+    }
+
+    @Test
+    fun unProblemaCualquieraNoDejaElDesvio() = runBlocking {
+        desviado()
+        banco.evento(FlightEvent.Problema("el gimbal no respondió"))
+        delay(100)
+        assertFalse("failsafeAterrizar(false)" in dron.ordenes)
+        telemetria(bateria = 21.0, alt = 60.0)
+        esperarA("la salida hacia la base") { "volarHacia" in dron.ordenes }
     }
 }

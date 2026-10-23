@@ -704,6 +704,27 @@ class SimulatedDroneControllerRelevosTest {
         assertEquals(aca.lon, b.ultima.lon, 0.0)
     }
 
+    /**
+     * Al decidir un desvío se prueba fijar el retorno en la base destino, lejos
+     * de donde está (RELEVOS §4). El simulador no tiene el límite de distancia
+     * del MSDK y lo acepta: un regreso posterior va ahí. Una posición inválida
+     * no cambia nada.
+     */
+    @Test
+    fun fijarElPuntoDeRetornoEnOtroLadoMudaLaBaseAEsePunto() = conDron { b ->
+        b.dron.fijarPuntoDeRetornoEn(Double.NaN, LON)
+        assertEquals(LAT, b.dron.estado.value.puntoDeRetornoLat, 0.0)
+
+        b.dron.fijarPuntoDeRetornoEn(alNorte(120.0), LON)
+
+        assertEquals(alNorte(120.0), b.dron.estado.value.puntoDeRetornoLat, 0.0)
+        assertEquals(LON, b.dron.estado.value.puntoDeRetornoLon, 0.0)
+        b.dron.returnHome()
+        volar(60_000)
+        assertEquals(FlightEvent.ArrivedHome, b.eventos.last())
+        assertEquals("baja en la base nueva (con el margen de llegada)", 120.0, metrosAlNorte(b.ultima), 5.0)
+    }
+
     // ---- cambiarAltura: la separación vertical y la altura de tránsito (RELEVOS §3.5 y §4) ----
 
     /** Sube en vertical a 2 m/s, sin moverse en el plano, y queda ahí. */

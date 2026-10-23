@@ -451,85 +451,20 @@ interface DroneController {
     suspend fun capturarFoto(): ByteArray? = withTimeoutOrNull(ESPERA_FOTO_MS) { cuadrosParaDeteccion.first() }
 
     /**
-     * Habilita el mando virtual CON EL DRON EN EL SUELO, antes de encender los
-     * motores, y espera la confirmación de la aeronave: true si quedó
-     * habilitado. Es el paso de B al aceptar un relevo (docs/RELEVOS.md §2.4):
-     * un rechazo del mando virtual (el control en un modo que no cede la
-     * autoridad, un regreso en curso) se descubre acá, en tierra, y B contesta
-     * `relay_reject` sin despegar, en vez de descubrirlo a 60 m y tener que
-     * aterrizar.
-     *
-     * Real: `enableVirtualStick` y esperar `VirtualStickState.isVirtualStickEnable`,
-     * con un tope de unos segundos; false si no se confirma. Por defecto true:
-     * un controlador sin mando virtual (el simulado) no tiene nada que
-     * habilitar, y el despegue de relevo igual exige [despegarHasta], que por
-     * defecto no despega.
-     */
-    suspend fun habilitarMandoVirtualEnTierra(): Boolean = true
-
-    /**
-     * Como [volarHacia], pero primero sube (o baja) EN VERTICAL hasta [alturaM]
-     * metros sobre el punto de despegue y recién ahí va en horizontal hasta el
-     * punto, a esa altura; al llegar queda estacionario y emite
-     * [FlightEvent.GotoArrived]. Es la única orden que cambia la altura con el
-     * dron ya en el aire:
-     *  - el desvío a otra base sube a la altura de tránsito antes de ir hacia el
-     *    punto de visitantes (RELEVOS §4), por encima de lo que haya en un
-     *    camino que el dron nunca voló;
-     *  - B, después del traspaso, baja en el lugar a la altura de seguimiento
-     *    (RELEVOS §3.5): se le pide el punto donde ya está, a otra altura.
-     *
-     * Real: el mando virtual con solo componente vertical hasta [alturaM] ± 1 m
-     * y después el lazo de [volarHacia]. Simulado: sube o baja a su velocidad
-     * vertical y después vuela. Una altura fuera de 2..120 m se recorta.
-     *
-     * Por defecto es [volarHacia]: vuela a la altura en la que está, que es lo
-     * que el dron hacía antes de esta orden (el desvío llega igual, más bajo, y
-     * B sigue al objetivo desde la altura de tránsito).
-     */
-    fun volarHaciaA(lat: Double, lon: Double, alturaM: Double) = volarHacia(lat, lon)
-
-    /**
-     * Fija el punto de retorno del dron en ([lat], [lon]), que no es donde está:
-     * al decidir un desvío se intenta con el punto de visitantes de la base
+     * Intenta fijar el punto de retorno del dron en ([lat], [lon]), que no es
+     * donde está: al decidir un desvío, el punto de visitantes de la base
      * destino (RELEVOS §4), para que un regreso del propio DJI vaya ahí y no a
      * una casa que ya no alcanza.
      *
      * Real: escribir `KeyHomeLocation`. El MSDK limita lo lejos que puede quedar
-     * del dron, así que el rechazo es lo esperado: se avisa con
-     * [FlightEvent.Problema] y el desvío sigue igual (al llegar,
-     * [fijarPuntoDeRetornoAqui] lo fija de verdad). Por defecto no hace nada.
+     * el punto, así que el rechazo es lo esperado y queda en el registro del
+     * controlador, no como un problema del dron: el desvío sigue igual y, al
+     * llegar, [fijarPuntoDeRetornoAqui] lo fija de verdad. Simulado: mueve su
+     * base (no tiene ese límite). El punto nuevo se ve en
+     * [EstadoDelDron.puntoDeRetornoLat]/[EstadoDelDron.puntoDeRetornoLon]. Por
+     * defecto no hace nada.
      */
     fun fijarPuntoDeRetornoEn(lat: Double, lon: Double) {
         // Sin implementación el punto de retorno queda donde estaba hasta llegar.
-    }
-
-    /**
-     * Quién confirma el aterrizaje cuando el dron lo pide cerca del suelo
-     * (`KeyIsLandingConfirmationNeeded`: abajo puede haber agua, techo o algo
-     * que no es suelo). Con `true` —el comportamiento de siempre— el
-     * controlador lo confirma solo si el aterrizaje lo ordenó la app. Con
-     * `false` no lo confirma: emite [FlightEvent.AterrizajePideConfirmacion] y
-     * queda estacionario esperando [confirmarAterrizaje] o otra orden.
-     *
-     * Se apaga en el aterrizaje de un desvío y en el del protocolo de última
-     * ubicación (RELEVOS §4): en un lugar que nadie revisó, la app se corre 10 m
-     * y lo vuelve a intentar (hasta 2 veces), y recién con la batería en el
-     * crítico + 1 confirma. Se vuelve a prender al tocar tierra.
-     *
-     * Por defecto no hace nada: el controlador sigue confirmando solo, y la app
-     * nunca recibe el pedido.
-     */
-    fun fijarConfirmacionDeAterrizaje(automatica: Boolean) {
-        // Sin implementación el controlador confirma como siempre.
-    }
-
-    /**
-     * Confirma el aterrizaje que el dron está pidiendo
-     * ([FlightEvent.AterrizajePideConfirmacion]; real: `KeyConfirmLanding`). Sin
-     * un pedido en curso no hace nada. Por defecto no hace nada.
-     */
-    fun confirmarAterrizaje() {
-        // Sin implementación no hay pedido que confirmar (ver fijarConfirmacionDeAterrizaje).
     }
 }

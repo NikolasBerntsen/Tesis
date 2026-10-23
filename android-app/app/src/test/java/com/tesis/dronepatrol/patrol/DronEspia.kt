@@ -92,14 +92,28 @@ internal class DronEspia(
         private set
 
     /**
-     * Si es true, apuntar la cámara y girar en el lugar emiten en el acto la
-     * telemetría que lo confirma, como haría el dron: la secuencia de última
-     * ubicación espera esa confirmación antes de cada foto.
+     * Si son true, apuntar la cámara ([confirmarCamara]) y girar en el lugar
+     * ([confirmarRumbo]) emiten en el acto la telemetría que lo confirma, como
+     * haría el dron: la secuencia de última ubicación espera esa confirmación
+     * antes de cada foto. Van por separado porque un giro que no se confirma
+     * es un mando virtual que no está, y eso corta la panorámica; una cámara
+     * que no confirma, no.
      */
     @Volatile
-    var confirmarCamaraYRumbo = false
+    var confirmarCamara = false
 
-    /** Lo que contesta [habilitarMandoVirtualEnTierra]. */
+    @Volatile
+    var confirmarRumbo = false
+
+    /** Las dos confirmaciones juntas (ver [confirmarCamara] y [confirmarRumbo]). */
+    var confirmarCamaraYRumbo: Boolean
+        get() = confirmarCamara && confirmarRumbo
+        set(valor) {
+            confirmarCamara = valor
+            confirmarRumbo = valor
+        }
+
+    /** Lo que contesta [prepararDespegue]. */
     @Volatile
     var mandoVirtualEnTierra = true
 
@@ -111,8 +125,8 @@ internal class DronEspia(
     @Volatile
     var ultimoDestino: Pair<Double, Double>? = null
 
-    private fun confirmar(cambio: (Telemetry) -> Telemetry) {
-        if (!confirmarCamaraYRumbo) return
+    private fun confirmar(si: Boolean, cambio: (Telemetry) -> Telemetry) {
+        if (!si) return
         val t = cambio(ultimaTelemetria ?: return).copy(ts = System.currentTimeMillis())
         ultimaTelemetria = t
         telemetria.tryEmit(t)
@@ -188,14 +202,17 @@ internal class DronEspia(
     override fun girarEnElLugar(rumboGrados: Double) {
         if (!conRelevos) return super.girarEnElLugar(rumboGrados)
         anotar("girar($rumboGrados)")
-        confirmar { it.copy(heading = rumboGrados, rumboCamara = rumboGrados) }
+        confirmar(confirmarRumbo) { it.copy(heading = rumboGrados, rumboCamara = rumboGrados) }
     }
 
     override fun apuntarCamara(pitchGrados: Double) {
         if (!conRelevos) return super.apuntarCamara(pitchGrados)
         anotar("apuntar($pitchGrados)")
-        confirmar { it.copy(gimbalPitch = pitchGrados) }
+        confirmar(confirmarCamara) { it.copy(gimbalPitch = pitchGrados) }
     }
+
+    override fun cambiarAltura(alturaM: Double) =
+        if (conRelevos) anotar("cambiarAltura(${alturaM.toInt()})") else super.cambiarAltura(alturaM)
 
     override fun cancelarRegreso() = if (conRelevos) anotar("cancelarRegreso") else super.cancelarRegreso()
 
@@ -214,33 +231,19 @@ internal class DronEspia(
         return foto
     }
 
-    /** Si no es null, [habilitarMandoVirtualEnTierra] lo tira: el SDK que falla en vez de contestar. */
+    /** Si no es null, [prepararDespegue] lo tira: el SDK que falla en vez de contestar. */
     @Volatile
     var fallaDelMandoVirtual: Exception? = null
 
-    override suspend fun habilitarMandoVirtualEnTierra(): Boolean {
-        if (!conRelevos) return super.habilitarMandoVirtualEnTierra()
-        anotar("habilitarMandoVirtual")
+    override suspend fun prepararDespegue(): Boolean {
+        if (!conRelevos) return super.prepararDespegue()
+        anotar("prepararDespegue")
         fallaDelMandoVirtual?.let { throw it }
         return mandoVirtualEnTierra
     }
 
-    /** La altura de la última [volarHaciaA]. */
-    @Volatile
-    var ultimaAltura: Double? = null
-
-    override fun volarHaciaA(lat: Double, lon: Double, alturaM: Double) {
-        if (!conRelevos) return super.volarHaciaA(lat, lon, alturaM)
-        ultimoDestino = lat to lon
-        ultimaAltura = alturaM
-        anotar("volarHaciaA(${alturaM.toInt()})")
-    }
+    override fun soltarDespegue() = if (conRelevos) anotar("soltarDespegue") else super.soltarDespegue()
 
     override fun fijarPuntoDeRetornoEn(lat: Double, lon: Double) =
         if (conRelevos) anotar("fijarPuntoDeRetornoEn") else super.fijarPuntoDeRetornoEn(lat, lon)
-
-    override fun fijarConfirmacionDeAterrizaje(automatica: Boolean) =
-        if (conRelevos) anotar("confirmacionAutomatica($automatica)") else super.fijarConfirmacionDeAterrizaje(automatica)
-
-    override fun confirmarAterrizaje() = if (conRelevos) anotar("confirmarAterrizaje") else super.confirmarAterrizaje()
 }

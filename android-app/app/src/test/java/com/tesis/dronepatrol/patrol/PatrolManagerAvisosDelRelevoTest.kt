@@ -1,6 +1,7 @@
 package com.tesis.dronepatrol.patrol
 
 import com.tesis.dronepatrol.comms.DetectionClient
+import com.tesis.dronepatrol.drone.DroneController
 import com.tesis.dronepatrol.model.FlightEvent
 import com.tesis.dronepatrol.model.MotivoDelDron
 import com.tesis.dronepatrol.model.PatrolState
@@ -92,12 +93,14 @@ class PatrolManagerAvisosDelRelevoTest {
         )
     }
 
-    /** Fuera de un desvío o de una emergencia, el aterrizaje se confirma como siempre. */
+    /** Un regreso que no se pudo cortar, con el dron en el suelo, no cambia nada: no hay vuelo que soltar. */
     @Test
-    fun unPedidoDeConfirmarElAterrizajeFueraDeUnDesvioSeConfirma() = runBlocking {
+    fun conElDronEnElSueloUnRegresoQueNoSeCortoSoloSeAvisa() = runBlocking {
         esperarQueEscuche()
-        dron.flightEvents.emit(FlightEvent.AterrizajePideConfirmacion)
-        esperarA("la confirmación") { "confirmarAterrizaje" in dron.ordenes }
-        assertEquals(listOf("confirmarAterrizaje"), dron.ordenes)
+        dron.flightEvents.emit(FlightEvent.Problema("${DroneController.NO_SE_CORTO_EL_REGRESO}: no había regreso"))
+        esperarA("el aviso del problema") { comandoCentral.mensajes("event").isNotEmpty() }
+        assertEquals(PatrolState.IDLE, patrulla.state.value)
+        assertEquals("no se le ordenó nada al dron", emptyList<String>(), dron.ordenes)
+        assertTrue(patrulla.localLog.replayCache.none { it.contains("no aceptó cortar su regreso") })
     }
 }

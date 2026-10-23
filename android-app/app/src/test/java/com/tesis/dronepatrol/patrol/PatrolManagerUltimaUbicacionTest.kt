@@ -1,5 +1,6 @@
 package com.tesis.dronepatrol.patrol
 
+import com.tesis.dronepatrol.drone.DroneController
 import com.tesis.dronepatrol.model.FlightEvent
 import com.tesis.dronepatrol.model.MotivoDelDron
 import com.tesis.dronepatrol.model.PatrolState
@@ -46,9 +47,11 @@ class PatrolManagerUltimaUbicacionTest {
     private suspend fun telemetria(norteM: Double = 1_500.0, bateria: Double) =
         banco.telemetria(norteM = norteM, bateria = bateria, pctParaVolver = 20.0, pctParaAterrizar = 2.0)
 
-    private suspend fun patrullandoLejos(confirma: Boolean = true) {
+    /** [confirma] es la cámara; el giro (el mando virtual) se confirma salvo que [gira] diga que no. */
+    private suspend fun patrullandoLejos(confirma: Boolean = true, gira: Boolean = true) {
         dron.estado.value = dron.estado.value.copy(umbralCriticoPct = 10.0)
-        dron.confirmarCamaraYRumbo = confirma
+        dron.confirmarCamara = confirma
+        dron.confirmarRumbo = gira
         banco.arrancar()
         banco.hub(BancoDeRelevos.basesDeSiempre())
         telemetria(bateria = 60.0)
@@ -58,7 +61,7 @@ class PatrolManagerUltimaUbicacionTest {
 
     /** La batería cae al disparo lejos de toda base: empieza el protocolo. */
     private suspend fun enEmergencia(bateria: Double = 12.0, confirma: Boolean = true) {
-        patrullandoLejos(confirma)
+        patrullandoLejos(confirma, gira = confirma)
         telemetria(bateria = bateria)
         esperarA("el protocolo") { patrulla.state.value == PatrolState.ATERRIZAJE_EMERGENCIA }
     }
@@ -197,9 +200,12 @@ class PatrolManagerUltimaUbicacionTest {
 
     @Test
     fun conElTopeDeVeinteSegundosAterrizaConLasFotosQueHaya() = runBlocking {
-        // El gimbal no confirma nada que no sea la inclinación de patrulla: cada paso espera su tope.
+        // El dron gira, pero el gimbal no confirma nada que no sea la inclinación
+        // de patrulla: cada paso espera su tope.
         val inicio = banco.reloj.ms
-        enEmergencia(confirma = false)
+        patrullandoLejos(confirma = false, gira = true)
+        telemetria(bateria = 12.0)
+        esperarA("el protocolo") { patrulla.state.value == PatrolState.ATERRIZAJE_EMERGENCIA }
         esperarA("el aterrizaje", topeMs = 10_000) { "land" in dron.ordenes }
         assertEquals("solo la oblicua se confirmó", 1, dron.ordenes.count { it == "capturarFoto" })
         val duro = banco.reloj.ms - inicio
@@ -303,5 +309,72 @@ class PatrolManagerUltimaUbicacionTest {
         delay(200)
         assertEquals("ni el §5: el vuelo es del DJI", antes, dron.ordenes.size)
         assertTrue(banco.mensajes("emergency_landing").isEmpty())
+    }
+
+    // ---- El regreso que pidió la app, cuando dispara el §5 (RELEVOS §4 y §5) ----
+
+    /** Volviendo a su base con el regreso que pidió la app (24 %: llega), y la batería cae al disparo. */
+    private suspend fun volviendoConElRegresoDeLaApp(confirma: Boolean = true) {
+        patrullandoLejos(confirma, gira = confirma)
+        telemetria(bateria = 24.0)
+        esperarA("el regreso a su base") { patrulla.state.value == PatrolState.RETURNING_HOME_BATTERY }
+        assertEquals("returnHome", dron.ultimaOrden)
+        telemetria(bateria = 12.0)
+        esperarA("el protocolo") { patrulla.state.value == PatrolState.ATERRIZAJE_EMERGENCIA }
+    }
+
+    /**
+     * Con un GoHome en curso el DJI no acepta el mando virtual: el vuelo
+     * estacionario y los giros del §5 se ignorarían mientras sigue volando
+     * hacia una casa que no alcanza. El regreso se corta ANTES de quedarse
+     * quieto.
+     */
+    @Test
+    fun enElRegresoQuePidioLaAppElDisparoLoCortaAntesDeQuedarQuieto() = runBlocking {
+        volviendoConElRegresoDeLaApp()
+        esperarA("el vuelo estacionario") { "hold" in dron.ordenes }
+        val ordenes = dron.ordenes
+        val corte = ordenes.indexOf("cancelarRegreso")
+        assertTrue(
+            "returnHome, después cancelarRegreso y recién ahí hold: $ordenes",
+            corte > ordenes.indexOf("returnHome") && corte < ordenes.indexOf("hold"),
+        )
+        assertEquals("un solo corte", 1, ordenes.count { it == "cancelarRegreso" })
+        esperarA("la secuencia entera") { "land" in dron.ordenes }
+    }
+
+    @Test
+    fun enUnDesvioElDisparoNoVuelveACortarElRegreso() = runBlocking {
+        patrullandoLejos()
+        telemetria(bateria = 21.0)
+        esperarA("el regreso") { patrulla.state.value == PatrolState.RETURNING_HOME_BATTERY }
+        banco.reloj.adelantar(Autonomia.CONFIRMAR_NO_LLEGA_MS)
+        telemetria(bateria = 21.0)
+        esperarA("el desvío") { banco.mensajes("rth_diverted").isNotEmpty() }
+        assertEquals("el desvío ya lo cortó", 1, dron.ordenes.count { it == "cancelarRegreso" })
+        telemetria(norteM = 1_200.0, bateria = 12.0)
+        esperarA("el protocolo") { patrulla.state.value == PatrolState.ATERRIZAJE_EMERGENCIA }
+        esperarA("el vuelo estacionario") { "hold" in dron.ordenes }
+        assertEquals(1, dron.ordenes.count { it == "cancelarRegreso" })
+    }
+
+    /**
+     * Si el controlador no logra cortar el regreso, el dron sigue volviendo y
+     * no se le pelea: la secuencia sigue solo con la cámara, sin una orden de
+     * vuelo más (ni giros ni aterrizar).
+     */
+    @Test
+    fun siNoSeCortaElRegresoLaSecuenciaSigueSoloConLaCamara() = runBlocking {
+        volviendoConElRegresoDeLaApp(confirma = false)
+        esperarA("la cenital, que no se confirma") { "apuntar(-90.0)" in dron.ordenes }
+        val antes = dron.ordenes.size
+        banco.evento(FlightEvent.Problema("${DroneController.NO_SE_CORTO_EL_REGRESO}: el dron no volvió a IDLE en 3 s"))
+        esperarA("la variante de la cámara") { dron.ordenes.drop(antes).count { it == "apuntar(-30.0)" } == 1 }
+        delay(500)
+        val despues = dron.ordenes.drop(antes)
+        assertFalse("land" in dron.ordenes)
+        assertFalse("ni una orden de vuelo: $despues", despues.any { it == "hold" || it.startsWith("girar") })
+        assertEquals(PatrolState.ATERRIZAJE_EMERGENCIA, patrulla.state.value)
+        assertEquals("la misma emergencia", 1, banco.mensajes("emergency_landing").map { it.getString("ref") }.toSet().size)
     }
 }

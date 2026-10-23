@@ -728,6 +728,20 @@ class SimulatedDroneController(
     }
 
     /**
+     * La base pasa a ser ([lat], [lon]), lejos de donde está: el simulador no
+     * tiene el límite de distancia del MSDK, así que lo acepta (el real
+     * probablemente no). Una posición inválida se ignora.
+     */
+    override fun fijarPuntoDeRetornoEn(lat: Double, lon: Double) {
+        if (!Geo.esPosicionValida(lat, lon)) return
+        synchronized(cerrojo) {
+            homeLat = lat
+            homeLon = lon
+            _estado.update { it.copy(puntoDeRetornoLat = lat, puntoDeRetornoLon = lon) }
+        }
+    }
+
+    /**
      * Con false, cuando la batería pida su regreso inteligente el dron no vuelve
      * (se le contestó que no). Al tocar el suelo vuelve a quedar permitido.
      */

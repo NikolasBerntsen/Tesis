@@ -337,16 +337,6 @@ sealed class FlightEvent {
      * deja seguir).
      */
     data class ElDronTomoElControl(val motivo: MotivoDelDron) : FlightEvent()
-
-    /**
-     * El dron está por tocar el suelo y pide que le confirmen el aterrizaje
-     * (abajo puede no ser suelo firme), y el controlador no lo confirma solo
-     * porque la app se lo pidió (ver
-     * [com.tesis.dronepatrol.drone.DroneController.fijarConfirmacionDeAterrizaje]).
-     * Pasa en el aterrizaje de un desvío o de una emergencia, en un lugar que
-     * nadie revisó: la app se corre y reintenta (docs/RELEVOS.md §4).
-     */
-    object AterrizajePideConfirmacion : FlightEvent()
 }
 
 /** Por qué el propio DJI tomó el control (ver [FlightEvent.ElDronTomoElControl]). */

@@ -1803,6 +1803,25 @@ class DjiDroneController : DroneController {
         }
     }
 
+    /**
+     * Intenta fijar el punto de retorno en ([lat], [lon]), lejos del dron: el
+     * punto de visitantes de la base de un desvío (RELEVOS §4), escribiendo
+     * KeyHomeLocation. El MSDK limita lo lejos que puede quedar, así que el
+     * rechazo es lo esperado (RELEVOS §8 lo mide en el banco): va al log, no al
+     * Comando Central, y al llegar [fijarPuntoDeRetornoAqui] lo fija de verdad.
+     */
+    override fun fijarPuntoDeRetornoEn(lat: Double, lon: Double) {
+        if (!Geo.esPosicionValida(lat, lon)) return
+        scope.launch {
+            val fijado = fijar(
+                FlightControllerKey.KeyHomeLocation,
+                LocationCoordinate2D(lat, lon),
+                alFallar = { motivo -> Log.i(TAG, "KeyHomeLocation en la base del desvío, rechazado como se esperaba: $motivo") },
+            )
+            if (fijado) Log.i(TAG, "Punto de retorno fijado en la base del desvío")
+        }
+    }
+
     /** Una acción sin parámetro cuyo rechazo es esperable: va al log, no al Comando Central. */
     private suspend fun intentar(llave: DJIActionKeyInfo<EmptyMsg, EmptyMsg>): Boolean =
         accionCon(llave, EmptyMsg(), alFallar = { motivo -> Log.i(TAG, "${llave.identifier}: $motivo") })

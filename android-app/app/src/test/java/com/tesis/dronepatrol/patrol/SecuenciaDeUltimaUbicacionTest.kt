@@ -40,7 +40,7 @@ class SecuenciaDeUltimaUbicacionTest {
         dron.confirmarCamaraYRumbo = true
         enElAire()
         val inicio = ahora
-        val fin = secuencia().conControl(puedeGirar = true)
+        val fin = secuencia().conControl(puedeGirar = { true })
 
         assertEquals(SecuenciaDeUltimaUbicacion.Final.ATERRIZO, fin)
         assertEquals(
@@ -68,21 +68,65 @@ class SecuenciaDeUltimaUbicacionTest {
     fun sinGirarNoHayPanoramica() = runBlocking {
         dron.confirmarCamaraYRumbo = true
         enElAire()
-        secuencia().conControl(puedeGirar = false)
+        secuencia().conControl(puedeGirar = { false })
         assertEquals(listOf("oblicua", "cenital"), fotos.map { it.tipo })
         assertEquals("land", dron.ultimaOrden)
     }
 
     @Test
     fun unPasoQueNoSeConfirmaSaleSinFotoYElTopeDuroAterriza() = runBlocking {
-        // Nada se confirma: ni la oblicua (el gimbal está en -50).
+        // El dron gira, pero la cámara no confirma nada: ni la oblicua (el gimbal está en -50).
+        dron.confirmarRumbo = true
         enElAire(gimbal = -50.0)
         val inicio = ahora
-        val fin = secuencia().conControl(puedeGirar = true)
+        val fin = secuencia().conControl(puedeGirar = { true })
         assertEquals(SecuenciaDeUltimaUbicacion.Final.ATERRIZO, fin)
         assertTrue(fotos.isEmpty())
         assertTrue("ninguna foto sin confirmar", "capturarFoto" !in dron.ordenes)
         assertEquals("el tope duro", SecuenciaDeUltimaUbicacion.TOPE_MS, ahora - inicio)
+        assertTrue("una cámara que no confirma no corta la panorámica", "girar(180.0)" in dron.ordenes)
+        assertEquals("land", dron.ultimaOrden)
+    }
+
+    /**
+     * Un giro que la telemetría no confirma es un mando virtual que no está (el
+     * DJI todavía en su regreso, por ejemplo): los rumbos que faltan tampoco
+     * van a salir, y cada uno gastaría 4 s con la batería en el crítico.
+     */
+    @Test
+    fun unGiroQueNoSeConfirmaCortaLaPanoramicaYAterriza() = runBlocking {
+        dron.confirmarCamara = true
+        enElAire()
+        val inicio = ahora
+        val fin = secuencia().conControl(puedeGirar = { true })
+        assertEquals(SecuenciaDeUltimaUbicacion.Final.ATERRIZO, fin)
+        assertEquals(
+            listOf(
+                "hold", "failsafeAterrizar(true)",
+                "apuntar(-70.0)", "capturarFoto",
+                "apuntar(-90.0)", "capturarFoto",
+                "apuntar(-30.0)", "girar(0.0)",
+                "land",
+            ),
+            dron.ordenes,
+        )
+        assertEquals(listOf("oblicua", "cenital"), fotos.map { it.tipo })
+        assertEquals(
+            "dos fotos asentadas y un solo giro esperado",
+            2 * SecuenciaDeUltimaUbicacion.ASENTAR_MS + SecuenciaDeUltimaUbicacion.CONFIRMACION_MAXIMA_MS,
+            ahora - inicio,
+        )
+    }
+
+    /** Si la app pierde el vuelo en el medio, la panorámica se deja ahí: se pregunta antes de cada giro. */
+    @Test
+    fun siDejaDePoderGirarEnElMedioNoGiraMas() = runBlocking {
+        dron.confirmarCamaraYRumbo = true
+        enElAire()
+        var giros = 0
+        secuencia().conControl(puedeGirar = { giros++ < 2 })
+        assertEquals(listOf("girar(0.0)", "girar(90.0)"), dron.ordenes.filter { it.startsWith("girar") })
+        assertEquals(listOf("oblicua", "cenital", "panoramica", "panoramica"), fotos.map { it.tipo })
         assertEquals("land", dron.ultimaOrden)
     }
 
@@ -90,7 +134,7 @@ class SecuenciaDeUltimaUbicacionTest {
     fun sinBateriaParaOtroPasoAterrizaEnseguida() = runBlocking {
         enElAire()
         alcanza = false
-        secuencia().conControl(puedeGirar = true)
+        secuencia().conControl(puedeGirar = { true })
         assertEquals(listOf("hold", "failsafeAterrizar(true)", "land"), dron.ordenes)
     }
 
@@ -99,7 +143,7 @@ class SecuenciaDeUltimaUbicacionTest {
         dron.foto = null
         dron.confirmarCamaraYRumbo = true
         enElAire()
-        secuencia().conControl(puedeGirar = false)
+        secuencia().conControl(puedeGirar = { false })
         assertTrue(fotos.isEmpty())
         assertEquals(2, dron.ordenes.count { it == "capturarFoto" })
 
@@ -112,14 +156,15 @@ class SecuenciaDeUltimaUbicacionTest {
             reloj = { ahora },
             pausa = { ahora += it },
         )
-        assertEquals(SecuenciaDeUltimaUbicacion.Final.ATERRIZO, sinTelemetria.conControl(puedeGirar = false))
+        // Sin telemetría tampoco se puede confirmar un giro: la panorámica se deja ahí.
+        assertEquals(SecuenciaDeUltimaUbicacion.Final.ATERRIZO, sinTelemetria.conControl(puedeGirar = { true }))
         assertTrue(fotos.isEmpty())
     }
 
     @Test
     fun siElProtocoloSeCortaNoSaleNiUnaOrdenMas() = runBlocking {
         sigue = false
-        assertEquals(SecuenciaDeUltimaUbicacion.Final.CORTADA, secuencia().conControl(puedeGirar = true))
+        assertEquals(SecuenciaDeUltimaUbicacion.Final.CORTADA, secuencia().conControl(puedeGirar = { true }))
         assertTrue(dron.ordenes.isEmpty())
 
         // Cortado en el medio: después de la primera foto.
@@ -138,7 +183,7 @@ class SecuenciaDeUltimaUbicacionTest {
             reloj = { ahora },
             pausa = { ahora += it },
         )
-        assertEquals(SecuenciaDeUltimaUbicacion.Final.CORTADA, s.conControl(puedeGirar = true))
+        assertEquals(SecuenciaDeUltimaUbicacion.Final.CORTADA, s.conControl(puedeGirar = { true }))
         assertEquals(listOf("hold", "failsafeAterrizar(true)", "apuntar(-70.0)", "capturarFoto"), dron.ordenes)
     }
 
@@ -158,7 +203,7 @@ class SecuenciaDeUltimaUbicacionTest {
                 if (++vueltas == 3) sigue = false
             },
         )
-        assertEquals(SecuenciaDeUltimaUbicacion.Final.CORTADA, s.conControl(puedeGirar = true))
+        assertEquals(SecuenciaDeUltimaUbicacion.Final.CORTADA, s.conControl(puedeGirar = { true }))
         assertTrue("capturarFoto" !in dron.ordenes)
     }
 
@@ -204,7 +249,7 @@ class SecuenciaDeUltimaUbicacionTest {
                 }
             },
         )
-        assertEquals("el aterrizaje no pasó la puerta", SecuenciaDeUltimaUbicacion.Final.CORTADA, s.conControl(puedeGirar = true))
+        assertEquals("el aterrizaje no pasó la puerta", SecuenciaDeUltimaUbicacion.Final.CORTADA, s.conControl(puedeGirar = { true }))
         assertEquals(listOf("hold", "failsafeAterrizar(true)"), dron.ordenes)
         assertEquals(2, pedidas.size)
     }

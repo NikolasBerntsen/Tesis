@@ -16,7 +16,10 @@ import kotlinx.coroutines.delay
  *  2. foto oblicua, con la inclinación de patrulla;
  *  3. foto cenital, la cámara a −90°;
  *  4. la cámara a −30° y una foto a 0°, 90°, 180° y 270° girando en el lugar
- *     (solo si se puede girar: con el mando virtual del lado de la app);
+ *     (solo si se puede girar: con el mando virtual del lado de la app). Un
+ *     giro que la telemetría no confirma es un mando virtual que no está —el
+ *     DJI todavía volviendo a casa, por ejemplo—: la panorámica se deja ahí y
+ *     no se gastan otros 4 s por rumbo con la batería en el crítico;
  *  5. aterrizar.
  *
  * Cada paso arranca solo si después queda batería ([alcanzaParaOtroPaso]); si
@@ -82,7 +85,13 @@ class SecuenciaDeUltimaUbicacion(
 
     private var inicioMs = 0L
 
-    suspend fun conControl(puedeGirar: Boolean): Final {
+    /**
+     * [puedeGirar] se pregunta antes de cada paso de la panorámica y no una
+     * sola vez al arrancar: lo que dice si el mando virtual está del lado de la
+     * app (que el DJI no haya vuelto a tomar el vuelo, que el corte de su
+     * regreso no haya fallado) puede cambiar en el medio de la secuencia.
+     */
+    suspend fun conControl(puedeGirar: () -> Boolean): Final {
         inicioMs = reloj()
         val quieto = ordenar {
             hold()
@@ -92,12 +101,15 @@ class SecuenciaDeUltimaUbicacion(
         val pasos = buildList {
             add(Paso(0, "oblicua", Telemetry.GIMBAL_PATRULLA, null))
             add(Paso(1, "cenital", CENITAL, null))
-            if (puedeGirar) RUMBOS_PANORAMICA.forEachIndexed { i, r -> add(Paso(2 + i, "panoramica", PANORAMICA, r)) }
+            RUMBOS_PANORAMICA.forEachIndexed { i, r -> add(Paso(2 + i, "panoramica", PANORAMICA, r)) }
         }
         for (p in pasos) {
             if (!sigue()) return Final.CORTADA
             if (reloj() - inicioMs >= TOPE_MS || !alcanzaParaOtroPaso()) break
-            fotografiar(p)
+            if (p.rumbo != null && !puedeGirar()) break
+            val girado = fotografiar(p)
+            // Sin giro no hay panorámica: los rumbos que faltan tampoco van a salir.
+            if (!girado) break
         }
         return if (ordenar { land() }) Final.ATERRIZO else Final.CORTADA
     }
@@ -115,18 +127,24 @@ class SecuenciaDeUltimaUbicacion(
 
     private class Paso(val seq: Int, val tipo: String, val inclinacion: Double, val rumbo: Double?)
 
-    private suspend fun fotografiar(p: Paso) {
+    /**
+     * Apunta, espera la confirmación, asienta y saca la foto del paso [p].
+     * Devuelve false solo si el paso pedía un giro y la telemetría nunca
+     * mostró el rumbo: el dron no está girando. Una cámara que no confirma o una
+     * foto que no llega dejan el paso sin foto, pero no dicen nada del giro.
+     */
+    private suspend fun fotografiar(p: Paso): Boolean {
         val apuntada = ordenar {
             apuntarCamara(p.inclinacion)
             p.rumbo?.let { girarEnElLugar(it) }
         }
-        if (!apuntada) return
+        if (!apuntada) return true
         val limite = minOf(reloj() + CONFIRMACION_MAXIMA_MS, inicioMs + TOPE_MS)
-        if (!esperar(limite) { confirmado(p) }) return
+        if (!esperar(limite) { confirmado(p) }) return rumboConfirmado(p)
         // Confirmado: recién ahí cuenta el asentamiento, para que la foto no salga movida.
         esperar(minOf(reloj() + ASENTAR_MS, inicioMs + TOPE_MS)) { false }
-        if (!sigue()) return
-        val jpeg = dron.capturarFoto() ?: return
+        if (!sigue()) return true
+        val jpeg = dron.capturarFoto() ?: return true
         val t = telemetria()
         alFotografiar(
             Foto(
@@ -138,13 +156,20 @@ class SecuenciaDeUltimaUbicacion(
                 telemetria = t,
             ),
         )
+        return true
     }
 
     private fun confirmado(p: Paso): Boolean {
         val t = telemetria() ?: return false
         val inclinacionOk = t.gimbalPitch.isFinite() && abs(t.gimbalPitch - p.inclinacion) <= TOLERANCIA_INCLINACION_GRADOS
-        val rumboOk = p.rumbo == null || (t.heading.isFinite() && diferenciaDeRumbo(t.heading, p.rumbo) <= TOLERANCIA_RUMBO_GRADOS)
-        return inclinacionOk && rumboOk
+        return inclinacionOk && rumboConfirmado(p)
+    }
+
+    /** El paso no pedía giro, o la telemetría ya muestra la nariz en su rumbo. */
+    private fun rumboConfirmado(p: Paso): Boolean {
+        val rumbo = p.rumbo ?: return true
+        val t = telemetria() ?: return false
+        return t.heading.isFinite() && diferenciaDeRumbo(t.heading, rumbo) <= TOLERANCIA_RUMBO_GRADOS
     }
 
     /** Espera [condicion] hasta [limiteMs]; false si no se cumplió (o el protocolo se cortó). */
