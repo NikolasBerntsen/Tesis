@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Drone Patrol</string>
+    <string name="app_name">Alta en el Cielo</string>
     <string name="cancelar">Cancelar</string>
     <string name="guardar">Guardar</string>
     <string name="continuar">Continuar</string>
@@ -12,7 +12,7 @@
     <string name="rol_dron">dron</string>
 
     <!-- Login del operador de campo -->
-    <string name="login_marca">DRONE PATROL</string>
+    <string name="login_marca">ALTA EN EL CIELO</string>
     <string name="login_titulo">Consola de campo</string>
     <string name="login_subtitulo">Identificate ante el Comando Central para desplegar un dron.</string>
     <string name="login_url_comando_central">URL del Comando Central</string>

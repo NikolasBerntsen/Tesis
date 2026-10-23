@@ -19,6 +19,7 @@ import {
   textoDeInclinacion,
   textoDeZoom,
 } from '../pilotaje';
+import { duenioDeLaAlerta } from '../relevos';
 import type { Alert, DroneStatus } from '../types';
 import AyudaDeControles from './AyudaDeControles';
 import MandoVirtual, { EJES_EN_CERO, type Ejes } from './MandoVirtual';
@@ -92,9 +93,25 @@ function liberarNavegador(elemento: HTMLElement | null) {
   sinFallar(() => tecladoDelNavegador()?.unlock?.());
 }
 
+/**
+ * Lo que pasa al salir del control manual, dicho en la pregunta de antes. Es
+ * lo que manda el detalle al soltar: sin orden con objetivo o en un relevo, y
+ * de vuelta a la ruta si no (`reanudacionAlSoltar` en DroneDetail).
+ */
+function queHaceAlSalir(hayObjetivo: boolean, enRelevo: boolean): string {
+  if (enRelevo) {
+    return hayObjetivo
+      ? 'Se suelta el control y el dron vuelve al objetivo que estaba siguiendo; el relevo sigue en marcha.'
+      : 'Se suelta el control sin darle ninguna orden al dron: sigue con el relevo.';
+  }
+  return hayObjetivo
+    ? 'Se suelta el control y el dron vuelve al objetivo que estaba siguiendo.'
+    : 'Se suelta el control y el dron vuelve a patrullar, hacia el próximo nodo de su ruta.';
+}
+
 /** El id más alto entre las alertas de este dron: lo que ya estaba al abrir la vista. */
 function mayorIdDeAlertas(alertas: readonly Alert[], droneId: string): number {
-  return alertas.reduce((mayor, a) => (a.drone_id === droneId && a.id > mayor ? a.id : mayor), 0);
+  return alertas.reduce((mayor, a) => (duenioDeLaAlerta(a) === droneId && a.id > mayor ? a.id : mayor), 0);
 }
 
 /**
@@ -124,6 +141,7 @@ export default function PilotajePantallaCompleta({
   avisoDeOrden,
   error,
   hayObjetivo,
+  enRelevo = false,
   suspendido,
   onMando,
   onCamara,
@@ -165,6 +183,11 @@ export default function PilotajePantallaCompleta({
   error: string;
   /** Con un objetivo cargado, soltar el control devuelve el dron al objetivo. */
   hayObjetivo: boolean;
+  /**
+   * El dron está en un relevo activo: soltar el control no le da ninguna
+   * orden y el relevo sigue (RELEVOS §3.9), en vez de mandarlo a patrullar.
+   */
+  enRelevo?: boolean;
   /** Un diálogo del detalle está abierto encima (despegar, aterrizar): el teclado no vuela. */
   suspendido: boolean;
   onMando: (ejes: Ejes) => boolean;
@@ -571,7 +594,11 @@ export default function PilotajePantallaCompleta({
     onCerrar();
   }
 
-  const nuevasAlertas = alertas.filter((a) => a.drone_id === droneId && a.status === 'PENDING' && a.id > umbralDeAlertas);
+  // De este dron quiere decir que la sigue este dron (ver duenioDeLaAlerta): es
+  // la que el piloto tiene delante, en el video que está mirando.
+  const nuevasAlertas = alertas.filter(
+    (a) => duenioDeLaAlerta(a) === droneId && a.status === 'PENDING' && a.id > umbralDeAlertas,
+  );
   const ultimaAlerta = nuevasAlertas.reduce<Alert | null>((ultima, a) => (!ultima || a.id > ultima.id ? a : ultima), null);
 
   const vista = (
@@ -784,11 +811,7 @@ export default function PilotajePantallaCompleta({
             </h2>
           </header>
           <div className="modal-cuerpo">
-            <p id={idSalidaTexto}>
-              {hayObjetivo
-                ? 'Se suelta el control y el dron vuelve al objetivo que estaba siguiendo.'
-                : 'Se suelta el control y el dron vuelve a patrullar, hacia el próximo nodo de su ruta.'}
-            </p>
+            <p id={idSalidaTexto}>{queHaceAlSalir(hayObjetivo, enRelevo)}</p>
             <p className="muted">
               Si sólo querés mirar el resto del detalle, cerrá la vista: el control sigue siendo tuyo y el dron queda
               en vuelo estacionario.

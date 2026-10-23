@@ -1,15 +1,20 @@
 import { batteryClass, signalClass, sobreObjetivo, stateLabel } from '../format';
-import type { Drone, DroneStatus } from '../types';
+import type { Drone, DroneStatus, Relevo } from '../types';
 import EditableName from './EditableName';
+import InsigniasDeRelevo from './InsigniasDeRelevo';
 
 const EN_TIERRA = ['IDLE', 'LANDED'];
+const SIN_RELEVOS: readonly Relevo[] = [];
 
 /**
  * Aviso a pantalla completa sobre la cámara cuando el dron está en un estado
- * alterado; el que corresponda primero gana.
+ * alterado; el que corresponda primero gana. El aterrizaje de emergencia va
+ * antes que todo: el dron baja solo donde está, y con él suele venir también
+ * la señal perdida o la batería baja, que ahí ya no son la noticia.
  */
 function overlayAlterado(status: DroneStatus | null): string | null {
   if (!status) return null;
+  if (status.state === 'ATERRIZAJE_EMERGENCIA') return 'ATERRIZAJE DE EMERGENCIA';
   if (status.signal === 'LOST') return 'SEÑAL PERDIDA';
   if (status.battery <= 25 || status.state === 'RETURNING_HOME_BATTERY') return 'BATERÍA BAJA';
   return null;
@@ -25,6 +30,9 @@ function textoEsquina(status: DroneStatus | null): { texto: string; clase: strin
   if (status?.state === 'MANUAL') return { texto: 'CONTROL MANUAL', clase: 'esquina-verde' };
   if (status?.state === 'ORBITING') return { texto: 'ORBITANDO', clase: 'esquina-oro' };
   if (status?.state === 'FOLLOWING') return { texto: 'SIGUIENDO', clase: 'esquina-oro' };
+  // Va hacia el objetivo de otro dron: es trabajo sobre una alerta, como orbitar.
+  if (status?.state === 'RELEVANDO') return { texto: 'RELEVANDO', clase: 'esquina-oro' };
+  if (status?.state === 'ATERRIZAJE_EMERGENCIA') return { texto: 'EMERGENCIA', clase: 'esquina-roja' };
   // `flying` manda sobre el estado: un IDLE en el aire no existe, pero un
   // PAUSED apoyado sí (la patrulla se cortó con el dron en el suelo).
   if (!status || EN_TIERRA.includes(status.state) || status.flying === false) {
@@ -38,6 +46,7 @@ export default function CameraTile({
   status,
   frame,
   pendingAlerts,
+  relevos = SIN_RELEVOS,
   onOpen,
   onRename,
 }: {
@@ -45,6 +54,8 @@ export default function CameraTile({
   status: DroneStatus | null;
   frame: string | null;
   pendingAlerts: number;
+  /** Los relevos que conoce la consola: dicen si este dron pidió uno o va a uno. */
+  relevos?: readonly Relevo[];
   onOpen: () => void;
   onRename: (displayName: string) => void;
 }) {
@@ -114,6 +125,9 @@ export default function CameraTile({
             <span className="badge-count">{pendingAlerts}</span>
           </div>
         )}
+        {/* En la ficha y no sobre el video, como el contador: es un dato del
+            dron, y encima de la imagen taparía lo que se está mirando. */}
+        <InsigniasDeRelevo droneId={drone.droneId} status={status} relevos={relevos} />
       </div>
       {/* Último hijo a propósito: así cubre lo de arriba sin necesitar z-index. */}
       <button

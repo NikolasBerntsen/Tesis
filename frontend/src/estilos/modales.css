@@ -156,3 +156,94 @@
   margin: 0 auto var(--e-6);
   text-align: center;
 }
+
+/* ---------------------------------------------------------------------------
+   HISTORIAL DE EVENTOS DE UN DRON (HistorialDeEventos)
+   <div class="modal-cuerpo historial [con-detalle]">
+     <section class="historial-lista"> lista + paginador </section>
+     <section class="historial-detalle"> el evento abierto </section>
+   </div>
+   El detalle se abre AL LADO de la lista, en el mismo pop-up: así se recorren
+   los eventos de a uno sin abrir y cerrar cajas. Con el detalle abierto, cada
+   columna scrollea por su cuenta, para no perder el lugar en la lista
+   mientras se lee un detalle largo (una alerta con su captura y su mapa).
+------------------------------------------------------------------------------ */
+/* La caja ancha de siempre se queda corta para dos columnas con un mapa. */
+.modal-caja.modal-ancho:has(> .historial) { width: min(1240px, 100%); }
+.modal-cuerpo.historial {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: var(--e-5);
+}
+.modal-cuerpo.historial.con-detalle {
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+}
+.historial-lista,
+.historial-detalle {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-4);
+  min-width: 0;
+}
+/* `min-height: 0` sólo acá, donde cada columna scrollea: con las columnas
+   apiladas, la fila de la grilla se achicaba por debajo de su contenido y el
+   detalle se pintaba encima de la lista. */
+.historial.con-detalle > .historial-lista,
+.historial.con-detalle > .historial-detalle {
+  overflow-y: auto;
+  min-height: 0;
+}
+.historial-detalle {
+  padding-left: var(--e-5);
+  border-left: 1px solid var(--veta);
+}
+/* Con la lista angosta, el mensaje del evento baja abajo de la hora y el tipo:
+   en tres columnas le quedaban cuatro letras por renglón. */
+.historial.con-detalle .log-row { grid-template-columns: 76px minmax(0, 1fr); }
+.historial.con-detalle .log-row > :last-child { grid-column: 2; }
+.historial-detalle-cabecera {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--e-4);
+}
+.historial-detalle-titulo {
+  margin: 0;
+  font-family: var(--fuente-serif);
+  font-size: var(--txt-md);
+  font-weight: 400;
+}
+
+/* En una pantalla angosta no entran dos columnas: el detalle baja debajo de la
+   lista (HistorialDeEventos lo trae a la vista al abrirlo), y scrollea el
+   cuerpo entero, como en cualquier otro pop-up. */
+@media (max-width: 900px) {
+  .modal-cuerpo.historial.con-detalle {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+    overflow-y: auto;
+  }
+  .historial.con-detalle > .historial-lista,
+  .historial.con-detalle > .historial-detalle {
+    overflow: visible;
+    min-height: auto;
+  }
+  .historial-detalle {
+    padding: var(--e-5) 0 0;
+    border-left: 0;
+    border-top: 1px solid var(--veta);
+  }
+  .historial.con-detalle .log-row { grid-template-columns: 84px 180px minmax(0, 1fr); }
+  .historial.con-detalle .log-row > :last-child { grid-column: auto; }
+}
+/* En un teléfono, ni siquiera la lista sola entra en tres columnas: el mensaje
+   baja abajo de la hora y el tipo, como con el detalle abierto. */
+@media (max-width: 640px) {
+  .historial .log-row,
+  .historial.con-detalle .log-row { grid-template-columns: 76px minmax(0, 1fr); }
+  .historial .log-row > :last-child,
+  .historial.con-detalle .log-row > :last-child { grid-column: 2; }
+}

@@ -163,4 +163,46 @@ describe('DroneStatusCard — vuelo y GPS', () => {
     render(<DroneStatusCard status={makeStatus({ flightMode: '' })} onResumePatrol={() => {}} />);
     expect(screen.queryByText('Modo de vuelo')).not.toBeInTheDocument();
   });
+
+  // RELEVOS §0: lo que el dron calcula que le cuesta volver, a título informativo.
+  it('la autonomía informada se lee en el segundo nivel, cada dato en su renglón', () => {
+    render(
+      <DroneStatusCard
+        status={makeStatus({
+          autonomia: { pctParaVolver: 18.4, pctParaAterrizar: 4, alcanceM: 2300, segundosParaVolver: 200 },
+        })}
+        onResumePatrol={() => {}}
+      />,
+    );
+    const valor = (rotulo: string) => screen.getByText(rotulo).nextElementSibling;
+    expect(valor('Batería para volver')).toHaveTextContent('18%');
+    expect(valor('Batería para aterrizar')).toHaveTextContent('4%');
+    expect(valor('Alcance')).toHaveTextContent('2.30 km');
+    expect(valor('Tiempo para volver')).toHaveTextContent('3 min 20 s');
+  });
+
+  it('lo que la autonomía no informa no ocupa renglón, y sin el objeto no hay ninguno', () => {
+    const { unmount } = render(
+      <DroneStatusCard
+        status={makeStatus({
+          autonomia: { pctParaVolver: null, pctParaAterrizar: null, alcanceM: 850, segundosParaVolver: null },
+        })}
+        onResumePatrol={() => {}}
+      />,
+    );
+    expect(screen.getByText('Alcance').nextElementSibling).toHaveTextContent('850 m');
+    expect(screen.queryByText('Batería para volver')).not.toBeInTheDocument();
+    expect(screen.queryByText('Tiempo para volver')).not.toBeInTheDocument();
+    unmount();
+
+    render(<DroneStatusCard status={makeStatus()} onResumePatrol={() => {}} />);
+    expect(screen.queryByText('Alcance')).not.toBeInTheDocument();
+  });
+
+  it('los estados nuevos se rotulan como en el teléfono', () => {
+    const { rerender } = render(<DroneStatusCard status={makeStatus({ state: 'RELEVANDO' })} onResumePatrol={() => {}} />);
+    expect(screen.getByText('Relevando a otro dron')).toBeInTheDocument();
+    rerender(<DroneStatusCard status={makeStatus({ state: 'ATERRIZAJE_EMERGENCIA' })} onResumePatrol={() => {}} />);
+    expect(screen.getByText('Aterrizaje de emergencia')).toBeInTheDocument();
+  });
 });

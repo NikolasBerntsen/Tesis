@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, rutasDeBase } from '../api';
 import { posicionDelDron, stateLabel } from '../format';
 import type { RastroObjetivo } from '../rastro';
-import type { Alert, Drone, DroneStatus, EventRow, Me, PatrolRoute } from '../types';
+import { avisoDeOrdenesEnRelevo, avisoDeReanudarEnRelevo, duenioDeLaAlerta, participaDeUnRelevo } from '../relevos';
+import type { Alert, Drone, DroneStatus, EventRow, Me, PatrolRoute, Relevo } from '../types';
 import type { DecidirAlerta } from '../useDecisionDeAlerta';
 import AlertaEnCurso from './AlertaEnCurso';
 import { useAvisar } from './AvisosFlotantes';
@@ -10,7 +11,8 @@ import DialogoConfirmacion from './DialogoConfirmacion';
 import DroneStatusCard from './DroneStatusCard';
 import DronesMap, { type MapItem, type WaypointsLayer } from './DronesMap';
 import EditableName from './EditableName';
-import EventLog from './EventLog';
+import HistorialDeEventos from './HistorialDeEventos';
+import InsigniasDeRelevo from './InsigniasDeRelevo';
 import LiveVideo from './LiveVideo';
 import type { Ejes } from './MandoVirtual';
 import PanelObjetivo from './PanelObjetivo';
@@ -74,6 +76,26 @@ const ORDEN_EN_CURSO: Record<OrdenDeVuelo, string> = {
   aterrizar: 'Aterrizaje ordenado: el dron baja donde está. El control sigue tomado.',
 };
 
+const SIN_RELEVOS: readonly Relevo[] = [];
+
+/**
+ * Lo que hace el dron cuando se lo suelta sin darle una orden (`'none'`): con
+ * objetivo vuelve a él, y en un relevo sigue con el relevo (RELEVOS §3.9).
+ * Sin ninguna de las dos se suelta con `'last'` y vuelve a su ruta.
+ */
+function queHaceAlSoltarSinOrden(conObjetivo: boolean, enRelevo: boolean): string {
+  if (enRelevo) {
+    return conObjetivo ? 'vuelve al objetivo que estaba siguiendo, y el relevo sigue en marcha' : 'sigue con el relevo';
+  }
+  return conObjetivo ? 'vuelve al objetivo que estaba siguiendo' : 'vuelve a patrullar su ruta';
+}
+
+/** El botón de soltar que no pierde nada: dice a qué vuelve el dron. */
+function etiquetaDeSoltarSinOrden(conObjetivo: boolean, enRelevo: boolean): string {
+  if (!enRelevo) return 'Soltar control (el dron vuelve al objetivo)';
+  return conObjetivo ? 'Soltar control (vuelve al objetivo, sigue el relevo)' : 'Soltar control (sigue el relevo)';
+}
+
 export default function DroneDetail({
   me,
   drone,
@@ -83,6 +105,7 @@ export default function DroneDetail({
   liveEvents,
   routes,
   alertas,
+  relevos = SIN_RELEVOS,
   rastro = null,
   onDecidir,
   onBack,
@@ -101,6 +124,8 @@ export default function DroneDetail({
   routes: PatrolRoute[];
   /** Las alertas de la consola: de acá sale la pendiente de este dron. */
   alertas: Alert[];
+  /** Los relevos que conoce la consola: las insignias de la cabecera salen de acá. */
+  relevos?: readonly Relevo[];
   /** Rastro del objetivo que el dron está siguiendo, si hay uno (rastro.ts). */
   rastro?: RastroObjetivo | null;
   onDecidir: DecidirAlerta;
@@ -120,10 +145,8 @@ export default function DroneDetail({
    */
   onCamara: (pitch: number) => boolean;
 }) {
-  const [history, setHistory] = useState<EventRow[]>([]);
-  // Hasta que llega el historial, el registro no puede decir "sin eventos":
-  // es lo primero que se lee al entrar y era mentira por medio segundo.
-  const [historiaCargada, setHistoriaCargada] = useState(false);
+  /** El pop-up del historial de eventos está abierto. */
+  const [viendoHistorial, setViendoHistorial] = useState(false);
   /** El supervisor pidió quitarle el control a otro y falta confirmarlo. */
   const [quitando, setQuitando] = useState(false);
   const avisar = useAvisar();
@@ -218,32 +241,6 @@ export default function DroneDetail({
     };
   }, [drone.droneId, drone.baseId]);
 
-  // Como los demás cargadores: la respuesta de un dron que ya se dejó no se
-  // escribe. Sin esto, saltar de A a B desde la campana dejaba que la
-  // respuesta de A llenara el registro de B con eventos ajenos, o que diera
-  // por cargado el de B y dijera "Sin eventos" mientras el suyo seguía viajando.
-  useEffect(() => {
-    let vigente = true;
-    setHistory([]);
-    setHistoriaCargada(false);
-    api<EventRow[]>(`/events?droneId=${encodeURIComponent(drone.droneId)}`)
-      .then((h) => vigente && setHistory(h))
-      .catch(console.error)
-      .finally(() => {
-        if (vigente) setHistoriaCargada(true);
-      });
-    return () => {
-      vigente = false;
-    };
-  }, [drone.droneId]);
-
-  // Historial del dron más los eventos que fueron llegando por WebSocket.
-  const events = useMemo(() => {
-    const known = new Set(history.map((e) => e.id));
-    const fresh = liveEvents.filter((e) => e.drone_id === drone.droneId && !known.has(e.id));
-    return [...fresh, ...history];
-  }, [history, liveEvents, drone.droneId]);
-
   const items = useMemo<MapItem[]>(
     () => [
       {
@@ -278,13 +275,36 @@ export default function DroneDetail({
   const enElAire = status?.flying === true;
   const sinGps = !!status && posicionDelDron(status) === null;
 
-  // Las alertas que se deciden al lado del video: las pendientes de ESTE dron.
+  // Las alertas que se deciden al lado del video: las pendientes que sigue
+  // ESTE dron, sea porque las creó o porque se las pasó un relevo (el video
+  // que hay que comparar con la captura es el del que está sobre el objetivo).
   // El carrusel las ordena (la más nueva primero) y recuerda cuál se mira.
   const pendientes = useMemo(
-    () => alertas.filter((a) => a.drone_id === drone.droneId && a.status === 'PENDING'),
+    () => alertas.filter((a) => duenioDeLaAlerta(a) === drone.droneId && a.status === 'PENDING'),
     [alertas, drone.droneId],
   );
   const hayAlerta = pendientes.length > 0;
+  /** Qué le hace al relevo en marcha una orden de patrullaje (RELEVOS §3.9). */
+  const avisoDeRelevo = avisoDeOrdenesEnRelevo(drone.droneId, relevos);
+  /**
+   * El dron está en un relevo activo, de cualquiera de los dos lados. Soltarle
+   * el control no le da ninguna orden (RELEVOS §3.9): un `resume_patrol` a B
+   * lo sacaría del relevo, y A se quedaría sin relevo. Y B en camino no tiene
+   * objetivo todavía (su rastreador arranca en el traspaso, §3.5), así que
+   * mirar sólo el objetivo lo soltaba con `'last'`, que un hub que respeta lo
+   * que se le pide tomaba como orden del operador y cancelaba el relevo.
+   */
+  const enRelevo = participaDeUnRelevo(drone.droneId, status, relevos);
+  /** Qué le pasa al relevo si igual se suelta con «Soltar y reanudar patrullaje». */
+  const avisoAlReanudar = avisoDeReanudarEnRelevo(drone.droneId, status, relevos);
+  const idAvisoAlReanudar = useId();
+  /**
+   * Con qué se suelta el control cuando no lo elige el operador (la salida de
+   * la vista de pilotaje y el supervisor que lo quita): la regla del hub,
+   * `reanudacionAlSoltar` en ws.ts. Con objetivo o en un relevo, `'none'`: el
+   * dron vuelve a lo que estaba haciendo. Si no, `'last'`: a su ruta.
+   */
+  const reanudacionAlSoltar = objetivo || enRelevo ? 'none' : 'last';
 
   // El aviso de "orden en curso" se va solo cuando el dron confirma: en el aire
   // para el despegue, en el suelo para el aterrizaje. También si se suelta el
@@ -430,28 +450,39 @@ export default function DroneDetail({
   /**
    * Supervisor: mismo endpoint, el backend registra que fue forzado. Con
    * objetivo, el dron vuelve a él: quitarle el control a alguien no es decidir
-   * que el objetivo deja de importar. Va por la confirmación (le corta el vuelo
-   * a otra persona), así que el error sube al diálogo en vez de quedar acá.
+   * que el objetivo deja de importar. En un relevo, el relevo sigue: tampoco es
+   * decidir cancelarlo. Va por la confirmación (le corta el vuelo a otra
+   * persona), así que el error sube al diálogo en vez de quedar acá.
    */
   async function quitarControl() {
     const otro = controlador;
     await api(`/drones/${drone.droneId}/control`, {
       method: 'DELETE',
-      body: JSON.stringify({ resume: objetivo ? 'none' : 'last' }),
+      body: JSON.stringify({ resume: reanudacionAlSoltar }),
     });
     avisar(`Se le quitó el control de ${drone.displayName} a ${otro}.`);
   }
   /**
    * La salida de la vista de pilotaje suelta el control con la misma regla que
-   * el supervisor: con objetivo, el dron vuelve a él. La vista se cierra antes
-   * de soltar, así la pérdida del control que viene después no se lee como que
-   * se lo sacó otro.
+   * el supervisor: con objetivo o en un relevo, el dron vuelve a lo suyo. La
+   * vista se cierra antes de soltar, así la pérdida del control que viene
+   * después no se lee como que se lo sacó otro.
    */
   const salirDelPilotaje = () => {
     setPilotando(false);
     // llamar() ya atrapa el rechazo y lo deja a la vista: no hay nada que esperar acá.
-    void soltarControl(objetivo ? 'none' : 'last');
+    void soltarControl(reanudacionAlSoltar);
   };
+  /**
+   * «Soltar y reanudar patrullaje». Fuera de un relevo alcanza con soltar con
+   * `'last'`. En un relevo no: soltar el control nunca es una orden para el
+   * relevo (§3.9), y el hub suelta sin orden a un dron que participa de uno,
+   * pida lo que pida la consola; con `'last'` el botón no haría nada de lo que
+   * dice. Reanudar ahí es decidir sobre el relevo (lo que dice el aviso de
+   * arriba del botón), y esa orden es POST /resume: el hub la cuenta para el
+   * relevo y además suelta el control de quien lo tiene.
+   */
+  const soltarYReanudar = () => (enRelevo ? retomar() : soltarControl('last'));
 
   // Otro dron en pantalla es otro vuelo: la vista no se queda abierta pilotando
   // al que se dejó de mirar.
@@ -565,7 +596,10 @@ export default function DroneDetail({
           </svg>{' '}
           Volver a Operación
         </button>
-        <h2>
+        {/* Enfocable sólo desde el código, como el título de las otras vistas
+            (EncabezadoDeVista): adonde vuelve el foco si el carrusel de
+            alertas se fue mientras su pop-up estaba abierto. */}
+        <h2 tabIndex={-1}>
           <EditableName name={drone.displayName} onRename={onRename} />
         </h2>
         {/* Conectado no es lo mismo que volando: con el dron apoyado esto
@@ -575,6 +609,17 @@ export default function DroneDetail({
           {!drone.online ? 'Desconectado' : enElSuelo ? 'En tierra' : 'En vuelo'}
         </span>
         {controlador && <span className="badge oro">Control manual: {controlador}</span>}
+        <InsigniasDeRelevo droneId={drone.droneId} status={status} relevos={relevos} />
+        {/* Arriba a la derecha, sobre la telemetría: el historial es consulta,
+            no algo que se mira todo el tiempo, y al pie de la vista quedaba
+            debajo de todo, donde en pleno vuelo nadie llegaba. */}
+        <button type="button" className="detalle-historial" onClick={() => setViendoHistorial(true)}>
+          <svg width="15" height="15" viewBox="0 0 16 16" {...TRAZO} style={{ verticalAlign: '-2px' }}>
+            <circle cx="8" cy="8" r="5.8" />
+            <path d="M8 4.8V8l2.2 1.4" />
+          </svg>{' '}
+          Ver historial de eventos
+        </button>
       </div>
       {/* El error va en su propia línea: dentro del encabezado empujaba el nombre */}
       {error && (
@@ -664,6 +709,12 @@ export default function DroneDetail({
             )}
           </div>
           <hr className="regla" />
+          {/* Antes de los botones: lo que dice es qué pasa si se los aprieta. */}
+          {avisoDeRelevo && (
+            <p className="aviso" role="note" data-testid="aviso-relevo">
+              {avisoDeRelevo}
+            </p>
+          )}
           <div className="ruta-controles">
             <select
               aria-label="Ruta de patrullaje"
@@ -782,16 +833,27 @@ export default function DroneDetail({
                   Volver a la vista de pilotaje
                 </button>
 
-                {/* Con un objetivo cargado hay dos formas de soltar, y la que
-                    va primero es la que no pierde nada: el dron vuelve a
-                    orbitarlo o a seguirlo. Mandarlo a patrullar es dejar el
-                    objetivo, y eso tiene que ser una decisión explícita. */}
-                {objetivo ? (
+                {/* Con un objetivo cargado o en un relevo hay dos formas de
+                    soltar, y la que va primero es la que no pierde nada: el
+                    dron vuelve a orbitar o seguir el objetivo, o sigue con el
+                    relevo. Mandarlo a patrullar es dejar eso, y tiene que ser
+                    una decisión explícita; en un relevo, con lo que le hace
+                    dicho antes del botón (RELEVOS §3.9). */}
+                {objetivo || enRelevo ? (
                   <>
                     <button className="resume" onClick={() => soltarControl('none')}>
-                      Soltar control (el dron vuelve al objetivo)
+                      {etiquetaDeSoltarSinOrden(!!objetivo, enRelevo)}
                     </button>
-                    <button className="ghost soltar-y-patrullar" onClick={() => soltarControl('last')}>
+                    {avisoAlReanudar && (
+                      <p className="aviso" role="note" id={idAvisoAlReanudar} data-testid="aviso-reanudar-en-relevo">
+                        {avisoAlReanudar}
+                      </p>
+                    )}
+                    <button
+                      className="ghost soltar-y-patrullar"
+                      aria-describedby={avisoAlReanudar ? idAvisoAlReanudar : undefined}
+                      onClick={soltarYReanudar}
+                    >
                       Soltar y reanudar patrullaje
                     </button>
                   </>
@@ -816,9 +878,16 @@ export default function DroneDetail({
         )}
       </div>
 
-      {/* La alerta de este dron se decide arriba, al lado del video; la
-          campana del encabezado sigue avisando desde cualquier vista. */}
-      <EventLog events={events} cargando={!historiaCargada} />
+      {/* Por dron: el de otro dron es otro historial, que arranca de cero. */}
+      {viendoHistorial && (
+        <HistorialDeEventos
+          key={drone.droneId}
+          droneId={drone.droneId}
+          nombre={drone.displayName}
+          liveEvents={liveEvents}
+          onCerrar={() => setViendoHistorial(false)}
+        />
+      )}
 
       {pilotando && (
         <PilotajePantallaCompleta
@@ -837,6 +906,7 @@ export default function DroneDetail({
           avisoDeOrden={ordenEnCurso && ORDEN_EN_CURSO[ordenEnCurso]}
           error={error}
           hayObjetivo={!!objetivo}
+          enRelevo={enRelevo}
           suspendido={aConfirmar !== null}
           onMando={onMando}
           onCamara={onCamara}
@@ -870,9 +940,7 @@ export default function DroneDetail({
         <DialogoConfirmacion
           pedido={{
             titulo: `Quitarle el control a ${controlador}`,
-            consecuencia: objetivo
-              ? `${controlador} deja de pilotear ${drone.displayName} en el acto y el dron vuelve al objetivo que estaba siguiendo.`
-              : `${controlador} deja de pilotear ${drone.displayName} en el acto y el dron vuelve a patrullar su ruta.`,
+            consecuencia: `${controlador} deja de pilotear ${drone.displayName} en el acto y el dron ${queHaceAlSoltarSinOrden(!!objetivo, enRelevo)}.`,
             detalle: 'Queda en el registro que el control se soltó a la fuerza, y quién lo hizo.',
             confirmar: 'Quitar control',
             enCurso: 'Quitando…',

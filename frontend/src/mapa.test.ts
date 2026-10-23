@@ -5,15 +5,21 @@ import {
   CLASE_TESELAS_CALLES,
   CLASE_TESELAS_SATELITE,
   FONDOS,
+  PALETA,
   TRAZO,
   aplicarFondo,
+  aspectoDelObjetivo,
   crearFondos,
+  droneIcon,
   etiquetaDeNodo,
   iconoBase,
+  iconoDeDeteccion,
+  iconoObjetivo,
   nombreDeFondo,
   vestir,
   vestirAtribucion,
 } from './mapa';
+import type { ObjetivoEnSeguimiento } from './types';
 
 vi.mock('leaflet', async () => (await import('./test/dobleLeaflet')).dobleLeaflet());
 
@@ -116,5 +122,55 @@ describe('mapa: lo que comparten todas las vistas', () => {
     const mapa = L.map(document.createElement('div'));
     vestirAtribucion(mapa, '');
     expect(mapa.attributionControl.setPrefix).toHaveBeenCalledWith('');
+  });
+});
+
+/** El HTML con que el doble de Leaflet se quedó al armar un ícono. */
+function htmlDe(icono: L.DivIcon): string {
+  return (icono as unknown as { icono: { html: string } }).icono.html;
+}
+
+describe('mapa: los marcadores que comparten la flota y el pop-up de una alerta', () => {
+  const objetivo: ObjetivoEnSeguimiento = {
+    alertId: 7,
+    type: 'PERSON',
+    lat: -34.6,
+    lon: -58.4,
+    speedMs: null,
+    courseDeg: null,
+    moving: false,
+    lost: false,
+    lastSeenMs: 0,
+    decision: 'PENDING',
+  };
+
+  it('el objetivo va en óxido mientras la alerta espera, en oro validado y punteado si se lo perdió', () => {
+    expect(aspectoDelObjetivo(objetivo)).toEqual({
+      color: PALETA.oxido,
+      trazo: TRAZO.objetivoPendiente,
+      perdido: false,
+      clave: 'PENDING-false',
+    });
+    const validado = aspectoDelObjetivo({ ...objetivo, decision: 'VALIDATED', lost: true });
+    expect(validado.color).toBe(PALETA.oro);
+    expect(validado.trazo).toBe(TRAZO.objetivoValidado);
+    expect(htmlDe(iconoObjetivo(validado))).toContain('stroke-dasharray');
+    expect(htmlDe(iconoObjetivo(aspectoDelObjetivo(objetivo)))).not.toContain('stroke-dasharray');
+  });
+
+  it('las iniciales del dron salen escapadas, y cada medallón trae su propio degradé', () => {
+    const uno = htmlDe(droneIcon('<b>x'));
+    const otro = htmlDe(droneIcon('Alfa'));
+    const caja = document.createElement('div');
+    caja.innerHTML = uno;
+    expect(caja.querySelector('b')).toBeNull();
+    const id = (html: string) => /linearGradient id="([^"]+)"/.exec(html)![1];
+    expect(id(uno)).not.toBe(id(otro));
+    expect(otro).toContain('>AL</text>');
+  });
+
+  it('la gota de la detección va en el óxido de las alertas y se arma una sola vez', () => {
+    expect(iconoDeDeteccion()).toBe(iconoDeDeteccion());
+    expect(htmlDe(iconoDeDeteccion())).toContain(PALETA.oxido);
   });
 });

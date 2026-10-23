@@ -3,6 +3,10 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { makeAlert, makeDrone } from '../test/fixtures';
 import CampanaDeAlertas from './CampanaDeAlertas';
+import ProveedorDeAlertas from './ProveedorDeAlertas';
+
+// El pop-up de la alerta lleva un mapa: Leaflet no corre en jsdom.
+vi.mock('leaflet', async () => (await import('../test/dobleLeaflet')).dobleLeaflet());
 
 const DRONES = [makeDrone({ droneId: 'd1', displayName: 'Alfa' }), makeDrone({ droneId: 'd2', displayName: 'Bravo' })];
 
@@ -28,6 +32,39 @@ describe('CampanaDeAlertas', () => {
 
     await userEvent.click(screen.getByRole('button'));
     expect(screen.getByText(/sin alertas pendientes/i)).toBeInTheDocument();
+  });
+
+  // RELEVOS §3.6: después de un traspaso, la alerta es del que la sigue.
+  it('una alerta relevada lleva al dron que la sigue, pendiente o ya decidida', async () => {
+    const props = montar([
+      makeAlert({ id: 9, drone_id: 'd1', seguidaPor: 'd2' }),
+      makeAlert({ id: 8, drone_id: 'd1', seguidaPor: 'd2', status: 'VALIDATED' }),
+    ]);
+    await userEvent.click(screen.getByRole('button', { name: /1 pendiente/ }));
+    const panel = screen.getByRole('region', { name: /alertas de detección/i });
+    await userEvent.click(within(panel).getByRole('button', { name: 'Bravo' }));
+    expect(props.onVerDron).toHaveBeenCalledWith('d2');
+
+    await userEvent.click(screen.getByRole('button', { name: /1 pendiente/ }));
+    expect(within(screen.getByRole('region', { name: /alertas de detección/i })).getByText(/· Bravo/)).toBeInTheDocument();
+  });
+
+  it('un tipo que la consola no conoce se lee tal cual, pendiente o decidido', async () => {
+    montar([
+      makeAlert({ id: 1, type: 'ANIMAL' as 'PERSON' }),
+      makeAlert({ id: 2, type: 'ANIMAL' as 'PERSON', status: 'DISMISSED' }),
+    ]);
+    await userEvent.click(screen.getByRole('button', { name: /1 pendiente/ }));
+    const panel = screen.getByRole('region', { name: /alertas de detección/i });
+    expect(within(panel).getByText('ANIMAL')).toHaveClass('badge', 'animal');
+    expect(within(panel).getByText(/ANIMAL · Alfa/)).toBeInTheDocument();
+  });
+
+  it('una alerta sin dron no ofrece ir a ninguna vista', async () => {
+    montar([makeAlert({ id: 3, drone_id: null })]);
+    await userEvent.click(screen.getByRole('button', { name: /1 pendiente/ }));
+    const panel = screen.getByRole('region', { name: /alertas de detección/i });
+    expect(within(panel).getByRole('button', { name: 'Dron desconocido' })).toBeDisabled();
   });
 
   it('lista la pendiente con su tipo y el nombre del dron, no el hash', async () => {
@@ -177,6 +214,66 @@ describe('CampanaDeAlertas', () => {
     await userEvent.keyboard('{Escape}');
     expect(screen.queryByRole('region', { name: /alertas de detección/i })).not.toBeInTheDocument();
     expect(otra).toHaveFocus();
+  });
+
+  it('suelta, sin la consola alrededor, no ofrece abrir las alertas', async () => {
+    montar([makeAlert({ id: 1, snapshot: 'QUFB' }), makeAlert({ id: 2, status: 'VALIDATED' })]);
+    await userEvent.click(screen.getByRole('button', { name: /1 pendiente/ }));
+    expect(screen.queryByRole('button', { name: 'Ver detalle' })).not.toBeInTheDocument();
+    expect(screen.getByAltText('Detección')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Validada/ })).not.toBeInTheDocument();
+  });
+});
+
+describe('CampanaDeAlertas — abrir una alerta en su pop-up', () => {
+  function enLaConsola(alerts = [makeAlert({ id: 4, drone_id: 'd2', snapshot: 'QUFB' })]) {
+    const verDron = vi.fn();
+    render(
+      <ProveedorDeAlertas alertas={alerts} drones={DRONES} statuses={{}} decidir={vi.fn()} verDron={verDron}>
+        <CampanaDeAlertas alerts={alerts} drones={DRONES} onDecidir={vi.fn()} onVerDron={verDron} />
+      </ProveedorDeAlertas>,
+    );
+    return { verDron };
+  }
+
+  it('una pendiente se abre desde su captura o desde "Ver detalle", y el desplegable se pliega', async () => {
+    enLaConsola();
+    const campana = screen.getByRole('button', { name: /1 pendiente/ });
+    await userEvent.click(campana);
+    await userEvent.click(screen.getByRole('button', { name: 'Ampliar la captura de la alerta #4' }));
+
+    const dialogo = screen.getByRole('dialog', { name: 'Alerta de persona #4' });
+    expect(within(dialogo).getByText(/^Bravo · /)).toBeInTheDocument();
+    // El desplegable no queda abierto atrás, a medio camino.
+    expect(screen.queryByRole('region', { name: /alertas de detección/i })).not.toBeInTheDocument();
+
+    // Al cerrar, el foco vuelve a la campana: el botón que se tocó ya no está.
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(campana).toHaveFocus();
+
+    await userEvent.click(campana);
+    await userEvent.click(screen.getByRole('button', { name: 'Ver detalle' }));
+    expect(screen.getByRole('dialog', { name: 'Alerta de persona #4' })).toBeInTheDocument();
+  });
+
+  it('una decidida también se abre, para ver quién la decidió y dónde fue', async () => {
+    enLaConsola([makeAlert({ id: 5, drone_id: 'd1', status: 'DISMISSED', decided_by: 'oper2' })]);
+    await userEvent.click(screen.getByRole('button', { name: /ninguna pendiente/ }));
+    await userEvent.click(screen.getByRole('button', { name: /Descartada/ }));
+
+    const dialogo = screen.getByRole('dialog', { name: 'Alerta de persona #5' });
+    expect(within(dialogo).getByText(/^Descartada por oper2/)).toBeInTheDocument();
+    expect(within(dialogo).queryByRole('button', { name: 'Validar' })).not.toBeInTheDocument();
+  });
+
+  it('desde el pop-up se va al video del dron', async () => {
+    const { verDron } = enLaConsola();
+    await userEvent.click(screen.getByRole('button', { name: /1 pendiente/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Ver detalle' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Ver feed en vivo' }));
+    expect(verDron).toHaveBeenCalledWith('d2');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });
 

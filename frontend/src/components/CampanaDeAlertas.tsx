@@ -1,5 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
+import { useAlertasEnVivo } from '../alertasEnVivo';
 import { time } from '../format';
+import { duenioDeLaAlerta } from '../relevos';
 import type { Alert, Drone } from '../types';
 import { useDecisionDeAlerta, type DecidirAlerta } from '../useDecisionDeAlerta';
 
@@ -30,6 +32,7 @@ export default function CampanaDeAlertas({
   const boton = useRef<HTMLButtonElement>(null);
   const idPanel = useId();
   const { decidir, errorDe, decidiendo } = useDecisionDeAlerta(onDecidir);
+  const { abrirAlerta } = useAlertasEnVivo();
 
   const pendientes = alerts.filter((a) => a.status === 'PENDING');
   const decididas = alerts.filter((a) => a.status !== 'PENDING').slice(0, 5);
@@ -63,6 +66,18 @@ export default function CampanaDeAlertas({
     return drones.find((d) => d.droneId === droneId)?.displayName ?? 'Dron desconocido';
   }
 
+  /**
+   * Abre el pop-up de la alerta y pliega el desplegable: abierto atrás, un
+   * Escape o un clic en el pop-up lo cerraban igual, y quedaba a medio camino.
+   * El foco pasa antes por la campana, que es adonde el pop-up lo devuelve al
+   * cerrarse: el botón que se tocó se va con el desplegable.
+   */
+  function abrir(alerta: Alert, abrirEnLaConsola: (a: Alert) => void) {
+    boton.current?.focus();
+    setAbierta(false);
+    abrirEnLaConsola(alerta);
+  }
+
   return (
     <div className="campana" ref={caja}>
       <button
@@ -93,53 +108,105 @@ export default function CampanaDeAlertas({
 
           {pendientes.length === 0 && <p className="vacio">Sin alertas pendientes.</p>}
 
-          {pendientes.map((a) => (
-            <div key={a.id} className="campana-alerta">
-              <div className="campana-alerta-head">
-                <span className={`badge ${a.type.toLowerCase()}`}>{TIPO[a.type as keyof typeof TIPO] ?? a.type}</span>
-                <button type="button" className="enlace" onClick={() => { onVerDron(a.drone_id!); setAbierta(false); }} disabled={!a.drone_id}>
-                  {nombre(a.drone_id)}
-                </button>
-                <time className="mono muted" dateTime={a.created_at}>
-                  {time(a.created_at)}
-                </time>
+          {pendientes.map((a) => {
+            // El nombre lleva al dron que sigue al objetivo ahora (un relevo
+            // se la pudo pasar a otro): es ahí donde está el video para decidir.
+            const duenio = duenioDeLaAlerta(a);
+            return (
+              <div key={a.id} className="campana-alerta">
+                <div className="campana-alerta-head">
+                  <span className={`badge ${a.type.toLowerCase()}`}>{TIPO[a.type as keyof typeof TIPO] ?? a.type}</span>
+                  <button
+                    type="button"
+                    className="enlace"
+                    onClick={
+                      duenio
+                        ? () => {
+                            onVerDron(duenio);
+                            setAbierta(false);
+                          }
+                        : undefined
+                    }
+                    disabled={!duenio}
+                  >
+                    {nombre(duenio)}
+                  </button>
+                  <time className="mono muted" dateTime={a.created_at}>
+                    {time(a.created_at)}
+                  </time>
+                  {abrirAlerta && (
+                    <button type="button" className="enlace alerta-ver-detalle" onClick={() => abrir(a, abrirAlerta)}>
+                      Ver detalle
+                    </button>
+                  )}
+                </div>
+                {a.snapshot && abrirAlerta && (
+                  <button
+                    type="button"
+                    className="snapshot-boton"
+                    aria-label={`Ampliar la captura de la alerta #${a.id}`}
+                    onClick={() => abrir(a, abrirAlerta)}
+                  >
+                    <img className="snapshot" src={`data:image/jpeg;base64,${a.snapshot}`} alt="Detección" />
+                  </button>
+                )}
+                {a.snapshot && !abrirAlerta && (
+                  <img className="snapshot" src={`data:image/jpeg;base64,${a.snapshot}`} alt="Detección" />
+                )}
+                <div className="alert-actions">
+                  <button className="validate" disabled={decidiendo(a.id)} onClick={() => decidir(a.id, 'VALIDATED')}>
+                    Validar
+                  </button>
+                  <button className="dismiss" disabled={decidiendo(a.id)} onClick={() => decidir(a.id, 'DISMISSED')}>
+                    Descartar
+                  </button>
+                </div>
+                {/* Pegado a los botones de ESA alerta: con tres pendientes en la
+                    lista, un aviso suelto arriba no diría cuál falló. */}
+                {errorDe(a.id) && (
+                  <p className="aviso malo" role="alert">
+                    {errorDe(a.id)}
+                  </p>
+                )}
               </div>
-              {a.snapshot && <img className="snapshot" src={`data:image/jpeg;base64,${a.snapshot}`} alt="Detección" />}
-              <div className="alert-actions">
-                <button className="validate" disabled={decidiendo(a.id)} onClick={() => decidir(a.id, 'VALIDATED')}>
-                  Validar
-                </button>
-                <button className="dismiss" disabled={decidiendo(a.id)} onClick={() => decidir(a.id, 'DISMISSED')}>
-                  Descartar
-                </button>
-              </div>
-              {/* Pegado a los botones de ESA alerta: con tres pendientes en la
-                  lista, un aviso suelto arriba no diría cuál falló. */}
-              {errorDe(a.id) && (
-                <p className="aviso malo" role="alert">
-                  {errorDe(a.id)}
-                </p>
-              )}
-            </div>
-          ))}
+            );
+          })}
 
           {decididas.length > 0 && (
             <>
               <hr className="regla" />
               <span className="etiqueta">Últimas decididas</span>
-              {decididas.map((a) => (
-                <div key={a.id} className="campana-decidida">
-                  <span className={`estado etiqueta ${a.status === 'VALIDATED' ? 'ok' : 'muted'}`}>
-                    {a.status === 'VALIDATED' ? 'Validada' : 'Descartada'}
-                  </span>
-                  <span className="muted">
-                    {TIPO[a.type as keyof typeof TIPO] ?? a.type} · {nombre(a.drone_id)}
-                  </span>
-                  <time className="mono muted" dateTime={a.created_at}>
-                    {time(a.created_at)}
-                  </time>
-                </div>
-              ))}
+              {decididas.map((a) => {
+                const renglon = (
+                  <>
+                    <span className={`estado etiqueta ${a.status === 'VALIDATED' ? 'ok' : 'muted'}`}>
+                      {a.status === 'VALIDATED' ? 'Validada' : 'Descartada'}
+                    </span>
+                    <span className="muted">
+                      {TIPO[a.type as keyof typeof TIPO] ?? a.type} · {nombre(duenioDeLaAlerta(a))}
+                    </span>
+                    <time className="mono muted" dateTime={a.created_at}>
+                      {time(a.created_at)}
+                    </time>
+                  </>
+                );
+                // Una decidida también se abre: quién la decidió, la captura y
+                // dónde fue siguen haciendo falta para el parte del turno.
+                return abrirAlerta ? (
+                  <button
+                    key={a.id}
+                    type="button"
+                    className="campana-decidida campana-decidida-boton"
+                    onClick={() => abrir(a, abrirAlerta)}
+                  >
+                    {renglon}
+                  </button>
+                ) : (
+                  <div key={a.id} className="campana-decidida">
+                    {renglon}
+                  </div>
+                );
+              })}
             </>
           )}
         </div>

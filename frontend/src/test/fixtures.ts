@@ -1,4 +1,76 @@
-import type { Alert, Drone, DroneStatus, EventRow, Me, PatrolRoute, UserView } from '../types';
+import type {
+  Alert,
+  Drone,
+  DroneStatus,
+  Emergencia,
+  EventRow,
+  FotoDeEmergencia,
+  Me,
+  PatrolRoute,
+  Relevo,
+  UserView,
+} from '../types';
+
+/** Un relevo de seguimiento de Alfa (a1) a Bravo (b2), en camino. */
+export function makeRelevo(over: Partial<Relevo> = {}): Relevo {
+  return {
+    id: 7,
+    motivo: 'seguimiento',
+    estado: 'EN_CAMINO',
+    motivoFin: null,
+    origen: { droneId: 'a1', displayName: 'Alfa' },
+    relevo: { droneId: 'b2', displayName: 'Bravo' },
+    baseId: 1,
+    alertId: 12,
+    routeId: null,
+    fromIndex: null,
+    etaS: 74,
+    rechazados: [],
+    venceEn: null,
+    creadoEn: '2026-10-23T15:04:05.000Z',
+    actualizadoEn: '2026-10-23T15:04:20.000Z',
+    ...over,
+  };
+}
+
+/** Un aterrizaje de emergencia de Alfa (a1), abierto y todavía bajando. */
+export function makeEmergencia(over: Partial<Emergencia> = {}): Emergencia {
+  return {
+    id: 3,
+    droneId: 'a1',
+    displayName: 'Alfa',
+    motivo: 'autonomia',
+    lat: -34.8702,
+    lon: -56.1902,
+    alt: 38,
+    bateria: 9,
+    ts: 1792767845000,
+    creadaEn: '2026-10-23T15:04:05.300Z',
+    aterrizadaEn: null,
+    aterrizajeLat: null,
+    aterrizajeLon: null,
+    aterrizajeAlt: null,
+    recuperadaEn: null,
+    recuperadaPor: null,
+    fotos: 0,
+    ...over,
+  };
+}
+
+export function makeFoto(over: Partial<FotoDeEmergencia> = {}): FotoDeEmergencia {
+  return {
+    seq: 0,
+    tipo: 'oblicua',
+    rumbo: 270,
+    inclinacion: -70,
+    lat: -34.8702,
+    lon: -56.1902,
+    alt: 38,
+    ts: 1792767847000,
+    jpegBase64: '/9j/AAAA',
+    ...over,
+  };
+}
 
 export function makeStatus(over: Partial<DroneStatus> = {}): DroneStatus {
   return {

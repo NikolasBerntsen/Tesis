@@ -3,7 +3,14 @@ import type { DroneStatus, ObjetivoEnSeguimiento } from './types';
 import {
   batteryClass,
   coordenadas,
+  coordenadasODato,
   decisionDelObjetivo,
+  duracion,
+  ETIQUETAS_DE_EVENTO,
+  etiquetaDeEvento,
+  fechaHoraLarga,
+  hashCorto,
+  tipoDeAlerta,
   formatDistance,
   haceCuanto,
   initials,
@@ -80,11 +87,47 @@ describe('stateLabel', () => {
     'PAUSED',
     'MANUAL',
     'FORCED',
+    // RELEVOS §1: los dos que sumó el diseño de relevos y emergencias.
+    'RELEVANDO',
+    'ATERRIZAJE_EMERGENCIA',
   ];
 
   it.each(ESTADOS_DEL_CONTRATO)('%s tiene etiqueta en castellano', (estado) => {
     expect(STATE_LABELS[estado]).toBeTruthy();
     expect(stateLabel(estado)).not.toBe(estado);
+  });
+
+  it('los estados nuevos se leen igual que en la pantalla del teléfono', () => {
+    expect(stateLabel('RELEVANDO')).toBe('Relevando a otro dron');
+    expect(stateLabel('ATERRIZAJE_EMERGENCIA')).toBe('Aterrizaje de emergencia');
+  });
+});
+
+describe('duracion', () => {
+  it('segundos, minutos y minutos con segundos', () => {
+    expect(duracion(0)).toBe('0 s');
+    expect(duracion(42.4)).toBe('42 s');
+    expect(duracion(120)).toBe('2 min');
+    expect(duracion(200)).toBe('3 min 20 s');
+  });
+
+  it('lo que no es un tiempo es la raya', () => {
+    expect(duracion(null)).toBe('—');
+    expect(duracion(undefined)).toBe('—');
+    expect(duracion(Number.NaN)).toBe('—');
+    expect(duracion(-5)).toBe('—');
+  });
+});
+
+describe('etiquetaDeEvento', () => {
+  it('rotula los eventos de relevos, desvíos y emergencias', () => {
+    expect(etiquetaDeEvento('RELAY_HANDOVER')).toBe('Traspaso del objetivo');
+    expect(etiquetaDeEvento('EMERGENCY_RECOVERED')).toBe('Dron recuperado');
+    expect(Object.keys(ETIQUETAS_DE_EVENTO)).toHaveLength(13);
+  });
+
+  it('un tipo que no conoce no lleva rótulo', () => {
+    expect(etiquetaDeEvento('PATROL_STARTED')).toBeNull();
   });
 });
 
@@ -312,5 +355,38 @@ describe('fechaYHora', () => {
 
   it('devuelve el timestamp crudo si la fila trae una fecha rota', () => {
     expect(fechaYHora('una fecha rota')).toBe('una fecha rota');
+  });
+});
+
+describe('alertas y registro', () => {
+  it('tipoDeAlerta: la pastilla en castellano, y un tipo desconocido tal cual', () => {
+    expect(tipoDeAlerta('PERSON')).toBe('PERSONA');
+    expect(tipoDeAlerta('VEHICLE')).toBe('VEHÍCULO');
+    expect(tipoDeAlerta('ANIMAL')).toBe('ANIMAL');
+  });
+
+  it('fechaHoraLarga: larga para leer, corta para las columnas, cruda si está rota y raya si falta', () => {
+    const iso = '2024-03-04T15:30:00.000Z';
+    expect(fechaHoraLarga(iso)).toBe(
+      new Date(iso).toLocaleString('es-AR', { dateStyle: 'long', timeStyle: 'medium' }),
+    );
+    expect(fechaHoraLarga(iso, 'short')).toBe(
+      new Date(iso).toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' }),
+    );
+    expect(fechaHoraLarga('una fecha rota')).toBe('una fecha rota');
+    expect(fechaHoraLarga(null)).toBe('—');
+  });
+
+  it('hashCorto: el hash largo se abrevia, el corto queda y sin hash va la raya', () => {
+    expect(hashCorto('c54ae4a0aad98bdc6ae5ab810751335c')).toBe('c54ae4…335c');
+    expect(hashCorto('corto')).toBe('corto');
+    expect(hashCorto(null)).toBe('—');
+    expect(hashCorto('')).toBe('—');
+  });
+
+  it('coordenadasODato: las coordenadas de siempre, o la raya si falta alguna', () => {
+    expect(coordenadasODato(-34.6, -58.4)).toBe('-34.600000, -58.400000');
+    expect(coordenadasODato(null, -58.4)).toBe('—');
+    expect(coordenadasODato(-34.6, undefined)).toBe('—');
   });
 });

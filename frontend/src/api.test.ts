@@ -9,10 +9,15 @@ import {
   getToken,
   getUsername,
   login,
+  marcarEmergenciaRecuperada,
   motivoDelRechazoDeDecision,
+  motivoDelRechazoDeRecuperacion,
   parsearMeta,
   traerDrones,
+  traerEmergencia,
+  traerEmergenciasAbiertas,
   traerLogs,
+  traerRelevosActivos,
   traerUsuarios,
 } from './api';
 
@@ -307,6 +312,47 @@ describe('api.ts', () => {
       await traerUsuarios({ incluirEliminados: true });
       expect(fetchMock.mock.calls[0][0]).toBe('/api/users?includeDeleted=1');
     });
+
+    // §5 del contrato: los relevos activos y las emergencias abiertas, que la
+    // consola pide al montar y en cada reconexión.
+    it('los relevos activos y las emergencias abiertas van con su flag', async () => {
+      let fetchMock = stubFetch([]);
+      await traerRelevosActivos();
+      expect(fetchMock.mock.calls[0][0]).toBe('/api/relevos?activos=1');
+      fetchMock = stubFetch([]);
+      await traerEmergenciasAbiertas();
+      expect(fetchMock.mock.calls[0][0]).toBe('/api/emergencias?abiertas=1');
+    });
+
+    it('la ficha de una emergencia y marcarla recuperada (un POST sin cuerpo)', async () => {
+      let fetchMock = stubFetch({ id: 3, fotos: [] });
+      expect(await traerEmergencia(3)).toEqual({ id: 3, fotos: [] });
+      expect(fetchMock.mock.calls[0][0]).toBe('/api/emergencias/3');
+      fetchMock = stubFetch({ id: 3, recuperadaPor: 'campo1' });
+      await marcarEmergenciaRecuperada(3);
+      expect(fetchMock.mock.calls[0][0]).toBe('/api/emergencias/3/recuperada');
+      expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'POST' });
+      expect(fetchMock.mock.calls[0][1].body).toBeUndefined();
+    });
+  });
+
+  describe('motivoDelRechazoDeRecuperacion', () => {
+    it('dice cada rechazo esperable en palabras del operador', () => {
+      expect(motivoDelRechazoDeRecuperacion(new ErrorDeApi('ya estaba recuperada', 409))).toBe(
+        'Otra persona ya la marcó como recuperada: la ficha se actualiza sola.',
+      );
+      expect(motivoDelRechazoDeRecuperacion(new ErrorDeApi('no existe', 404))).toBe('La emergencia ya no existe.');
+      expect(motivoDelRechazoDeRecuperacion(new ErrorDeApi('no', 403))).toBe(
+        'Tu usuario no puede marcar emergencias como recuperadas.',
+      );
+    });
+
+    it('lo demás va con el texto que haya', () => {
+      expect(motivoDelRechazoDeRecuperacion(new ErrorDeApi('Error 500', 500))).toBe(
+        'No se pudo marcar como recuperada: Error 500',
+      );
+      expect(motivoDelRechazoDeRecuperacion('raro')).toBe('No se pudo marcar como recuperada: raro');
+    });
   });
 
   describe('parsearMeta', () => {
@@ -364,6 +410,30 @@ describe('api.ts', () => {
       expect(meta.alerta).toEqual({ id: 7, tipo: 'PERSON', lat: -34.9, lon: -56.2, ts: '2024-01-01T00:00:00.000Z' });
       expect(meta.decision).toBe('VALIDATED');
       expect(parsearMeta(JSON.stringify({ alerta: { tipo: 'PERSON' } })).alerta).toBeUndefined();
+    });
+
+    it('lee la emergencia (§7) y descarta la que no trae id', () => {
+      const meta = parsearMeta(
+        JSON.stringify({
+          emergencia: { id: 3, motivo: 'autonomia', lat: -34.8702, lon: -56.1902, ts: '2026-10-23T15:04:05.300Z' },
+        }),
+      );
+      expect(meta.emergencia).toEqual({
+        id: 3,
+        motivo: 'autonomia',
+        lat: -34.8702,
+        lon: -56.1902,
+        ts: '2026-10-23T15:04:05.300Z',
+      });
+      expect(parsearMeta(JSON.stringify({ emergencia: { motivo: 'autonomia' } })).emergencia).toBeUndefined();
+      expect(parsearMeta(JSON.stringify({ emergencia: { id: 4 } })).emergencia).toEqual({
+        id: 4,
+        motivo: '',
+        lat: null,
+        lon: null,
+        ts: null,
+      });
+      expect(parsearMeta(JSON.stringify({ emergencia: 'abc' })).emergencia).toBeUndefined();
     });
 
     it('descarta la ficha de dron vacía', () => {

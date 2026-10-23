@@ -208,6 +208,33 @@ const filaDelRegistro = (donde: string, texto: string, velo: string[]) => {
 };
 for (const [pastilla, texto, velo] of PASTILLAS_DEL_REGISTRO) filaDelRegistro(pastilla, texto, [velo]);
 filaDelRegistro('hora y tipo de evento', '--tinta-media', []);
+// El historial de un dron resalta los tipos graves y los avisos, y su fila
+// abierta lleva el mismo velo que la del Registro bajo el mouse. El pop-up es
+// la misma piedra que la tarjeta (mármol 0 con su cara).
+filaDelRegistro('tipo de evento grave (.event-type.bad)', '--peligro', []);
+filaDelRegistro('tipo de evento de aviso (.event-type.warn)', '--alerta-texto', []);
+filaDelRegistro('mensaje del evento', '--tinta', []);
+
+// --- Aterrizajes de emergencia y relevos (relevos.css) --------------------------------
+// El aviso de arriba de la consola apoya en la página (mármol 0) con el velo
+// de óxido: el texto va en la tinta del tema y el motivo en la media. Las
+// insignias de relevo son pastillas de las de siempre, y la que falló (.malo)
+// es la de óxido, que ya mide `.badge.person`.
+pares.push(
+  { donde: 'aviso de emergencias: texto', texto: '--tinta', sobre: ['--peligro-velo'], base: '--marmol-0', minimo: TEXTO },
+  {
+    donde: 'aviso de emergencias: motivo',
+    texto: '--tinta-media',
+    sobre: ['--peligro-velo'],
+    base: '--marmol-0',
+    minimo: TEXTO,
+  },
+  { donde: 'aviso de emergencias: título', texto: '--peligro', sobre: ['--peligro-velo'], base: '--marmol-0', minimo: TEXTO },
+  // La esquina del mosaico apoya en mármol 0 macizo, como las otras esquinas.
+  { donde: 'esquina "EMERGENCIA" del mosaico', texto: '--peligro', base: '--marmol-0', minimo: TEXTO },
+  // La miniatura elegida de la galería lleva la cara de lo activo.
+  { donde: 'miniatura elegida de la galería', texto: '--tinta', sobre: ['--cara-activa'], base: '--marmol-1', minimo: TEXTO },
+);
 
 // --- Bordes de los controles y foco ----------------------------------------------
 for (const s of SUPERFICIES) {
@@ -286,6 +313,7 @@ describe('los pares medidos son los que pintan las hojas', () => {
   const primitivos = leer('./primitivos.css');
   const modales = leer('./modales.css');
   const vistas = leer('./vistas.css');
+  const relevos = leer('./relevos.css');
 
   it.each([
     ['fila elegida', primitivos, '.tabla tbody tr.seleccionada', 'background', 'var(--oro-velo)'],
@@ -301,6 +329,15 @@ describe('los pares medidos son los que pintan las hojas', () => {
       'var(--tinta-media)',
     ],
     ['fila del Registro bajo el mouse', vistas, '.log-row.cliqueable:hover', 'background', 'var(--oro-velo-fila)'],
+    ['fila abierta del historial de un dron', vistas, ".log-row-boton[aria-current='true']", 'background', 'var(--oro-velo-fila)'],
+    ['aviso de emergencias: fondo', relevos, '.aviso-emergencias', 'background', 'var(--peligro-velo)'],
+    ['aviso de emergencias: texto', relevos, '.aviso-emergencias', 'color', 'var(--tinta)'],
+    ['aviso de emergencias: título', relevos, '.aviso-emergencias-titulo', 'color', 'var(--peligro)'],
+    ['aviso de emergencias: motivo', relevos, '.aviso-emergencia-motivo', 'color', 'var(--tinta-media)'],
+    ['insignia de relevo que falló: texto', relevos, '.badge.malo', 'color', 'var(--peligro)'],
+    ['insignia de relevo que falló: fondo', relevos, '.badge.malo', 'background', 'var(--peligro-velo)'],
+    ['esquina "EMERGENCIA" del mosaico', relevos, '.esquina-roja', 'color', 'var(--peligro)'],
+    ['miniatura elegida de la galería', relevos, ".galeria-miniatura[aria-pressed='true']", 'background-image', 'var(--cara-activa)'],
   ])('%s', (_donde, hoja, selector, propiedad, esperado) => {
     expect(valorDe(hoja, selector, propiedad)).toBe(esperado);
   });

@@ -3,9 +3,10 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProveedorDeAvisos } from './AvisosFlotantes';
 import DroneDetail from './DroneDetail';
+import ProveedorDeAlertas from './ProveedorDeAlertas';
 import type { MapItem, WaypointsLayer } from './DronesMap';
 import { api, rutasDeBase } from '../api';
-import { makeAlert, makeDrone, makeEvent, makeMe, makeRoute, makeStatus } from '../test/fixtures';
+import { makeAlert, makeDrone, makeEvent, makeMe, makeRelevo, makeRoute, makeStatus } from '../test/fixtures';
 import type { Alert, ObjetivoEnSeguimiento } from '../types';
 
 // El mapa anota los items que recibe: es la forma de ver que el rastro del
@@ -21,7 +22,13 @@ vi.mock('./DronesMap', () => ({
     return <div data-testid="mapa-mock" />;
   },
 }));
-vi.mock('../api', () => ({ api: vi.fn(), rutasDeBase: vi.fn() }));
+// Sólo se doblan los pedidos: parsearMeta es el de verdad, el que usa el
+// detalle de un evento del historial.
+vi.mock('../api', async (importarOriginal) => ({
+  ...(await importarOriginal<typeof import('../api')>()),
+  api: vi.fn(),
+  rutasDeBase: vi.fn(),
+}));
 // El minimapa de la vista de pilotaje sí usa Leaflet: va el doble compartido.
 vi.mock('leaflet', async () => (await import('../test/dobleLeaflet')).dobleLeaflet());
 const apiMock = vi.mocked(api);
@@ -98,9 +105,9 @@ beforeEach(() => {
 });
 
 describe('DroneDetail', () => {
-  it('muestra el encabezado, pide el historial y vuelve con el botón', async () => {
+  it('muestra el encabezado y vuelve con el botón', async () => {
     const props = renderDetail();
-    await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/events?droneId=d1'));
+    await esperarCarga();
     expect(screen.getByText('Alfa')).toBeInTheDocument();
     expect(screen.getByText('En vuelo')).toBeInTheDocument();
     expect(screen.getByTestId('mapa-mock')).toBeInTheDocument();
@@ -113,22 +120,6 @@ describe('DroneDetail', () => {
     renderDetail({ drone: makeDrone({ online: false, controlledBy: 'oper9' }) });
     expect(await screen.findByText('Desconectado')).toBeInTheDocument();
     expect(screen.getByText('Control manual: oper9')).toBeInTheDocument();
-  });
-
-  it('fusiona los eventos en vivo del dron con el historial', async () => {
-    apiMock.mockImplementation((path: string) => {
-      if (path.startsWith('/events')) return Promise.resolve([makeEvent({ id: 1, message: 'del historial' })]);
-      return Promise.resolve({});
-    });
-    renderDetail({
-      liveEvents: [
-        makeEvent({ id: 2, drone_id: 'd1', message: 'evento fresco' }),
-        makeEvent({ id: 3, drone_id: 'otro', message: 'de otro dron' }),
-      ],
-    });
-    expect(await screen.findByText('del historial')).toBeInTheDocument();
-    expect(screen.getByText('evento fresco')).toBeInTheDocument();
-    expect(screen.queryByText('de otro dron')).not.toBeInTheDocument();
   });
 
   it('muestra la ruta activa cuando el estado la referencia', async () => {
@@ -257,48 +248,6 @@ describe('DroneDetail', () => {
     await waitFor(() =>
       expect(document.querySelector('.avisos-flotantes')).toHaveTextContent('Se le quitó el control de Alfa a oper9.'),
     );
-  });
-
-  it('el registro del dron espera el historial antes de decir que está vacío', async () => {
-    let contestar: (v: unknown[]) => void = () => {};
-    apiMock.mockImplementation((path: string) =>
-      path.startsWith('/events') ? new Promise((r) => (contestar = r)) : Promise.resolve({}),
-    );
-    renderDetail();
-    expect(await screen.findByText('Trayendo los eventos del dron…')).toBeInTheDocument();
-    expect(screen.queryByText('Sin eventos registrados.')).not.toBeInTheDocument();
-    contestar([]);
-    expect(await screen.findByText('Sin eventos registrados.')).toBeInTheDocument();
-  });
-
-  it('al saltar a otro dron, el historial del anterior no se escribe en el registro del nuevo', async () => {
-    // Desde la campana se pasa de un dron a otro sin salir del detalle: la
-    // respuesta del primero puede llegar después de pedir la del segundo.
-    const contestar: Record<string, (v: unknown[]) => void> = {};
-    apiMock.mockImplementation((path: string) =>
-      path.startsWith('/events')
-        ? new Promise((r) => (contestar[new URLSearchParams(path.split('?')[1]).get('droneId')!] = r))
-        : Promise.resolve({}),
-    );
-    const { volverARenderizar } = renderDetail();
-    await waitFor(() => expect(contestar.d1).toBeDefined());
-
-    volverARenderizar({
-      drone: makeDrone({ droneId: 'd2', displayName: 'Bravo', online: true }),
-      status: makeStatus({ droneId: 'd2', state: 'PATROLLING', routeId: null }),
-    });
-    await waitFor(() => expect(contestar.d2).toBeDefined());
-
-    contestar.d1([makeEvent({ id: 1, drone_id: 'd1', message: 'evento de Alfa' })]);
-    // Ni los eventos de Alfa ni un "Sin eventos" adelantado: el de Bravo sigue viajando.
-    await act(async () => {});
-    expect(screen.queryByText('evento de Alfa')).not.toBeInTheDocument();
-    expect(screen.queryByText('Sin eventos registrados.')).not.toBeInTheDocument();
-    expect(screen.getByText('Trayendo los eventos del dron…')).toBeInTheDocument();
-
-    contestar.d2([makeEvent({ id: 2, drone_id: 'd2', message: 'evento de Bravo' })]);
-    expect(await screen.findByText('evento de Bravo')).toBeInTheDocument();
-    expect(screen.queryByText('evento de Alfa')).not.toBeInTheDocument();
   });
 
   it('si el control cambia de manos con la pregunta abierta, la pregunta se descarta', async () => {
@@ -1202,6 +1151,151 @@ describe('DroneDetail — alerta en curso', () => {
   });
 });
 
+describe('DroneDetail — historial de eventos', () => {
+  const abrirHistorial = () => userEvent.click(screen.getByRole('button', { name: 'Ver historial de eventos' }));
+  const historial = () => screen.getByRole('dialog', { name: 'Historial de eventos' });
+
+  it('ya no hay lista al pie: el historial se abre desde arriba a la derecha, sobre la telemetría', async () => {
+    renderDetail();
+    await esperarCarga();
+    // Al entrar no se pide nada: el historial se trae cuando se lo abre.
+    expect(apiMock).not.toHaveBeenCalledWith(expect.stringMatching(/^\/events/));
+    expect(screen.queryByText('Sin eventos registrados.')).not.toBeInTheDocument();
+
+    const boton = screen.getByRole('button', { name: 'Ver historial de eventos' });
+    const cabecera = document.querySelector('.detail-head')!;
+    expect(cabecera.contains(boton)).toBe(true);
+    // La cabecera va antes que la tarjeta de estado: el botón queda arriba de la telemetría.
+    const estado = document.querySelector('.status-grid')!;
+    expect(cabecera.compareDocumentPosition(estado) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await abrirHistorial();
+    expect(historial()).toBeInTheDocument();
+    expect(apiMock).toHaveBeenCalledWith('/events?droneId=d1&limit=100');
+    expect(await within(historial()).findByText('Sin eventos registrados.')).toBeInTheDocument();
+  });
+
+  it('suma al historial los eventos en vivo de este dron', async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path.startsWith('/events')) return Promise.resolve([makeEvent({ id: 1, message: 'del historial' })]);
+      return Promise.resolve({});
+    });
+    renderDetail({
+      liveEvents: [
+        makeEvent({ id: 2, drone_id: 'd1', message: 'evento fresco' }),
+        makeEvent({ id: 3, drone_id: 'otro', message: 'de otro dron' }),
+      ],
+    });
+    await esperarCarga();
+    await abrirHistorial();
+    expect(await within(historial()).findByText('del historial')).toBeInTheDocument();
+    expect(within(historial()).getByText('evento fresco')).toBeInTheDocument();
+    expect(within(historial()).queryByText('de otro dron')).not.toBeInTheDocument();
+  });
+
+  it('espera el historial antes de decir que está vacío', async () => {
+    let contestar: (v: unknown[]) => void = () => {};
+    apiMock.mockImplementation((path: string) =>
+      path.startsWith('/events') ? new Promise((r) => (contestar = r)) : Promise.resolve({}),
+    );
+    renderDetail();
+    await esperarCarga();
+    await abrirHistorial();
+    expect(within(historial()).getByText('Trayendo los eventos del dron…')).toBeInTheDocument();
+    expect(screen.queryByText('Sin eventos registrados.')).not.toBeInTheDocument();
+    await act(async () => contestar([]));
+    expect(within(historial()).getByText('Sin eventos registrados.')).toBeInTheDocument();
+  });
+
+  it('el historial de otro dron arranca de cero: la respuesta del anterior no se escribe', async () => {
+    const contestar: Record<string, (v: unknown[]) => void> = {};
+    apiMock.mockImplementation((path: string) =>
+      path.startsWith('/events')
+        ? new Promise((r) => (contestar[new URLSearchParams(path.split('?')[1]).get('droneId')!] = r))
+        : Promise.resolve({}),
+    );
+    const { volverARenderizar } = renderDetail();
+    await esperarCarga();
+    await abrirHistorial();
+    await waitFor(() => expect(contestar.d1).toBeDefined());
+
+    volverARenderizar({
+      drone: makeDrone({ droneId: 'd2', displayName: 'Bravo', online: true }),
+      status: makeStatus({ droneId: 'd2', state: 'PATROLLING', routeId: null }),
+    });
+    await waitFor(() => expect(contestar.d2).toBeDefined());
+    expect(within(historial()).getByText('Bravo · los últimos 100')).toBeInTheDocument();
+
+    await act(async () => contestar.d1([makeEvent({ id: 1, drone_id: 'd1', message: 'evento de Alfa' })]));
+    expect(screen.queryByText('evento de Alfa')).not.toBeInTheDocument();
+    expect(within(historial()).getByText('Trayendo los eventos del dron…')).toBeInTheDocument();
+
+    await act(async () => contestar.d2([makeEvent({ id: 2, drone_id: 'd2', message: 'evento de Bravo' })]));
+    expect(within(historial()).getByText('evento de Bravo')).toBeInTheDocument();
+  });
+
+  it('una alerta del historial se abre al lado, con su captura, su mapa y el camino al video', async () => {
+    const alerta = makeAlert({ id: 7, drone_id: 'd1', snapshot: 'QUFB' });
+    apiMock.mockImplementation((path: string) =>
+      path.startsWith('/events')
+        ? Promise.resolve([
+            makeEvent({
+              id: 5,
+              type: 'ALERT_CREATED',
+              alert_id: 7,
+              message: 'Alerta de PERSONA generada por Alfa',
+              meta: JSON.stringify({ alerta: { id: 7, tipo: 'PERSON', lat: -34.6, lon: -58.4, ts: null } }),
+            }),
+          ])
+        : Promise.resolve({}),
+    );
+    const verDron = vi.fn();
+    const drone = makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true });
+    render(
+      <ProveedorDeAlertas alertas={[alerta]} drones={[drone]} statuses={{}} decidir={vi.fn()} verDron={verDron}>
+        <DroneDetail
+          me={makeMe()}
+          drone={drone}
+          status={makeStatus({ droneId: 'd1', routeId: null })}
+          frame={null}
+          conectado
+          liveEvents={[]}
+          routes={[makeRoute({ id: 1, name: 'Ruta Perimetral' })]}
+          alertas={[alerta]}
+          onDecidir={vi.fn()}
+          onBack={vi.fn()}
+          onRename={vi.fn()}
+          onWaypointLabel={vi.fn()}
+          onMando={vi.fn(() => true)}
+          onCamara={vi.fn(() => true)}
+        />
+      </ProveedorDeAlertas>,
+    );
+    await esperarCarga();
+    await abrirHistorial();
+    await userEvent.click(await within(historial()).findByRole('button', { name: /Alerta de PERSONA generada por Alfa/ }));
+
+    const panel = within(historial()).getByRole('region', { name: 'Alerta de PERSONA generada por Alfa' });
+    expect(within(panel).getByAltText('Captura de la detección')).toBeInTheDocument();
+    expect(within(panel).getByRole('button', { name: 'Validar' })).toBeInTheDocument();
+
+    // Ya se está en la vista de este dron: ir al video es cerrar el historial.
+    await userEvent.click(within(panel).getByRole('button', { name: 'Ver feed en vivo' }));
+    expect(verDron).toHaveBeenCalledWith('d1');
+    expect(screen.queryByRole('dialog', { name: 'Historial de eventos' })).not.toBeInTheDocument();
+  });
+
+  it('al cerrar el historial el foco vuelve al botón que lo abrió', async () => {
+    renderDetail();
+    await esperarCarga();
+    await abrirHistorial();
+    await within(historial()).findByText('Sin eventos registrados.');
+    await userEvent.click(within(historial()).getByRole('button', { name: 'Cerrar el historial' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Ver historial de eventos' })).toHaveFocus();
+  });
+});
+
 describe('DroneDetail — objetivo', () => {
   it('con objetivo muestra su panel, lo marca en la leyenda y le pasa el rastro al mapa', async () => {
     renderDetail({
@@ -1452,5 +1546,148 @@ describe('DroneDetail — sin GPS', () => {
     renderDetail({ status: makeStatus({ gpsFix: true }) });
     await esperarCarga();
     expect(screen.queryByTestId('mapa-sin-gps')).not.toBeInTheDocument();
+  });
+});
+
+describe('DroneDetail — soltar el control de un dron en un relevo (RELEVOS §3.9)', () => {
+  /** Alfa (d1) va a relevar a Charlie: está en camino y todavía no tiene objetivo (§3.5). */
+  const VA_A_RELEVAR = makeRelevo({
+    estado: 'EN_CAMINO',
+    origen: { droneId: 'c3', displayName: 'Charlie' },
+    relevo: { droneId: 'd1', displayName: 'Alfa' },
+  });
+  /** Alfa (d1) pidió el relevo de un seguimiento: tiene el objetivo y Bravo viene en camino. */
+  const PIDIO_RELEVO = makeRelevo({ estado: 'EN_CAMINO', origen: { droneId: 'd1', displayName: 'Alfa' } });
+
+  const conControl = (status: Parameters<typeof makeStatus>[0] = {}) => ({
+    me: makeMe({ username: 'admin1', canControl: true }),
+    drone: makeDrone({ controlledBy: 'admin1', online: true }),
+    status: makeStatus({ state: 'MANUAL', controlledBy: 'admin1', flying: true, routeId: null, target: null, ...status }),
+  });
+
+  const soltoCon = (resume: 'none' | 'last') =>
+    waitFor(() =>
+      expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', { method: 'DELETE', body: JSON.stringify({ resume }) }),
+    );
+
+  async function salirDelPilotaje(): Promise<HTMLElement> {
+    const vista = await abrirPilotaje();
+    fireEvent.click(within(vista).getByRole('button', { name: 'Salir del control manual' }));
+    const dialogo = screen.getByRole('dialog', { name: '¿Salir del control manual?' });
+    fireEvent.click(within(dialogo).getByRole('button', { name: 'Salir del control manual' }));
+    return dialogo;
+  }
+
+  it('salir de la vista de pilotaje del que va a relevar lo suelta sin orden: el relevo sigue', async () => {
+    renderDetail({ ...conControl(), relevos: [VA_A_RELEVAR] });
+    const vista = await abrirPilotaje();
+    fireEvent.click(within(vista).getByRole('button', { name: 'Salir del control manual' }));
+    expect(screen.getByRole('dialog', { name: '¿Salir del control manual?' })).toHaveTextContent('sigue con el relevo');
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: '¿Salir del control manual?' })).getByRole('button', {
+        name: 'Salir del control manual',
+      }),
+    );
+    await soltoCon('none');
+    expect(apiMock).not.toHaveBeenCalledWith('/drones/d1/control', { method: 'DELETE', body: JSON.stringify({ resume: 'last' }) });
+  });
+
+  it('el supervisor que le quita el control al que va a relevar tampoco cancela el relevo', async () => {
+    renderDetail({
+      me: makeMe({ username: 'super1', role: 'supervisor', canControl: true }),
+      drone: makeDrone({ controlledBy: 'oper9' }),
+      status: makeStatus({ state: 'MANUAL', controlledBy: 'oper9', target: null }),
+      relevos: [VA_A_RELEVAR],
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'Quitar control' }));
+    const dialogo = await screen.findByRole('dialog', { name: 'Quitarle el control a oper9' });
+    expect(dialogo).toHaveTextContent('oper9 deja de pilotear Alfa en el acto y el dron sigue con el relevo.');
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Quitar control' }));
+    await soltoCon('none');
+  });
+
+  it('en la tarjeta, soltar sin orden va primero; reanudar queda aparte y dice qué le hace al relevo', async () => {
+    renderDetail({ ...conControl(), relevos: [VA_A_RELEVAR] });
+    await esperarCarga();
+    expect(screen.queryByRole('button', { name: 'Devolver al patrullaje' })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Soltar control (sigue el relevo)' }));
+    await soltoCon('none');
+
+    const aviso = screen.getByTestId('aviso-reanudar-en-relevo');
+    expect(aviso).toHaveTextContent(
+      'Está yendo a relevar a Charlie: reanudar el patrullaje cancela el relevo y Charlie se queda sin relevo.',
+    );
+    const reanudar = screen.getByRole('button', { name: 'Soltar y reanudar patrullaje' });
+    expect(reanudar).toHaveAccessibleDescription(aviso.textContent ?? '');
+    apiMock.mockClear();
+    await userEvent.click(reanudar);
+    // Es una orden explícita, y va por donde el hub la cuenta para el relevo:
+    // soltar con 'last' a un dron en relevo el hub lo suelta sin orden.
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/drones/d1/resume', { method: 'POST', body: '{}' }));
+    expect(apiMock).not.toHaveBeenCalledWith('/drones/d1/control', expect.anything());
+  });
+
+  it('el que pidió el relevo también reanuda con la orden explícita, no soltando con "last"', async () => {
+    renderDetail({ ...conControl({ target: OBJETIVO }), relevos: [PIDIO_RELEVO] });
+    await esperarCarga();
+    apiMock.mockClear();
+    await userEvent.click(screen.getByRole('button', { name: 'Soltar y reanudar patrullaje' }));
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/drones/d1/resume', { method: 'POST', body: '{}' }));
+    expect(apiMock).not.toHaveBeenCalledWith('/drones/d1/control', expect.anything());
+  });
+
+  it('si el hub rechaza reanudar, el motivo queda a la vista', async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path.startsWith('/events')) return Promise.resolve([]);
+      if (path.endsWith('/resume')) return Promise.reject(new Error('El dron está controlado por oper9'));
+      return Promise.resolve({});
+    });
+    renderDetail({ ...conControl(), relevos: [VA_A_RELEVAR] });
+    await esperarCarga();
+    await userEvent.click(screen.getByRole('button', { name: 'Soltar y reanudar patrullaje' }));
+    expect(await screen.findByText('El dron está controlado por oper9')).toHaveAttribute('role', 'alert');
+  });
+
+  it('el que pidió el relevo con el objetivo cargado vuelve al objetivo, y el relevo sigue', async () => {
+    renderDetail({ ...conControl({ target: OBJETIVO }), relevos: [PIDIO_RELEVO] });
+    await esperarCarga();
+    expect(screen.getByRole('button', { name: 'Soltar control (vuelve al objetivo, sigue el relevo)' })).toBeInTheDocument();
+    expect(screen.getByTestId('aviso-reanudar-en-relevo')).toHaveTextContent('antes de que llegue Bravo');
+    const dialogo = await salirDelPilotaje();
+    expect(dialogo).toHaveTextContent('vuelve al objetivo que estaba siguiendo; el relevo sigue en marcha');
+    await soltoCon('none');
+  });
+
+  it('el supervisor que se lo quita al que pidió el relevo dice las dos cosas', async () => {
+    renderDetail({
+      me: makeMe({ username: 'super1', role: 'supervisor', canControl: true }),
+      drone: makeDrone({ controlledBy: 'oper9' }),
+      status: makeStatus({ state: 'MANUAL', controlledBy: 'oper9', target: OBJETIVO }),
+      relevos: [PIDIO_RELEVO],
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'Quitar control' }));
+    expect(await screen.findByRole('dialog', { name: 'Quitarle el control a oper9' })).toHaveTextContent(
+      'el dron vuelve al objetivo que estaba siguiendo, y el relevo sigue en marcha.',
+    );
+  });
+
+  it('alcanza con el relevo que informa el teléfono, aunque la consola no lo conozca', async () => {
+    renderDetail(
+      conControl({ relevo: { enEspera: false, disponible: false, relayId: 9, rol: 'relevo', fase: 'en_camino' } }),
+    );
+    await esperarCarga();
+    expect(screen.getByTestId('aviso-reanudar-en-relevo')).toHaveTextContent('Está en un relevo');
+    await salirDelPilotaje();
+    await soltoCon('none');
+  });
+
+  it('un relevo que ya terminó no cuenta: soltar lo devuelve a su ruta, como siempre', async () => {
+    renderDetail({ ...conControl(), relevos: [{ ...VA_A_RELEVAR, estado: 'CANCELADO' }] });
+    await esperarCarga();
+    expect(screen.getByRole('button', { name: 'Devolver al patrullaje' })).toBeInTheDocument();
+    expect(screen.queryByTestId('aviso-reanudar-en-relevo')).not.toBeInTheDocument();
+    await salirDelPilotaje();
+    await soltoCon('last');
   });
 });

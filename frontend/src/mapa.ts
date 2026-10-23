@@ -1,6 +1,8 @@
 import L from 'leaflet';
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
+import { initials } from './format';
 import { esc } from './html';
+import type { ObjetivoEnSeguimiento } from './types';
 
 /**
  * Lo que todos los mapas de la consola tienen en común. Vive acá y no copiado
@@ -161,6 +163,152 @@ export function iconoBase(): L.DivIcon {
     });
   }
   return rombo;
+}
+
+/* --- Marcadores del dron, del objetivo y de la detección -------------------
+   Los dibujan el mapa de la flota (DronesMap) y el del pop-up de una alerta
+   (MapaDeAlerta). Vivían en DronesMap, y el pop-up habría tenido que copiarlos
+   o pintar otro dron: un marcador que cambia de cara de un mapa a otro es un
+   marcador que hay que volver a aprender. */
+
+/* Leaflet pinta sus capas con colores pasados por JS, no con CSS: por eso la
+   paleta se repite acá. Los que llevan un token al lado son los valores de
+   mármol de ese token, y teselas.test.ts los compara con tokens.css: el óxido
+   y el azul se habían quedado en los de antes de que el tema los ajustara.
+   Los trazos que van sobre las teselas, además, llevan una clase de TRAZO
+   para que el CSS les ponga el color del tema; el de acá queda de respaldo. */
+export const PALETA = {
+  // El halo de los marcadores: un marfil casi blanco, más claro que la piedra
+  // de la página, para que el marcador se despegue de cualquier tesela.
+  marfil: '#FBFAF7',
+  tinta: '#2B2620', // --tinta
+  tintaMedia: '#5C544A', // --tinta-media
+  oroClaro: '#F0E3B8',
+  oroMedio: '#D9BE6B',
+  oro: '#B8912F', // --oro
+  oroOscuro: '#8A6A1C', // --oro-oscuro
+  oliva: '#4F7A46', // --ok
+  oxido: '#8E3328', // --peligro
+  info: '#375870', // --info
+  negro: '#14120F',
+  ambar: '#F2C230', // el par negro/ámbar es el de mayor contraste posible
+} as const;
+
+/* El color del objetivo dice qué se decidió y el trazo si se lo está viendo:
+   rojo óxido mientras la alerta espera, oro una vez validada (el mismo oro del
+   dron: "esto es nuestro"), y apagado y punteado si la detección lo perdió,
+   porque lo que se ve es la última posición conocida y no una presencia. */
+export interface AspectoObjetivo {
+  color: string;
+  /** La clase de TRAZO con que el CSS tiñe el hilo y el rastro según el tema. */
+  trazo: string;
+  perdido: boolean;
+  /** Identifica el ícono: sólo se rehace cuando cambia. */
+  clave: string;
+}
+
+export function aspectoDelObjetivo(o: ObjetivoEnSeguimiento): AspectoObjetivo {
+  const validado = o.decision === 'VALIDATED';
+  return {
+    color: validado ? PALETA.oro : PALETA.oxido,
+    trazo: validado ? TRAZO.objetivoValidado : TRAZO.objetivoPendiente,
+    perdido: o.lost,
+    clave: `${o.decision}-${o.lost}`,
+  };
+}
+
+/** Una mira: se distingue del medallón del dron y del rombo de la base. */
+export function iconoObjetivo(a: AspectoObjetivo): L.DivIcon {
+  const trazo = a.perdido ? 'stroke-dasharray="3 3"' : '';
+  return L.divIcon({
+    className: 'objetivo-icon',
+    html: `<svg width="28" height="28" viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg" opacity="${a.perdido ? 0.55 : 1}">
+      <circle cx="14" cy="14" r="10" fill="${PALETA.marfil}" fill-opacity=".85" stroke="${a.color}" stroke-width="2.6" ${trazo}/>
+      <path d="M14 1.5v6M14 20.5v6M1.5 14h6M20.5 14h6" stroke="${a.color}" stroke-width="2.2" stroke-linecap="round"/>
+      <circle cx="14" cy="14" r="3.2" fill="${a.color}"/>
+    </svg>`,
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+    popupAnchor: [0, -14],
+  });
+}
+
+// Cada medallón trae su propio degradé, así que necesita un id único
+let secuenciaLamina = 0;
+
+/**
+ * El dron es lo único de oro macizo del mapa: un medallón de lámina dorada con
+ * las iniciales grabadas y una punta que marca la posición exacta. Las
+ * iniciales salen del nombre, que lo escribe un operador: van escapadas.
+ */
+export function droneIcon(name: string): L.DivIcon {
+  const id = `lamina-${++secuenciaLamina}`;
+  return L.divIcon({
+    className: 'drone-pin-icon',
+    html: `<svg width="34" height="42" viewBox="0 0 34 42" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="${PALETA.oroClaro}"/>
+          <stop offset=".28" stop-color="${PALETA.oroMedio}"/>
+          <stop offset=".55" stop-color="${PALETA.oro}"/>
+          <stop offset="1" stop-color="${PALETA.oroOscuro}"/>
+        </linearGradient>
+      </defs>
+      <path d="M17 40.6 11.7 28.4h10.6z" fill="url(#${id})" stroke="${PALETA.marfil}" stroke-width="1.6" stroke-linejoin="round"/>
+      <circle cx="17" cy="16.6" r="13" fill="url(#${id})" stroke="${PALETA.marfil}" stroke-width="2"/>
+      <text x="17" y="21" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="700" fill="${PALETA.tinta}">${esc(initials(name))}</text>
+    </svg>`,
+    iconSize: [34, 42],
+    iconAnchor: [17, 40],
+    popupAnchor: [0, -36],
+  });
+}
+
+let gota: L.DivIcon | null = null;
+
+/**
+ * Dónde la detección vio al objetivo: una gota de óxido, el color de la alerta
+ * que espera. Es un lugar fijo y no una presencia, por eso no es la mira del
+ * objetivo (que se mueve con él) ni lleva el oro del dron.
+ */
+export function iconoDeDeteccion(): L.DivIcon {
+  if (!gota) {
+    gota = L.divIcon({
+      className: 'deteccion-icon',
+      html: `<svg width="26" height="32" viewBox="0 0 26 32" xmlns="http://www.w3.org/2000/svg">
+      <path d="M13 31 7.6 20.6h10.8z" fill="${PALETA.oxido}" stroke="${PALETA.marfil}" stroke-width="1.6" stroke-linejoin="round"/>
+      <circle cx="13" cy="12" r="9" fill="${PALETA.oxido}" stroke="${PALETA.marfil}" stroke-width="2"/>
+      <circle cx="13" cy="12" r="3.2" fill="${PALETA.marfil}"/>
+    </svg>`,
+      iconSize: [26, 32],
+      iconAnchor: [13, 30],
+    });
+  }
+  return gota;
+}
+
+let senial: L.DivIcon | null = null;
+
+/**
+ * Dónde quedó un dron que aterrizó de emergencia: una gota de óxido con un
+ * signo de admiración. Es la gota de la detección (un lugar, no una presencia)
+ * con la marca de lo que no puede esperar, porque ahí hay que mandar a alguien.
+ */
+export function iconoDeEmergencia(): L.DivIcon {
+  if (!senial) {
+    senial = L.divIcon({
+      className: 'emergencia-icon',
+      html: `<svg width="30" height="36" viewBox="0 0 30 36" xmlns="http://www.w3.org/2000/svg">
+      <path d="M15 35 9 23h12z" fill="${PALETA.oxido}" stroke="${PALETA.marfil}" stroke-width="1.6" stroke-linejoin="round"/>
+      <circle cx="15" cy="13.5" r="11" fill="${PALETA.oxido}" stroke="${PALETA.marfil}" stroke-width="2"/>
+      <path d="M15 7.6v7.2" stroke="${PALETA.marfil}" stroke-width="2.6" stroke-linecap="round"/>
+      <circle cx="15" cy="19.3" r="1.7" fill="${PALETA.marfil}"/>
+    </svg>`,
+      iconSize: [30, 36],
+      iconAnchor: [15, 34],
+    });
+  }
+  return senial;
 }
 
 /**

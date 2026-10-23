@@ -946,6 +946,22 @@ describe('PilotajePantallaCompleta — salir', () => {
     );
   });
 
+  it('en un relevo dice que el relevo sigue, y no que vuelve a patrullar (RELEVOS §3.9)', () => {
+    montar({ enRelevo: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Salir del control manual' }));
+    const dialogo = screen.getByRole('dialog', { name: '¿Salir del control manual?' });
+    expect(dialogo).toHaveTextContent('Se suelta el control sin darle ninguna orden al dron: sigue con el relevo.');
+    expect(dialogo).not.toHaveTextContent('patrullar');
+  });
+
+  it('en un relevo y con objetivo, vuelve al objetivo y el relevo sigue', () => {
+    montar({ enRelevo: true, hayObjetivo: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Salir del control manual' }));
+    expect(screen.getByRole('dialog', { name: '¿Salir del control manual?' })).toHaveTextContent(
+      'Se suelta el control y el dron vuelve al objetivo que estaba siguiendo; el relevo sigue en marcha.',
+    );
+  });
+
   it('"Seguir piloteando" cierra el diálogo sin soltar nada', () => {
     const { onSalir, onCerrar, onMando } = montar();
     fireEvent.click(screen.getByRole('button', { name: 'Salir del control manual' }));
