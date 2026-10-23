@@ -142,7 +142,9 @@ sobreSuperficies('.badge.ok y .cat-sistema', '--ok-texto', ['--ok-velo']);
 sobreSuperficies('.badge.person y .aviso.malo', '--peligro', ['--peligro-velo']);
 sobreSuperficies('.badge.vehicle', '--alerta-texto', ['--alerta-velo']);
 sobreSuperficies('.badge.info y .cat-drone', '--info', ['--info-velo']);
-sobreSuperficies('.badge.oro ("Control manual") y .cat-usuarios', '--oro-texto', ['--oro-velo']);
+sobreSuperficies('.badge.oro ("Control manual"), .cat-usuarios y .chip.oro (el dron de una alerta)', '--oro-texto', [
+  '--oro-velo',
+]);
 pares.push({ donde: '.badge común', texto: '--tinta-media', base: '--marmol-2', minimo: TEXTO });
 pares.push({ donde: '.badge-count (la cuenta de la campana, sobre óxido)', texto: '--marmol-0', base: '--peligro', minimo: TEXTO });
 
@@ -158,7 +160,11 @@ sobreSuperficies(
 );
 sobreSuperficies('botón dorado :hover', '--oro-texto', ['--oro-velo', '--cara-activa', '--boton-fondo']);
 sobreSuperficies('.validate / .resume ("Validar", "Devolver al patrullaje")', '--valida-texto', ['--valida-fondo']);
-sobreSuperficies('.dismiss :hover y en una decisión ("Descartar", "Eliminar")', '--descarta-texto', ['--descarta-fondo']);
+sobreSuperficies(
+  '.dismiss :hover y en una decisión ("Descartar", "Eliminar"), y .chip.rojo (la clase de una alerta)',
+  '--descarta-texto',
+  ['--descarta-fondo'],
+);
 // La sección abierta de la barra: el velo dorado, sin el fondo del botón.
 sobreSuperficies('sección abierta de la barra', '--oro-texto', ['--cara-activa'], TEXTO, PANELES);
 pares.push({ donde: 'texto seleccionado (::selection)', texto: '--tinta-sobre-oro', base: '--oro-claro', minimo: TEXTO });
@@ -230,6 +236,17 @@ for (const [base, piedra] of PIEDRAS) {
     { donde: `marca: "Comando de drones" sobre ${piedra}`, texto: '--tinta-media', sobre, base, minimo: TEXTO },
   );
 }
+
+// --- El visor: una pantalla negra en los dos temas -------------------------------
+// El pie ("Captura · 14:32:05") y el aviso de una cámara sin imagen van sobre
+// el negro del visor. "En vivo" va encima de la imagen, que puede ser cielo
+// blanco o noche cerrada: su velo se mide contra las dos, como el HUD.
+pares.push(
+  { donde: 'pie del visor ("Captura", la hora)', texto: '--visor-tinta', base: '--visor-pie', minimo: TEXTO },
+  { donde: 'visor sin imagen ("Sin señal de video")', texto: '--visor-tinta', base: '--recuadro-video', minimo: TEXTO },
+  { donde: '"En vivo" sobre un cuadro blanco', texto: '--visor-tinta', sobre: ['--visor-velo'], base: '#FFFFFF', minimo: TEXTO },
+  { donde: '"En vivo" sobre un cuadro negro', texto: '--visor-tinta', sobre: ['--visor-velo'], base: '#000000', minimo: TEXTO },
+);
 
 // --- Bordes de los controles y foco ----------------------------------------------
 for (const s of SUPERFICIES) {
@@ -350,6 +367,19 @@ describe('los pares medidos son los que pintan las hojas', () => {
     ['Descartar en una decisión', primitivos, '.alert-actions button.dismiss', 'background-color', 'var(--descarta-fondo)'],
     ['tinta de Descartar', primitivos, '.alert-actions button.dismiss', 'color', 'var(--descarta-texto)'],
     ['sección abierta de la barra', layout, '.topnav button.active', 'color', 'var(--oro-texto)'],
+    // Las fichas de una alerta: la clase en la placa de Descartar, el dron en oro.
+    ['ficha de la clase', primitivos, '.chip.rojo', 'background-color', 'var(--descarta-fondo)'],
+    ['tinta de la ficha de la clase', primitivos, '.chip.rojo', 'color', 'var(--descarta-texto)'],
+    ['ficha del dron', primitivos, '.chip.oro', 'background-color', 'var(--oro-velo)'],
+    ['tinta de la ficha del dron', primitivos, '.chip.oro', 'color', 'var(--oro-texto)'],
+    // El visor de las cámaras y de la captura.
+    ['visor', vistas, '.visor', 'background-color', 'var(--recuadro-video)'],
+    ['pie del visor', vistas, '.visor-pie', 'background-color', 'var(--visor-pie)'],
+    ['tinta del pie del visor', vistas, '.visor-pie', 'color', 'var(--visor-tinta)'],
+    ['velo de "En vivo"', vistas, '.visor-vivo', 'background-color', 'var(--visor-velo)'],
+    ['tinta de "En vivo"', vistas, '.visor-vivo', 'color', 'var(--visor-tinta)'],
+    // El medallón del vacío flota sobre el panel: es un panel firme.
+    ['medallón del vacío', modales, '.medalla', 'background-color', 'var(--panel-firme)'],
   ])('%s', (_donde, hoja, selector, propiedad, esperado) => {
     expect(valorDe(hoja, selector, propiedad)).toBe(esperado);
   });

@@ -62,6 +62,15 @@
     background: none !important;
     background-image: none !important;
   }
+  /* El visor es negro en los dos temas: en papel, una placa de tóner con la
+     letra clara encima, que no sale. Queda la imagen con su borde, y el pie
+     en tinta de imprenta. */
+  .visor,
+  .visor-pie,
+  .visor-vivo {
+    background: none !important;
+    color: var(--papel-tinta) !important;
+  }
 
   .modal,
   .modal-fondo {
@@ -121,6 +130,9 @@
   .regla-ornamental,
   .filo-oro::after,
   .card > h2::after,
+  .carrusel-cabecera::after,
+  .mapa-head::after,
+  .visor-cuadro::after,
   .card.activa::after,
   .comparacion-despues::after,
   .login-card::before,

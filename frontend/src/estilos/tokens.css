@@ -176,6 +176,25 @@
   --papel-tinta: #000000;
   --papel-tinta-media: #333333;
 
+  /* --- Visor ---------------------------------------------------------------
+     El recuadro negro de una cámara del tablero y de la captura de una
+     alerta, con las escuadras de un visor en las esquinas. Por la misma razón
+     que el recuadro del video, no cambia con el tema: es una pantalla, y lo
+     que va escrito sobre ella (el pie, "EN VIVO") es claro en los dos. */
+  --visor-tinta: #E6E0D4;
+  --visor-pie: #0B0B0D;
+  --visor-esquina: rgba(255, 255, 255, .78);
+  /* Bajo el mouse las escuadras se encienden: dicen que el visor se abre. */
+  --visor-esquina-encendida: #FFFFFF;
+  /* La pastilla "EN VIVO" va encima de la imagen, que puede ser cielo
+     blanco: el velo es lo que la deja leer (contraste.test.ts). */
+  --visor-velo: rgba(0, 0, 0, .66);
+  /* El punto rojo de lo que pasa ahora: la cámara en vivo, la alerta sin
+     atender. Es una luz y no un texto (al lado siempre va la palabra), así
+     que brilla igual en los dos temas. */
+  --punto-vivo: #EF4B43;
+  --punto-vivo-halo: 0 0 0 3px rgba(239, 75, 67, .25), 0 0 10px rgba(239, 75, 67, .7);
+
   /* Paneles del HUD de pilotaje: piedra translúcida apoyada sobre el video.
      Al 92 % y no menos: debajo puede haber cielo blanco o noche cerrada, y el
      aviso grave tiene que leerse sobre los dos. */
@@ -223,7 +242,9 @@
      en una red cerrada. Cinzel es la marca y los rótulos grabados en
      versalitas; Cormorant Garamond, los títulos y las cifras grandes; Inter,
      todo lo que se lee de corrido. */
-  --fuente-marca: 'Cinzel', 'Trajan Pro', Georgia, 'Times New Roman', serif;
+  /* La marca lleva primero sus cifras (base.css): sólo los dígitos, que en
+     Cinzel se confunden con letras ("1" con "I"). */
+  --fuente-marca: 'Cifras de la marca', 'Cinzel', 'Trajan Pro', Georgia, 'Times New Roman', serif;
   --fuente-serif: 'Cormorant Garamond', Garamond, Georgia, 'Times New Roman', serif;
   --fuente-cuerpo: 'Inter Variable', Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --fuente-mono: ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, monospace;

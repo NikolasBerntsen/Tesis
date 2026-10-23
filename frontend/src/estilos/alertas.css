@@ -1,46 +1,82 @@
 /* ============================================================================
-   ALERTAS — el carrusel de las pendientes (AlertaEnCurso), en la vista del dron
-   y en el tablero. La tarjeta en sí (.alerta-en-curso, su filo óxido) está en
-   vistas.css; acá van las piezas para recorrerla y la variante apaisada.
+   ALERTAS — la tarjeta de las pendientes (AlertaEnCurso), en la vista del
+   dron y en el tablero: su cabecera con el carrusel, la captura en su visor
+   (el visor es de vistas.css, lo comparte con las cámaras) y lo que se decide.
+   Sin foto de fondo, a propósito: la tarjeta es un panel translúcido más, y
+   lo que tiene que llamar la mirada es la captura.
    ========================================================================= */
 
-/* El título ya no es hijo directo de la tarjeta (comparte renglón con los
-   pasos), así que la línea grabada de `.card > h2` se repite en la cabecera:
-   la tarjeta tiene que leerse igual con una alerta que con cinco. */
+.alerta-en-curso {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-4);
+}
+
+/* --- Cabecera ------------------------------------------------------------------
+   El punto rojo y la cuenta ("1 alerta sin atender") a la izquierda; los pasos
+   del carrusel y cuánto hace que espera, a la derecha; un hilo de oro debajo.
+   El título no es hijo directo de la tarjeta (comparte renglón con los pasos):
+   la letra de `.card > h2` y el tramito de oro de la línea los pone
+   primitivos.css, para que la tarjeta se lea igual con una alerta que con
+   cinco. */
 .carrusel-cabecera {
   position: relative;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--e-2) var(--e-3);
-  padding-bottom: var(--e-2);
+  gap: var(--e-2) var(--e-4);
+  padding-bottom: 14px;
   border-bottom: 1px solid var(--veta);
 }
-.carrusel-cabecera::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  bottom: -1px;
-  width: 38px;
-  height: 1px;
-  background: linear-gradient(90deg, var(--oro-oscuro) 0%, var(--oro-claro) 100%);
-}
-.carrusel-cabecera h2 {
+.carrusel-cabecera > h2 {
+  gap: 14px;
   margin: 0;
-  font-size: var(--txt-md);
+  font-size: var(--txt-base);
 }
 
-/* Los pasos van a la derecha del título, juntos: flecha, cuenta, flecha. */
+/* A la derecha del título, juntos, los pasos y el reloj. Si no entran en el
+   renglón bajan los dos y siguen a la derecha. */
+.carrusel-lado {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--e-2) var(--e-4);
+  margin-left: auto;
+}
+/* Los pasos: flecha, cuenta, flecha. Con una sola alerta quedan vacíos. */
 .carrusel-pasos {
   display: inline-flex;
   align-items: center;
   gap: var(--e-2);
-  margin-left: auto;
+}
+/* Las flechas son teclas cuadradas de 44 px, como en el prototipo: se tocan
+   con el dedo en la tableta de campo, y redondas de 34 se erraban. */
+.carrusel-paso.icono-boton {
+  width: var(--alto-tactil);
+  height: var(--alto-tactil);
+  border-radius: var(--radio-chico);
+}
+.carrusel-paso.icono-boton svg {
+  width: 18px;
+  height: 18px;
 }
 .carrusel-cuenta {
   min-width: 4.5em;
   text-align: center;
   font-variant-numeric: tabular-nums lining-nums;
+}
+
+/* Cuánto hace que espera: el reloj y la cuenta en cifras parejas, para que
+   el segundero no haga bailar el renglón. */
+.alerta-espera {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--e-2);
+  color: var(--tinta-media);
+  font-size: var(--txt-base);
+  font-variant-numeric: tabular-nums lining-nums;
+  white-space: nowrap;
 }
 
 /* Lo que la cuenta le dice al lector de pantalla y no hace falta ver: "Alerta"
@@ -102,49 +138,128 @@
   .carrusel-cuenta.llego { animation: none; }
 }
 
-/* El nombre del dron y "Ver la alerta nueva" son `.enlace` (nuevos.css), que
-   ya se saca de encima la sombra y la cara de `button` en todos sus estados. */
+/* "Ver la alerta nueva" es `.enlace` (nuevos.css), que ya se saca de encima
+   la sombra y la cara de `button` en todos sus estados. */
 .carrusel-nuevas {
   align-self: flex-start;
   font-size: var(--txt-sm);
 }
 
-/* La alerta en pantalla: misma columna que la tarjeta tenía antes del carrusel. */
+/* --- La alerta en pantalla -------------------------------------------------
+   En la vista del dron va en una columna angosta, al lado del video: la
+   captura arriba y lo que se decide debajo. */
 .carrusel-diapositiva,
-.alerta-cuerpo,
 .alerta-detalle {
   display: flex;
   flex-direction: column;
-  gap: var(--e-3);
+  gap: var(--e-4);
   min-width: 0;
 }
 .alerta-detalle > p { margin: 0; }
 
-/* "Validar" y "Descartar" no llevan arreglo propio acá: su placa sale de
-   --valida-* y --descarta-* (primitivos.css), que tienen valor por tema,
-   igual en la campana que en el carrusel o en el detalle del dron. */
-.carrusel-dron { font-weight: 600; }
+/* Variante apaisada: el tablero. La tarjeta cruza todo el ancho, con la
+   captura a la izquierda y lo que se decide a la derecha, para no empujar las
+   cámaras media pantalla hacia abajo. Cuando no entran las dos columnas, lo
+   que se decide baja debajo de la captura. */
+.alerta-en-curso.apaisada .carrusel-diapositiva {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 26px 36px;
+}
+.alerta-en-curso.apaisada .visor {
+  flex: 0 1 440px;
+  min-width: 0;
+}
+.alerta-en-curso.apaisada .alerta-detalle {
+  flex: 1 1 380px;
+  max-width: 600px;
+}
 
-/* --- Variante apaisada: el tablero ------------------------------------------
-   Arriba de la grilla de cámaras, la tarjeta cruza todo el ancho: la captura
-   a la izquierda y lo que se decide a la derecha, para no empujar las cámaras
-   media pantalla hacia abajo. */
-.alerta-en-curso.apaisada .alerta-cuerpo {
-  display: grid;
-  grid-template-columns: minmax(200px, 340px) minmax(0, 1fr);
-  align-items: start;
+/* La consigna, en el cuerpo de lectura: es lo que hay que hacer antes de
+   apretar nada. */
+.alerta-consigna {
+  font-size: var(--txt-md);
+  line-height: 1.45;
+}
+
+/* "Validar" y "Descartar" toman su placa de --valida-* y --descarta-*
+   (primitivos.css), igual en la campana que acá o en el pop-up. Lo propio de
+   la tarjeta es el tamaño: son la decisión, y pesan como tal. Validar lleva
+   en reposo un halo más tenue que el de su hover (`:enabled` pesa menos que
+   ese hover y deja afuera al deshabilitado, que no brilla). */
+.alerta-en-curso .alert-actions {
+  flex-wrap: wrap;
   gap: var(--e-4);
 }
-.alerta-en-curso.apaisada .alert-actions { max-width: 420px; }
-@media (max-width: 700px) {
-  .alerta-en-curso.apaisada .alerta-cuerpo { grid-template-columns: 1fr; }
+.alerta-en-curso .alert-actions button {
+  flex: 1 1 150px;
+  gap: 10px;
+  min-height: 58px;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: .01em;
+}
+.alerta-en-curso .validate:enabled {
+  box-shadow: 0 0 14px color-mix(in srgb, var(--valida-filo) 22%, transparent);
 }
 
+/* Qué le hace cada botón al dron: el ícono de información y las dos líneas. */
+.alerta-consecuencias {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--e-3);
+  color: var(--tinta-media);
+  font-size: var(--txt-sm);
+  line-height: 1.5;
+}
+.alerta-consecuencias > svg {
+  flex: none;
+  margin-top: 1px;
+}
+.alerta-consecuencias > p { margin: 0; }
+
+/* "Ver detalle", en versalitas de oro con su flecha: en la tarjeta es el
+   camino a la alerta entera, no un enlace en medio de un texto. */
+.alerta-en-curso .alerta-ver-detalle {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 6px;
+  min-height: 32px;
+  font-size: var(--txt-sm);
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  text-decoration-color: transparent;
+}
+.alerta-en-curso .alerta-ver-detalle:hover:not(:disabled) { text-decoration-color: var(--oro); }
+
 /* --- Abrir la alerta ----------------------------------------------------------
-   En el carrusel y en la campana, la captura es un botón que abre el pop-up de
-   la alerta, y "Ver detalle" es el mismo camino en texto. El botón de la
-   captura se saca de encima la cara de `button`: lo que se ve es la imagen, y
-   el puntero de lupa dice que se puede agrandar. */
+   En la tarjeta, el visor de la captura entero es el botón que abre el pop-up
+   de la alerta, y "Ver detalle" es el mismo camino en texto. Se saca de encima
+   la cara de `button`: lo que se ve es el visor, el puntero de lupa dice que
+   se agranda, y bajo el mouse se encienden el filo y las escuadras. */
+button.visor {
+  width: 100%;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  background-image: none;
+  box-shadow: none;
+  cursor: zoom-in;
+}
+button.visor:hover:not(:disabled) {
+  border-color: var(--oro);
+  background-image: none;
+}
+button.visor:active:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+}
+button.visor:hover .visor-cuadro::after { --esquina: var(--visor-esquina-encendida); }
+
+/* En la campana la captura es un botón sin visor: la imagen sola. */
 .snapshot-boton {
   display: block;
   width: 100%;

@@ -3,7 +3,7 @@ import { useAlertasEnVivo } from '../alertasEnVivo';
 import { time } from '../format';
 import type { Alert, Drone } from '../types';
 import { useDecisionDeAlerta, type DecidirAlerta } from '../useDecisionDeAlerta';
-import { IconoCampana } from './Iconos';
+import { IconoCampana, IconoCheck, IconoTacho } from './Iconos';
 
 const TIPO = { PERSON: 'PERSONA', VEHICLE: 'VEHÍCULO' } as const;
 
@@ -135,10 +135,14 @@ export default function CampanaDeAlertas({
                 <img className="snapshot" src={`data:image/jpeg;base64,${a.snapshot}`} alt="Detección" />
               )}
               <div className="alert-actions">
+                {/* Con el tilde y el tacho de la tarjeta del tablero: el mismo
+                    par se reconoce igual en los dos lugares. */}
                 <button className="validate" disabled={decidiendo(a.id)} onClick={() => decidir(a.id, 'VALIDATED')}>
+                  <IconoCheck tamano={18} />
                   Validar
                 </button>
                 <button className="dismiss" disabled={decidiendo(a.id)} onClick={() => decidir(a.id, 'DISMISSED')}>
+                  <IconoTacho tamano={18} />
                   Descartar
                 </button>
               </div>

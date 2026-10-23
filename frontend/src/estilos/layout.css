@@ -312,19 +312,14 @@
 .conn.bad { color: var(--peligro); }
 
 /* --- Conmutadores de vista y pestañas -------------------------------------- */
+/* "Cámaras / Mapa" vive en la cabecera de Operación: su tamaño y sus
+   versalitas los pone pulido.css, y el elegido lleva el oro de lo presionado
+   (aria-pressed, primitivos.css). */
 .view-switch,
 .tabs {
   display: flex;
   gap: var(--e-2);
   flex-wrap: wrap;
-}
-/* "Cámaras / Mapa": dos botones comunes en versalitas; el elegido lleva el
-   oro de lo presionado (aria-pressed, primitivos.css). */
-.view-switch button {
-  font-size: var(--txt-sm);
-  font-weight: 600;
-  letter-spacing: .1em;
-  text-transform: uppercase;
 }
 
 /* --- Cuerpo de la página: el lienzo ---------------------------------------

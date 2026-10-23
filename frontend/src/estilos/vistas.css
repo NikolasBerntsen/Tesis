@@ -52,6 +52,19 @@
   background: var(--oro-lamina);
   transition: width var(--transicion);
 }
+/* La barra de la batería en la cámara del tablero: el mismo medidor, más
+   grueso y teñido por nivel (el de la cifra de al lado), para leerse de un
+   vistazo en una grilla de varias cámaras. */
+.medidor.barra {
+  display: block;
+  height: 6px;
+  margin-top: 6px;
+  background: var(--veta);
+  box-shadow: none;
+}
+.medidor-relleno.ok { background: var(--ok); }
+.medidor-relleno.warn { background: var(--alerta); }
+.medidor-relleno.bad { background: var(--peligro); }
 
 /* El color y el fondo los pone button.resume en primitivos.css: acá va sólo
    lo que es de esta vista (ocupa el ancho de la tarjeta). */
@@ -92,11 +105,136 @@
   display: block;
 }
 
+/* --- Visor ------------------------------------------------------------------
+   <div class="visor">
+     <div class="visor-cuadro"> la imagen </div>
+     <span class="visor-vivo">…</span>            (opcional, sobre la imagen)
+     <span class="visor-pie"> qué es · cuándo </span> (opcional, al pie)
+   </div>
+   Un recuadro negro con las escuadras de una cámara en las esquinas: el de
+   cada cámara del tablero y el de la captura de una alerta. Negro en los dos
+   temas, como el recuadro del video: es una pantalla, y todo lo que va
+   escrito encima (el pie, "En vivo") es claro en los dos (tokens.css). */
+.visor {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  border: 1px solid var(--veta-fuerte);
+  border-radius: var(--radio-chico);
+  color: var(--visor-tinta);
+  background-color: var(--recuadro-video);
+}
+/* Adentro del visor la imagen va a sangre: el marco es el del visor. Entera
+   y no recortada (contain): de una captura se decide una alerta, y lo que
+   queda afuera del recorte es justo lo que no se ve. */
+.visor-cuadro {
+  position: relative;
+  display: block;
+}
+.visor .video,
+.visor .snapshot {
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background-color: var(--recuadro-video);
+}
+/* Las escuadras: cuatro esquinas en L, dibujadas en una sola capa encima de
+   la imagen (ocho trazos de degradé liso), sin marcado de más. El color va en
+   una variable para que el visor que se abre las encienda bajo el mouse. */
+.visor-cuadro::after {
+  --esquina: var(--visor-esquina);
+  --brazo: 24px;
+  content: '';
+  position: absolute;
+  inset: 10px;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--esquina) 0 0) top left / var(--brazo) 2px,
+    linear-gradient(var(--esquina) 0 0) top left / 2px var(--brazo),
+    linear-gradient(var(--esquina) 0 0) top right / var(--brazo) 2px,
+    linear-gradient(var(--esquina) 0 0) top right / 2px var(--brazo),
+    linear-gradient(var(--esquina) 0 0) bottom left / var(--brazo) 2px,
+    linear-gradient(var(--esquina) 0 0) bottom left / 2px var(--brazo),
+    linear-gradient(var(--esquina) 0 0) bottom right / var(--brazo) 2px,
+    linear-gradient(var(--esquina) 0 0) bottom right / 2px var(--brazo);
+  background-repeat: no-repeat;
+}
+/* Al pie, qué es lo que se ve y cuándo: "Captura · 14:32:05". */
+.visor-pie {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--e-3);
+  padding: 11px 14px;
+  color: var(--visor-tinta);
+  background-color: var(--visor-pie);
+  font-size: var(--txt-sm);
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: .02em;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+.visor-rotulo {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--e-2);
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+/* Lo que se ve cuando no hay imagen: el aviso, en el alto de la captura que
+   falta, para que la tarjeta no salte al recorrer las alertas. */
+.visor-sin-imagen {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 16 / 9;
+}
+.visor-sin-imagen .vacio,
+.visor .video.placeholder { color: var(--visor-tinta); }
+/* "● En vivo", arriba a la izquierda, pasada la escuadra. El velo oscuro es
+   lo que lo deja leer sobre un cielo blanco (contraste.test.ts). */
+.visor-vivo {
+  position: absolute;
+  top: 14px;
+  left: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 9px;
+  border-radius: 6px;
+  color: var(--visor-tinta);
+  background-color: var(--visor-velo);
+  font-size: var(--txt-xs);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+/* El punto rojo de lo que pasa ahora: la cámara en vivo y la alerta sin
+   atender. Es una luz, no un texto: al lado siempre va la palabra. */
+.punto-vivo {
+  display: inline-block;
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background-color: var(--punto-vivo);
+  box-shadow: var(--punto-vivo-halo);
+}
+.visor-vivo .punto-vivo {
+  width: 8px;
+  height: 8px;
+}
+
 /* --- Alertas -------------------------------------------------------------- */
 /* La alerta pendiente suelta (.alert.pending), la decidida (.alert.decided) y
    la franja de pendientes del tablero (.alert-strip / .alert-chip) se fueron
    con la campana y el carrusel: ningún componente las usa ya. Se borraron
-   porque eran justamente las que arrancaban en un blanco escrito a mano. */
+   porque eran justamente las que arrancaban en un blanco escrito a mano. La
+   tarjeta del carrusel (.alerta-en-curso) vive entera en alertas.css. */
 .alert-head {
   display: flex;
   gap: var(--e-3);
@@ -108,18 +246,6 @@
   gap: var(--e-3);
 }
 .alert-actions button { flex: 1; }
-
-/* Alerta en curso, al lado del video en la vista del dron. Lleva el filo
-   óxido de las alertas, mezclado desde el token para que siga al tema. */
-.alerta-en-curso {
-  display: flex;
-  flex-direction: column;
-  gap: var(--e-3);
-  border-color: color-mix(in srgb, var(--peligro) 50%, transparent);
-}
-.alerta-en-curso h2 { margin: 0; }
-.alerta-en-curso .alert-head time { margin-left: auto; }
-.alerta-consecuencias { font-size: var(--txt-xs); }
 
 /* --- Registro de eventos --------------------------------------------------- */
 /* La lista del historial de un dron (EventLog) ya no es una tarjeta con su
@@ -219,14 +345,18 @@ details.meta pre {
 }
 
 /* --- Grilla de cámaras ----------------------------------------------------- */
+/* Las cámaras van adentro del panel de "Drones activos": en un teléfono el
+   panel deja menos de 320 px, y una columna de 320 fija se salía por el
+   costado. Ahí la columna toma el ancho que haya. */
 .camera-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
   gap: var(--e-5);
 }
+/* Cada cámara es una tarjeta con filo de oro y el visor a sangre arriba: la
+   imagen es lo que se mira, la ficha de abajo es el rótulo. */
 .camera-tile {
   position: relative;
-  padding: var(--e-3);
   border: 1px solid var(--veta-fuerte);
   border-radius: var(--radio);
   cursor: pointer;
@@ -239,6 +369,16 @@ details.meta pre {
   border-color: var(--oro);
   box-shadow: var(--sombra-flotante);
 }
+/* El visor sigue el canto de la tarjeta arriba y la cierra con una línea
+   abajo. Sin overflow:hidden en la tarjeta: recortaría el anillo de foco del
+   botón estirado, que se dibuja por fuera. */
+.camera-tile > .visor {
+  border-width: 0 0 1px;
+  border-radius: calc(var(--radio) - 1px) calc(var(--radio) - 1px) 0 0;
+}
+/* Bajo el mouse las escuadras se encienden, como en la captura de una
+   alerta: el mosaico entero se abre. */
+.camera-tile:hover .visor-cuadro::after { --esquina: var(--visor-esquina-encendida); }
 
 /* El control que abre el detalle del dron: un <button> de verdad, estirado
    sobre el mosaico entero. No se ve —el mosaico ya se dibuja solo— pero trae
@@ -278,8 +418,8 @@ details.meta pre {
 .tile-info {
   display: flex;
   flex-direction: column;
-  gap: var(--e-1);
-  margin-top: var(--e-3);
+  gap: var(--e-4);
+  padding: 14px var(--e-4) var(--e-4);
 }
 .tile-row {
   display: flex;
@@ -288,20 +428,46 @@ details.meta pre {
   align-items: center;
   font-size: var(--txt-sm);
 }
-.tile-row.muted { color: var(--tinta-media); }
 /* Primera fila: el nombre manda y no se parte. Si compite de igual a igual con
    el estado, un rótulo largo ("Volviendo a base…") lo corta al medio y el
    lápiz queda colgando en el hueco. */
-.tile-info > .tile-row:first-child {
-  flex-wrap: wrap;
-  align-items: baseline;
-}
+.tile-info > .tile-row:first-child { flex-wrap: wrap; }
 .tile-info > .tile-row:first-child > .editable-name { flex: none; }
-.tile-info > .tile-row:first-child > .estado {
-  margin-left: auto;
-  text-align: right;
+/* El nombre del dron se lee grabado en Cinzel, como la marca: en la serif
+   chica de antes, "Halcón 1" se perdía al lado de su propio estado. */
+.camera-tile .editable-name .inscripcion {
+  font-family: var(--fuente-marca);
+  font-size: var(--txt-md);
+  font-weight: 600;
+  letter-spacing: .04em;
 }
-.tile-video { position: relative; }
+/* El estado, en una pastilla con su punto: a la derecha del nombre. */
+.tile-info > .tile-row:first-child > .estado {
+  min-height: 26px;
+  margin-left: auto;
+  padding: 0 10px;
+  border: 1px solid var(--veta);
+  border-radius: 999px;
+  font-size: var(--txt-xxs);
+  font-weight: 600;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.tile-info > .tile-row:first-child > .estado.accent { border-color: var(--oro); }
+/* Los datos: el rótulo en versalitas arriba, la cifra en serif abajo, y la
+   batería con su barra. */
+.tile-datos {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--e-3);
+  margin: 0;
+}
+.tile-datos dt { font-size: var(--txt-xxs); letter-spacing: .14em; }
+.tile-datos dd {
+  margin: var(--e-1) 0 0;
+  line-height: 1.1;
+}
 /* El velo apaga la imagen —el cuadro que se ve es viejo— y el aviso va en su
    propio sello de piedra: sobre un velo translúcido el óxido dependía de lo
    que hubiera en el video, y con cielo claro detrás no se leía. */
@@ -327,11 +493,12 @@ details.meta pre {
   text-transform: uppercase;
 }
 /* La esquina va en mármol macizo del tema: era un blanco al 88 % escrito a
-   mano, que en obsidiana dejaba "PATRULLANDO" en marfil sobre casi blanco. */
+   mano, que en obsidiana dejaba "PATRULLANDO" en marfil sobre casi blanco.
+   Arriba a la derecha, pasada la escuadra, a la altura de "En vivo". */
 .tile-esquina {
   position: absolute;
-  right: 10px;
-  top: 10px;
+  right: 44px;
+  top: 14px;
   font-size: var(--txt-xxs);
   font-weight: 700;
   letter-spacing: var(--versalita);
@@ -340,6 +507,12 @@ details.meta pre {
   border-radius: var(--radio-sello);
   background: var(--marmol-0);
   border: 1px solid var(--veta);
+}
+/* En un teléfono la cámara mide 270 px: pasadas las escuadras, "En vivo" y
+   "Patrullando" se tocaban. Ahí los dos se meten adentro de la escuadra. */
+@media (max-width: 480px) {
+  .camera-tile .visor-vivo { top: 18px; left: 18px; }
+  .camera-tile .tile-esquina { top: 18px; right: 18px; }
 }
 .esquina-verde { color: var(--ok-texto); }
 .esquina-gris { color: var(--tinta-media); }
@@ -447,15 +620,7 @@ details.meta pre {
      lea igual que las que sólo tienen h2. */
   border-bottom: 1px solid var(--veta);
 }
-.mapa-head::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  bottom: -1px;
-  width: 38px;
-  height: 1px;
-  background: linear-gradient(90deg, var(--oro-oscuro) 0%, var(--oro-claro) 100%);
-}
+/* El tramito de oro de la línea lo pone primitivos.css, con el de `.card > h2`. */
 .mapa-head h2 { margin: 0; border: 0; padding: 0; }
 .mapa-head h2::after { display: none; }
 

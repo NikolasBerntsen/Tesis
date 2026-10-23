@@ -157,6 +157,49 @@
   text-align: center;
 }
 
+/* Con medallón ("No hay drones activos." en Operación): el vacío ocupa su
+   lugar en la vista, en un recuadro de hilo de oro apoyado sobre el panel y
+   la veta de la página, sin foto detrás. Al centro, el medallón con el
+   dibujo, el título en Cormorant grande y las dos líneas de ayuda. */
+.vacio-guia.con-medalla {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 230px;
+  padding: 28px var(--e-4);
+  border: 1px solid var(--veta);
+  border-radius: var(--radio-chico);
+  text-align: center;
+}
+.medalla {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 96px;
+  height: 96px;
+  border: 1px solid var(--veta-fuerte);
+  border-radius: 50%;
+  color: var(--tinta);
+  background-color: var(--panel-firme);
+  box-shadow: 0 0 0 8px var(--oro-velo);
+}
+/* A 46 px el trazo de los íconos se ve grueso: se afina, como en el prototipo. */
+.medalla > svg { stroke-width: 1.3; }
+.con-medalla > .vacio {
+  margin: var(--e-4) 0 var(--e-2);
+  padding: 0;
+  color: var(--tinta);
+  font-size: var(--txt-2xl);
+  font-weight: 600;
+  line-height: 1.1;
+}
+.con-medalla > .muted {
+  margin: 0 auto;
+  font-size: var(--txt-base);
+  line-height: 1.6;
+}
+
 /* ---------------------------------------------------------------------------
    HISTORIAL DE EVENTOS DE UN DRON (HistorialDeEventos)
    <div class="modal-cuerpo historial [con-detalle]">

@@ -26,6 +26,27 @@ describe('EstadoVacio', () => {
     expect(container.firstElementChild).toHaveClass('vacio-guia');
   });
 
+  it('con ícono lleva el medallón, fuera del árbol de accesibilidad', () => {
+    const { container } = render(
+      <EstadoVacio titulo="No hay drones activos." icono={<svg data-testid="dibujo" />}>
+        Cuando un dron se conecte, su cámara aparece acá.
+      </EstadoVacio>,
+    );
+    expect(container.firstElementChild).toHaveClass('vacio-guia', 'con-medalla');
+    const medalla = container.querySelector('.medalla') as HTMLElement;
+    expect(medalla).toHaveAttribute('aria-hidden', 'true');
+    expect(medalla).toContainElement(screen.getByTestId('dibujo'));
+    // El título y la guía siguen siendo los de siempre.
+    expect(screen.getByText('No hay drones activos.')).toHaveClass('vacio');
+    expect(screen.getByText('Cuando un dron se conecte, su cámara aparece acá.')).toHaveClass('muted');
+  });
+
+  it('sin ícono no dibuja el medallón', () => {
+    const { container } = render(<EstadoVacio titulo="Todavía no hay bases.">Con «Nueva base» la das de alta.</EstadoVacio>);
+    expect(container.querySelector('.medalla')).toBeNull();
+    expect(container.firstElementChild).not.toHaveClass('con-medalla');
+  });
+
   it('sin guía es el cartel solo', () => {
     const { container } = render(<EstadoVacio titulo="No hay usuarios para mostrar." />);
     expect(container.firstElementChild).toHaveClass('vacio');

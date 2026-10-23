@@ -107,6 +107,20 @@
   letter-spacing: .1em;
   text-transform: uppercase;
 }
+/* "Cámaras / Mapa" es lo único de la cabecera de Operación y se toca con el
+   dedo en la tableta de campo: va al alto táctil, con su ícono y un ancho
+   mínimo común, para que las dos teclas midan lo mismo y el oro de la elegida
+   no haga saltar a la otra. */
+.vista-cabecera .view-switch button {
+  min-height: var(--alto-tactil);
+  min-width: 150px;
+  padding-inline: 18px;
+  gap: 10px;
+  font-size: var(--txt-sm);
+}
+.vista-cabecera .view-switch {
+  gap: var(--e-3);
+}
 .vista-cabecera input,
 .vista-cabecera select {
   height: var(--alto-control);
