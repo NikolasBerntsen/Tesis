@@ -1620,8 +1620,33 @@ describe('DroneDetail — soltar el control de un dron en un relevo (RELEVOS §3
     );
     const reanudar = screen.getByRole('button', { name: 'Soltar y reanudar patrullaje' });
     expect(reanudar).toHaveAccessibleDescription(aviso.textContent ?? '');
+    apiMock.mockClear();
     await userEvent.click(reanudar);
-    await soltoCon('last');
+    // Es una orden explícita, y va por donde el hub la cuenta para el relevo:
+    // soltar con 'last' a un dron en relevo el hub lo suelta sin orden.
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/drones/d1/resume', { method: 'POST', body: '{}' }));
+    expect(apiMock).not.toHaveBeenCalledWith('/drones/d1/control', expect.anything());
+  });
+
+  it('el que pidió el relevo también reanuda con la orden explícita, no soltando con "last"', async () => {
+    renderDetail({ ...conControl({ target: OBJETIVO }), relevos: [PIDIO_RELEVO] });
+    await esperarCarga();
+    apiMock.mockClear();
+    await userEvent.click(screen.getByRole('button', { name: 'Soltar y reanudar patrullaje' }));
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/drones/d1/resume', { method: 'POST', body: '{}' }));
+    expect(apiMock).not.toHaveBeenCalledWith('/drones/d1/control', expect.anything());
+  });
+
+  it('si el hub rechaza reanudar, el motivo queda a la vista', async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path.startsWith('/events')) return Promise.resolve([]);
+      if (path.endsWith('/resume')) return Promise.reject(new Error('El dron está controlado por oper9'));
+      return Promise.resolve({});
+    });
+    renderDetail({ ...conControl(), relevos: [VA_A_RELEVAR] });
+    await esperarCarga();
+    await userEvent.click(screen.getByRole('button', { name: 'Soltar y reanudar patrullaje' }));
+    expect(await screen.findByText('El dron está controlado por oper9')).toHaveAttribute('role', 'alert');
   });
 
   it('el que pidió el relevo con el objetivo cargado vuelve al objetivo, y el relevo sigue', async () => {

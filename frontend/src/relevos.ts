@@ -289,12 +289,12 @@ function relevoActivoDe(droneId: string, relevos: readonly Relevo[]): Relevo | u
 
 /**
  * Si el dron participa de un relevo activo: es la pregunta que hace el hub
- * (`reanudacionAlSoltar` en ws.ts) para soltarle el control sin orden. Soltar
- * con `'last'` es un `resume_patrol`, y eso el hub lo toma como una orden del
- * operador (RELEVOS §3.9): a B lo saca del relevo y a A lo manda a patrullar
- * con la batería que lo hizo pedir uno. B en camino todavía no tiene objetivo
- * (su rastreador arranca en el punto de traspaso, §3.5), así que mirar sólo
- * `status.target` lo soltaba con `'last'` y cancelaba el relevo.
+ * (`reanudacionAlSoltar` en ws.ts, y DELETE /control) para soltarle el control
+ * sin orden. Soltar con `'last'` le manda un `resume_patrol` (RELEVOS §3.9):
+ * a B lo sacaría del relevo y a A lo mandaría a patrullar con la batería que
+ * lo hizo pedir uno. B en camino todavía no tiene objetivo (su rastreador
+ * arranca en el punto de traspaso, §3.5), así que mirar sólo `status.target`
+ * lo soltaba con `'last'` y cancelaba el relevo.
  *
  * Mira también el `status.relevo` del teléfono: la consola puede no conocer el
  * relevo (la lista por REST falló o todavía no volvió), y el dron sí lo sabe.
@@ -307,10 +307,14 @@ export function participaDeUnRelevo(
   return typeof status?.relevo?.relayId === 'number' || relevoActivoDe(droneId, relevos) !== undefined;
 }
 
+const PATRULLA_CON_POCA_BATERIA =
+  'Pidió un relevo: reanudar el patrullaje lo manda a patrullar con la batería que lo hizo pedirlo.';
+
 /**
  * Lo que hace «Soltar y reanudar patrullaje» con el relevo del que participa
  * el dron (RELEVOS §3.9), o `null` si no participa de ninguno. Es lo que el
- * hub hace con esa orden (`ordenDelOperador`): la consola lo dice antes del clic.
+ * hub hace con esa orden (`ordenDelOperador`, POST /resume): la consola lo
+ * dice antes del clic.
  */
 export function avisoDeReanudarEnRelevo(
   droneId: string,
@@ -320,7 +324,10 @@ export function avisoDeReanudarEnRelevo(
   const relevo = relevoActivoDe(droneId, relevos);
   if (!relevo) {
     if (!participaDeUnRelevo(droneId, status, relevos)) return null;
-    return 'Está en un relevo: reanudar el patrullaje lo saca del relevo.';
+    // La consola no conoce el relevo: sólo sabe de qué lado está, por el teléfono.
+    return status?.relevo?.rol === 'origen'
+      ? PATRULLA_CON_POCA_BATERIA
+      : 'Está en un relevo: reanudar el patrullaje lo saca del relevo.';
   }
   const origen = relevo.origen.displayName;
   if (relevo.relevo?.droneId === droneId) {
@@ -334,7 +341,7 @@ export function avisoDeReanudarEnRelevo(
     const quien = relevo.relevo?.displayName ?? 'el relevo';
     return `Pidió un relevo: reanudar el patrullaje le hace soltar el objetivo antes de que llegue ${quien}, y patrullar con la batería que lo hizo pedirlo.`;
   }
-  return 'Pidió un relevo: reanudar el patrullaje lo manda a patrullar con la batería que lo hizo pedirlo.';
+  return PATRULLA_CON_POCA_BATERIA;
 }
 
 // ---- La alerta cambia de dueño ----

@@ -239,6 +239,14 @@ describe('soltar el control de un dron en un relevo (RELEVOS §3.9)', () => {
     expect(avisoDeReanudarEnRelevo('c3', enUnRelevo, [])).toBe('Está en un relevo: reanudar el patrullaje lo saca del relevo.');
   });
 
+  it('si el teléfono dice que lo pidió él, el aviso habla de la batería y no de sacarlo del relevo', () => {
+    const loPidio = makeStatus({ relevo: enEspera({ enEspera: false, disponible: false, relayId: 9, rol: 'origen', fase: 'pedido' }) });
+    expect(participaDeUnRelevo('c3', loPidio, [])).toBe(true);
+    expect(avisoDeReanudarEnRelevo('c3', loPidio, [])).toBe(
+      'Pidió un relevo: reanudar el patrullaje lo manda a patrullar con la batería que lo hizo pedirlo.',
+    );
+  });
+
   it('al que va: reanudar cancela el relevo, o le quita la reserva si todavía no sabía nada', () => {
     expect(avisoDeReanudarEnRelevo('b2', sinStatus, [relevo()])).toBe(
       'Está yendo a relevar a Alfa: reanudar el patrullaje cancela el relevo y Alfa se queda sin relevo.',

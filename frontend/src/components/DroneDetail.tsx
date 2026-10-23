@@ -288,10 +288,11 @@ export default function DroneDetail({
   const avisoDeRelevo = avisoDeOrdenesEnRelevo(drone.droneId, relevos);
   /**
    * El dron está en un relevo activo, de cualquiera de los dos lados. Soltarle
-   * el control con `'last'` es un `resume_patrol`, que el hub toma como orden
-   * del operador (RELEVOS §3.9): a B lo saca del relevo, y A se queda sin
-   * relevo. Y B en camino no tiene objetivo todavía (su rastreador arranca en
-   * el traspaso, §3.5), así que mirar sólo el objetivo lo soltaba justo así.
+   * el control no le da ninguna orden (RELEVOS §3.9): un `resume_patrol` a B
+   * lo sacaría del relevo, y A se quedaría sin relevo. Y B en camino no tiene
+   * objetivo todavía (su rastreador arranca en el traspaso, §3.5), así que
+   * mirar sólo el objetivo lo soltaba con `'last'`, que un hub que respeta lo
+   * que se le pide tomaba como orden del operador y cancelaba el relevo.
    */
   const enRelevo = participaDeUnRelevo(drone.droneId, status, relevos);
   /** Qué le pasa al relevo si igual se suelta con «Soltar y reanudar patrullaje». */
@@ -472,6 +473,16 @@ export default function DroneDetail({
     // llamar() ya atrapa el rechazo y lo deja a la vista: no hay nada que esperar acá.
     void soltarControl(reanudacionAlSoltar);
   };
+  /**
+   * «Soltar y reanudar patrullaje». Fuera de un relevo alcanza con soltar con
+   * `'last'`. En un relevo no: soltar el control nunca es una orden para el
+   * relevo (§3.9), y el hub suelta sin orden a un dron que participa de uno,
+   * pida lo que pida la consola; con `'last'` el botón no haría nada de lo que
+   * dice. Reanudar ahí es decidir sobre el relevo (lo que dice el aviso de
+   * arriba del botón), y esa orden es POST /resume: el hub la cuenta para el
+   * relevo y además suelta el control de quien lo tiene.
+   */
+  const soltarYReanudar = () => (enRelevo ? retomar() : soltarControl('last'));
 
   // Otro dron en pantalla es otro vuelo: la vista no se queda abierta pilotando
   // al que se dejó de mirar.
@@ -841,7 +852,7 @@ export default function DroneDetail({
                     <button
                       className="ghost soltar-y-patrullar"
                       aria-describedby={avisoAlReanudar ? idAvisoAlReanudar : undefined}
-                      onClick={() => soltarControl('last')}
+                      onClick={soltarYReanudar}
                     >
                       Soltar y reanudar patrullaje
                     </button>
