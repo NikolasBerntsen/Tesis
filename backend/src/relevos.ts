@@ -290,10 +290,11 @@ export class CoordinadorDeRelevos {
    */
   private readonly posteriores = new Map<number, number>();
   /**
-   * Desde cuándo muestra el status de cada dron que está en tierra. Con A en
-   * tierra, un pedido que todavía no le avisó nada a B ya no tiene a quién
-   * esperar (RELEVOS §2.2: se asigna "mientras A no haya aterrizado"), y un
-   * desvío ya terminó (§4: el bloqueo dura hasta el aterrizaje del desviado).
+   * Desde cuándo muestra el status de cada dron que está en tierra, en su
+   * conexión de ahora (ver `alConectar`). Con A en tierra, un pedido que
+   * todavía no le avisó nada a B ya no tiene a quién esperar (RELEVOS §2.2: se
+   * asigna "mientras A no haya aterrizado"), y un desvío ya terminó (§4: el
+   * bloqueo dura hasta el aterrizaje del desviado).
    */
   private readonly enTierraDesde = new Map<string, number>();
   /** Cuándo arrancó el hub: sin ningún status de A desde entonces, es lo último que se sabe de él. */
@@ -801,6 +802,13 @@ export class CoordinadorDeRelevos {
   alConectar(droneId: string): void {
     this.primerStatus.add(droneId);
     this.desconectadoDesde.delete(droneId);
+    // Que estaba en tierra es de antes del corte: sin enlace con el hub pudo
+    // despegar y volver por batería, y su pedido de relevo (se repite cada 5 s)
+    // puede llegar antes que su primer status. Esa marca vieja lo vencería en
+    // el acto; si sigue en tierra, el primer status la vuelve a poner. Al
+    // desconectarse, en cambio, la marca queda: el enlace que se corta al
+    // posarse es justo el caso en que el landed_at_base no llega.
+    this.enTierraDesde.delete(droneId);
   }
 
   alDesconectar(droneId: string): void {

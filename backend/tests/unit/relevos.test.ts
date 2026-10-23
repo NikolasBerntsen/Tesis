@@ -1495,6 +1495,47 @@ describe('relevos — pedidos que A deja sin aviso', () => {
     expect(nuevo.listar(false)[0]).toMatchObject({ estado: 'CANCELADO', motivoFin: 'sin_relevo' });
     expect(nuevo.participaDeUnRelevoActivo(B)).toBe(false);
   });
+
+  it('A en tierra antes de un corte no vence el pedido que llega al reconectar antes de su primer status', () => {
+    const b = new Banco();
+    b.conectar(A, B);
+    // la última vez que el hub lo vio, A estaba posado en su base
+    b.status(A, enTierraEnNorte);
+    // el teléfono pierde el enlace; A despega, patrulla y vuelve por batería sin el hub
+    b.desconectar(A);
+    b.avanzar(20 * 60_000);
+    // el enlace vuelve en pleno regreso, y el pedido (que se repite cada 5 s)
+    // llega antes que el primer status: lo que se sabía de A es de antes del corte
+    b.conectar(A);
+    expect(pedirPatrulla(b)).toMatchObject({ estado: 'SIN_RELEVO' });
+    b.coord.barrer();
+    expect(b.relevo(1).estado).toBe('SIN_RELEVO');
+    // sigue pendiente mientras A vuelve, y un B que aparece lo toma
+    b.volando(A);
+    b.enEspera(B);
+    b.coord.barrer();
+    expect(b.relevo(1)).toMatchObject({ estado: 'RESERVADO', relevo: { droneId: B } });
+  });
+
+  it('si el enlace se corta al tocar tierra, la marca queda: el reservado vence a los 10 s igual', () => {
+    const b = new Banco();
+    b.conectar(A, B);
+    b.volando(A);
+    b.enEspera(B);
+    pedirPatrulla(b);
+    // un land ordenado desde la consola, y el teléfono se queda sin enlace al posarse
+    b.status(A, { ...enTierraEnNorte, state: 'MANUAL' });
+    b.desconectar(A);
+    b.avanzar(PLAZOS.avisoDeAterrizajeMs - 1);
+    b.enEspera(B);
+    b.coord.barrer();
+    expect(b.relevo(1).estado).toBe('RESERVADO');
+    b.avanzar(1);
+    b.enEspera(B);
+    b.coord.barrer();
+    expect(b.relevo(1)).toMatchObject({ estado: 'CANCELADO', motivoFin: 'sin_relevo' });
+    expect(b.a(B)).toEqual([]);
+  });
 });
 
 describe('relevos — reconexión y desconexión', () => {

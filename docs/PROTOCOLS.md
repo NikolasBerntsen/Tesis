@@ -555,7 +555,11 @@ ruta que ya nadie vuela— el hub también mira los status de A:
 - Sin ese aviso de descenso, A en tierra (`flying: false`, sea cual sea su
   `state`) vence el pedido con `sin_relevo`: en `SIN_RELEVO` en el acto; en
   `RESERVADO`, a los **10 s** (es lo que el hub espera el `landed_at_base`,
-  que puede llegar después del status y que despacharía a B).
+  que puede llegar después del status y que despacharía a B). Cuentan solo
+  los status de la conexión actual de A: uno en tierra de antes de una
+  reconexión no vence nada (sin enlace A pudo despegar y volver, y su pedido
+  puede llegar antes que su primer status). Si A se desconecta después de
+  posarse, el suyo sigue valiendo.
 - Un pedido `RESERVADO` o `SIN_RELEVO` (de patrulla o de seguimiento) vence con
   `sin_relevo` a los **10 minutos sin ningún status de A**, contados desde su
   pedido o desde el arranque del hub si fue después: con la batería con la que
