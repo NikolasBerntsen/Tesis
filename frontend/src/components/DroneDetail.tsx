@@ -537,7 +537,10 @@ export default function DroneDetail({
           </svg>{' '}
           Volver a Operación
         </button>
-        <h2>
+        {/* Enfocable sólo desde el código, como el título de las otras vistas
+            (EncabezadoDeVista): adonde vuelve el foco si el carrusel de
+            alertas se fue mientras su pop-up estaba abierto. */}
+        <h2 tabIndex={-1}>
           <EditableName name={drone.displayName} onRename={onRename} />
         </h2>
         {/* Conectado no es lo mismo que volando: con el dron apoyado esto

@@ -102,6 +102,8 @@ export default function Modal({
   ancho,
   enfocarPrimerCampo,
   onCerrar,
+  onEscape,
+  onDevolverFoco,
   children,
 }: {
   /** `id` del título, para el `aria-labelledby` de la caja. */
@@ -116,6 +118,22 @@ export default function Modal({
    */
   enfocarPrimerCampo?: boolean;
   onCerrar: () => void;
+  /**
+   * Lo que hace Escape cuando no es cerrar. Un pop-up con algo abierto adentro
+   * (el detalle de un evento al lado del historial) cierra primero eso: un
+   * Escape que se llevaba el pop-up entero obligaba a abrirlo de nuevo y a
+   * buscar otra vez la página y la fila. Pasa por acá y no por un listener
+   * propio del pop-up para respetar la pila: con otro diálogo encima, el
+   * Escape es de ese, no del panel de abajo.
+   */
+  onEscape?: () => void;
+  /**
+   * Adónde va el foco al cerrarse si lo que lo tenía antes de abrir ya no está
+   * en la página (o no había nada enfocado), como en la vista de pilotaje.
+   * Decidir una alerta desde su pop-up se lleva el botón del carrusel que lo
+   * abrió, y sin esto el foco caía en <body>.
+   */
+  onDevolverFoco?: () => void;
   children: ReactNode;
 }) {
   const caja = useRef<HTMLDivElement>(null);
@@ -125,6 +143,12 @@ export default function Modal({
   // sólo porque el padre le pasa una función nueva.
   const cerrar = useRef(onCerrar);
   cerrar.current = onCerrar;
+  const escapar = useRef(onEscape);
+  escapar.current = onEscape;
+  // En una ref por lo mismo, y porque se lee recién al desmontar: vale la
+  // última que pasó el padre, no la del primer render.
+  const devolverFoco = useRef(onDevolverFoco);
+  devolverFoco.current = onDevolverFoco;
   // Un arrastre para seleccionar texto que arranca adentro de la caja dispara su
   // `click` en el ancestro común, que es el velo: sin recordar dónde empezó,
   // soltar el botón un poco afuera cerraba el diálogo y se perdía la lectura.
@@ -163,9 +187,11 @@ export default function Modal({
     const previo = document.activeElement;
     enfocarElInicio();
     // El foco vuelve a lo que abrió el diálogo: con el teclado, cerrar no puede
-    // dejarte de nuevo arriba de todo.
+    // dejarte de nuevo arriba de todo. Si eso ya no está, quien abrió dice
+    // adónde (`onDevolverFoco`).
     return () => {
-      if (previo instanceof HTMLElement) previo.focus();
+      if (previo instanceof HTMLElement && previo !== document.body && previo.isConnected) previo.focus();
+      else devolverFoco.current?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -228,7 +254,7 @@ export default function Modal({
       // Los de abajo se quedan quietos: el teclado es del diálogo de arriba.
       if (pila[pila.length - 1] !== caja) return;
       if (ev.key === 'Escape') {
-        cerrar.current();
+        (escapar.current ?? cerrar.current)();
         return;
       }
       if (ev.key !== 'Tab' || !caja.current) return;

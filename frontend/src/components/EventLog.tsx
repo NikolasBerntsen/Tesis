@@ -24,13 +24,13 @@ export default function EventLog({
   cargando = false,
   seleccionado = null,
   onAbrir,
-}: {
+}: Readonly<{
   events: readonly EventRow[];
   cargando?: boolean;
   /** Id del evento cuyo detalle está abierto. */
   seleccionado?: number | null;
   onAbrir: (evento: EventRow) => void;
-}) {
+}>) {
   // Lo que llega en vivo se muestra aunque el historial todavía viaje: el
   // esqueleto es sólo para la lista vacía, no tapa eventos que ya están.
   const esperando = cargando && events.length === 0;

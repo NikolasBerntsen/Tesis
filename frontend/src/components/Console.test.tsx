@@ -601,6 +601,48 @@ describe('Console', () => {
     await waitFor(() => expect(screen.queryByRole('region', { name: 'Alerta en curso' })).not.toBeInTheDocument());
   });
 
+  const ALERTA_6 = { id: 6, type: 'PERSON', status: 'PENDING', drone_id: 'd1', created_at: '2024-01-01T12:00:00.000Z' };
+
+  /**
+   * Abre la alerta 6 desde el carrusel, la valida en el pop-up y hace que el
+   * backend lo confirme: era la única pendiente, así que el carrusel se va
+   * —con el botón que abrió el pop-up— y el pop-up queda abierto.
+   */
+  async function validarLaUnicaDesdeSuPopUp(carrusel: HTMLElement) {
+    await userEvent.click(within(carrusel).getByRole('button', { name: 'Ver detalle' }));
+    const dialogo = screen.getByRole('dialog', { name: 'Alerta de persona #6' });
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Validar' }));
+    await waitFor(() => expect(rutas()).toContain('POST /alerts/6/decision'));
+    fire({
+      type: 'alert_updated',
+      alert: { ...ALERTA_6, status: 'VALIDATED', decided_by: 'oper1', decided_at: '2024-01-01T12:01:00.000Z' },
+    });
+    await waitFor(() => expect(carrusel).not.toBeInTheDocument());
+    expect(dialogo).toBeInTheDocument();
+  }
+
+  it('decidida en su pop-up la última alerta del tablero, al cerrarlo el foco va al título y no a <body>', async () => {
+    render(<Console onLogout={() => {}} />);
+    await screen.findByText('Alfa');
+    fire({ type: 'alert_created', alert: ALERTA_6 });
+    await validarLaUnicaDesdeSuPopUp(await screen.findByRole('region', { name: '1 alerta sin atender' }));
+
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Operación' })).toHaveFocus();
+  });
+
+  it('en la vista del dron, el foco va al título con su nombre', async () => {
+    render(<Console onLogout={() => {}} />);
+    await abrirDetalleDelPrimerDron();
+    fire({ type: 'alert_created', alert: ALERTA_6 });
+    await validarLaUnicaDesdeSuPopUp(await screen.findByRole('region', { name: 'Alerta en curso' }));
+
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: /^Alfa/ })).toHaveFocus();
+  });
+
   it('arma el rastro del objetivo con cada status y lo borra cuando el seguimiento termina', async () => {
     const objetivo = (lon: number): ObjetivoEnSeguimiento => ({
       alertId: 12,

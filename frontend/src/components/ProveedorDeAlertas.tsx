@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { ContextoDeAlertas, type AlertasEnVivo } from '../alertasEnVivo';
 import type { Alert } from '../types';
 import ModalDeAlerta from './ModalDeAlerta';
@@ -22,20 +22,33 @@ export default function ProveedorDeAlertas({
   verDron,
   children,
 }: Omit<AlertasEnVivo, 'abrirAlerta'> & { children: ReactNode }) {
-  const [abierta, setAbierta] = useState<Alert | null>(null);
+  // Con la alerta va adónde devolver el foco si lo que la abrió se va con el
+  // pop-up abierto: es justo el caso de arriba, y sólo quien abre sabe qué
+  // queda en su lugar.
+  const [abierta, setAbierta] = useState<{ alerta: Alert; devolverFoco?: () => void } | null>(null);
+  const abrirAlerta = useCallback(
+    (alerta: Alert, devolverFoco?: () => void) => setAbierta({ alerta, devolverFoco }),
+    [],
+  );
 
   // Memoizado, como todo valor de un contexto: un objeto nuevo en cada render
   // de la consola —y la consola se pinta con cada cuadro de video— le avisaría
   // a cada lector que algo cambió aunque no haya cambiado nada.
   const valor = useMemo<AlertasEnVivo>(
-    () => ({ alertas, drones, statuses, decidir, verDron, abrirAlerta: setAbierta }),
-    [alertas, drones, statuses, decidir, verDron],
+    () => ({ alertas, drones, statuses, decidir, verDron, abrirAlerta }),
+    [alertas, drones, statuses, decidir, verDron, abrirAlerta],
   );
 
   return (
     <ContextoDeAlertas.Provider value={valor}>
       {children}
-      {abierta && <ModalDeAlerta alerta={abierta} onCerrar={() => setAbierta(null)} />}
+      {abierta && (
+        <ModalDeAlerta
+          alerta={abierta.alerta}
+          onCerrar={() => setAbierta(null)}
+          onDevolverFoco={abierta.devolverFoco}
+        />
+      )}
     </ContextoDeAlertas.Provider>
   );
 }

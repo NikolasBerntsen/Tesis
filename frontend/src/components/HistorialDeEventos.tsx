@@ -30,13 +30,13 @@ export default function HistorialDeEventos({
   nombre,
   liveEvents,
   onCerrar,
-}: {
+}: Readonly<{
   droneId: string;
   nombre: string;
   /** Los eventos que la consola recibió en vivo, de todos los drones. */
   liveEvents: readonly EventRow[];
   onCerrar: () => void;
-}) {
+}>) {
   const idTitulo = useId();
   const idDetalle = useId();
   const [historia, setHistoria] = useState<EventRow[]>([]);
@@ -104,7 +104,10 @@ export default function HistorialDeEventos({
   }
 
   return (
-    <Modal etiquetadoPor={idTitulo} ancho onCerrar={onCerrar}>
+    // Con un evento abierto, Escape cierra sólo su detalle y el foco vuelve a
+    // la fila: el operador que recorre el historial uno por uno no pierde la
+    // página en la que estaba. El segundo Escape ya cierra el pop-up.
+    <Modal etiquetadoPor={idTitulo} ancho onCerrar={onCerrar} onEscape={abierto ? cerrarDetalle : undefined}>
       <header className="modal-cabecera">
         <div>
           <h2 className="modal-titulo" id={idTitulo}>

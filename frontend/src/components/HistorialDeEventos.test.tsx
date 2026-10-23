@@ -169,6 +169,23 @@ describe('HistorialDeEventos', () => {
     expect(fila('despegó')).not.toHaveAttribute('aria-current');
   });
 
+  it('con un evento abierto, Escape cierra sólo el detalle y el foco vuelve a la fila; el segundo cierra el pop-up', async () => {
+    apiMock.mockResolvedValue([makeEvent({ id: 2, message: 'aterrizó' }), makeEvent({ id: 1, message: 'despegó' })]);
+    const { onCerrar } = montar();
+    await userEvent.click(await screen.findByRole('button', { name: /despegó/ }));
+    // El foco adentro del panel, que es lo que se va con el primer Escape.
+    act(() => screen.getByRole('button', { name: 'Cerrar el detalle del evento' }).focus());
+
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('region', { name: 'despegó' })).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Historial de eventos' })).toBeInTheDocument();
+    expect(onCerrar).not.toHaveBeenCalled();
+    expect(fila('despegó')).toHaveFocus();
+
+    await userEvent.keyboard('{Escape}');
+    expect(onCerrar).toHaveBeenCalledTimes(1);
+  });
+
   it('el detalle de una alerta trae captura, mapa y decisión, y el video cierra el historial', async () => {
     const vivo: AlertasEnVivo = {
       ...SIN_CONSOLA,

@@ -11,7 +11,16 @@ import Modal from './Modal';
  * campana. La caja es la ancha: la captura y el mapa van lado a lado, y es la
  * vista en la que se decide adónde mandar a alguien.
  */
-export default function ModalDeAlerta({ alerta, onCerrar }: { alerta: Alert; onCerrar: () => void }) {
+export default function ModalDeAlerta({
+  alerta,
+  onCerrar,
+  onDevolverFoco,
+}: Readonly<{
+  alerta: Alert;
+  onCerrar: () => void;
+  /** Adónde va el foco al cerrar si lo que abrió el pop-up ya no está. */
+  onDevolverFoco?: () => void;
+}>) {
   const idTitulo = useId();
   const vivo = useAlertasEnVivo();
   // La cabecera también sigue a la consola: es la misma alerta, más fresca.
@@ -19,7 +28,7 @@ export default function ModalDeAlerta({ alerta, onCerrar }: { alerta: Alert; onC
   const dron = vivo.drones.find((d) => d.droneId === actual.drone_id);
 
   return (
-    <Modal etiquetadoPor={idTitulo} ancho onCerrar={onCerrar}>
+    <Modal etiquetadoPor={idTitulo} ancho onCerrar={onCerrar} onDevolverFoco={onDevolverFoco}>
       <header className="modal-cabecera">
         <div>
           <h2 className="modal-titulo" id={idTitulo}>

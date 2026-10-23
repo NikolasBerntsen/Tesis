@@ -111,7 +111,7 @@ const CIRCULO_PRECISION: L.CircleMarkerOptions = {
  * por seguridad —es la prueba de dónde se hizo el alta—, así que además del
  * marcador se dibuja el círculo de precisión del GPS.
  */
-function MiniMapa({ ubicacion }: { ubicacion: MetaUbicacion }) {
+function MiniMapa({ ubicacion }: Readonly<{ ubicacion: MetaUbicacion }>) {
   const contenedor = useRef<HTMLDivElement>(null);
   const mapa = useRef<L.Map | null>(null);
   const marca = useRef<L.LayerGroup | null>(null);
@@ -178,7 +178,7 @@ function MiniMapa({ ubicacion }: { ubicacion: MetaUbicacion }) {
 
 /* --- Bloques del cuerpo ---------------------------------------------------- */
 
-function ListaDatos({ campos }: { campos: CamposMeta }) {
+function ListaDatos({ campos }: Readonly<{ campos: CamposMeta }>) {
   return (
     <dl className="datos">
       {Object.entries(campos).map(([clave, valor]) => (
@@ -197,13 +197,13 @@ function ColumnaComparada({
   claves,
   cambiadas,
   despues = false,
-}: {
+}: Readonly<{
   titulo: string;
   campos: CamposMeta;
   claves: string[];
   cambiadas: Set<string>;
   despues?: boolean;
-}) {
+}>) {
   return (
     <div className={despues ? 'comparacion-col comparacion-despues' : 'comparacion-col'}>
       <span className="comparacion-titulo">{titulo}</span>
@@ -220,7 +220,7 @@ function ColumnaComparada({
 }
 
 /** Antes → después, resaltando únicamente los campos que cambiaron. */
-function Comparacion({ antes, despues }: { antes?: CamposMeta; despues?: CamposMeta }) {
+function Comparacion({ antes, despues }: Readonly<{ antes?: CamposMeta; despues?: CamposMeta }>) {
   const claves = [...new Set([...Object.keys(antes ?? {}), ...Object.keys(despues ?? {})])];
 
   // Con una sola punta no hay nada que comparar: es el estado con el que quedó
@@ -250,7 +250,7 @@ function Comparacion({ antes, despues }: { antes?: CamposMeta; despues?: CamposM
   );
 }
 
-function FichaDron({ drone }: { drone: MetaDron }) {
+function FichaDron({ drone }: Readonly<{ drone: MetaDron }>) {
   return (
     <>
       <h3 className="etiqueta">Dron</h3>
@@ -283,7 +283,7 @@ function FichaDron({ drone }: { drone: MetaDron }) {
  * bloque es el de la alerta completa —captura, mapa y decisión—, el mismo del
  * pop-up que se abre desde el carrusel o la campana.
  */
-export default function DetalleDeEvento({ fila, onIrAlVideo }: { fila: EventRow; onIrAlVideo: () => void }) {
+export default function DetalleDeEvento({ fila, onIrAlVideo }: Readonly<{ fila: EventRow; onIrAlVideo: () => void }>) {
   // Memoizado porque parsearMeta arma objetos nuevos en cada llamada y
   // `meta.ubicacion` es la dependencia del efecto que dibuja el mini mapa: sin
   // esto, cada render del padre reconstruía el mapa entero.

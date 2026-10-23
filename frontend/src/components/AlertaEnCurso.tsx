@@ -21,6 +21,15 @@ function Chevron({ hacia }: { hacia: 'atras' | 'adelante' }) {
 }
 
 /**
+ * El título de la vista que se está mirando: el primer encabezado de su
+ * <main>. Las vistas que llevan el carrusel lo dejan enfocar desde el código
+ * (`tabIndex={-1}`, fuera del tabulador) para esto.
+ */
+function enfocarElTituloDeLaVista() {
+  document.querySelector<HTMLElement>('main h2')?.focus();
+}
+
+/**
  * Las alertas pendientes, de a una y con flechas para recorrerlas.
  *
  * Decidir una alerta es comparar dos imágenes: la captura que disparó la
@@ -104,6 +113,20 @@ export default function AlertaEnCurso({
     else if (ev.key === 'ArrowRight') carrusel.siguiente();
     else return;
     ev.preventDefault();
+  }
+
+  /**
+   * Al cerrar el pop-up de la alerta el foco vuelve a lo que lo abrió
+   * (Modal.tsx). Pero decidirla desde el pop-up se lleva su diapositiva, y con
+   * ella el botón que lo abrió: el foco caía en <body> y el teclado arrancaba
+   * otra vez desde arriba de la página. Va al carrusel, que ya muestra la que
+   * le seguía, como al decidir desde la tarjeta; y si era la última y el
+   * carrusel también se fue, al título de la vista.
+   */
+  function devolverFoco() {
+    const carrusel = seccion.current;
+    if (carrusel?.isConnected) carrusel.focus();
+    else enfocarElTituloDeLaVista();
   }
 
   function alSalirElFoco(ev: FocusEvent<HTMLElement>) {
@@ -232,7 +255,11 @@ export default function AlertaEnCurso({
             {time(alerta.created_at)}
           </time>
           {abrirAlerta && (
-            <button type="button" className="enlace alerta-ver-detalle" onClick={() => abrirAlerta(alerta)}>
+            <button
+              type="button"
+              className="enlace alerta-ver-detalle"
+              onClick={() => abrirAlerta(alerta, devolverFoco)}
+            >
               Ver detalle
             </button>
           )}
@@ -246,7 +273,7 @@ export default function AlertaEnCurso({
               type="button"
               className="snapshot-boton"
               aria-label={`Ampliar la captura de la alerta #${alerta.id}`}
-              onClick={() => abrirAlerta(alerta)}
+              onClick={() => abrirAlerta(alerta, devolverFoco)}
             >
               {captura}
             </button>

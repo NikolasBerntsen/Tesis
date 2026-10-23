@@ -21,8 +21,12 @@ export interface AlertasEnVivo {
   decidir: DecidirAlerta | null;
   /** Lleva a la vista del dron, donde está su video en vivo. */
   verDron: ((droneId: string) => void) | null;
-  /** Abre el pop-up de una alerta, por encima de lo que se esté mirando. */
-  abrirAlerta: ((alerta: Alert) => void) | null;
+  /**
+   * Abre el pop-up de una alerta, por encima de lo que se esté mirando.
+   * `devolverFoco` dice adónde va el foco al cerrarlo si lo que lo abrió ya
+   * no está (ver Modal.tsx, `onDevolverFoco`).
+   */
+  abrirAlerta: ((alerta: Alert, devolverFoco?: () => void) => void) | null;
 }
 
 /**

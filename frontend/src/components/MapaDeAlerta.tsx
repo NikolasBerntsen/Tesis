@@ -39,7 +39,7 @@ export default function MapaDeAlerta({
   deteccion,
   objetivo,
   dron,
-}: {
+}: Readonly<{
   deteccion: Punto | null;
   /**
    * El objetivo en seguimiento de ESTA alerta (`status.target` con su
@@ -49,7 +49,7 @@ export default function MapaDeAlerta({
   objetivo: ObjetivoEnSeguimiento | null;
   /** El dron y su posición actual, o `null` si no la informa. */
   dron: { nombre: string; posicion: Punto } | null;
-}) {
+}>) {
   const contenedor = useRef<HTMLDivElement>(null);
   const mapa = useRef<L.Map | null>(null);
   const marcas = useRef<L.LayerGroup | null>(null);

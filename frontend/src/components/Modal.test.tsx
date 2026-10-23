@@ -418,3 +418,93 @@ describe('Modal: dónde arranca el foco', () => {
     expect(caja).toHaveFocus();
   });
 });
+
+describe('Modal: Escape con algo abierto adentro', () => {
+  it('con onEscape, Escape hace eso y no cierra; los demás caminos siguen cerrando', async () => {
+    const onCerrar = vi.fn();
+    const onEscape = vi.fn();
+    render(
+      <Modal etiquetadoPor="t-panel" onCerrar={onCerrar} onEscape={onEscape}>
+        <h2 id="t-panel">Historial</h2>
+        <button type="button" onClick={onCerrar}>
+          Cerrar
+        </button>
+      </Modal>,
+    );
+    await userEvent.keyboard('{Escape}');
+    expect(onEscape).toHaveBeenCalledTimes(1);
+    expect(onCerrar).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Cerrar' }));
+    expect(onCerrar).toHaveBeenCalledTimes(1);
+  });
+
+  it('con otro diálogo encima, el Escape es del de arriba y no llega al de abajo', async () => {
+    const onEscapeAbajo = vi.fn();
+    const cerrarArriba = vi.fn();
+    render(
+      <>
+        <Modal etiquetadoPor="t-abajo-esc" onCerrar={vi.fn()} onEscape={onEscapeAbajo}>
+          <h2 id="t-abajo-esc">Historial</h2>
+        </Modal>
+        <Modal etiquetadoPor="t-arriba-esc" onCerrar={cerrarArriba}>
+          <h2 id="t-arriba-esc">Confirmación</h2>
+        </Modal>
+      </>,
+    );
+    await userEvent.keyboard('{Escape}');
+    expect(cerrarArriba).toHaveBeenCalledTimes(1);
+    expect(onEscapeAbajo).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Lo que abre el diálogo puede irse mientras está abierto: decidir una alerta
+ * desde su pop-up se lleva el botón del carrusel que lo abrió.
+ */
+function AbridorQueSeVa({ onDevolverFoco }: { onDevolverFoco: () => void }) {
+  const [abierto, setAbierto] = useState(false);
+  const [conAbridor, setConAbridor] = useState(true);
+  return (
+    <>
+      <button type="button">Respaldo</button>
+      {conAbridor && (
+        <button type="button" onClick={() => setAbierto(true)}>
+          Abrir
+        </button>
+      )}
+      {abierto && (
+        <Modal etiquetadoPor="t-se-va" onCerrar={() => setAbierto(false)} onDevolverFoco={onDevolverFoco}>
+          <h2 id="t-se-va">Alerta</h2>
+          <button type="button" onClick={() => setConAbridor(false)}>
+            Validar
+          </button>
+        </Modal>
+      )}
+    </>
+  );
+}
+
+describe('Modal: adónde vuelve el foco al cerrar', () => {
+  it('si lo que lo abrió ya no está, el foco va adonde diga onDevolverFoco y no a <body>', async () => {
+    const onDevolverFoco = vi.fn(() => screen.getByRole('button', { name: 'Respaldo' }).focus());
+    render(<AbridorQueSeVa onDevolverFoco={onDevolverFoco} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Abrir' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Validar' }));
+    expect(screen.queryByRole('button', { name: 'Abrir' })).not.toBeInTheDocument();
+
+    await userEvent.keyboard('{Escape}');
+    expect(onDevolverFoco).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Respaldo' })).toHaveFocus();
+  });
+
+  it('si lo que lo abrió sigue ahí, el foco vuelve a eso y onDevolverFoco no se usa', async () => {
+    const onDevolverFoco = vi.fn();
+    render(<AbridorQueSeVa onDevolverFoco={onDevolverFoco} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Abrir' }));
+
+    await userEvent.keyboard('{Escape}');
+    expect(screen.getByRole('button', { name: 'Abrir' })).toHaveFocus();
+    expect(onDevolverFoco).not.toHaveBeenCalled();
+  });
+});
