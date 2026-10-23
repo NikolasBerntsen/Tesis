@@ -205,6 +205,9 @@
   margin: 0;
   font-size: var(--txt-xl);
 }
+/* "Ver historial de eventos" va al final de la cabecera, contra el borde
+   derecho, arriba de la tarjeta de telemetría. */
+.detail-head .detalle-historial { margin-left: auto; }
 
 /* Barra de acciones de una vista (título a la izquierda, botones a la derecha) */
 .barra-acciones {

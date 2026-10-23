@@ -10,7 +10,7 @@ import DialogoConfirmacion from './DialogoConfirmacion';
 import DroneStatusCard from './DroneStatusCard';
 import DronesMap, { type MapItem, type WaypointsLayer } from './DronesMap';
 import EditableName from './EditableName';
-import EventLog from './EventLog';
+import HistorialDeEventos from './HistorialDeEventos';
 import LiveVideo from './LiveVideo';
 import type { Ejes } from './MandoVirtual';
 import PanelObjetivo from './PanelObjetivo';
@@ -120,10 +120,8 @@ export default function DroneDetail({
    */
   onCamara: (pitch: number) => boolean;
 }) {
-  const [history, setHistory] = useState<EventRow[]>([]);
-  // Hasta que llega el historial, el registro no puede decir "sin eventos":
-  // es lo primero que se lee al entrar y era mentira por medio segundo.
-  const [historiaCargada, setHistoriaCargada] = useState(false);
+  /** El pop-up del historial de eventos está abierto. */
+  const [viendoHistorial, setViendoHistorial] = useState(false);
   /** El supervisor pidió quitarle el control a otro y falta confirmarlo. */
   const [quitando, setQuitando] = useState(false);
   const avisar = useAvisar();
@@ -217,32 +215,6 @@ export default function DroneDetail({
       vigente = false;
     };
   }, [drone.droneId, drone.baseId]);
-
-  // Como los demás cargadores: la respuesta de un dron que ya se dejó no se
-  // escribe. Sin esto, saltar de A a B desde la campana dejaba que la
-  // respuesta de A llenara el registro de B con eventos ajenos, o que diera
-  // por cargado el de B y dijera "Sin eventos" mientras el suyo seguía viajando.
-  useEffect(() => {
-    let vigente = true;
-    setHistory([]);
-    setHistoriaCargada(false);
-    api<EventRow[]>(`/events?droneId=${encodeURIComponent(drone.droneId)}`)
-      .then((h) => vigente && setHistory(h))
-      .catch(console.error)
-      .finally(() => {
-        if (vigente) setHistoriaCargada(true);
-      });
-    return () => {
-      vigente = false;
-    };
-  }, [drone.droneId]);
-
-  // Historial del dron más los eventos que fueron llegando por WebSocket.
-  const events = useMemo(() => {
-    const known = new Set(history.map((e) => e.id));
-    const fresh = liveEvents.filter((e) => e.drone_id === drone.droneId && !known.has(e.id));
-    return [...fresh, ...history];
-  }, [history, liveEvents, drone.droneId]);
 
   const items = useMemo<MapItem[]>(
     () => [
@@ -575,6 +547,16 @@ export default function DroneDetail({
           {!drone.online ? 'Desconectado' : enElSuelo ? 'En tierra' : 'En vuelo'}
         </span>
         {controlador && <span className="badge oro">Control manual: {controlador}</span>}
+        {/* Arriba a la derecha, sobre la telemetría: el historial es consulta,
+            no algo que se mira todo el tiempo, y al pie de la vista quedaba
+            debajo de todo, donde en pleno vuelo nadie llegaba. */}
+        <button type="button" className="detalle-historial" onClick={() => setViendoHistorial(true)}>
+          <svg width="15" height="15" viewBox="0 0 16 16" {...TRAZO} style={{ verticalAlign: '-2px' }}>
+            <circle cx="8" cy="8" r="5.8" />
+            <path d="M8 4.8V8l2.2 1.4" />
+          </svg>{' '}
+          Ver historial de eventos
+        </button>
       </div>
       {/* El error va en su propia línea: dentro del encabezado empujaba el nombre */}
       {error && (
@@ -816,9 +798,16 @@ export default function DroneDetail({
         )}
       </div>
 
-      {/* La alerta de este dron se decide arriba, al lado del video; la
-          campana del encabezado sigue avisando desde cualquier vista. */}
-      <EventLog events={events} cargando={!historiaCargada} />
+      {/* Por dron: el de otro dron es otro historial, que arranca de cero. */}
+      {viendoHistorial && (
+        <HistorialDeEventos
+          key={drone.droneId}
+          droneId={drone.droneId}
+          nombre={drone.displayName}
+          liveEvents={liveEvents}
+          onCerrar={() => setViendoHistorial(false)}
+        />
+      )}
 
       {pilotando && (
         <PilotajePantallaCompleta

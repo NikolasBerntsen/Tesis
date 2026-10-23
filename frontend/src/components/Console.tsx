@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, getRole, getUsername, motivoDelRechazoDeDecision } from '../api';
 import { sumarAlRastro, type RastroObjetivo } from '../rastro';
 import type { Alert, Drone, DroneStatus, EventRow, Me, NovedadDron, PatrolRoute, RolConsola } from '../types';
@@ -12,6 +12,7 @@ import Dashboard from './Dashboard';
 import DroneDetail from './DroneDetail';
 import DronesView from './DronesView';
 import LogsView from './LogsView';
+import ProveedorDeAlertas from './ProveedorDeAlertas';
 import UsersView from './UsersView';
 
 const MAX_EVENTS = 300;
@@ -219,17 +220,25 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
 
   /**
    * Decide una alerta. Si el backend la rechaza, el error SUBE con el motivo ya
-   * dicho para el operador: lo muestra el que tiene el botón (la campana o la
-   * tarjeta de la vista del dron), que es donde el operador está mirando.
-   * Tragárselo acá era dejar al operador creyendo que había decidido.
+   * dicho para el operador: lo muestra el que tiene el botón (la campana, la
+   * tarjeta de la vista del dron o el pop-up de la alerta), que es donde el
+   * operador está mirando. Tragárselo acá era dejar al operador creyendo que
+   * había decidido. Estable (useCallback) porque viaja en el contexto de las
+   * alertas, y una función nueva por render despertaría a todos sus lectores.
    */
-  async function decidirAlerta(id: number, decision: 'VALIDATED' | 'DISMISSED'): Promise<void> {
+  const decidirAlerta = useCallback(async (id: number, decision: 'VALIDATED' | 'DISMISSED'): Promise<void> => {
     try {
       await api(`/alerts/${id}/decision`, { method: 'POST', body: JSON.stringify({ decision }) });
     } catch (err) {
       throw new Error(motivoDelRechazoDeDecision(err));
     }
-  }
+  }, []);
+
+  /** Lleva a la vista de un dron, donde está su video en vivo, desde cualquier sección. */
+  const verDron = useCallback((droneId: string) => {
+    setSeccion('operacion');
+    setSelectedId(droneId);
+  }, []);
 
   async function rename(droneId: string, displayName: string) {
     try {
@@ -254,101 +263,108 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
     // Los avisos de "guardado" viven acá, una sola región para toda la consola:
     // cambiar de sección no los corta ni los duplica.
     <ProveedorDeAvisos>
-      <div className="dashboard">
-        <header className="topbar">
-          <h1>Comando Central</h1>
-          <nav className="topnav" aria-label="Secciones de la consola">
-            {secciones.map((s) => (
-              <button
-                key={s}
-                className={abierta === s ? 'active' : ''}
-                aria-current={abierta === s ? 'page' : undefined}
-                onClick={() => setSeccion(s)}
-              >
-                {ETIQUETA[s]}
+      {/* Lo que el pop-up de una alerta lee en vivo, abierto desde donde sea.
+          El operador de campo no recibe alertas ni puede decidirlas. */}
+      <ProveedorDeAlertas
+        alertas={alerts}
+        drones={drones}
+        statuses={statuses}
+        decidir={deCampo ? null : decidirAlerta}
+        verDron={deCampo ? null : verDron}
+      >
+        <div className="dashboard">
+          <header className="topbar">
+            <h1>Comando Central</h1>
+            <nav className="topnav" aria-label="Secciones de la consola">
+              {secciones.map((s) => (
+                <button
+                  key={s}
+                  className={abierta === s ? 'active' : ''}
+                  aria-current={abierta === s ? 'page' : undefined}
+                  onClick={() => setSeccion(s)}
+                >
+                  {ETIQUETA[s]}
+                </button>
+              ))}
+            </nav>
+            <div className="topbar-right">
+              {/* El operador de campo entra a una consola recortada: conviene que lo
+                  lea, y no que lo deduzca de que no hay más botones. */}
+              {deCampo && <span className="badge oro">Sesión de campo</span>}
+              {/* El operador de campo no recibe alertas: el backend no se las manda. */}
+              {!deCampo && (
+                <CampanaDeAlertas
+                  alerts={alerts}
+                  drones={drones}
+                  onDecidir={decidirAlerta}
+                  onVerDron={verDron}
+                />
+              )}
+              {/* El punto lo dibuja .estado con currentColor: en la interfaz no hay
+                  caracteres decorativos, y así el punto toma el verde o el rojo. */}
+              <span className={`conn estado versalita ${conectado ? 'ok' : 'bad'}`} aria-live="polite">
+                {conectado ? 'conectado' : 'sin conexión'}
+              </span>
+              <BotonTema />
+              {/* En una tableta el nombre se recorta con puntos suspensivos: el
+                  title lo deja leer entero. */}
+              <span className="username" title={usuario}>
+                {usuario}
+              </span>
+              <button className="ghost versalita" onClick={onLogout}>
+                Salir
               </button>
-            ))}
-          </nav>
-          <div className="topbar-right">
-            {/* El operador de campo entra a una consola recortada: conviene que lo
-                lea, y no que lo deduzca de que no hay más botones. */}
-            {deCampo && <span className="badge oro">Sesión de campo</span>}
-            {/* El operador de campo no recibe alertas: el backend no se las manda. */}
-            {!deCampo && (
-              <CampanaDeAlertas
-                alerts={alerts}
-                drones={drones}
-                onDecidir={decidirAlerta}
-                onVerDron={(droneId) => {
-                  setSeccion('operacion');
-                  setSelectedId(droneId);
-                }}
-              />
-            )}
-            {/* El punto lo dibuja .estado con currentColor: en la interfaz no hay
-                caracteres decorativos, y así el punto toma el verde o el rojo. */}
-            <span className={`conn estado versalita ${conectado ? 'ok' : 'bad'}`} aria-live="polite">
-              {conectado ? 'conectado' : 'sin conexión'}
-            </span>
-            <BotonTema />
-            {/* En una tableta el nombre se recorta con puntos suspensivos: el
-                title lo deja leer entero. */}
-            <span className="username" title={usuario}>
-              {usuario}
-            </span>
-            <button className="ghost versalita" onClick={onLogout}>
-              Salir
-            </button>
-          </div>
-        </header>
-        {!me ? (
-          <main className="page-main">
-            <p className="vacio" role="status">
-              Cargando la consola…
-            </p>
-          </main>
-        ) : abierta === 'drones' ? (
-          <DronesView me={me} novedad={novedadDron} />
-        ) : abierta === 'bases' ? (
-          me && <BasesView me={me} />
-        ) : abierta === 'rutas' ? (
-          me && <RutasView me={me} />
-        ) : abierta === 'usuarios' ? (
-          <UsersView me={me} />
-        ) : abierta === 'registro' ? (
-          <LogsView />
-        ) : selected ? (
-          <DroneDetail
-            me={me}
-            drone={selected}
-            status={statuses[selected.droneId] ?? null}
-            frame={frames[selected.droneId] ?? null}
-            conectado={conectado}
-            liveEvents={liveEvents}
-            routes={routes}
-            alertas={alerts}
-            rastro={rastros[selected.droneId] ?? null}
-            onDecidir={decidirAlerta}
-            onBack={() => setSelectedId(null)}
-            onRename={(name) => rename(selected.droneId, name)}
-            onWaypointLabel={setWaypointLabel}
-            onMando={(ejes) => enviar({ type: 'manual_stick', droneId: selected.droneId, ...ejes })}
-            onCamara={(pitch) => enviar({ type: 'manual_gimbal', droneId: selected.droneId, pitch })}
-          />
-        ) : (
-          <Dashboard
-            drones={drones}
-            statuses={statuses}
-            frames={frames}
-            alerts={alerts}
-            pendingAlerts={pendingAlerts}
-            rastros={rastros}
-            onDecidir={decidirAlerta}
-            onOpenDrone={setSelectedId}
-            onRename={rename}
-          />
-        )}
-      </div>
+            </div>
+          </header>
+          {!me ? (
+            <main className="page-main">
+              <p className="vacio" role="status">
+                Cargando la consola…
+              </p>
+            </main>
+          ) : abierta === 'drones' ? (
+            <DronesView me={me} novedad={novedadDron} />
+          ) : abierta === 'bases' ? (
+            me && <BasesView me={me} />
+          ) : abierta === 'rutas' ? (
+            me && <RutasView me={me} />
+          ) : abierta === 'usuarios' ? (
+            <UsersView me={me} />
+          ) : abierta === 'registro' ? (
+            <LogsView />
+          ) : selected ? (
+            <DroneDetail
+              me={me}
+              drone={selected}
+              status={statuses[selected.droneId] ?? null}
+              frame={frames[selected.droneId] ?? null}
+              conectado={conectado}
+              liveEvents={liveEvents}
+              routes={routes}
+              alertas={alerts}
+              rastro={rastros[selected.droneId] ?? null}
+              onDecidir={decidirAlerta}
+              onBack={() => setSelectedId(null)}
+              onRename={(name) => rename(selected.droneId, name)}
+              onWaypointLabel={setWaypointLabel}
+              onMando={(ejes) => enviar({ type: 'manual_stick', droneId: selected.droneId, ...ejes })}
+              onCamara={(pitch) => enviar({ type: 'manual_gimbal', droneId: selected.droneId, pitch })}
+            />
+          ) : (
+            <Dashboard
+              drones={drones}
+              statuses={statuses}
+              frames={frames}
+              alerts={alerts}
+              pendingAlerts={pendingAlerts}
+              rastros={rastros}
+              onDecidir={decidirAlerta}
+              onOpenDrone={setSelectedId}
+              onRename={rename}
+            />
+          )}
+        </div>
+      </ProveedorDeAlertas>
     </ProveedorDeAvisos>
   );
 }

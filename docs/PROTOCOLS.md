@@ -117,15 +117,17 @@ juntas, **filtradas y paginadas en el servidor**; el log de drones
 ### La columna `meta`
 
 `meta` es JSON y guarda el detalle estructurado que la consola despliega al
-hacer clic en una entrada del registro. Las claves son siempre las mismas, así
-el pop-up sabe cómo pintar cada una sin conocer el tipo de evento:
+hacer clic en una entrada del registro (el pop-up del Registro y el panel
+lateral del historial de un dron muestran el mismo detalle). Las claves son
+siempre las mismas, así el pop-up sabe cómo pintar cada una sin conocer el tipo
+de evento:
 
 | Clave | Forma | Cómo se muestra |
 |---|---|---|
 | `antes` / `despues` | objetos planos con las mismas claves | Dos columnas comparadas con una flecha en el medio, resaltando solo lo que cambió |
 | `ubicacion` | `{lat, lon, accuracyM}` o `null` | Mini mapa con un marcador, más las coordenadas |
-| `alerta` | `{id, tipo, lat, lon, ts}` | Se trae la alerta completa con `GET /api/alerts/:id` y se muestra la captura del video |
-| `drone` | `{hash, displayName, model}` | Ficha compacta del dron |
+| `alerta` | `{id, tipo, lat, lon, ts}` | La alerta entera, igual que en su propio pop-up: la captura, un mapa con el punto de la detección (y, si el seguimiento sigue, el objetivo y el dron ahora), el dron, "Ver feed en vivo" y Validar/Descartar si está pendiente. Sale de la lista en vivo de la consola o, si no está ahí, de `GET /api/alerts/:id`. Una fila vieja sin `meta.alerta` pero con la columna `alert_id` se muestra igual |
+| `drone` | `{hash, displayName, model}` | Ficha compacta del dron (si el evento nombra una alerta, la ficha va adentro del bloque de la alerta) |
 | `detalle` | objeto plano | Lista de clave/valor |
 
 La forma exacta por tipo de evento está en la tabla del final de este
@@ -736,8 +738,8 @@ tampoco**, por lo mismo.
 
 | Método | Ruta | Auth | Descripción |
 |---|---|---|---|
-| GET | `/api/alerts?status=` | operador+ | Lista de alertas |
-| **GET** | **`/api/alerts/:id`** | operador+ | Alerta completa **con la captura del video**; la usa el pop-up del registro |
+| GET | `/api/alerts?status=` | operador+ | Lista de alertas (las últimas 100, **con la captura**): la consola la carga al conectarse y la mantiene al día con `alert_created`/`alert_updated` |
+| **GET** | **`/api/alerts/:id`** | operador+ | Alerta completa **con la captura del video**. La consola la pide sólo para la alerta que no tiene en su lista (la de un evento viejo del Registro o del historial de un dron), y otra vez después de decidirla desde el pop-up, porque esa no le llega por el WebSocket |
 | POST | `/api/alerts/:id/decision` | operador+ | `{decision: VALIDATED\|DISMISSED}`; registra quién decidió y notifica al dron |
 
 ### Usuarios
@@ -755,7 +757,7 @@ tampoco**, por lo mismo.
 | Método | Ruta | Auth | Descripción |
 |---|---|---|---|
 | **GET** | **`/api/logs`** | admin | `?category=&page=&pageSize=&droneId=&q=` → **`{items, total, page, pageSize}`**. `pageSize` ∈ {25, 50, 75, 100}; fuera de ese conjunto cae a 25. El filtro y el conteo se resuelven **en SQL**, no en el navegador |
-| GET | `/api/events` | operador+ | `?limit=&droneId=`: log de drones (más reciente primero) |
+| GET | `/api/events` | operador+ | `?limit=&droneId=`: log de drones (más reciente primero). `limit` por defecto 200, techo 1000. El historial de eventos de la vista de un dron pide `?droneId=…&limit=100` al abrirse, le suma los `event` que llegan en vivo y pagina de a 20 en el navegador: con cien filas no hace falta paginar en el servidor |
 
 ## 6. Ficha de dron (`drone`)
 

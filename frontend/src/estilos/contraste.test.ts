@@ -208,6 +208,12 @@ const filaDelRegistro = (donde: string, texto: string, velo: string[]) => {
 };
 for (const [pastilla, texto, velo] of PASTILLAS_DEL_REGISTRO) filaDelRegistro(pastilla, texto, [velo]);
 filaDelRegistro('hora y tipo de evento', '--tinta-media', []);
+// El historial de un dron resalta los tipos graves y los avisos, y su fila
+// abierta lleva el mismo velo que la del Registro bajo el mouse. El pop-up es
+// la misma piedra que la tarjeta (mármol 0 con su cara).
+filaDelRegistro('tipo de evento grave (.event-type.bad)', '--peligro', []);
+filaDelRegistro('tipo de evento de aviso (.event-type.warn)', '--alerta-texto', []);
+filaDelRegistro('mensaje del evento', '--tinta', []);
 
 // --- Bordes de los controles y foco ----------------------------------------------
 for (const s of SUPERFICIES) {
@@ -301,6 +307,7 @@ describe('los pares medidos son los que pintan las hojas', () => {
       'var(--tinta-media)',
     ],
     ['fila del Registro bajo el mouse', vistas, '.log-row.cliqueable:hover', 'background', 'var(--oro-velo-fila)'],
+    ['fila abierta del historial de un dron', vistas, ".log-row-boton[aria-current='true']", 'background', 'var(--oro-velo-fila)'],
   ])('%s', (_donde, hoja, selector, propiedad, esperado) => {
     expect(valorDe(hoja, selector, propiedad)).toBe(esperado);
   });

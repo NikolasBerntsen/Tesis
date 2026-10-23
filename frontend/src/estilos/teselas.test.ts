@@ -156,11 +156,12 @@ describe('trazos sobre el mapa', () => {
   });
 });
 
-describe('la paleta que DronesMap le pasa a Leaflet', () => {
-  // Leaflet recibe los colores por JS, así que DronesMap los repite. Cada uno
-  // que dice copiar un token tiene que valer lo que ese token vale en mármol:
-  // el óxido y el azul se habían quedado en los de antes del ajuste del tema.
-  const fuente = leer('../components/DronesMap.tsx');
+describe('la paleta que los mapas le pasan a Leaflet', () => {
+  // Leaflet recibe los colores por JS, así que mapa.ts los repite (la usan el
+  // mapa de la flota y el del pop-up de una alerta). Cada uno que dice copiar
+  // un token tiene que valer lo que ese token vale en mármol: el óxido y el
+  // azul se habían quedado en los de antes del ajuste del tema.
+  const fuente = leer('../mapa.ts');
   const paleta = /const PALETA = \{([\s\S]*?)\n\} as const;/.exec(fuente)?.[1] ?? '';
   const copias = [...paleta.matchAll(/'(#[0-9a-f]{6})',\s*\/\/\s*(--[\w-]+)/gi)].map(([, hex, token]) => ({ hex, token }));
 

@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
+import { useAlertasEnVivo } from '../alertasEnVivo';
 import { time } from '../format';
 import type { Alert, Drone } from '../types';
 import { useDecisionDeAlerta, type DecidirAlerta } from '../useDecisionDeAlerta';
@@ -30,6 +31,7 @@ export default function CampanaDeAlertas({
   const boton = useRef<HTMLButtonElement>(null);
   const idPanel = useId();
   const { decidir, errorDe, decidiendo } = useDecisionDeAlerta(onDecidir);
+  const { abrirAlerta } = useAlertasEnVivo();
 
   const pendientes = alerts.filter((a) => a.status === 'PENDING');
   const decididas = alerts.filter((a) => a.status !== 'PENDING').slice(0, 5);
@@ -61,6 +63,18 @@ export default function CampanaDeAlertas({
   function nombre(droneId: string | null): string {
     if (!droneId) return 'Dron desconocido';
     return drones.find((d) => d.droneId === droneId)?.displayName ?? 'Dron desconocido';
+  }
+
+  /**
+   * Abre el pop-up de la alerta y pliega el desplegable: abierto atrás, un
+   * Escape o un clic en el pop-up lo cerraban igual, y quedaba a medio camino.
+   * El foco pasa antes por la campana, que es adonde el pop-up lo devuelve al
+   * cerrarse: el botón que se tocó se va con el desplegable.
+   */
+  function abrir(alerta: Alert, abrirEnLaConsola: (a: Alert) => void) {
+    boton.current?.focus();
+    setAbierta(false);
+    abrirEnLaConsola(alerta);
   }
 
   return (
@@ -103,8 +117,25 @@ export default function CampanaDeAlertas({
                 <time className="mono muted" dateTime={a.created_at}>
                   {time(a.created_at)}
                 </time>
+                {abrirAlerta && (
+                  <button type="button" className="enlace alerta-ver-detalle" onClick={() => abrir(a, abrirAlerta)}>
+                    Ver detalle
+                  </button>
+                )}
               </div>
-              {a.snapshot && <img className="snapshot" src={`data:image/jpeg;base64,${a.snapshot}`} alt="Detección" />}
+              {a.snapshot && abrirAlerta && (
+                <button
+                  type="button"
+                  className="snapshot-boton"
+                  aria-label={`Ampliar la captura de la alerta #${a.id}`}
+                  onClick={() => abrir(a, abrirAlerta)}
+                >
+                  <img className="snapshot" src={`data:image/jpeg;base64,${a.snapshot}`} alt="Detección" />
+                </button>
+              )}
+              {a.snapshot && !abrirAlerta && (
+                <img className="snapshot" src={`data:image/jpeg;base64,${a.snapshot}`} alt="Detección" />
+              )}
               <div className="alert-actions">
                 <button className="validate" disabled={decidiendo(a.id)} onClick={() => decidir(a.id, 'VALIDATED')}>
                   Validar
@@ -127,19 +158,37 @@ export default function CampanaDeAlertas({
             <>
               <hr className="regla" />
               <span className="etiqueta">Últimas decididas</span>
-              {decididas.map((a) => (
-                <div key={a.id} className="campana-decidida">
-                  <span className={`estado etiqueta ${a.status === 'VALIDATED' ? 'ok' : 'muted'}`}>
-                    {a.status === 'VALIDATED' ? 'Validada' : 'Descartada'}
-                  </span>
-                  <span className="muted">
-                    {TIPO[a.type as keyof typeof TIPO] ?? a.type} · {nombre(a.drone_id)}
-                  </span>
-                  <time className="mono muted" dateTime={a.created_at}>
-                    {time(a.created_at)}
-                  </time>
-                </div>
-              ))}
+              {decididas.map((a) => {
+                const renglon = (
+                  <>
+                    <span className={`estado etiqueta ${a.status === 'VALIDATED' ? 'ok' : 'muted'}`}>
+                      {a.status === 'VALIDATED' ? 'Validada' : 'Descartada'}
+                    </span>
+                    <span className="muted">
+                      {TIPO[a.type as keyof typeof TIPO] ?? a.type} · {nombre(a.drone_id)}
+                    </span>
+                    <time className="mono muted" dateTime={a.created_at}>
+                      {time(a.created_at)}
+                    </time>
+                  </>
+                );
+                // Una decidida también se abre: quién la decidió, la captura y
+                // dónde fue siguen haciendo falta para el parte del turno.
+                return abrirAlerta ? (
+                  <button
+                    key={a.id}
+                    type="button"
+                    className="campana-decidida campana-decidida-boton"
+                    onClick={() => abrir(a, abrirAlerta)}
+                  >
+                    {renglon}
+                  </button>
+                ) : (
+                  <div key={a.id} className="campana-decidida">
+                    {renglon}
+                  </div>
+                );
+              })}
             </>
           )}
         </div>

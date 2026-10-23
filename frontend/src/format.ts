@@ -190,3 +190,39 @@ export function situacionDelObjetivo(objetivo: ObjetivoEnSeguimiento): string {
 export function decisionDelObjetivo(objetivo: ObjetivoEnSeguimiento): string {
   return objetivo.decision === 'VALIDATED' ? 'Validada por un operador' : 'Sin decidir';
 }
+
+// ---- Alertas y registro ----
+// Los usan el detalle de un evento y el de una alerta, que viven en archivos
+// distintos y se muestran uno adentro del otro: si cada uno tuviera su copia,
+// la misma fecha se leería de dos formas en el mismo pop-up.
+
+/** Rótulo de la pastilla de una alerta. Un tipo que la consola no conoce se muestra tal cual. */
+export function tipoDeAlerta(tipo: string): string {
+  if (tipo === 'PERSON') return 'PERSONA';
+  if (tipo === 'VEHICLE') return 'VEHÍCULO';
+  return tipo;
+}
+
+/**
+ * Fecha y hora para leer con calma: el detalle de un evento o de una alerta.
+ * Las columnas comparadas son angostas, y ahí va la corta. Una fila vieja puede
+ * traer cualquier cosa en la fecha: se muestra cruda antes que un "Invalid Date".
+ */
+export function fechaHoraLarga(ts: string | null, estilo: 'long' | 'short' = 'long'): string {
+  if (!ts) return '—';
+  const fecha = new Date(ts);
+  if (Number.isNaN(fecha.getTime())) return ts;
+  return fecha.toLocaleString('es-AR', { dateStyle: estilo, timeStyle: estilo === 'long' ? 'medium' : 'short' });
+}
+
+/** El identificador del dron es un hash largo: nunca se muestra entero. */
+export function hashCorto(hash: string | null | undefined): string {
+  if (!hash) return '—';
+  return hash.length > 14 ? `${hash.slice(0, 6)}…${hash.slice(-4)}` : hash;
+}
+
+/** Las coordenadas de `coordenadas`, o la raya si el dato no vino. */
+export function coordenadasODato(lat: number | null | undefined, lon: number | null | undefined): string {
+  if (typeof lat !== 'number' || typeof lon !== 'number') return '—';
+  return coordenadas(lat, lon);
+}

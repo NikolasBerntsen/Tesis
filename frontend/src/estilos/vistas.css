@@ -122,12 +122,9 @@
 .alerta-consecuencias { font-size: var(--txt-xs); }
 
 /* --- Registro de eventos --------------------------------------------------- */
-.log-card .log {
-  max-height: 420px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-}
+/* La lista del historial de un dron (EventLog) ya no es una tarjeta con su
+   propio scroll al pie de la vista: vive en un pop-up, y el que scrollea es
+   la columna de la lista (modales.css). */
 .log {
   display: flex;
   flex-direction: column;
@@ -141,9 +138,9 @@
   align-items: baseline;
   transition: background-color var(--transicion);
 }
-/* La fila de rótulos vive fuera del contenedor que scrollea (es hija directa
-   de la tarjeta): se la marca con la veta fuerte, igual que el thead de .tabla */
-.log-card > .log-row { border-bottom-color: var(--veta-fuerte); }
+/* La fila de rótulos va fuera de las filas que se abren: se la marca con la
+   veta fuerte, igual que el thead de .tabla */
+.log-encabezado { border-bottom-color: var(--veta-fuerte); }
 .log-row:last-child { border-bottom: none; }
 .log-row:hover { background: var(--realce-70); }
 .log-row-general { grid-template-columns: 150px 88px 180px 1fr; }
@@ -172,6 +169,38 @@
 .log-row.cliqueable:focus-visible {
   outline: var(--filo) solid var(--anillo-foco);
   outline-offset: -2px;
+}
+
+/* La fila del historial de un dron es un <button>: se le saca todo lo que
+   `button` le pone (la cara, el filo, la sombra, la presión), y queda un
+   renglón más del registro. Sin esto el hover le teñía de oro el borde de
+   abajo y cada fila se leía como una tecla. */
+.log-row-boton {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  border: 0;
+  border-bottom: 1px solid var(--veta);
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+.log-row-boton:hover:not(:disabled) { border-color: var(--veta); }
+/* Un mensaje largo se parte adentro de su columna en vez de salirse de la fila. */
+.log-row-boton > :last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.log-row-boton:active:not(:disabled) {
+  box-shadow: none;
+  transform: none;
+}
+/* La fila abierta en el panel de al lado: el velo de la fila (el mismo del
+   hover, medido en contraste.test.ts) y el filo de oro de lo seleccionado. */
+.log-row-boton[aria-current='true'] {
+  background: var(--oro-velo-fila);
+  box-shadow: inset var(--filo) 0 0 0 var(--oro);
 }
 
 details.meta summary {

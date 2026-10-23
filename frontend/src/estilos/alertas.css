@@ -139,3 +139,86 @@
 @media (max-width: 700px) {
   .alerta-en-curso.apaisada .alerta-cuerpo { grid-template-columns: 1fr; }
 }
+
+/* --- Abrir la alerta ----------------------------------------------------------
+   En el carrusel y en la campana, la captura es un botón que abre el pop-up de
+   la alerta, y "Ver detalle" es el mismo camino en texto. El botón de la
+   captura se saca de encima la cara de `button`: lo que se ve es la imagen, y
+   el puntero de lupa dice que se puede agrandar. */
+.snapshot-boton {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radio-chico);
+  background: none;
+  box-shadow: none;
+  cursor: zoom-in;
+}
+.snapshot-boton:hover:not(:disabled) {
+  background-image: none;
+  box-shadow: 0 0 0 var(--filo) var(--oro);
+}
+.snapshot-boton:active:not(:disabled) {
+  transform: none;
+  box-shadow: 0 0 0 var(--filo) var(--oro);
+}
+.alerta-ver-detalle { font-size: var(--txt-sm); }
+
+/* La decidida de la campana también se abre: el renglón entero es el botón,
+   sin la cara ni el filo de una tecla. */
+.campana-decidida-boton {
+  width: 100%;
+  padding: var(--e-1) var(--e-2);
+  text-align: left;
+  font: inherit;
+  font-size: var(--txt-sm);
+  color: inherit;
+  border: 0;
+  border-radius: var(--radio-chico);
+  background: none;
+  box-shadow: none;
+}
+.campana-decidida-boton:hover:not(:disabled) {
+  background: var(--realce-70);
+}
+.campana-decidida-boton:active:not(:disabled) {
+  box-shadow: none;
+  transform: none;
+}
+
+/* --- El pop-up de la alerta (DetalleDeAlerta) ---------------------------------
+   El mismo bloque va en el pop-up propio de la alerta, en el detalle de un
+   evento del Registro y en el panel lateral del historial de un dron. */
+.detalle-alerta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-4);
+  min-width: 0;
+}
+.detalle-alerta-titulo {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--e-3);
+  margin: 0;
+}
+/* La captura y el mapa lado a lado mientras entren dos columnas de 260 px; en
+   un pop-up angosto o en un teléfono, uno debajo del otro. */
+.detalle-alerta-vistas {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  align-items: start;
+  gap: var(--e-4);
+}
+.detalle-alerta-captura:empty { display: none; }
+.mapa-alerta-lienzo { height: 260px; }
+.mapa-alerta .mapa-leyenda { margin-top: var(--e-2); }
+.detalle-alerta-acciones {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-3);
+}
+.detalle-alerta-acciones > p { margin: 0; }
+.detalle-alerta-acciones .alert-actions { max-width: 420px; }
+.detalle-alerta-video { align-self: flex-start; }

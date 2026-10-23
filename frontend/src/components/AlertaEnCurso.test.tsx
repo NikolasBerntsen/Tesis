@@ -2,8 +2,12 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import AlertaEnCurso from './AlertaEnCurso';
+import ProveedorDeAlertas from './ProveedorDeAlertas';
 import { makeAlert, makeDrone } from '../test/fixtures';
 import { ESPERA_DEL_RELEVO_MS } from '../useCarruselDeAlertas';
+
+// El pop-up de la alerta lleva un mapa: Leaflet no corre en jsdom.
+vi.mock('leaflet', async () => (await import('../test/dobleLeaflet')).dobleLeaflet());
 
 type Props = Parameters<typeof AlertaEnCurso>[0];
 
@@ -416,5 +420,57 @@ describe('AlertaEnCurso — en el tablero', () => {
   it('sin `onVerDron` (vista del dron) no repite el nombre del dron', () => {
     montar({ alertas: [makeAlert({ id: 1, drone_id: 'd1' })], drones });
     expect(screen.queryByRole('button', { name: 'Alfa' })).not.toBeInTheDocument();
+  });
+
+  it('suelta, sin la consola alrededor, no ofrece abrir la alerta: no habría quién la muestre', () => {
+    montar();
+    expect(screen.queryByRole('button', { name: 'Ver detalle' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Ampliar la captura/ })).not.toBeInTheDocument();
+  });
+});
+
+describe('AlertaEnCurso — abrir la alerta en su pop-up', () => {
+  const alfa = makeDrone({ droneId: 'd1', displayName: 'Alfa' });
+
+  function enLaConsola(alertas = [makeAlert({ id: 7, type: 'VEHICLE', drone_id: 'd1', snapshot: 'QUFB' })]) {
+    const verDron = vi.fn();
+    render(
+      <ProveedorDeAlertas alertas={alertas} drones={[alfa]} statuses={{}} decidir={vi.fn()} verDron={verDron}>
+        <AlertaEnCurso alertas={alertas} onDecidir={vi.fn()} />
+      </ProveedorDeAlertas>,
+    );
+    return { verDron };
+  }
+
+  it('tocar la captura abre el pop-up con la alerta, y al cerrarlo el foco vuelve a la captura', async () => {
+    enLaConsola();
+    const captura = screen.getByRole('button', { name: 'Ampliar la captura de la alerta #7' });
+    expect(within(captura).getByAltText('Captura que disparó la detección')).toBeInTheDocument();
+
+    await userEvent.click(captura);
+    const dialogo = screen.getByRole('dialog', { name: 'Alerta de vehículo #7' });
+    expect(within(dialogo).getByAltText('Captura de la detección')).toBeInTheDocument();
+    expect(within(dialogo).getByRole('button', { name: 'Ver feed en vivo' })).toBeEnabled();
+
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(captura).toHaveFocus();
+  });
+
+  it('"Ver detalle" abre la misma alerta, también la que llegó sin captura', async () => {
+    enLaConsola([makeAlert({ id: 9, drone_id: 'd1', snapshot: null })]);
+    expect(screen.queryByRole('button', { name: /Ampliar la captura/ })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Ver detalle' }));
+    expect(screen.getByRole('dialog', { name: 'Alerta de persona #9' })).toBeInTheDocument();
+    expect(screen.getByText('La detección no dejó captura.')).toBeInTheDocument();
+  });
+
+  it('desde el pop-up se va al video del dron', async () => {
+    const { verDron } = enLaConsola();
+    await userEvent.click(screen.getByRole('button', { name: 'Ver detalle' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Ver feed en vivo' }));
+    expect(verDron).toHaveBeenCalledWith('d1');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });

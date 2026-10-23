@@ -3,8 +3,11 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Console from './Console';
 import type { MapItem, WaypointsLayer } from './DronesMap';
-import { makeDrone, makeMe, makeRoute, makeStatus } from '../test/fixtures';
-import type { Me, ObjetivoEnSeguimiento } from '../types';
+import { makeDrone, makeEvent, makeMe, makeRoute, makeStatus } from '../test/fixtures';
+import type { EventRow, Me, ObjetivoEnSeguimiento } from '../types';
+
+// El pop-up de una alerta lleva un mapa (MapaDeAlerta): Leaflet no corre en jsdom.
+vi.mock('leaflet', async () => (await import('../test/dobleLeaflet')).dobleLeaflet());
 
 // El mapa se sustituye por un botón que dispara el renombre de un nodo: Leaflet
 // no corre en jsdom, pero el cable que baja hasta Console sí se puede probar.
@@ -56,12 +59,14 @@ let codigos: Record<string, number> = {};
 let meFix: Me = makeMe({ username: 'oper1', role: 'operator' });
 let dronesFix = [makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true })];
 let routesFix = [makeRoute()];
+/** Lo que devuelve el Registro (GET /logs). */
+let logsFix: EventRow[] = [];
 
 function responder(metodo: string, ruta: string, cuerpo: string): unknown {
   if (ruta === '/me') return meFix;
   if (metodo === 'PATCH' && ruta.startsWith('/drones/')) return { ...dronesFix[0], ...JSON.parse(cuerpo) };
   if (ruta.startsWith('/drones')) return dronesFix;
-  if (ruta.startsWith('/logs')) return { items: [], total: 0, page: 1, pageSize: 25 };
+  if (ruta.startsWith('/logs')) return { items: logsFix, total: logsFix.length, page: 1, pageSize: 25 };
   // Las rutas que la base del dron tiene habilitadas: son las que la vista de
   // detalle ofrece en el selector.
   if (/^\/bases\/\d+\/routes/.test(ruta)) return routesFix;
@@ -87,6 +92,7 @@ beforeEach(() => {
   meFix = makeMe({ username: 'oper1', role: 'operator' });
   dronesFix = [makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true })];
   routesFix = [];
+  logsFix = [];
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init: RequestInit = {}) => {
@@ -484,6 +490,86 @@ describe('Console', () => {
       ruta: '/alerts/1/decision',
       cuerpo: JSON.stringify({ decision: 'VALIDATED' }),
     });
+  });
+
+  it('una alerta se abre desde la campana en su pop-up, y desde ahí se va al video del dron', async () => {
+    meFix = makeMe({ username: 'admin1', role: 'admin' });
+    render(<Console onLogout={() => {}} />);
+    await screen.findByText('Alfa');
+    // Desde otra sección: el pop-up lleva al dron igual.
+    await userEvent.click(screen.getByRole('button', { name: 'Registro' }));
+    await screen.findByRole('heading', { name: 'Registro del sistema' });
+    fire({
+      type: 'alert_created',
+      alert: {
+        id: 3,
+        type: 'PERSON',
+        status: 'PENDING',
+        drone_id: 'd1',
+        lat: -34.6,
+        lon: -58.4,
+        snapshot: 'QUFB',
+        decided_by: null,
+        decided_at: null,
+        created_at: '2024-01-01T12:00:00.000Z',
+      },
+    });
+
+    await userEvent.click(await screen.findByRole('button', { name: /1 pendiente/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Ver detalle' }));
+    const dialogo = screen.getByRole('dialog', { name: 'Alerta de persona #3' });
+    expect(within(dialogo).getByAltText('Captura de la detección')).toBeInTheDocument();
+    expect(within(dialogo).getByText('En línea')).toBeInTheDocument();
+
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Ver feed en vivo' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /Volver a Operación/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Operación' })).toHaveClass('active');
+  });
+
+  it('en el Registro, el evento de una alerta la muestra entera, se decide ahí y lleva al video', async () => {
+    meFix = makeMe({ username: 'admin1', role: 'admin' });
+    logsFix = [
+      makeEvent({
+        id: 9,
+        type: 'ALERT_CREATED',
+        alert_id: 5,
+        message: 'Alerta de VEHÍCULO generada por Alfa',
+        meta: JSON.stringify({ alerta: { id: 5, tipo: 'VEHICLE', lat: -34.6, lon: -58.4, ts: '2024-01-01T12:00:00.000Z' } }),
+      }),
+    ];
+    rechazados.add('POST /alerts/5/decision');
+    codigos['POST /alerts/5/decision'] = 409;
+    render(<Console onLogout={() => {}} />);
+    await screen.findByText('Alfa');
+    fire({
+      type: 'alert_created',
+      alert: {
+        id: 5,
+        type: 'VEHICLE',
+        status: 'PENDING',
+        drone_id: 'd1',
+        lat: -34.6,
+        lon: -58.4,
+        snapshot: 'QkJC',
+        decided_by: null,
+        decided_at: null,
+        created_at: '2024-01-01T12:00:00.000Z',
+      },
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Registro' }));
+    await userEvent.click(await screen.findByRole('button', { name: /Ver el detalle de ALERT_CREATED/ }));
+    const dialogo = screen.getByRole('dialog', { name: 'Alerta de VEHÍCULO generada por Alfa' });
+    expect(within(dialogo).getByAltText('Captura de la detección')).toHaveAttribute('src', 'data:image/jpeg;base64,QkJC');
+
+    // Otro operador ya la había decidido: el motivo se lee en el pop-up.
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Validar' }));
+    expect(await within(dialogo).findByRole('alert')).toHaveTextContent('ya la decidió otro operador');
+
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Ver feed en vivo' }));
+    expect(await screen.findByRole('button', { name: /Volver a Operación/ })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('la alerta pendiente del dron se decide desde su vista, al lado del video', async () => {

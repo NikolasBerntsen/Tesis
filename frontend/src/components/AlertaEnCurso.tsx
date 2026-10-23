@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, type FocusEvent, type KeyboardEvent } from 'react';
+import { useAlertasEnVivo } from '../alertasEnVivo';
 import { time } from '../format';
 import type { Alert, Drone } from '../types';
 import { useCarruselDeAlertas } from '../useCarruselDeAlertas';
@@ -59,6 +60,9 @@ export default function AlertaEnCurso({
 }) {
   const carrusel = useCarruselDeAlertas(alertas);
   const { decidir, errorDe, decidiendo } = useDecisionDeAlerta(onDecidir);
+  // El pop-up con todo lo de la alerta (mapa, dron, video) lo abre la consola:
+  // ver ProveedorDeAlertas.
+  const { abrirAlerta } = useAlertasEnVivo();
   const idTitulo = useId();
   const seccion = useRef<HTMLElement>(null);
   const focoAdentro = useRef(false);
@@ -88,6 +92,9 @@ export default function AlertaEnCurso({
 
   const error = errorDe(alerta.id);
   const siguiendo = seguidas.includes(alerta.id);
+  const captura = alerta.snapshot ? (
+    <img className="snapshot" src={`data:image/jpeg;base64,${alerta.snapshot}`} alt="Captura que disparó la detección" />
+  ) : null;
   const dron = drones?.find((d) => d.droneId === alerta.drone_id) ?? null;
 
   function alTeclear(ev: KeyboardEvent<HTMLElement>) {
@@ -224,15 +231,28 @@ export default function AlertaEnCurso({
           <time className="mono muted" dateTime={alerta.created_at}>
             {time(alerta.created_at)}
           </time>
+          {abrirAlerta && (
+            <button type="button" className="enlace alerta-ver-detalle" onClick={() => abrirAlerta(alerta)}>
+              Ver detalle
+            </button>
+          )}
         </div>
         <div className="alerta-cuerpo">
-          {alerta.snapshot ? (
-            <img
-              className="snapshot"
-              src={`data:image/jpeg;base64,${alerta.snapshot}`}
-              alt="Captura que disparó la detección"
-            />
-          ) : (
+          {captura && abrirAlerta && (
+            // La captura es lo que se mira primero: tocarla la abre en grande,
+            // con el mapa y el dron al lado. "Ver detalle" es el mismo camino
+            // para la alerta que llegó sin captura.
+            <button
+              type="button"
+              className="snapshot-boton"
+              aria-label={`Ampliar la captura de la alerta #${alerta.id}`}
+              onClick={() => abrirAlerta(alerta)}
+            >
+              {captura}
+            </button>
+          )}
+          {captura && !abrirAlerta && captura}
+          {!captura && (
             // No `.video`: en el par del video y el mapa esa clase fija 420 px de
             // alto, y un aviso de una línea quedaría flotando en un hueco enorme.
             <p className="vacio">La alerta llegó sin captura</p>

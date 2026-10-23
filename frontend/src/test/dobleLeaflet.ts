@@ -50,6 +50,8 @@ export const estadoMapa = {
   /** Cuántos se destruyeron. */
   mapasDestruidos: 0,
   vistas: [] as { centro: unknown; zoom: unknown }[],
+  /** Los puntos de cada `fitBounds`, en orden: el encuadre de varios puntos a la vez. */
+  encuadres: [] as unknown[][],
 };
 
 export function limpiarEstadoMapa() {
@@ -59,6 +61,7 @@ export function limpiarEstadoMapa() {
   estadoMapa.mapasCreados = 0;
   estadoMapa.mapasDestruidos = 0;
   estadoMapa.vistas = [];
+  estadoMapa.encuadres = [];
 }
 
 /** URLs de las teselas que se pusieron, para distinguir callejero de satelital. */
@@ -120,7 +123,10 @@ export function dobleLeaflet() {
       panTo: vi.fn(),
       flyTo: vi.fn(),
       invalidateSize: vi.fn(),
-      fitBounds: vi.fn(),
+      fitBounds: (limites: { puntos?: unknown[] }) => {
+        estadoMapa.encuadres.push(limites.puntos ?? []);
+        return mapa;
+      },
       getZoom: () => 16,
       getPane: () => document.createElement('div'),
       attributionControl: {
@@ -155,7 +161,7 @@ export function dobleLeaflet() {
     polyline: (puntos: unknown, opciones?: Record<string, unknown>) => capa('polyline', undefined, puntos, opciones),
     polygon: (puntos: unknown, opciones?: Record<string, unknown>) => capa('polygon', undefined, puntos, opciones),
     divIcon: (o: unknown) => ({ icono: o }),
-    latLngBounds: () => ({ pad: () => ({}) }),
+    latLngBounds: (puntos?: unknown[]) => ({ puntos, pad: () => ({}) }),
     control: { zoom: () => control },
     Control: class {
       onAdd: (() => HTMLElement) | undefined;
