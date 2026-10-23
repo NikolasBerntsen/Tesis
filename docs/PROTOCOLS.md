@@ -431,12 +431,23 @@ patrullaje en curso (RELEVOS §3.7). La app lo **repite cada 5 s con el mismo
   nada; contesta `relay_status` de ese relevo, aunque haya terminado.
 - Si `(A, motivo)` ya tiene un relevo activo (uno por origen y motivo, y uno de
   seguimiento por `alertId`), no crea otro: **adopta el `ref` nuevo** (la app
-  se pudo reiniciar y perder el viejo) y contesta `relay_status` de ese.
+  se pudo reiniciar y perder el viejo) y contesta `relay_status` de ese. En
+  seguimiento se adopta **solo el de la misma `alertId`**. En patrulla, si B
+  todavía no recibió nada (`RESERVADO` o `SIN_RELEVO`), el relevo toma además
+  el `routeId` y el `fromIndex` del pedido nuevo: son los del regreso de ahora.
+- **Seguimiento por otra alerta**: A sigue un solo objetivo a la vez, así que
+  un relevo de seguimiento activo de A por otra alerta quiere decir que A ya
+  dejó ese objetivo, y el hub lo trata como un `relay_abandon` de ese relevo
+  (con B en camino la alerta pasa a B; sin B, `CANCELADO` `origen_se_fue`;
+  uno en `TRASPASO` termina solo). El pedido nuevo crea su propio relevo:
+  nunca se le contesta con el estado ni la `etaS` de un B que va hacia otro
+  objetivo, que A usaría para su ventana de gracia.
 - Si no, crea el relevo (evento `RELAY_REQUESTED`) y busca candidato con las
   reglas de RELEVOS §2.2 (patrulla: reserva, `RESERVADO`) o §3.2
   (seguimiento: ordena en el acto, `ORDENADO` con `relay_tracking`). Sin
   candidato: `SIN_RELEVO` (evento `RELAY_UNAVAILABLE`), y el pedido queda
-  pendiente hasta que aparezca uno o venza (§3, `motivoFin`).
+  pendiente hasta que aparezca uno o venza (§3, `motivoFin`; ver "Pedidos que
+  vencen sin aviso" más abajo).
 
 #### `relay_accept` y `relay_reject`: B contesta la orden
 
@@ -517,10 +528,12 @@ real: `KeyGoHomeStatus = LANDING`; simulador: comienzo del descenso del
 regreso; las dos llegan como `FlightEvent.DescendiendoEnBase`). Si en ese
 momento no hay conexión con el hub, sale al reconectar. Es **autosuficiente**:
 si el hub no tiene el relevo (el `relay_request` se perdió), lo crea con estos
-datos. Después vuelve a elegir B (prefiere el reservado si sigue disponible),
-le manda `relay_start` (`ORDENADO`, evento `RELAY_ASSIGNED`) y, sin
-candidato, `SIN_RELEVO`. Aterrizando en otra base no se manda: ese relevo ya
-salió con el `rth_diverted`.
+datos. Si lo tiene, adopta su `ref` (el de los `relay_status` siguientes) y,
+con B todavía sin avisar, su `routeId` y su `fromIndex`. Después vuelve a
+elegir B (prefiere el reservado si sigue disponible), le manda `relay_start`
+(`ORDENADO`, evento `RELAY_ASSIGNED`) y, sin candidato, `SIN_RELEVO`.
+Aterrizando en otra base no se manda: ese relevo ya salió con el
+`rth_diverted`.
 
 `landed_at_base` sale al tocar tierra al final de un regreso a una base (la
 propia o la del desvío; de `FlightEvent.Aterrizado`/`ArrivedHome`). Nunca por
@@ -529,6 +542,28 @@ un `land` ordenado por una persona. Con un relevo de patrulla de A esperando
 despacha en el acto (`relay_start` y `relay_go` juntos); en `SIN_RELEVO` el
 pedido vence (`CANCELADO`, `motivoFin: "sin_relevo"`). Si A venía desviado a
 esa base, se levanta el bloqueo de sus despegues.
+
+**Pedidos que vencen sin aviso.** `landing_at_base` y `landed_at_base` son
+mensajes únicos, y se pierden si al teléfono se le corta el enlace al tocar
+tierra; un `land` ordenado por una persona no manda ninguno. Para que un pedido
+no quede colgado —y un B que aparece horas después despegue solo hacia una
+ruta que ya nadie vuela— el hub también mira los status de A:
+- Después del `landing_at_base`, un status de A con `alt ≤ 5` o en tierra
+  (`flying: false`) vale como su `landed_at_base`: es "A abajo" para el
+  `relay_go` (§2.b) y, para un pedido `SIN_RELEVO`, el último intento de
+  asignarlo antes de que venza con `sin_relevo`.
+- Sin ese aviso de descenso, A en tierra (`flying: false`, sea cual sea su
+  `state`) vence el pedido con `sin_relevo`: en `SIN_RELEVO` en el acto; en
+  `RESERVADO`, a los **10 s** (es lo que el hub espera el `landed_at_base`,
+  que puede llegar después del status y que despacharía a B). Cuentan solo
+  los status de la conexión actual de A: uno en tierra de antes de una
+  reconexión no vence nada (sin enlace A pudo despegar y volver, y su pedido
+  puede llegar antes que su primer status). Si A se desconecta después de
+  posarse, el suyo sigue valiendo.
+- Un pedido `RESERVADO` o `SIN_RELEVO` (de patrulla o de seguimiento) vence con
+  `sin_relevo` a los **10 minutos sin ningún status de A**, contados desde su
+  pedido o desde el arranque del hub si fue después: con la batería con la que
+  pidió, A ya está en tierra.
 
 #### `rth_diverted`: A no vuelve a su base
 
@@ -547,7 +582,11 @@ plataforma de la base de A queda libre: si A tenía un relevo de patrulla en
 `RESERVADO`, `ORDENADO` o `SIN_RELEVO`, el hub despacha a B en el acto
 (`relay_start` junto con `relay_go`). Con `otra_base`, **bloquea los despegues
 de relevo desde la base destino** hasta el `landed_at_base` de A con ese
-`baseId` o hasta 10 minutos.
+`baseId`, hasta un status de A en tierra (`flying: false`: el aterrizaje del
+desviado, aunque su aviso no llegue) o hasta 10 minutos. La repetición de un
+desvío vigente no se registra otra vez ni estira el bloqueo; un `rth_diverted`
+después de eso (con el desvío anterior cerrado o con sus 10 minutos cumplidos)
+es un **desvío nuevo**: otro evento y otros 10 minutos de bloqueo.
 
 #### `emergency_landing`, `emergency_photo` y `emergency_landed`: última ubicación
 
@@ -671,7 +710,7 @@ Mismas convenciones que §1.b. Todos van **solo al dron correspondiente**.
 | `relay_status` | A | En respuesta a cada `relay_request` (reintentos incluidos), en cada cambio de estado del relevo y cada 5 s mientras esté `EN_CAMINO` |
 | `relay_start` | B | Al ordenarle un relevo de patrulla (`ORDENADO`); al reconectarse |
 | `relay_tracking` | B | Al ordenarle un relevo de seguimiento (`ORDENADO`); al reconectarse |
-| `relay_target` | B | Desde que acepta un seguimiento hasta que el relevo termina: con cada status de A y cada 5 s sin él |
+| `relay_target` | B | Desde que acepta un seguimiento hasta que el relevo termina: con cada status de A (aunque su objetivo no pase) y cada 5 s sin él. Si terminó `COMPLETADO` por `origen_sin_confirmar`, sigue hasta el primero `retirado` o 10 minutos: B no baja hasta saber que A se fue (RELEVOS §3.5) |
 | `relay_go` | B | Relevo de patrulla aceptado, cuando A está abajo o se desvió; al reconectarse si ya se le había dado |
 | `relay_done` | A | Al pasar a `TRASPASO`, y en cada reconexión de A mientras siga así |
 | `relay_cancel` | B, o el que se reconecta | El relevo se cancela, vence o falla con B asignado; `relay_accept` que no corresponde; reconexión con un relevo terminado o desconocido |
@@ -782,23 +821,30 @@ ordena con la alerta ya `VALIDATED` (RELEVOS §3.2).
 | Campo | Tipo | Obligatorio | Regla |
 |---|---|---|---|
 | `relayId`, `alertId`, `decision`, `objetivo` | | sí | Como en `relay_tracking` |
-| `origen` | `"en_linea"` \| `"sin_enlace"` \| `"retirado"` | sí | `en_linea`: sale con el status de A que acaba de llegar. `sin_enlace`: A está desconectado del hub o sin status hace más de 5 s; va la última estimación válida, cada 5 s. `retirado`: A ya no sigue al objetivo (`relay_released`, `relay_abandon`, o su estado es `RETURNING_HOME*`, `ATERRIZAJE_EMERGENCIA`, `LANDED` o `IDLE`); va la última estimación válida |
+| `origen` | `"en_linea"` \| `"sin_enlace"` \| `"retirado"` | sí | `en_linea`: sale con el status de A que acaba de llegar, **traiga o no un objetivo que pase** (en el traspaso A ya soltó su rastreador y lo manda sin `target`); si no trae, va la última estimación válida. `sin_enlace`: A está desconectado del hub o sin status hace más de 5 s; va la última estimación válida, cada 5 s. `retirado`: A ya no sigue al objetivo (`relay_released`, `relay_abandon`, o su estado es `RETURNING_HOME*`, `ATERRIZAJE_EMERGENCIA`, `LANDED` o `IDLE`); va la última estimación válida |
 | `aLat`, `aLon` | posición o `null` | sí | Posición de A en su último status |
 | `aAlt` | número \| null | sí | Altura de A en su último status; `null` si no hay ninguno |
-| `ts` | entero | sí | Hora del hub en que llegó el status de A del que sale `objetivo` (con `sin_enlace` y `retirado`, el del último válido) |
+| `ts` | entero | sí | Hora del hub en que llegó el status de A del que sale **`objetivo`**: identifica esa estimación. Cuando el mensaje lleva la última válida (`sin_enlace`, `retirado`, o un `en_linea` cuyo status no traía un objetivo que pase), es el `ts` de esa, y se repite |
 
-B descarta un `relay_target` con `ts` menor o igual que el último que aplicó, y
-**nunca compara `ts` con su propio reloj** (no están sincronizados): sirve solo
-para ordenar. Vuela hacia la estimación extrapolada con `speedMs`/`courseDeg` y
-`lastSeenMs` + su tiempo de viaje, y baja a la altura de seguimiento recién con A
-a más de 100 m del objetivo o `origen: "retirado"` (RELEVOS §3.4 y §3.5).
+El `ts` **ordena solo el objetivo**: B toma el `objetivo` de un `relay_target`
+únicamente si su `ts` es mayor que el del último que tomó (si no, es la misma
+estimación o una más vieja, y se queda con la que tiene). `origen`, `aLat`,
+`aLon` y `aAlt` los toma de **todos**, aunque el `ts` se repita: son del último
+status de A, y los mensajes de una misma conexión llegan en orden (el hub no
+reenvía `relay_target` viejos al reconectar). Un `retirado` con el `ts` del
+último `en_linea` es lo normal. B **nunca compara `ts` con su propio reloj** (no
+están sincronizados). Vuela hacia la estimación extrapolada con
+`speedMs`/`courseDeg` y `lastSeenMs` + su tiempo de viaje, y baja a la altura de
+seguimiento recién con A a más de 100 m del objetivo o `origen: "retirado"`
+(RELEVOS §3.4 y §3.5).
 
 #### Objetivo de un relevo (`objetivo`)
 
 Es `status.target` de A (§1) con `vNorteMs` y `vEsteMs` siempre presentes. El
-hub **solo reenvía objetivos que pasan esto** (y si el de un status de A no
-pasa, no sale `relay_target` por ese status: B se queda con el anterior); la app
-lo vuelve a validar igual.
+hub **solo reenvía objetivos que pasan esto**: si el de un status de A no pasa,
+el `relay_target` de ese status lleva la posición de A con el último objetivo
+que pasó y su `ts`, y B se queda con su estimación. La app lo vuelve a validar
+igual.
 
 | Campo | Tipo | Regla |
 |---|---|---|
@@ -824,8 +870,8 @@ total desde la última vista no pasa del tope del rastreador.
 | `relayId` | entero | sí | Un relevo de patrulla aceptado por este B |
 
 Sale cuando A está abajo: su `landed_at_base`, o un status de A posterior al
-`landing_at_base` con `alt ≤ 5`. También junto con `relay_start` cuando A se
-desvió o aterrizó antes de que se ordenara (§1.b). Sin telemetría de A, B no
+`landing_at_base` con `alt ≤ 5` o en tierra (`flying: false`). También junto
+con `relay_start` cuando A se desvió o aterrizó antes de que se ordenara (§1.b). Sin telemetría de A, B no
 despega hasta que A confirme o un operador ordene la ruta a mano; a los
 `RELEVO_DESPEGUE_MS = 120 s` del `relay_start` sin `relay_go`, el relevo pasa a
 `FALLIDO` (`motivoFin: "sin_despegue"`) y B recibe `relay_cancel {motivo:
@@ -863,7 +909,9 @@ Las órdenes del operador **hacia B** (`start_route`, `stop_patrol`,
 recibirla en un relevo, lo olvida y la cumple. Un `relay_cancel` antes de la
 orden la haría arrancar un regreso que la orden pisa un instante después. Las
 mismas órdenes **hacia A** en un seguimiento son un `relay_abandon` (§1.b).
-Tomar el control de B no cancela nada.
+Tomar el control de B no cancela nada, y soltarlo tampoco: a un dron que
+participa de un relevo activo (A o B) el hub lo suelta siempre sin
+`resume_patrol` (§5, `DELETE /control`). La orden de reanudar es `POST /resume`.
 
 #### `emergency_ack` y `emergency_photo_ack`
 
@@ -946,7 +994,7 @@ Forma que devuelven `relay_updated` y `GET /api/relevos`:
 | `id` | entero | El `relayId` |
 | `motivo` | `"patrulla"` \| `"seguimiento"` | |
 | `estado` | texto | `RESERVADO` (patrulla: B elegido pero todavía sin avisar; la reserva es tentativa), `ORDENADO` (B recibió la orden y tiene 10 s para contestar), `EN_CAMINO` (B aceptó), `TRASPASO` (solo seguimiento: B llegó y A está soltando), `SIN_RELEVO` (pedido pendiente sin candidato), `COMPLETADO`, `CANCELADO`, `FALLIDO`. **Activos**: los cinco primeros; **terminales**: los tres últimos |
-| `motivoFin` | texto \| null | `null` mientras está activo y en un `COMPLETADO` normal. `COMPLETADO`: `origen_sin_confirmar` (A no confirmó en 30 s). `CANCELADO`: `orden_del_operador`, `alerta_descartada`, `sin_relevo` (el pedido sin candidato venció: A aterrizó o se fue), `origen_se_fue` (A abandonó un seguimiento sin B en camino). `FALLIDO`: `relevo_abortado` (`relay_abort`), `relevo_desconectado` (B más de 20 s sin conexión), `sin_despegue` (120 s sin A abajo), `relevo_perdio_estado` (B se reconectó en el aire sin el relevo) |
+| `motivoFin` | texto \| null | `null` mientras está activo y en un `COMPLETADO` normal. `COMPLETADO`: `origen_sin_confirmar` (A no confirmó en 30 s). `CANCELADO`: `orden_del_operador`, `alerta_descartada`, `sin_relevo` (el pedido venció antes de avisarle a un B, sin candidato o solo reservado: A aterrizó, se fue o hace 10 minutos que no da noticias, §1.b "Pedidos que vencen sin aviso"), `origen_se_fue` (A abandonó un seguimiento sin B en camino). `FALLIDO`: `relevo_abortado` (`relay_abort`), `relevo_desconectado` (B más de 20 s sin conexión), `sin_despegue` (120 s sin A abajo), `relevo_perdio_estado` (B se reconectó en el aire sin el relevo) |
 | `origen` | `{droneId, displayName}` | A |
 | `relevo` | `{droneId, displayName}` \| null | B, el reservado o el ordenado; `null` sin candidato |
 | `baseId` | entero \| null | La base desde la que sale B (patrulla: la de A; seguimiento: la de B); `null` sin B |
@@ -1341,7 +1389,7 @@ Lo que cambió respecto de la versión anterior está marcado con **negrita**.
 | POST | `/api/drones/:droneId/resume` | operador+ | `{fromIndex?}`: reanuda hacia ese nodo o **hacia el próximo de la ruta**. Libera el control manual y **termina el seguimiento de un objetivo** |
 | POST | `/api/drones/:droneId/goto` | con `canControl` | `{routeId, index}`: fuerza el vuelo hacia ese nodo |
 | POST | `/api/drones/:droneId/control` | con `canControl` | Toma el control manual (409 si otro lo tiene) |
-| DELETE | `/api/drones/:droneId/control` | titular o supervisor+ | `{resume: 'last'\|'none'\|número}`. **Con un objetivo en seguimiento la consola manda `'none'`: el dron vuelve al objetivo.** Si el titular se desconecta, el hub suelta el control con `'none'` cuando el último status del dron trae `target`, y con `'last'` si no |
+| DELETE | `/api/drones/:droneId/control` | titular o supervisor+ | `{resume: 'last'\|'none'\|número}`. **Con un objetivo en seguimiento la consola manda `'none'`: el dron vuelve al objetivo.** Si el titular se desconecta, el hub suelta el control con `'none'` cuando el último status del dron trae `target`, y con `'last'` si no. **A un dron que participa de un relevo activo (A o B) el hub lo suelta siempre con `'none'`, pida lo que pida el cuerpo: soltar no es una orden y no toca el relevo (RELEVOS §3.9). Para reanudarlo está `POST /resume`, que sí cuenta como orden del operador** |
 | **POST** | **`/api/drones/:droneId/takeoff`** | **titular del control (con `canControl`)** | **Despegue en el lugar (§2 `takeoff`). 409 si no tenés el control. Registra `TAKEOFF_ORDERED`** |
 | **POST** | **`/api/drones/:droneId/land`** | **titular del control (con `canControl`)** | **Aterriza donde está (§2 `land`). 409 si no tenés el control. Registra `LANDING_ORDERED`** |
 | POST | `/api/drones/:droneId/manual_move` | titular del control | `{bearing, distanceM}`: desplazamiento puntual (la consola manda 25 m por click) |

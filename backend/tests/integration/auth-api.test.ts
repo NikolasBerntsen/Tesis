@@ -96,7 +96,7 @@ describe('integración — login, /me y cierre de sesión', () => {
     expect(r.body.role).toBe('drone');
     expect(r.body.droneId).toBe(DRON.alfa);
     expect(r.body.displayName).toBe('Alfa');
-    expect(r.body.base).toEqual({ name: 'Base Norte', lat: -34.8565, lon: -56.2075 });
+    expect(r.body.base).toEqual({ name: 'Base Norte', lat: -34.8565, lon: -56.2075, aterrizajeLat: null, aterrizajeLon: null });
   });
 
   it('/me de un dron eliminado después de emparejar da 403', async () => {

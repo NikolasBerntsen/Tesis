@@ -35,6 +35,8 @@ import {
   listAlerts,
   decideAlert,
   listDecisionsSince,
+  fijarSeguidaPor,
+  seguidorDeAlerta,
   type DroneAsset,
   type UserRow,
 } from '../../src/store';
@@ -291,7 +293,7 @@ describe('store — drones como activos', () => {
     expect(d.active).toBe(true);
     expect(d.inventoryCode).toBe('INV-1');
     expect(d.baseId).toBe(norte.id);
-    expect(d.base).toEqual({ name: 'Base Norte', lat: -34.85, lon: -56.2 });
+    expect(d.base).toEqual({ name: 'Base Norte', lat: -34.85, lon: -56.2, aterrizajeLat: null, aterrizajeLon: null });
     expect(d.createdBy).toBe('campo');
     expect(d.deletedAt).toBeNull();
 
@@ -324,7 +326,13 @@ describe('store — drones como activos', () => {
     expect(toDroneAssetView(fila).base).toBeNull();
     expect(toDroneAssetView(fila).active).toBe(false);
     // sin nombre de base unida, cae a "Base"
-    expect(toDroneAssetView({ ...fila, b_name: null, b_lon: -56.2 }).base).toEqual({ name: 'Base', lat: -34.85, lon: -56.2 });
+    expect(toDroneAssetView({ ...fila, b_name: null, b_lon: -56.2 }).base).toEqual({
+      name: 'Base', lat: -34.85, lon: -56.2, aterrizajeLat: null, aterrizajeLon: null,
+    });
+    // el punto para visitantes viaja con la base cuando la base lo tiene
+    expect(toDroneAssetView({ ...fila, b_lon: -56.2, b_aterrizaje_lat: -34.8502, b_aterrizaje_lon: -56.2 }).base).toMatchObject({
+      aterrizajeLat: -34.8502, aterrizajeLon: -56.2,
+    });
   });
 
   it('getDrone devuelve el dron AUNQUE esté borrado; listDrones lo esconde', () => {
@@ -346,7 +354,7 @@ describe('store — drones como activos', () => {
     expect(r?.after.displayName).toBe('Alfa-2');
     // lo que no se manda no se toca
     expect(r?.after.model).toBe('M1');
-    expect(r?.after.base).toEqual({ name: 'Norte', lat: 1, lon: 2 });
+    expect(r?.after.base).toEqual({ name: 'Norte', lat: 1, lon: 2, aterrizajeLat: null, aterrizajeLon: null });
 
     expect(updateDrone(d.hash, { active: false })?.after.active).toBe(false);
     expect(updateDrone(d.hash, { model: 'M2' })?.after.model).toBe('M2');
@@ -356,7 +364,9 @@ describe('store — drones como activos', () => {
     const norte = createBase({ name: 'Norte', lat: 1, lon: 2 }, 'supervisor');
     const sur = createBase({ name: 'Sur', lat: 3, lon: 4 }, 'supervisor');
     const d = createDrone({ displayName: 'Alfa', baseId: norte.id }, 'campo');
-    expect(updateDrone(d.hash, { baseId: sur.id })?.after.base).toEqual({ name: 'Sur', lat: 3, lon: 4 });
+    expect(updateDrone(d.hash, { baseId: sur.id })?.after.base).toEqual({
+      name: 'Sur', lat: 3, lon: 4, aterrizajeLat: null, aterrizajeLon: null,
+    });
     expect(updateDrone(d.hash, { baseId: null })?.after.base).toBeNull();
     // renombrar la base se refleja en el dron: la referencia es viva, no una copia
     updateBase(sur.id, { name: 'Sur Renombrada' });
@@ -397,7 +407,7 @@ describe('store — drones como activos', () => {
     expect(getDroneIdentity(activo.hash)).toEqual({
       droneId: activo.hash,
       displayName: 'Alfa',
-      base: { name: 'Base Norte', lat: -34.85, lon: -56.2 },
+      base: { name: 'Base Norte', lat: -34.85, lon: -56.2, aterrizajeLat: null, aterrizajeLon: null },
     });
     expect(getDroneIdentity(inactivo.hash)?.displayName).toBe('Bravo');
     expect(getDroneIdentity(borrado.hash)).toBeUndefined();
@@ -593,6 +603,31 @@ describe('store — alertas', () => {
     // alerta inexistente
     expect(decideAlert(9999, 'VALIDATED', 'op')).toBeUndefined();
   });
+
+  it('seguidaPor: null es "la sigue el que la creó", y solo devuelve la alerta cuando cambia', () => {
+    const a = createAlert('VEHICLE', 'd1', null, null, null);
+    expect(a.seguidaPor).toBeNull();
+    expect(seguidorDeAlerta(a)).toBe('d1');
+    // pasarla al creador no es un cambio
+    expect(fijarSeguidaPor(a.id, 'd1')).toBeUndefined();
+    const traspasada = fijarSeguidaPor(a.id, 'd2');
+    expect(traspasada?.seguidaPor).toBe('d2');
+    expect(seguidorDeAlerta(traspasada!)).toBe('d2');
+    expect(listAlerts()[0].seguidaPor).toBe('d2');
+    expect(fijarSeguidaPor(a.id, 'd2')).toBeUndefined();
+    // volver al creador guarda NULL, no el drone_id repetido
+    expect(fijarSeguidaPor(a.id, 'd1')?.seguidaPor).toBeNull();
+    expect(fijarSeguidaPor(9999, 'd1')).toBeUndefined();
+  });
+
+  it('las decisiones recientes son de las alertas que el dron SIGUE, no de las que creó', () => {
+    const a = createAlert('VEHICLE', 'd1', null, null, null);
+    fijarSeguidaPor(a.id, 'd2');
+    decideAlert(a.id, 'VALIDATED', 'op');
+    const desde = new Date(Date.now() - 60_000).toISOString();
+    expect(listDecisionsSince('d2', desde).map((d) => d.id)).toEqual([a.id]);
+    expect(listDecisionsSince('d1', desde)).toEqual([]);
+  });
 });
 
 // Lo que el hub le reenvía a un dron que se reconecta: las decisiones sobre SUS
@@ -745,8 +780,9 @@ describe('store — la base del dron sale del vínculo por FK', () => {
     const base = createBase({ name: 'Base Obelisco', lat: -34.6037, lon: -58.3816 }, 'admin1');
     const dron = createDrone({ displayName: 'Alfa', baseId: base.id }, 'admin1');
 
-    expect(dron.base).toEqual({ name: 'Base Obelisco', lat: -34.6037, lon: -58.3816 });
-    expect(getDroneIdentity(dron.hash)?.base).toEqual({ name: 'Base Obelisco', lat: -34.6037, lon: -58.3816 });
+    const obelisco = { name: 'Base Obelisco', lat: -34.6037, lon: -58.3816, aterrizajeLat: null, aterrizajeLon: null };
+    expect(dron.base).toEqual(obelisco);
+    expect(getDroneIdentity(dron.hash)?.base).toEqual(obelisco);
   });
 
   it('renombrar la base se ve en el dron sin tocar el dron', () => {

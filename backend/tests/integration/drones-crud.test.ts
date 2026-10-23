@@ -56,7 +56,7 @@ describe('integración — ABM de drones', () => {
     expect(r.body.controlledBy).toBeNull();
     expect(r.body.inventoryCode).toBe('INV-0042');
     expect(r.body.baseId).toBe(oeste.id);
-    expect(r.body.base).toEqual({ name: 'Base Oeste', lat: -34.85, lon: -56.21 });
+    expect(r.body.base).toEqual({ name: 'Base Oeste', lat: -34.85, lon: -56.21, aterrizajeLat: null, aterrizajeLon: null });
 
     // la consola se entera sin repollear
     const aviso = await operWs.waitFor((m) => m.type === 'drone_updated' && m.drone.hash === r.body.hash);
@@ -292,7 +292,7 @@ describe('integración — listado de drones', () => {
       active: true,
       deletedAt: null,
       baseId: expect.any(Number),
-      base: { name: 'Base Norte', lat: -34.8565, lon: -56.2075 },
+      base: { name: 'Base Norte', lat: -34.8565, lon: -56.2075, aterrizajeLat: null, aterrizajeLon: null },
       online: false,
       lastStatus: null,
       controlledBy: null,

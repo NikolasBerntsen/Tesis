@@ -133,7 +133,9 @@ export function limpiarBase() {
   // El orden importa: base_routes referencia a bases y a patrol_routes, y los
   // drones referencian a bases. Borrar al revés dispara la clave foránea.
   db.exec(
-    'DELETE FROM base_routes; DELETE FROM events; DELETE FROM alerts; DELETE FROM patrol_routes; ' +
+    'DELETE FROM relevo_refs; DELETE FROM relevos; DELETE FROM emergencia_fotos; DELETE FROM emergencia_refs; ' +
+      'DELETE FROM emergencias; ' +
+      'DELETE FROM base_routes; DELETE FROM events; DELETE FROM alerts; DELETE FROM patrol_routes; ' +
       'DELETE FROM drones; DELETE FROM bases; DELETE FROM users; DELETE FROM sqlite_sequence;',
   );
 }
