@@ -14,6 +14,7 @@ import com.tesis.dronepatrol.drone.DronEnCurso
 import com.tesis.dronepatrol.drone.DroneController
 import com.tesis.dronepatrol.model.PatrolRoute
 import com.tesis.dronepatrol.model.Waypoint
+import com.tesis.dronepatrol.patrol.AlmacenEnMemoria
 import java.net.ConnectException
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -57,6 +58,24 @@ internal class BancoDeOperacion(private val dron: DroneController) {
     private val crearComandoCentralDeLaApp = MainActivity.crearComandoCentral
     private val crearDeteccionDeLaApp = MainActivity.crearDeteccion
     private val relojDeLaSenialDeLaApp = MainActivity.relojDeLaSenial
+    private val crearAlmacenDeLaApp = MainActivity.crearAlmacenDeEmergencias
+    private val relojDeLaApp = MainActivity.reloj
+
+    /**
+     * Cuánto se adelanta el reloj de la patrulla (el del seguimiento y los
+     * relevos) sobre la hora de verdad. En cero es el de la app —las cajas de
+     * la detección, por ejemplo, vencen con la hora del sistema—; la prueba lo
+     * sube para saltar una cuenta regresiva sin esperarla.
+     */
+    @Volatile
+    var adelantoDelRelojMs = 0L
+
+    /**
+     * Dónde guarda la pantalla la cola de la emergencia: en memoria, para que
+     * una prueba no le deje una emergencia pendiente a la siguiente. Una prueba
+     * la puede llenar antes de abrir, como si la app se hubiera reiniciado.
+     */
+    val almacenDeEmergencias = AlmacenEnMemoria()
 
     /** Lo que contesta el Comando Central al pedirle las rutas cuando se abre la pantalla. */
     var rutas: List<PatrolRoute> = emptyList()
@@ -109,6 +128,8 @@ internal class BancoDeOperacion(private val dron: DroneController) {
                 .also { deteccion = it }
         }
         MainActivity.relojDeLaSenial = { relojDeLaSenialMs }
+        MainActivity.crearAlmacenDeEmergencias = { almacenDeEmergencias }
+        MainActivity.reloj = { System.currentTimeMillis() + adelantoDelRelojMs }
         val intent = Intent(aplicacion, MainActivity::class.java)
             .putExtra(MainActivity.EXTRA_DRONE_TOKEN, "token-de-prueba")
             .putExtra(MainActivity.EXTRA_DRONE_HASH, HASH)
@@ -155,6 +176,8 @@ internal class BancoDeOperacion(private val dron: DroneController) {
         MainActivity.crearComandoCentral = crearComandoCentralDeLaApp
         MainActivity.crearDeteccion = crearDeteccionDeLaApp
         MainActivity.relojDeLaSenial = relojDeLaSenialDeLaApp
+        MainActivity.crearAlmacenDeEmergencias = crearAlmacenDeLaApp
+        MainActivity.reloj = relojDeLaApp
     }
 }
 

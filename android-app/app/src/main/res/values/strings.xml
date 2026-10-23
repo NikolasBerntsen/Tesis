@@ -180,6 +180,20 @@
     <string name="main_confirmar_aterrizar_titulo">¿Aterrizar acá?</string>
     <string name="main_confirmar_aterrizar_texto">El dron desciende y aterriza en el lugar donde está ahora. Confirmá que abajo hay suelo firme y despejado.</string>
 
+    <string name="main_en_espera">En espera para relevos</string>
+    <string name="main_en_espera_ayuda">Prendelo después de revisar el dron y su zona de despegue: con él, el dron puede despegar solo para relevar a otro. Se apaga solo al despegar, al aterrizar, al cambiar la batería, si se pierde el dron o el Comando Central, al cerrar esta pantalla y a los 30 minutos.</string>
+    <string name="main_relevo_titulo">Despegue de relevo</string>
+    <string name="main_relevo_cuenta">Despega en %1$d s</string>
+    <string name="main_relevo_habilitando">Preparando el despegue: habilitando el mando virtual…</string>
+    <string name="main_relevo_esperando">Listo para despegar: espera que %1$s esté abajo</string>
+    <string name="main_relevo_detalle_seguimiento">Va a tomar el objetivo que sigue %1$s. Si alrededor del dron no está despejado, cancelá.</string>
+    <string name="main_relevo_detalle_patrulla">Va a seguir la ruta de %1$s. Si alrededor del dron no está despejado, cancelá.</string>
+    <string name="main_relevo_cancelar">Cancelar el despegue</string>
+    <string name="main_emergencia_titulo">Aterrizaje de emergencia</string>
+    <string name="main_emergencia_bajando">El dron está bajando en esta posición:</string>
+    <string name="main_emergencia_aterrizo">Última posición del dron, donde aterrizó:</string>
+    <string name="main_emergencia_posicion">%1$.6f, %2$.6f</string>
+
     <string name="main_aviso_despegando">Despegando: el dron sube a la altura de trabajo. No te acerques.</string>
     <string name="main_aviso_en_el_aire">A la altura de trabajo: empieza la ruta.</string>
     <string name="main_aviso_problema">%1$s</string>

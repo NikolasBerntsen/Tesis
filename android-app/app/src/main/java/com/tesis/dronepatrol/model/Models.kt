@@ -223,6 +223,13 @@ data class ObjetivoReportado(
     val vistoHaceMs: Long,
     /** `PENDING` o `VALIDATED`. */
     val decision: String,
+    /**
+     * Componentes norte y este de la velocidad (m/s), `0` con el objetivo
+     * quieto: con ellas B siembra su rastreador en un relevo (docs/PROTOCOLS.md
+     * §1, `target.vNorteMs/vEsteMs`). NaN no las manda (son opcionales).
+     */
+    val vNorteMs: Double = Double.NaN,
+    val vEsteMs: Double = Double.NaN,
 )
 
 data class DroneBase(val name: String, val lat: Double, val lon: Double)

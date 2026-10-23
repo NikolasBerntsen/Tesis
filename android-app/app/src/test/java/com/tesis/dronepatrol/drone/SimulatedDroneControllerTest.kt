@@ -18,7 +18,7 @@ import org.robolectric.annotation.Config
 /**
  * Pruebas de los modos HOLD/GOTO y del rumbo del simulador. Usan Robolectric
  * solo porque el video simulado dibuja con android.graphics; la lógica de vuelo
- * corre igual que en la JVM, con tiempos reales (tick de 500 ms, 12 m/s).
+ * corre igual que en la JVM, con tiempos reales (tick de 500 ms, 8 m/s).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
