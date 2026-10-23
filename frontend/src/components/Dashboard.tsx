@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { RastroObjetivo } from '../rastro';
-import type { Alert, Drone, DroneStatus } from '../types';
+import type { Alert, Drone, DroneStatus, Relevo } from '../types';
 import type { DecidirAlerta } from '../useDecisionDeAlerta';
 import AlertaEnCurso from './AlertaEnCurso';
 import CameraTile from './CameraTile';
@@ -11,6 +11,7 @@ import { EstadoVacio } from './EstadosDeVista';
 // Fijo y no `{}` en la firma: un objeto nuevo en cada render rehacía los
 // items del mapa en cada render, y el mapa los redibuja cuando cambian.
 const SIN_RASTROS: Record<string, RastroObjetivo> = {};
+const SIN_RELEVOS: readonly Relevo[] = [];
 
 export default function Dashboard({
   drones,
@@ -18,6 +19,7 @@ export default function Dashboard({
   frames,
   alerts,
   pendingAlerts,
+  relevos = SIN_RELEVOS,
   rastros = SIN_RASTROS,
   onDecidir,
   onOpenDrone,
@@ -28,6 +30,8 @@ export default function Dashboard({
   frames: Record<string, string>;
   alerts: Alert[];
   pendingAlerts: Record<string, number>;
+  /** Los relevos que conoce la consola: de acá salen las insignias de cada mosaico. */
+  relevos?: readonly Relevo[];
   /** Rastro del objetivo de cada dron que está sobre uno (ver rastro.ts). */
   rastros?: Record<string, RastroObjetivo>;
   /** Validar o descartar desde el tablero, con el mismo camino que la campana. */
@@ -129,6 +133,7 @@ export default function Dashboard({
                 status={statuses[d.droneId] ?? null}
                 frame={frames[d.droneId] ?? null}
                 pendingAlerts={pendingAlerts[d.droneId] ?? 0}
+                relevos={relevos}
                 onOpen={() => onOpenDrone(d.droneId)}
                 onRename={(name) => onRename(d.droneId, name)}
               />

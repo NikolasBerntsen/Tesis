@@ -1,4 +1,4 @@
-import { time } from '../format';
+import { etiquetaDeEvento, time } from '../format';
 import type { EventRow } from '../types';
 import { EsqueletoDeTabla, EstadoVacio } from './EstadosDeVista';
 
@@ -9,6 +9,13 @@ const HIGHLIGHT: Record<string, string> = {
   SIGNAL_LOST: 'bad',
   RTH_LOW_BATTERY: 'warn',
   RTH_SIGNAL_LOSS: 'warn',
+  // Un dron que bajó fuera de base es lo más grave que puede pasar en vuelo;
+  // un relevo que falla o que no encuentra dron deja un hueco en la guardia.
+  EMERGENCY_LANDING: 'bad',
+  EMERGENCY_LANDED: 'bad',
+  RELAY_FAILED: 'bad',
+  RELAY_UNAVAILABLE: 'warn',
+  RTH_DIVERTED: 'warn',
 };
 
 /**
@@ -67,7 +74,11 @@ export default function EventLog({
               <time className="muted mono" dateTime={e.ts}>
                 {time(e.ts)}
               </time>
-              <span className={`event-type mono ${HIGHLIGHT[e.type] ?? ''}`}>{e.type}</span>
+              {/* El código se queda (es lo que se busca en el Registro); el
+                  rótulo, para los que la consola conoce, va en el globo. */}
+              <span className={`event-type mono ${HIGHLIGHT[e.type] ?? ''}`} title={etiquetaDeEvento(e.type) ?? undefined}>
+                {e.type}
+              </span>
               <span>{e.message}</span>
             </button>
           );

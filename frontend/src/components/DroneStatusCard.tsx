@@ -1,5 +1,7 @@
 import {
   batteryClass,
+  duracion,
+  formatDistance,
   posicionDelDron,
   signalClass,
   sobreObjetivo,
@@ -7,7 +9,29 @@ import {
   textoSinGps,
   waypointLabel,
 } from '../format';
-import type { Base, DroneStatus } from '../types';
+import type { Autonomia, Base, DroneStatus } from '../types';
+
+function esNumero(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v);
+}
+
+/**
+ * Lo que el dron calcula que le cuesta volver (`status.autonomia`), en
+ * renglones. Es a título informativo (el que decide volver es el dron), pero
+ * explica por qué un dron con 40 % se vuelve: lejos de casa, 40 % puede ser lo
+ * justo. Cada dato que no vino no ocupa renglón.
+ */
+function datosDeAutonomia(a: Autonomia | undefined): { rotulo: string; valor: string }[] {
+  if (!a) return [];
+  const datos: { rotulo: string; valor: string }[] = [];
+  if (esNumero(a.pctParaVolver)) datos.push({ rotulo: 'Batería para volver', valor: `${Math.round(a.pctParaVolver)}%` });
+  if (esNumero(a.pctParaAterrizar)) {
+    datos.push({ rotulo: 'Batería para aterrizar', valor: `${Math.round(a.pctParaAterrizar)}%` });
+  }
+  if (esNumero(a.alcanceM)) datos.push({ rotulo: 'Alcance', valor: formatDistance(a.alcanceM) });
+  if (esNumero(a.segundosParaVolver)) datos.push({ rotulo: 'Tiempo para volver', valor: duracion(a.segundosParaVolver) });
+  return datos;
+}
 
 /**
  * Hairline con relleno dorado en lugar de una barra de progreso: el nivel se
@@ -70,6 +94,7 @@ export default function DroneStatusCard({
   // es lo que explica que el dron no aparezca en el mapa y que las flechas no
   // anden. Las coordenadas en sí quedan en el segundo nivel.
   const detalleDeVuelo = [vuelo, posicion ? null : 'sin GPS'].filter(Boolean).join(' · ');
+  const autonomia = datosDeAutonomia(status.autonomia);
   const recorrido = status.waypointTotal
     ? ((status.waypointIndex + 1) / status.waypointTotal) * 100
     : 0;
@@ -179,6 +204,12 @@ export default function DroneStatusCard({
               <strong className="mono">{status.flightMode}</strong>
             </div>
           )}
+          {autonomia.map((d) => (
+            <div key={d.rotulo}>
+              <span>{d.rotulo}</span>
+              <strong>{d.valor}</strong>
+            </div>
+          ))}
         </div>
       </details>
 

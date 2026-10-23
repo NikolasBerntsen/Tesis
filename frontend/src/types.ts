@@ -18,6 +18,13 @@ export interface BaseAsset {
   deleted: boolean;
   /** Fecha ISO de esa baja; queda como dato de auditoría. */
   deletedAt: string | null;
+  /**
+   * Punto de aterrizaje para visitantes (RELEVOS §0): dónde baja un dron que se
+   * desvía desde otra base. Van juntos, los dos números o los dos `null`, a
+   * entre 10 y 50 m de la base. Opcionales porque un backend viejo no los manda.
+   */
+  aterrizajeLat?: number | null;
+  aterrizajeLon?: number | null;
 }
 
 /**
@@ -48,6 +55,36 @@ export interface ObjetivoEnSeguimiento {
   lastSeenMs: number;
   /** `PENDING` mientras nadie decidió la alerta; `VALIDATED` si un operador la confirmó. */
   decision: 'PENDING' | 'VALIDATED';
+  /**
+   * Componentes norte y este de la velocidad, en m/s. Los usa el relevo de un
+   * seguimiento; una app vieja no los manda y la consola no los necesita.
+   */
+  vNorteMs?: number;
+  vEsteMs?: number;
+}
+
+/**
+ * Si el dron está en espera, disponible o participando de un relevo
+ * (`status.relevo`, §1 del contrato). El hub lo valida antes de reenviarlo: si
+ * no pasa, el campo no viene, igual que con una app vieja.
+ */
+export interface RelevoDelDron {
+  /** El interruptor «En espera para relevos» del teléfono está prendido. */
+  enEspera: boolean;
+  /** Además de en espera, en condiciones de salir ya (batería, GPS, en su base…). */
+  disponible: boolean;
+  relayId: number | null;
+  /** `origen` es el que pidió el relevo (A); `relevo`, el que va (B). */
+  rol: 'origen' | 'relevo' | null;
+  fase: string | null;
+}
+
+/** Lo que el dron calcula que le cuesta volver y aterrizar (`status.autonomia`). */
+export interface Autonomia {
+  pctParaVolver: number | null;
+  pctParaAterrizar: number | null;
+  alcanceM: number | null;
+  segundosParaVolver: number | null;
 }
 
 export interface DroneStatus {
@@ -92,6 +129,10 @@ export interface DroneStatus {
    * vista de pilotaje supone -30°.
    */
   gimbalPitch?: number;
+  /** En espera, disponible o en un relevo. Sin el campo, ninguna de las tres. */
+  relevo?: RelevoDelDron;
+  /** Sin el objeto, o con todo en `null`, el dron no informa su autonomía. */
+  autonomia?: Autonomia;
 }
 
 /**
@@ -214,7 +255,92 @@ export interface Alert {
   snapshot: string | null;
   decided_by: string | null;
   decided_at: string | null;
+  /**
+   * El dron que sigue al objetivo ahora, o `null` si es el que la creó. Cambia
+   * en el traspaso de un relevo (RELEVOS §3.6); un backend viejo no lo manda.
+   */
+  seguidaPor?: string | null;
 }
+
+/** Un dron como lo nombra un relevo. */
+export interface DronDelRelevo {
+  droneId: string;
+  displayName: string;
+}
+
+/**
+ * Un relevo entre dos drones, como lo devuelven `relay_updated` y
+ * `GET /api/relevos` (§3 del contrato). El hub es la única fuente de verdad: la
+ * consola lo toma por `id` y no lo revisa.
+ */
+export interface Relevo {
+  id: number;
+  motivo: 'patrulla' | 'seguimiento' | string;
+  /** `RESERVADO` … `FALLIDO`; un estado que la consola no conoce se muestra tal cual. */
+  estado: string;
+  motivoFin: string | null;
+  /** A, el que pidió el relevo. */
+  origen: DronDelRelevo;
+  /** B, el que va; `null` mientras no hay candidato. */
+  relevo: DronDelRelevo | null;
+  baseId: number | null;
+  alertId: number | null;
+  routeId: number | null;
+  fromIndex: number | null;
+  etaS: number | null;
+  rechazados: string[];
+  venceEn: string | null;
+  creadoEn: string;
+  actualizadoEn: string;
+}
+
+/**
+ * Un aterrizaje de emergencia (RELEVOS §5), como lo devuelven
+ * `emergency_updated` y `GET /api/emergencias`. Queda abierto hasta que alguien
+ * marca el dron como recuperado.
+ */
+export interface Emergencia {
+  id: number;
+  droneId: string;
+  displayName: string;
+  motivo: 'autonomia' | 'bateria_critica_dji' | string;
+  /** Dónde estaba al disparar el protocolo; `null` sin GPS. */
+  lat: number | null;
+  lon: number | null;
+  alt: number;
+  bateria: number;
+  /** El reloj del teléfono al disparar: es un dato, no ordena nada. */
+  ts: number;
+  /** Hora del hub al abrirla: la que se muestra. */
+  creadaEn: string;
+  aterrizadaEn: string | null;
+  /** La última posición al tocar tierra: la que hay que ir a buscar. */
+  aterrizajeLat: number | null;
+  aterrizajeLon: number | null;
+  aterrizajeAlt: number | null;
+  recuperadaEn: string | null;
+  recuperadaPor: string | null;
+  /** Cuántas fotos llegaron. */
+  fotos: number;
+}
+
+/** Una foto del protocolo de última ubicación. */
+export interface FotoDeEmergencia {
+  seq: number;
+  tipo: 'oblicua' | 'cenital' | 'panoramica' | string;
+  /** Hacia dónde miraba la cámara, 0..360°. */
+  rumbo: number;
+  /** Inclinación de la cámara: 0 es el horizonte, -90 derecho al suelo. */
+  inclinacion: number;
+  lat: number | null;
+  lon: number | null;
+  alt: number;
+  ts: number;
+  jpegBase64: string;
+}
+
+/** `GET /api/emergencias/:id`: la emergencia con sus fotos, ordenadas por `seq`. */
+export type EmergenciaConFotos = Omit<Emergencia, 'fotos'> & { fotos: FotoDeEmergencia[] };
 
 export interface EventRow {
   id: number;
@@ -274,12 +400,23 @@ export interface MetaAlerta {
   ts: string | null;
 }
 
+/** Emergencia referenciada (`meta.emergencia`); el resto se trae con GET /api/emergencias/:id. */
+export interface MetaEmergencia {
+  id: number;
+  motivo: string;
+  lat: number | null;
+  lon: number | null;
+  /** `creadaEn` de la emergencia. */
+  ts: string | null;
+}
+
 /** El `meta` de un EventRow ya parseado y saneado. */
 export interface MetaEvento {
   antes?: CamposMeta;
   despues?: CamposMeta;
   ubicacion?: MetaUbicacion;
   alerta?: MetaAlerta;
+  emergencia?: MetaEmergencia;
   drone?: MetaDron;
   detalle?: CamposMeta;
   /** Quién ejecutó la acción (emparejamiento, decisión de alerta). */

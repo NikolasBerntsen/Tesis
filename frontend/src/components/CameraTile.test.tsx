@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import CameraTile from './CameraTile';
-import { makeDrone, makeStatus } from '../test/fixtures';
+import { makeDrone, makeRelevo, makeStatus } from '../test/fixtures';
 
 function renderTile(props: Partial<Parameters<typeof CameraTile>[0]> = {}) {
   const base = {
@@ -196,5 +196,36 @@ describe('CameraTile', () => {
 
     await userEvent.click(renombrar);
     expect(props.onOpen).not.toHaveBeenCalled();
+  });
+
+  describe('relevos y emergencias (RELEVOS §6)', () => {
+    it('un aterrizaje de emergencia tapa el video antes que la señal o la batería, y la esquina va en óxido', () => {
+      renderTile({ status: makeStatus({ state: 'ATERRIZAJE_EMERGENCIA', signal: 'LOST', battery: 8, flying: false }) });
+      expect(screen.getByText('ATERRIZAJE DE EMERGENCIA')).toBeInTheDocument();
+      expect(screen.queryByText('SEÑAL PERDIDA')).not.toBeInTheDocument();
+      expect(screen.getByText('EMERGENCIA')).toHaveClass('tile-esquina', 'esquina-roja');
+      expect(screen.getByText('Aterrizaje de emergencia')).toBeInTheDocument();
+    });
+
+    it('relevando va en oro, como el que está sobre un objetivo', () => {
+      renderTile({ status: makeStatus({ state: 'RELEVANDO' }) });
+      expect(screen.getByText('RELEVANDO')).toHaveClass('esquina-oro');
+      expect(screen.getByText('Relevando a otro dron')).toBeInTheDocument();
+    });
+
+    it('las insignias de relevo van en la ficha del mosaico', () => {
+      renderTile({
+        drone: makeDrone({ droneId: 'a1', displayName: 'Alfa' }),
+        status: makeStatus({ droneId: 'a1' }),
+        relevos: [makeRelevo()],
+      });
+      expect(screen.getByText('Relevo en camino: Bravo')).toHaveClass('badge', 'oro');
+      expect(screen.getByTestId('insignias-relevo').closest('.tile-info')).not.toBeNull();
+    });
+
+    it('sin relevos ni espera no hay insignias', () => {
+      renderTile();
+      expect(screen.queryByTestId('insignias-relevo')).not.toBeInTheDocument();
+    });
   });
 });

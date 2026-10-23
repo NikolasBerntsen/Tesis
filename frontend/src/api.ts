@@ -3,12 +3,16 @@ import type {
   PatrolRoute,
   CamposMeta,
   Drone,
+  Emergencia,
+  EmergenciaConFotos,
   EventRow,
   MetaAlerta,
   MetaDron,
+  MetaEmergencia,
   MetaEvento,
   MetaUbicacion,
   PaginaLogs,
+  Relevo,
   RolConsola,
   TamanioPagina,
   UserView,
@@ -204,6 +208,46 @@ export function rutasDeBase(baseId: number): Promise<PatrolRoute[]> {
   return api<PatrolRoute[]>(`/bases/${baseId}/routes`);
 }
 
+// ---- Relevos y emergencias ----
+// La consola los pide al montar y en cada reconexión del socket (§3 del
+// contrato: no llegan solos al conectarse), y de ahí en más los mantiene con
+// `relay_updated` y `emergency_updated`.
+
+/** Los relevos activos (RESERVADO … SIN_RELEVO). Operador o más. */
+export function traerRelevosActivos(): Promise<Relevo[]> {
+  return api<Relevo[]>(`/relevos${armarQuery({ activos: 1 })}`);
+}
+
+/** Las emergencias que nadie marcó recuperadas. Operador de campo o más. */
+export function traerEmergenciasAbiertas(): Promise<Emergencia[]> {
+  return api<Emergencia[]>(`/emergencias${armarQuery({ abiertas: 1 })}`);
+}
+
+/** Una emergencia con sus fotos, ordenadas por `seq`. */
+export function traerEmergencia(id: number): Promise<EmergenciaConFotos> {
+  return api<EmergenciaConFotos>(`/emergencias/${id}`);
+}
+
+/** Cierra la emergencia: el dron ya está en manos del equipo. Devuelve la emergencia sin fotos. */
+export function marcarEmergenciaRecuperada(id: number): Promise<Emergencia> {
+  return api<Emergencia>(`/emergencias/${id}/recuperada`, { method: 'POST' });
+}
+
+/**
+ * Por qué no se pudo marcar recuperada, dicho para el operador. El 409 es el
+ * caso esperable: dos personas del equipo la marcan a la vez, y al segundo le
+ * sirve saber que ya está hecho, no el texto del backend.
+ */
+export function motivoDelRechazoDeRecuperacion(e: unknown): string {
+  if (e instanceof ErrorDeApi) {
+    if (e.status === 409) return 'Otra persona ya la marcó como recuperada: la ficha se actualiza sola.';
+    if (e.status === 404) return 'La emergencia ya no existe.';
+    if (e.status === 403) return 'Tu usuario no puede marcar emergencias como recuperadas.';
+  }
+  const detalle = e instanceof Error ? e.message : String(e);
+  return `No se pudo marcar como recuperada: ${detalle}`;
+}
+
 /**
  * Distancia en metros entre dos coordenadas (haversine). La consola la necesita
  * para ordenar las rutas por cercanía y para avisar cuando el primer nodo de
@@ -271,6 +315,20 @@ function leerAlerta(valor: unknown): MetaAlerta | undefined {
   };
 }
 
+function leerEmergencia(valor: unknown): MetaEmergencia | undefined {
+  if (!esObjeto(valor)) return undefined;
+  const id = numero(valor.id);
+  // Como la alerta: sin id no hay ficha que traer.
+  if (id === null) return undefined;
+  return {
+    id,
+    motivo: texto(valor.motivo) ?? '',
+    lat: numero(valor.lat),
+    lon: numero(valor.lon),
+    ts: texto(valor.ts) ?? null,
+  };
+}
+
 function leerDron(valor: unknown): MetaDron | undefined {
   if (!esObjeto(valor)) return undefined;
   const hash = texto(valor.hash);
@@ -298,6 +356,7 @@ export function parsearMeta(meta: EventRow['meta']): MetaEvento {
     despues: camposPlanos(crudo.despues),
     ubicacion: leerUbicacion(crudo.ubicacion),
     alerta: leerAlerta(crudo.alerta),
+    emergencia: leerEmergencia(crudo.emergencia),
     drone: leerDron(crudo.drone),
     detalle: camposPlanos(crudo.detalle),
     por: texto(crudo.por),

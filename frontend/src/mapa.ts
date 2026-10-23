@@ -287,6 +287,30 @@ export function iconoDeDeteccion(): L.DivIcon {
   return gota;
 }
 
+let senial: L.DivIcon | null = null;
+
+/**
+ * Dónde quedó un dron que aterrizó de emergencia: una gota de óxido con un
+ * signo de admiración. Es la gota de la detección (un lugar, no una presencia)
+ * con la marca de lo que no puede esperar, porque ahí hay que mandar a alguien.
+ */
+export function iconoDeEmergencia(): L.DivIcon {
+  if (!senial) {
+    senial = L.divIcon({
+      className: 'emergencia-icon',
+      html: `<svg width="30" height="36" viewBox="0 0 30 36" xmlns="http://www.w3.org/2000/svg">
+      <path d="M15 35 9 23h12z" fill="${PALETA.oxido}" stroke="${PALETA.marfil}" stroke-width="1.6" stroke-linejoin="round"/>
+      <circle cx="15" cy="13.5" r="11" fill="${PALETA.oxido}" stroke="${PALETA.marfil}" stroke-width="2"/>
+      <path d="M15 7.6v7.2" stroke="${PALETA.marfil}" stroke-width="2.6" stroke-linecap="round"/>
+      <circle cx="15" cy="19.3" r="1.7" fill="${PALETA.marfil}"/>
+    </svg>`,
+      iconSize: [30, 36],
+      iconAnchor: [15, 34],
+    });
+  }
+  return senial;
+}
+
 /**
  * Estado del conmutador atado a un mapa que ya existe.
  *

@@ -34,6 +34,39 @@ describe('CampanaDeAlertas', () => {
     expect(screen.getByText(/sin alertas pendientes/i)).toBeInTheDocument();
   });
 
+  // RELEVOS §3.6: después de un traspaso, la alerta es del que la sigue.
+  it('una alerta relevada lleva al dron que la sigue, pendiente o ya decidida', async () => {
+    const props = montar([
+      makeAlert({ id: 9, drone_id: 'd1', seguidaPor: 'd2' }),
+      makeAlert({ id: 8, drone_id: 'd1', seguidaPor: 'd2', status: 'VALIDATED' }),
+    ]);
+    await userEvent.click(screen.getByRole('button', { name: /1 pendiente/ }));
+    const panel = screen.getByRole('region', { name: /alertas de detección/i });
+    await userEvent.click(within(panel).getByRole('button', { name: 'Bravo' }));
+    expect(props.onVerDron).toHaveBeenCalledWith('d2');
+
+    await userEvent.click(screen.getByRole('button', { name: /1 pendiente/ }));
+    expect(within(screen.getByRole('region', { name: /alertas de detección/i })).getByText(/· Bravo/)).toBeInTheDocument();
+  });
+
+  it('un tipo que la consola no conoce se lee tal cual, pendiente o decidido', async () => {
+    montar([
+      makeAlert({ id: 1, type: 'ANIMAL' as 'PERSON' }),
+      makeAlert({ id: 2, type: 'ANIMAL' as 'PERSON', status: 'DISMISSED' }),
+    ]);
+    await userEvent.click(screen.getByRole('button', { name: /1 pendiente/ }));
+    const panel = screen.getByRole('region', { name: /alertas de detección/i });
+    expect(within(panel).getByText('ANIMAL')).toHaveClass('badge', 'animal');
+    expect(within(panel).getByText(/ANIMAL · Alfa/)).toBeInTheDocument();
+  });
+
+  it('una alerta sin dron no ofrece ir a ninguna vista', async () => {
+    montar([makeAlert({ id: 3, drone_id: null })]);
+    await userEvent.click(screen.getByRole('button', { name: /1 pendiente/ }));
+    const panel = screen.getByRole('region', { name: /alertas de detección/i });
+    expect(within(panel).getByRole('button', { name: 'Dron desconocido' })).toBeDisabled();
+  });
+
   it('lista la pendiente con su tipo y el nombre del dron, no el hash', async () => {
     montar([makeAlert({ id: 9, type: 'VEHICLE', drone_id: 'd2' })]);
     await userEvent.click(screen.getByRole('button', { name: /1 pendiente/ }));

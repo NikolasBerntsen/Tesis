@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, type FocusEvent, type KeyboardEvent } from 'react';
 import { useAlertasEnVivo } from '../alertasEnVivo';
 import { time } from '../format';
+import { duenioDeLaAlerta } from '../relevos';
 import type { Alert, Drone } from '../types';
 import { useCarruselDeAlertas } from '../useCarruselDeAlertas';
 import { useDecisionDeAlerta, type DecidirAlerta } from '../useDecisionDeAlerta';
@@ -104,7 +105,10 @@ export default function AlertaEnCurso({
   const captura = alerta.snapshot ? (
     <img className="snapshot" src={`data:image/jpeg;base64,${alerta.snapshot}`} alt="Captura que disparó la detección" />
   ) : null;
-  const dron = drones?.find((d) => d.droneId === alerta.drone_id) ?? null;
+  // El dron al que lleva el nombre es el que sigue al objetivo ahora: después
+  // de un relevo, el video que sirve para decidir es el suyo.
+  const duenio = duenioDeLaAlerta(alerta);
+  const dron = drones?.find((d) => d.droneId === duenio) ?? null;
 
   function alTeclear(ev: KeyboardEvent<HTMLElement>) {
     // Con modificadores son atajos del navegador (Alt+← es "atrás"): no se tocan.

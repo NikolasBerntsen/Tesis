@@ -14,9 +14,22 @@ import type { ObjetivoEnSeguimiento } from '../types';
 /**
  * Las coordenadas del objetivo con su botón de copiar. Es el dato que el
  * operador le pasa al equipo de tierra, y dictarlas o retiparlas de la pantalla
- * es la forma más rápida de mandar a alguien a la cuadra equivocada.
+ * es la forma más rápida de mandar a alguien a la cuadra equivocada. La ficha
+ * de un aterrizaje de emergencia la usa igual, con su propio rótulo: ahí lo que
+ * se copia es dónde quedó el dron.
  */
-export function CoordenadasCopiables({ lat, lon }: { lat: number; lon: number }) {
+export function CoordenadasCopiables({
+  lat,
+  lon,
+  etiqueta = 'Copiar las coordenadas del objetivo',
+  testId = 'coordenadas-objetivo',
+}: {
+  lat: number;
+  lon: number;
+  /** El nombre accesible del botón: qué coordenadas se copian. */
+  etiqueta?: string;
+  testId?: string;
+}) {
   const [resultado, setResultado] = useState<'copiado' | 'fallo' | null>(null);
   const temporizador = useRef<ReturnType<typeof setTimeout>>();
   useEffect(() => () => clearTimeout(temporizador.current), []);
@@ -38,8 +51,8 @@ export function CoordenadasCopiables({ lat, lon }: { lat: number; lon: number })
   return (
     <>
       <span className="hash">
-        <span data-testid="coordenadas-objetivo">{texto}</span>
-        <button type="button" onClick={copiar} aria-label="Copiar las coordenadas del objetivo">
+        <span data-testid={testId}>{texto}</span>
+        <button type="button" onClick={copiar} aria-label={etiqueta}>
           {resultado === 'copiado' ? 'Copiado' : 'Copiar'}
         </button>
       </span>

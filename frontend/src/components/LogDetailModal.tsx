@@ -1,4 +1,5 @@
 import { useId } from 'react';
+import { etiquetaDeEvento } from '../format';
 import type { EventRow } from '../types';
 import DetalleDeEvento from './DetalleDeEvento';
 import IconoCerrar from './IconoCerrar';
@@ -17,6 +18,7 @@ const CATEGORIA: Record<EventRow['category'], string> = {
  */
 export default function LogDetailModal({ fila, onCerrar }: { fila: EventRow; onCerrar: () => void }) {
   const idTitulo = useId();
+  const etiqueta = etiquetaDeEvento(fila.type);
 
   return (
     <Modal etiquetadoPor={idTitulo} onCerrar={onCerrar}>
@@ -27,6 +29,8 @@ export default function LogDetailModal({ fila, onCerrar }: { fila: EventRow; onC
           </h2>
           <p className="modal-subtitulo">
             <span className={`cat-badge cat-${fila.category}`}>{CATEGORIA[fila.category]}</span>{' '}
+            {/* El rótulo de los tipos que la consola conoce, delante del código. */}
+            {etiqueta && <span>{`${etiqueta} · `}</span>}
             <span className="mono">{fila.type}</span>
           </p>
         </div>

@@ -1,11 +1,24 @@
 import L from 'leaflet';
 import { Fragment, useEffect, useMemo, useRef } from 'react';
 import { parsearMeta } from '../api';
-import { coordenadasODato, fechaHoraLarga, hashCorto } from '../format';
+import { MOTIVO_DE_EMERGENCIA } from '../emergencias';
+import { coordenadasODato, duracion, fechaHoraLarga, hashCorto } from '../format';
 import { useFondo, vestirAtribucion } from '../mapa';
+import {
+  ESTADO_DEL_RELEVO,
+  MOTIVO_DE_FIN,
+  MOTIVO_DEL_DESVIO,
+  MOTIVO_DEL_DRON_DE_RELEVO,
+  MOTIVO_DEL_RELEVO,
+  estadoDelRelevo,
+  motivoDeFin,
+  tonoDelEstado,
+} from '../relevos';
+import { useRelevosYEmergencias } from '../relevosYEmergencias';
 import type { CamposMeta, EventRow, MetaAlerta, MetaDron, MetaUbicacion, ValorMeta } from '../types';
 import ConmutadorDeFondo from './ConmutadorDeFondo';
 import DetalleDeAlerta from './DetalleDeAlerta';
+import DetalleDeEmergencia from './DetalleDeEmergencia';
 
 /** Rótulos de los campos que viajan en `antes`/`despues`/`detalle`. */
 const CAMPO: Record<string, string> = {
@@ -33,14 +46,33 @@ const CAMPO: Record<string, string> = {
   motivo: 'Motivo',
   teniaElControl: 'Tenía el control',
   forzado: 'Forzado',
+  // Relevos, desvíos y emergencias (§7 del contrato).
+  relevoId: 'Relevo',
+  motivoFin: 'Cómo terminó',
+  origen: 'Pidió el relevo',
+  relevo: 'Dron de relevo',
+  motivoDeB: 'Motivo del dron de relevo',
+  baseId: 'Base (id)',
+  alt: 'Altura',
+  bateria: 'Batería',
 };
+
+/**
+ * Claves que viajan en `detalle` para otra cosa que leerlas: `relevoHash` es
+ * el id del dron de relevo, para filtrar el registro por él, y al lado de su
+ * nombre sería un hash largo que nadie reconoce.
+ */
+const CLAVES_OCULTAS = new Set(['relevoHash']);
+
+/** La unidad de los números que la tienen, para no leer "38" a secas. */
+const UNIDAD: Record<string, string> = { alt: 'm', bateria: '%' };
 
 /**
  * Valores que son enumeraciones del backend. Se traducen sólo en las claves que
  * de verdad guardan una enumeración: un `decidedBy` puede valer "admin" y ahí
  * "admin" es el nombre de una persona, no el rol.
  */
-const CLAVES_ENUMERADAS = new Set(['role', 'rol', 'estado', 'status', 'decision']);
+const CLAVES_ENUMERADAS = new Set(['role', 'rol', 'estado', 'status', 'decision', 'motivo', 'motivoFin', 'motivoDeB']);
 const VALOR_ENUMERADO: Record<string, string> = {
   field_operator: 'Operador de campo',
   operator: 'Operador',
@@ -50,6 +82,14 @@ const VALOR_ENUMERADO: Record<string, string> = {
   PENDING: 'Pendiente',
   VALIDATED: 'Validada',
   DISMISSED: 'Descartada',
+  // Un `motivo` libre (el de soltar el control, el de cerrar la sesión de
+  // campo) no está en esta lista y pasa tal cual.
+  ...ESTADO_DEL_RELEVO,
+  ...MOTIVO_DE_FIN,
+  ...MOTIVO_DE_EMERGENCIA,
+  ...MOTIVO_DEL_RELEVO,
+  ...MOTIVO_DEL_DESVIO,
+  ...MOTIVO_DEL_DRON_DE_RELEVO,
 };
 
 /** `decidedAt`, `deletedAt` y compañía llegan en ISO: no son para leer así. */
@@ -62,7 +102,7 @@ function etiquetaCampo(clave: string): string {
 function valorLegible(clave: string, valor: ValorMeta | undefined): string {
   if (valor === undefined || valor === null || valor === '') return '—';
   if (typeof valor === 'boolean') return valor ? 'Sí' : 'No';
-  if (typeof valor === 'number') return String(valor);
+  if (typeof valor === 'number') return UNIDAD[clave] ? `${valor} ${UNIDAD[clave]}` : String(valor);
   // Las columnas comparadas son angostas: ahí la fecha va corta.
   if (MARCA_ISO.test(valor)) return fechaHoraLarga(valor, 'short');
   return CLAVES_ENUMERADAS.has(clave) ? (VALOR_ENUMERADO[valor] ?? valor) : valor;
@@ -181,12 +221,14 @@ function MiniMapa({ ubicacion }: Readonly<{ ubicacion: MetaUbicacion }>) {
 function ListaDatos({ campos }: Readonly<{ campos: CamposMeta }>) {
   return (
     <dl className="datos">
-      {Object.entries(campos).map(([clave, valor]) => (
-        <Fragment key={clave}>
-          <dt>{etiquetaCampo(clave)}</dt>
-          <dd>{valorLegible(clave, valor)}</dd>
-        </Fragment>
-      ))}
+      {Object.entries(campos)
+        .filter(([clave]) => !CLAVES_OCULTAS.has(clave))
+        .map(([clave, valor]) => (
+          <Fragment key={clave}>
+            <dt>{etiquetaCampo(clave)}</dt>
+            <dd>{valorLegible(clave, valor)}</dd>
+          </Fragment>
+        ))}
     </dl>
   );
 }
@@ -250,6 +292,41 @@ function Comparacion({ antes, despues }: Readonly<{ antes?: CamposMeta; despues?
   );
 }
 
+/**
+ * Cómo está AHORA el relevo que nombra un evento, si la consola lo sigue: el
+ * evento dice en qué estado quedó en ese momento, y el que lo abre casi
+ * siempre quiere saber en qué terminó. Si la consola no lo conoce (un relevo
+ * de otra guardia), no hay nada que agregar a lo que guardó el evento.
+ */
+function RelevoAhora({ relevoId }: Readonly<{ relevoId: number }>) {
+  const { relevos } = useRelevosYEmergencias();
+  const relevo = relevos.find((r) => r.id === relevoId);
+  if (!relevo) return null;
+  const fin = motivoDeFin(relevo.motivoFin);
+  return (
+    <>
+      <h3 className="etiqueta">{`Relevo #${relevo.id} ahora`}</h3>
+      <dl className="datos" data-testid="relevo-ahora">
+        <dt>Estado</dt>
+        <dd aria-live="polite">
+          <span className={`estado ${tonoDelEstado(relevo.estado)}`}>{estadoDelRelevo(relevo.estado)}</span>
+          {fin && ` · ${fin}`}
+        </dd>
+        <dt>Pidió el relevo</dt>
+        <dd>{relevo.origen.displayName}</dd>
+        <dt>Dron de relevo</dt>
+        <dd>{relevo.relevo?.displayName ?? 'Sin candidato'}</dd>
+        {relevo.etaS !== null && relevo.estado === 'EN_CAMINO' && (
+          <>
+            <dt>Llega en</dt>
+            <dd>{duracion(relevo.etaS)}</dd>
+          </>
+        )}
+      </dl>
+    </>
+  );
+}
+
 function FichaDron({ drone }: Readonly<{ drone: MetaDron }>) {
   return (
     <>
@@ -289,6 +366,7 @@ export default function DetalleDeEvento({ fila, onIrAlVideo }: Readonly<{ fila: 
   // esto, cada render del padre reconstruía el mapa entero.
   const meta = useMemo(() => parsearMeta(fila.meta), [fila.meta]);
   const alerta = alertaDelEvento(fila, meta);
+  const relevoId = meta.detalle?.relevoId;
 
   // El origen de los eventos de dron es el hash: se muestra el nombre, que es
   // lo único que un humano puede reconocer.
@@ -325,7 +403,9 @@ export default function DetalleDeEvento({ fila, onIrAlVideo }: Readonly<{ fila: 
 
       {(meta.antes || meta.despues) && <Comparacion antes={meta.antes} despues={meta.despues} />}
 
-      {meta.ubicacion && (
+      {/* La ficha de una emergencia trae su propio mapa, con la misma
+          posición: dos mapas del mismo punto, uno arriba del otro, confunden. */}
+      {meta.ubicacion && !meta.emergencia && (
         <>
           <h3 className="etiqueta">Ubicación registrada</h3>
           <MiniMapa ubicacion={meta.ubicacion} />
@@ -344,7 +424,13 @@ export default function DetalleDeEvento({ fila, onIrAlVideo }: Readonly<{ fila: 
         />
       )}
 
-      {meta.drone && !alerta && <FichaDron drone={meta.drone} />}
+      {/* La emergencia entera, como en su propio pop-up: fotos, mapa,
+          coordenadas y «Marcar como recuperado». */}
+      {meta.emergencia && (
+        <DetalleDeEmergencia key={meta.emergencia.id} emergenciaId={meta.emergencia.id} referencia={meta.emergencia} />
+      )}
+
+      {meta.drone && !alerta && !meta.emergencia && <FichaDron drone={meta.drone} />}
 
       {meta.detalle && (
         <>
@@ -352,6 +438,9 @@ export default function DetalleDeEvento({ fila, onIrAlVideo }: Readonly<{ fila: 
           <ListaDatos campos={meta.detalle} />
         </>
       )}
+
+      {/* Después del detalle: primero lo que guardó el evento, después cómo sigue. */}
+      {typeof relevoId === 'number' && <RelevoAhora relevoId={relevoId} />}
     </>
   );
 }

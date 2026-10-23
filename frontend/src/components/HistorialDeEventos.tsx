@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { api } from '../api';
-import { fechaYHora } from '../format';
+import { api, parsearMeta } from '../api';
+import { etiquetaDeEvento, fechaYHora } from '../format';
 import type { EventRow } from '../types';
 import DetalleDeEvento from './DetalleDeEvento';
 import EventLog from './EventLog';
@@ -12,6 +12,16 @@ export const EVENTOS_DEL_HISTORIAL = 100;
 
 /** Cuántos se ven por página: veinte filas entran sin scrollear en una pantalla de escritorio. */
 export const EVENTOS_POR_PAGINA = 20;
+
+/**
+ * Si un evento es de este dron. Los de un relevo quedan anotados a nombre del
+ * que lo pidió (§7 del contrato), pero también son la historia del que fue: el
+ * hub deja su id en `detalle.relevoHash` justamente para encontrarlos.
+ */
+function esDelDron(evento: EventRow, droneId: string): boolean {
+  if (evento.drone_id === droneId) return true;
+  return evento.type.startsWith('RELAY_') && parsearMeta(evento.meta).detalle?.relevoHash === droneId;
+}
 
 /**
  * El historial de eventos de un dron, en un pop-up. Antes era una lista suelta
@@ -73,7 +83,7 @@ export default function HistorialDeEventos({
   // cien, que es lo que promete el título.
   const eventos = useMemo(() => {
     const conocidos = new Set(historia.map((e) => e.id));
-    const frescos = liveEvents.filter((e) => e.drone_id === droneId && !conocidos.has(e.id));
+    const frescos = liveEvents.filter((e) => esDelDron(e, droneId) && !conocidos.has(e.id));
     const todos = [...frescos, ...historia];
     todos.sort((a, b) => b.id - a.id);
     return todos.slice(0, EVENTOS_DEL_HISTORIAL);
@@ -93,6 +103,7 @@ export default function HistorialDeEventos({
   // En una pantalla angosta el detalle queda debajo de la lista, fuera de la
   // vista: se lo trae. En una ancha ya está a la vista y esto no mueve nada.
   const idAbierto = abierto?.id;
+  const rotulo = abierto ? etiquetaDeEvento(abierto.type) : null;
   useEffect(() => {
     if (idAbierto !== undefined) panel.current?.scrollIntoView?.({ block: 'nearest' });
   }, [idAbierto]);
@@ -164,6 +175,7 @@ export default function HistorialDeEventos({
                   {abierto.message}
                 </h3>
                 <p className="modal-subtitulo">
+                  {rotulo && <span>{`${rotulo} · `}</span>}
                   <span className="mono">{abierto.type}</span>
                   {` · ${fechaYHora(abierto.ts)}`}
                 </p>

@@ -1,0 +1,151 @@
+/* ============================================================================
+   RELEVOS Y EMERGENCIAS — las insignias de relevo de cada dron, el aviso de
+   los aterrizajes de emergencia sin recuperar y la ficha de uno (galería de
+   fotos), más el punto para visitantes del diálogo de una base (RELEVOS §6).
+   Todo sale de los tokens: los dos temas cambian solos.
+   ========================================================================= */
+
+/* --- Insignias de relevo ------------------------------------------------------
+   Pastillas de las de siempre (.badge), en una fila que se parte si no entra:
+   en el mosaico del tablero y en la cabecera de la vista del dron. */
+.insignias-relevo {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--e-1) var(--e-2);
+  min-width: 0;
+}
+.tile-info > .insignias-relevo { display: flex; }
+/* Lo que falló o no tiene salida: el óxido de las alertas, como .badge.person. */
+.badge.malo {
+  background: var(--peligro-velo);
+  border-color: color-mix(in srgb, var(--peligro) 40%, transparent);
+  color: var(--peligro);
+}
+
+/* El mosaico de un dron que baja de emergencia: la esquina va en óxido, el
+   mismo del aviso que tapa la imagen. */
+.esquina-roja { color: var(--peligro); border-color: var(--peligro); }
+/* "ATERRIZAJE DE EMERGENCIA" no entra en un renglón de un mosaico angosto:
+   partido, se lee centrado y en dos mitades parejas, no colgado a la izquierda. */
+.tile-overlay span {
+  text-align: center;
+  text-wrap: balance;
+}
+
+/* --- Aviso de emergencias -------------------------------------------------------
+   Una franja de óxido debajo de la barra, con el margen de la página: no es
+   una tarjeta más del tablero sino algo que cruza todas las secciones. El texto
+   va en la tinta del tema sobre el velo de óxido, y el título en óxido. */
+.aviso-emergencias {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-2);
+  margin: var(--e-4) var(--e-6) 0;
+  padding: var(--e-3) var(--e-4);
+  border: 1px solid var(--peligro);
+  border-left-width: 4px;
+  border-radius: var(--radio-chico);
+  background: var(--peligro-velo);
+  color: var(--tinta);
+}
+.aviso-emergencias-titulo {
+  margin: 0;
+  font-family: var(--fuente-cuerpo);
+  font-size: var(--txt-sm);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  color: var(--peligro);
+}
+.aviso-emergencias-lista {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.aviso-emergencia {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--e-1) var(--e-3);
+}
+.aviso-emergencia-motivo { color: var(--tinta-media); font-size: var(--txt-sm); }
+.aviso-emergencia > button { margin-left: auto; }
+@media (max-width: 1100px) {
+  .aviso-emergencias { margin-inline: var(--e-5); }
+}
+@media (max-width: 900px) {
+  .aviso-emergencias { margin-inline: var(--e-4); }
+  .aviso-emergencia > button { margin-left: 0; }
+}
+
+/* --- Ficha de una emergencia: la galería ------------------------------------------
+   La foto elegida grande, con su pie (tipo, rumbo, inclinación), y las demás
+   en miniatura debajo. La ficha comparte la grilla del pop-up de una alerta
+   (.detalle-alerta-vistas): las fotos a un lado y el mapa al otro. */
+.galeria {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-2);
+  min-width: 0;
+}
+.galeria-principal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-1);
+  margin: 0;
+}
+.galeria-principal figcaption {
+  font-size: var(--txt-xs);
+  color: var(--tinta-media);
+}
+.galeria-miniaturas {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: var(--e-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.galeria-miniatura {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 3px;
+  font-size: var(--txt-xxs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+}
+.galeria-miniatura img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: var(--radio-sello);
+}
+/* La que se está mirando lleva la cara de lo activo, como un chip elegido. */
+.galeria-miniatura[aria-pressed='true'] {
+  border-color: var(--oro);
+  background-image: var(--cara-activa);
+}
+
+/* --- Bases: el punto para visitantes ----------------------------------------------- */
+.elector-de-punto { margin-top: calc(-1 * var(--e-1)); }
+.campo-grupo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-3);
+  margin: 0;
+}
+.campo-grupo > p { margin: 0; }
+/* En la tabla, debajo de las coordenadas: un dato de la base, no una columna. */
+.base-visitantes {
+  display: block;
+  font-family: var(--fuente-cuerpo);
+  font-size: var(--txt-xs);
+}

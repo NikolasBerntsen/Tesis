@@ -19,6 +19,7 @@ import {
   textoDeInclinacion,
   textoDeZoom,
 } from '../pilotaje';
+import { duenioDeLaAlerta } from '../relevos';
 import type { Alert, DroneStatus } from '../types';
 import AyudaDeControles from './AyudaDeControles';
 import MandoVirtual, { EJES_EN_CERO, type Ejes } from './MandoVirtual';
@@ -94,7 +95,7 @@ function liberarNavegador(elemento: HTMLElement | null) {
 
 /** El id más alto entre las alertas de este dron: lo que ya estaba al abrir la vista. */
 function mayorIdDeAlertas(alertas: readonly Alert[], droneId: string): number {
-  return alertas.reduce((mayor, a) => (a.drone_id === droneId && a.id > mayor ? a.id : mayor), 0);
+  return alertas.reduce((mayor, a) => (duenioDeLaAlerta(a) === droneId && a.id > mayor ? a.id : mayor), 0);
 }
 
 /**
@@ -571,7 +572,11 @@ export default function PilotajePantallaCompleta({
     onCerrar();
   }
 
-  const nuevasAlertas = alertas.filter((a) => a.drone_id === droneId && a.status === 'PENDING' && a.id > umbralDeAlertas);
+  // De este dron quiere decir que la sigue este dron (ver duenioDeLaAlerta): es
+  // la que el piloto tiene delante, en el video que está mirando.
+  const nuevasAlertas = alertas.filter(
+    (a) => duenioDeLaAlerta(a) === droneId && a.status === 'PENDING' && a.id > umbralDeAlertas,
+  );
   const ultimaAlerta = nuevasAlertas.reduce<Alert | null>((ultima, a) => (!ultima || a.id > ultima.id ? a : ultima), null);
 
   const vista = (

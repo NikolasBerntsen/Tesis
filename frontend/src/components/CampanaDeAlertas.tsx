@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { useAlertasEnVivo } from '../alertasEnVivo';
 import { time } from '../format';
+import { duenioDeLaAlerta } from '../relevos';
 import type { Alert, Drone } from '../types';
 import { useDecisionDeAlerta, type DecidirAlerta } from '../useDecisionDeAlerta';
 
@@ -107,52 +108,69 @@ export default function CampanaDeAlertas({
 
           {pendientes.length === 0 && <p className="vacio">Sin alertas pendientes.</p>}
 
-          {pendientes.map((a) => (
-            <div key={a.id} className="campana-alerta">
-              <div className="campana-alerta-head">
-                <span className={`badge ${a.type.toLowerCase()}`}>{TIPO[a.type as keyof typeof TIPO] ?? a.type}</span>
-                <button type="button" className="enlace" onClick={() => { onVerDron(a.drone_id!); setAbierta(false); }} disabled={!a.drone_id}>
-                  {nombre(a.drone_id)}
-                </button>
-                <time className="mono muted" dateTime={a.created_at}>
-                  {time(a.created_at)}
-                </time>
-                {abrirAlerta && (
-                  <button type="button" className="enlace alerta-ver-detalle" onClick={() => abrir(a, abrirAlerta)}>
-                    Ver detalle
+          {pendientes.map((a) => {
+            // El nombre lleva al dron que sigue al objetivo ahora (un relevo
+            // se la pudo pasar a otro): es ahí donde está el video para decidir.
+            const duenio = duenioDeLaAlerta(a);
+            return (
+              <div key={a.id} className="campana-alerta">
+                <div className="campana-alerta-head">
+                  <span className={`badge ${a.type.toLowerCase()}`}>{TIPO[a.type as keyof typeof TIPO] ?? a.type}</span>
+                  <button
+                    type="button"
+                    className="enlace"
+                    onClick={
+                      duenio
+                        ? () => {
+                            onVerDron(duenio);
+                            setAbierta(false);
+                          }
+                        : undefined
+                    }
+                    disabled={!duenio}
+                  >
+                    {nombre(duenio)}
+                  </button>
+                  <time className="mono muted" dateTime={a.created_at}>
+                    {time(a.created_at)}
+                  </time>
+                  {abrirAlerta && (
+                    <button type="button" className="enlace alerta-ver-detalle" onClick={() => abrir(a, abrirAlerta)}>
+                      Ver detalle
+                    </button>
+                  )}
+                </div>
+                {a.snapshot && abrirAlerta && (
+                  <button
+                    type="button"
+                    className="snapshot-boton"
+                    aria-label={`Ampliar la captura de la alerta #${a.id}`}
+                    onClick={() => abrir(a, abrirAlerta)}
+                  >
+                    <img className="snapshot" src={`data:image/jpeg;base64,${a.snapshot}`} alt="Detección" />
                   </button>
                 )}
-              </div>
-              {a.snapshot && abrirAlerta && (
-                <button
-                  type="button"
-                  className="snapshot-boton"
-                  aria-label={`Ampliar la captura de la alerta #${a.id}`}
-                  onClick={() => abrir(a, abrirAlerta)}
-                >
+                {a.snapshot && !abrirAlerta && (
                   <img className="snapshot" src={`data:image/jpeg;base64,${a.snapshot}`} alt="Detección" />
-                </button>
-              )}
-              {a.snapshot && !abrirAlerta && (
-                <img className="snapshot" src={`data:image/jpeg;base64,${a.snapshot}`} alt="Detección" />
-              )}
-              <div className="alert-actions">
-                <button className="validate" disabled={decidiendo(a.id)} onClick={() => decidir(a.id, 'VALIDATED')}>
-                  Validar
-                </button>
-                <button className="dismiss" disabled={decidiendo(a.id)} onClick={() => decidir(a.id, 'DISMISSED')}>
-                  Descartar
-                </button>
+                )}
+                <div className="alert-actions">
+                  <button className="validate" disabled={decidiendo(a.id)} onClick={() => decidir(a.id, 'VALIDATED')}>
+                    Validar
+                  </button>
+                  <button className="dismiss" disabled={decidiendo(a.id)} onClick={() => decidir(a.id, 'DISMISSED')}>
+                    Descartar
+                  </button>
+                </div>
+                {/* Pegado a los botones de ESA alerta: con tres pendientes en la
+                    lista, un aviso suelto arriba no diría cuál falló. */}
+                {errorDe(a.id) && (
+                  <p className="aviso malo" role="alert">
+                    {errorDe(a.id)}
+                  </p>
+                )}
               </div>
-              {/* Pegado a los botones de ESA alerta: con tres pendientes en la
-                  lista, un aviso suelto arriba no diría cuál falló. */}
-              {errorDe(a.id) && (
-                <p className="aviso malo" role="alert">
-                  {errorDe(a.id)}
-                </p>
-              )}
-            </div>
-          ))}
+            );
+          })}
 
           {decididas.length > 0 && (
             <>
@@ -165,7 +183,7 @@ export default function CampanaDeAlertas({
                       {a.status === 'VALIDATED' ? 'Validada' : 'Descartada'}
                     </span>
                     <span className="muted">
-                      {TIPO[a.type as keyof typeof TIPO] ?? a.type} · {nombre(a.drone_id)}
+                      {TIPO[a.type as keyof typeof TIPO] ?? a.type} · {nombre(duenioDeLaAlerta(a))}
                     </span>
                     <time className="mono muted" dateTime={a.created_at}>
                       {time(a.created_at)}

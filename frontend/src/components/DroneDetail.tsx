@@ -2,7 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { api, rutasDeBase } from '../api';
 import { posicionDelDron, stateLabel } from '../format';
 import type { RastroObjetivo } from '../rastro';
-import type { Alert, Drone, DroneStatus, EventRow, Me, PatrolRoute } from '../types';
+import { avisoDeOrdenesEnRelevo, duenioDeLaAlerta } from '../relevos';
+import type { Alert, Drone, DroneStatus, EventRow, Me, PatrolRoute, Relevo } from '../types';
 import type { DecidirAlerta } from '../useDecisionDeAlerta';
 import AlertaEnCurso from './AlertaEnCurso';
 import { useAvisar } from './AvisosFlotantes';
@@ -11,6 +12,7 @@ import DroneStatusCard from './DroneStatusCard';
 import DronesMap, { type MapItem, type WaypointsLayer } from './DronesMap';
 import EditableName from './EditableName';
 import HistorialDeEventos from './HistorialDeEventos';
+import InsigniasDeRelevo from './InsigniasDeRelevo';
 import LiveVideo from './LiveVideo';
 import type { Ejes } from './MandoVirtual';
 import PanelObjetivo from './PanelObjetivo';
@@ -74,6 +76,8 @@ const ORDEN_EN_CURSO: Record<OrdenDeVuelo, string> = {
   aterrizar: 'Aterrizaje ordenado: el dron baja donde está. El control sigue tomado.',
 };
 
+const SIN_RELEVOS: readonly Relevo[] = [];
+
 export default function DroneDetail({
   me,
   drone,
@@ -83,6 +87,7 @@ export default function DroneDetail({
   liveEvents,
   routes,
   alertas,
+  relevos = SIN_RELEVOS,
   rastro = null,
   onDecidir,
   onBack,
@@ -101,6 +106,8 @@ export default function DroneDetail({
   routes: PatrolRoute[];
   /** Las alertas de la consola: de acá sale la pendiente de este dron. */
   alertas: Alert[];
+  /** Los relevos que conoce la consola: las insignias de la cabecera salen de acá. */
+  relevos?: readonly Relevo[];
   /** Rastro del objetivo que el dron está siguiendo, si hay uno (rastro.ts). */
   rastro?: RastroObjetivo | null;
   onDecidir: DecidirAlerta;
@@ -250,13 +257,17 @@ export default function DroneDetail({
   const enElAire = status?.flying === true;
   const sinGps = !!status && posicionDelDron(status) === null;
 
-  // Las alertas que se deciden al lado del video: las pendientes de ESTE dron.
+  // Las alertas que se deciden al lado del video: las pendientes que sigue
+  // ESTE dron, sea porque las creó o porque se las pasó un relevo (el video
+  // que hay que comparar con la captura es el del que está sobre el objetivo).
   // El carrusel las ordena (la más nueva primero) y recuerda cuál se mira.
   const pendientes = useMemo(
-    () => alertas.filter((a) => a.drone_id === drone.droneId && a.status === 'PENDING'),
+    () => alertas.filter((a) => duenioDeLaAlerta(a) === drone.droneId && a.status === 'PENDING'),
     [alertas, drone.droneId],
   );
   const hayAlerta = pendientes.length > 0;
+  /** Qué le hace al relevo en marcha una orden de patrullaje (RELEVOS §3.9). */
+  const avisoDeRelevo = avisoDeOrdenesEnRelevo(drone.droneId, relevos);
 
   // El aviso de "orden en curso" se va solo cuando el dron confirma: en el aire
   // para el despegue, en el suelo para el aterrizaje. También si se suelta el
@@ -550,6 +561,7 @@ export default function DroneDetail({
           {!drone.online ? 'Desconectado' : enElSuelo ? 'En tierra' : 'En vuelo'}
         </span>
         {controlador && <span className="badge oro">Control manual: {controlador}</span>}
+        <InsigniasDeRelevo droneId={drone.droneId} status={status} relevos={relevos} />
         {/* Arriba a la derecha, sobre la telemetría: el historial es consulta,
             no algo que se mira todo el tiempo, y al pie de la vista quedaba
             debajo de todo, donde en pleno vuelo nadie llegaba. */}
@@ -649,6 +661,12 @@ export default function DroneDetail({
             )}
           </div>
           <hr className="regla" />
+          {/* Antes de los botones: lo que dice es qué pasa si se los aprieta. */}
+          {avisoDeRelevo && (
+            <p className="aviso" role="note" data-testid="aviso-relevo">
+              {avisoDeRelevo}
+            </p>
+          )}
           <div className="ruta-controles">
             <select
               aria-label="Ruta de patrullaje"

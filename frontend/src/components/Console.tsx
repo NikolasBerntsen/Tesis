@@ -1,9 +1,42 @@
 import escudo from '../assets/escudo-128.webp';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api, getRole, getUsername, motivoDelRechazoDeDecision } from '../api';
+import {
+  ErrorDeApi,
+  api,
+  getRole,
+  getUsername,
+  marcarEmergenciaRecuperada,
+  motivoDelRechazoDeDecision,
+  motivoDelRechazoDeRecuperacion,
+  traerEmergencia,
+  traerEmergenciasAbiertas,
+  traerRelevosActivos,
+} from '../api';
+import {
+  aplicarEmergencia,
+  esEmergencia,
+  esFotoEnVivo,
+  reemplazarAbiertas,
+  sinFotos,
+  sumarFotoEnVivo,
+} from '../emergencias';
 import { sumarAlRastro, type RastroObjetivo } from '../rastro';
-import type { Alert, Drone, DroneStatus, EventRow, Me, NovedadDron, PatrolRoute, RolConsola } from '../types';
+import { aplicarRelevo, duenioDeLaAlerta, esRelevo, reemplazarActivos } from '../relevos';
+import type {
+  Alert,
+  Drone,
+  DroneStatus,
+  Emergencia,
+  EventRow,
+  FotoDeEmergencia,
+  Me,
+  NovedadDron,
+  PatrolRoute,
+  Relevo,
+  RolConsola,
+} from '../types';
 import { useWebSocket } from '../useWebSocket';
+import AvisoDeEmergencias from './AvisoDeEmergencias';
 import { ProveedorDeAvisos } from './AvisosFlotantes';
 import BasesView from './BasesView';
 import BotonTema from './BotonTema';
@@ -14,6 +47,7 @@ import DroneDetail from './DroneDetail';
 import DronesView from './DronesView';
 import LogsView from './LogsView';
 import ProveedorDeAlertas from './ProveedorDeAlertas';
+import ProveedorDeEmergencias from './ProveedorDeEmergencias';
 import UsersView from './UsersView';
 
 const MAX_EVENTS = 300;
@@ -69,6 +103,15 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
   // status, para que la línea y el marcador del objetivo avancen juntos.
   const rastrosBuffer = useRef<Record<string, RastroObjetivo>>({});
   const [rastros, setRastros] = useState<Record<string, RastroObjetivo>>({});
+  // Los relevos y las emergencias no llegan solos al conectarse: se piden por
+  // REST al montar y en cada reconexión, y de ahí en más los mantiene el
+  // WebSocket (§3 del contrato).
+  const [relevos, setRelevos] = useState<Relevo[]>([]);
+  const [emergencias, setEmergencias] = useState<Emergencia[]>([]);
+  // Las fotos de cada emergencia que llegan en vivo. Las anteriores las trae
+  // la ficha al abrirse: guardarlas todas acá sería cargar imágenes que nadie
+  // pidió.
+  const [fotosDeEmergencias, setFotosDeEmergencias] = useState<Record<number, FotoDeEmergencia[]>>({});
 
   // El rol de la sesión sirve para pintar la barra sin esperar a /me; el que
   // manda es el que informa el backend, y si difieren la sección se corrige sola.
@@ -152,6 +195,18 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
         // El renombre iniciado desde la app no viene acompañado de `drone_updated`
         setNovedadDron({ tipo: 'renombre', droneId: msg.droneId, displayName: msg.displayName });
         break;
+      // Las filas ya las validó el hub (§3 del contrato): la consola las toma por
+      // id. Lo único que se mira es que tengan forma, para que un mensaje roto
+      // no tumbe la consola entera.
+      case 'relay_updated':
+        if (esRelevo(msg.relay)) setRelevos((prev) => aplicarRelevo(prev, msg.relay));
+        break;
+      case 'emergency_updated':
+        if (esEmergencia(msg.emergencia)) setEmergencias((prev) => aplicarEmergencia(prev, msg.emergencia));
+        break;
+      case 'emergency_photo':
+        if (esFotoEnVivo(msg)) setFotosDeEmergencias((prev) => sumarFotoEnVivo(prev, msg));
+        break;
     }
   });
 
@@ -179,6 +234,42 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
     api<Alert[]>('/alerts').then(setAlerts).catch(console.error);
     api<PatrolRoute[]>('/routes').then(setRoutes).catch(console.error);
   }, [conectado, me]);
+
+  // Como los drones: al montar y en cada reconexión, porque mientras el canal
+  // estuvo caído un relevo pudo terminar o un dron pudo bajar de emergencia.
+  // Las emergencias le llegan también al operador de campo: es quien sale a
+  // buscar el dron. Los relevos no: el backend no se los muestra.
+  useEffect(() => {
+    if (!me) return;
+    void traerEmergenciasAbiertas()
+      .then((lista) => setEmergencias((prev) => reemplazarAbiertas(prev, lista)))
+      .catch(console.error);
+    if (me.role === 'field_operator') return;
+    void traerRelevosActivos()
+      .then((lista) => setRelevos((prev) => reemplazarActivos(prev, lista)))
+      .catch(console.error);
+  }, [conectado, me]);
+
+  /**
+   * Cierra una emergencia. La respuesta se aplica en el acto (el
+   * `emergency_updated` llega igual, pero no hay por qué esperarlo). Si otra
+   * persona ya la había cerrado, la ficha se trae de nuevo para que deje de
+   * ofrecer el botón, y el motivo sube a quien lo mostró.
+   */
+  const marcarRecuperada = useCallback(async (id: number): Promise<Emergencia> => {
+    try {
+      const recuperada = await marcarEmergenciaRecuperada(id);
+      setEmergencias((prev) => aplicarEmergencia(prev, recuperada));
+      return recuperada;
+    } catch (err) {
+      if (err instanceof ErrorDeApi && err.status === 409) {
+        void traerEmergencia(id)
+          .then((e) => setEmergencias((prev) => aplicarEmergencia(prev, sinFotos(e))))
+          .catch(console.error);
+      }
+      throw new Error(motivoDelRechazoDeRecuperacion(err));
+    }
+  }, []);
 
   // Apodo de un nodo de patrullaje. El backend responde con la ruta completa y
   // además emite route_updated, así que las demás consolas también se enteran.
@@ -249,10 +340,13 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
     }
   }
 
+  // Cada pendiente cuenta para el dron que sigue al objetivo AHORA: después de
+  // un relevo es en ese dron donde se mira el video y se decide.
   const pendingAlerts = useMemo(() => {
     const count: Record<string, number> = {};
     for (const a of alerts) {
-      if (a.status === 'PENDING' && a.drone_id) count[a.drone_id] = (count[a.drone_id] ?? 0) + 1;
+      const duenio = duenioDeLaAlerta(a);
+      if (a.status === 'PENDING' && duenio) count[duenio] = (count[duenio] ?? 0) + 1;
     }
     return count;
   }, [alerts]);
@@ -273,102 +367,114 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
         decidir={deCampo ? null : decidirAlerta}
         verDron={deCampo ? null : verDron}
       >
-        <div className="dashboard">
-          <header className="topbar">
-            {/* El escudo es decorativo: el nombre del proyecto ya lo dice el texto. */}
-            <h1 className="marca">
-              <img className="marca-escudo" src={escudo} alt="" />
-              <span>Alta en el Cielo</span>
-            </h1>
-            <nav className="topnav" aria-label="Secciones de la consola">
-              {secciones.map((s) => (
-                <button
-                  key={s}
-                  className={abierta === s ? 'active' : ''}
-                  aria-current={abierta === s ? 'page' : undefined}
-                  onClick={() => setSeccion(s)}
-                >
-                  {ETIQUETA[s]}
+        {/* Las emergencias sí son del operador de campo: es quien sale a
+            buscar el dron, y quien lo marca recuperado. */}
+        <ProveedorDeEmergencias
+          relevos={relevos}
+          emergencias={emergencias}
+          fotos={fotosDeEmergencias}
+          marcarRecuperada={marcarRecuperada}
+        >
+          <div className="dashboard">
+            <header className="topbar">
+              {/* El escudo es decorativo: el nombre del proyecto ya lo dice el texto. */}
+              <h1 className="marca">
+                <img className="marca-escudo" src={escudo} alt="" />
+                <span>Alta en el Cielo</span>
+              </h1>
+              <nav className="topnav" aria-label="Secciones de la consola">
+                {secciones.map((s) => (
+                  <button
+                    key={s}
+                    className={abierta === s ? 'active' : ''}
+                    aria-current={abierta === s ? 'page' : undefined}
+                    onClick={() => setSeccion(s)}
+                  >
+                    {ETIQUETA[s]}
+                  </button>
+                ))}
+              </nav>
+              <div className="topbar-right">
+                {/* El operador de campo entra a una consola recortada: conviene que lo
+                    lea, y no que lo deduzca de que no hay más botones. */}
+                {deCampo && <span className="badge oro">Sesión de campo</span>}
+                {/* El operador de campo no recibe alertas: el backend no se las manda. */}
+                {!deCampo && (
+                  <CampanaDeAlertas
+                    alerts={alerts}
+                    drones={drones}
+                    onDecidir={decidirAlerta}
+                    onVerDron={verDron}
+                  />
+                )}
+                {/* El punto lo dibuja .estado con currentColor: en la interfaz no hay
+                    caracteres decorativos, y así el punto toma el verde o el rojo. */}
+                <span className={`conn estado versalita ${conectado ? 'ok' : 'bad'}`} aria-live="polite">
+                  {conectado ? 'conectado' : 'sin conexión'}
+                </span>
+                <BotonTema />
+                {/* En una tableta el nombre se recorta con puntos suspensivos: el
+                    title lo deja leer entero. */}
+                <span className="username" title={usuario}>
+                  {usuario}
+                </span>
+                <button className="ghost versalita" onClick={onLogout}>
+                  Salir
                 </button>
-              ))}
-            </nav>
-            <div className="topbar-right">
-              {/* El operador de campo entra a una consola recortada: conviene que lo
-                  lea, y no que lo deduzca de que no hay más botones. */}
-              {deCampo && <span className="badge oro">Sesión de campo</span>}
-              {/* El operador de campo no recibe alertas: el backend no se las manda. */}
-              {!deCampo && (
-                <CampanaDeAlertas
-                  alerts={alerts}
-                  drones={drones}
-                  onDecidir={decidirAlerta}
-                  onVerDron={verDron}
-                />
-              )}
-              {/* El punto lo dibuja .estado con currentColor: en la interfaz no hay
-                  caracteres decorativos, y así el punto toma el verde o el rojo. */}
-              <span className={`conn estado versalita ${conectado ? 'ok' : 'bad'}`} aria-live="polite">
-                {conectado ? 'conectado' : 'sin conexión'}
-              </span>
-              <BotonTema />
-              {/* En una tableta el nombre se recorta con puntos suspensivos: el
-                  title lo deja leer entero. */}
-              <span className="username" title={usuario}>
-                {usuario}
-              </span>
-              <button className="ghost versalita" onClick={onLogout}>
-                Salir
-              </button>
-            </div>
-          </header>
-          {!me ? (
-            <main className="page-main">
-              <p className="vacio" role="status">
-                Cargando la consola…
-              </p>
-            </main>
-          ) : abierta === 'drones' ? (
-            <DronesView me={me} novedad={novedadDron} />
-          ) : abierta === 'bases' ? (
-            me && <BasesView me={me} />
-          ) : abierta === 'rutas' ? (
-            me && <RutasView me={me} />
-          ) : abierta === 'usuarios' ? (
-            <UsersView me={me} />
-          ) : abierta === 'registro' ? (
-            <LogsView />
-          ) : selected ? (
-            <DroneDetail
-              me={me}
-              drone={selected}
-              status={statuses[selected.droneId] ?? null}
-              frame={frames[selected.droneId] ?? null}
-              conectado={conectado}
-              liveEvents={liveEvents}
-              routes={routes}
-              alertas={alerts}
-              rastro={rastros[selected.droneId] ?? null}
-              onDecidir={decidirAlerta}
-              onBack={() => setSelectedId(null)}
-              onRename={(name) => rename(selected.droneId, name)}
-              onWaypointLabel={setWaypointLabel}
-              onMando={(ejes) => enviar({ type: 'manual_stick', droneId: selected.droneId, ...ejes })}
-              onCamara={(pitch) => enviar({ type: 'manual_gimbal', droneId: selected.droneId, pitch })}
-            />
-          ) : (
-            <Dashboard
-              drones={drones}
-              statuses={statuses}
-              frames={frames}
-              alerts={alerts}
-              pendingAlerts={pendingAlerts}
-              rastros={rastros}
-              onDecidir={decidirAlerta}
-              onOpenDrone={setSelectedId}
-              onRename={rename}
-            />
-          )}
-        </div>
+              </div>
+            </header>
+            <AvisoDeEmergencias />
+            {!me ? (
+              <main className="page-main">
+                <p className="vacio" role="status">
+                  Cargando la consola…
+                </p>
+              </main>
+            ) : abierta === 'drones' ? (
+              <DronesView me={me} novedad={novedadDron} />
+            ) : abierta === 'bases' ? (
+              <BasesView me={me} />
+            ) : abierta === 'rutas' ? (
+              <RutasView me={me} />
+            ) : abierta === 'usuarios' ? (
+              <UsersView me={me} />
+            ) : abierta === 'registro' ? (
+              <LogsView />
+            ) : selected ? (
+              <DroneDetail
+                me={me}
+                drone={selected}
+                status={statuses[selected.droneId] ?? null}
+                frame={frames[selected.droneId] ?? null}
+                conectado={conectado}
+                liveEvents={liveEvents}
+                routes={routes}
+                alertas={alerts}
+                relevos={relevos}
+                rastro={rastros[selected.droneId] ?? null}
+                onDecidir={decidirAlerta}
+                onBack={() => setSelectedId(null)}
+                onRename={(name) => rename(selected.droneId, name)}
+                onWaypointLabel={setWaypointLabel}
+                onMando={(ejes) => enviar({ type: 'manual_stick', droneId: selected.droneId, ...ejes })}
+                onCamara={(pitch) => enviar({ type: 'manual_gimbal', droneId: selected.droneId, pitch })}
+              />
+            ) : (
+              <Dashboard
+                drones={drones}
+                statuses={statuses}
+                frames={frames}
+                alerts={alerts}
+                pendingAlerts={pendingAlerts}
+                relevos={relevos}
+                rastros={rastros}
+                onDecidir={decidirAlerta}
+                onOpenDrone={setSelectedId}
+                onRename={rename}
+              />
+            )}
+          </div>
+        </ProveedorDeEmergencias>
       </ProveedorDeAlertas>
     </ProveedorDeAvisos>
   );
