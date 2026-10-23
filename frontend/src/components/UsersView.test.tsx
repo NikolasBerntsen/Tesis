@@ -1034,6 +1034,23 @@ describe('UsersView — carga, vacío y tabla', () => {
     expect(screen.queryByText('No hay usuarios para mostrar.')).not.toBeInTheDocument();
   });
 
+  // Como el resto de las secciones: el vacío lleva el medallón con el símbolo
+  // de la barra, y no queda como un renglón suelto en la tarjeta.
+  it('sin usuarios, o sin coincidencias, el vacío lleva el medallón de la sección', async () => {
+    servir([]);
+    const supervisor = montar('supervisor', 'super1');
+    await screen.findByText('No hay usuarios para mostrar.');
+    expect(supervisor.container.querySelector('.con-medalla .medalla svg')).not.toBeNull();
+    supervisor.unmount();
+
+    servir([ADMIN1], []);
+    const { container } = montar();
+    await screen.findByText('admin1');
+    await userEvent.type(screen.getByRole('searchbox', { name: 'Buscar usuarios' }), 'zzz');
+    await screen.findByText('Ningún usuario coincide con la búsqueda.');
+    expect(container.querySelector('.con-medalla .medalla svg')).not.toBeNull();
+  });
+
   it('si la carga falla no afirma que no hay usuarios, ni que la búsqueda no coincide', async () => {
     servir([]);
     montar();

@@ -156,6 +156,8 @@ describe('Console', () => {
     expect(operacion.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
     // El nombre se recorta en una tableta: el title lo deja leer entero.
     expect(screen.getByText('oper1', { selector: '.username' })).toHaveAttribute('title', 'oper1');
+    // Y no se presenta como un control: no hay menú de sesión que abrir.
+    expect(screen.getByText('oper1', { selector: '.username' }).closest('button')).toBeNull();
     // La región de los avisos de "guardado" está desde el arranque, vacía.
     expect(document.querySelector('.avisos-flotantes')).toBeEmptyDOMElement();
     expect(screen.queryByRole('button', { name: 'Usuarios' })).not.toBeInTheDocument();

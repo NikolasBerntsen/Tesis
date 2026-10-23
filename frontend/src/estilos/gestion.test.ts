@@ -71,6 +71,17 @@ describe('filtros', () => {
   });
 });
 
+describe('rutas de una base', () => {
+  it('la ruta marcada se ve marcada: velo y filo izquierdo, como la fila elegida de una tabla', () => {
+    // `.lista-bases button` le gana a `button.active` (misma especificidad,
+    // carga después) y le saca filo, velo y resplandor: sin esta regla, las
+    // rutas marcadas en «Rutas de una base» no se distinguían de las otras, y
+    // lo que queda sin marcar se le saca a la base.
+    expect(valorDe(nuevos, '.lista-bases button.active', 'background')).toBe('var(--oro-velo)');
+    expect(valorDe(nuevos, '.lista-bases button.active', 'box-shadow')).toContain('var(--filo-activo)');
+  });
+});
+
 describe('el Registro en un teléfono', () => {
   it('el lienzo crece con la lista y scrollea la página, en vez de dejar el cuerpo en cero', () => {
     const consulta = /@media \(max-width: 640px\), \(max-height: 600px\)\s*\{([\s\S]*?)\n\}/.exec(sinComentarios(nuevos));

@@ -132,12 +132,14 @@ export default function CameraTile({
             </dd>
           </div>
           {/* El contador va en la ficha y no flotando sobre el video: ahí
-              pisaba el rótulo de la esquina. */}
+              pisaba el rótulo de la esquina. Rótulo de una palabra y la cuenta
+              como cifra, igual que batería y señal: «Alertas pendientes» se
+              partía en dos renglones y bajaba su número uno más que los otros. */}
           {pendingAlerts > 0 && (
             <div>
-              <dt className="rotulo">Alertas pendientes</dt>
+              <dt className="rotulo">Alertas</dt>
               <dd>
-                <span className="badge-count">{pendingAlerts}</span>
+                <strong className="cifra-chica bad">{pendingAlerts}</strong>
               </dd>
             </div>
           )}

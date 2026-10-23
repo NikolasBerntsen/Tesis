@@ -1,12 +1,10 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { useAlertasEnVivo } from '../alertasEnVivo';
-import { time } from '../format';
+import { time, tipoDeAlerta } from '../format';
 import type { Alert, Drone } from '../types';
 import { useDecisionDeAlerta, type DecidirAlerta } from '../useDecisionDeAlerta';
-import { IconoCampana } from './Iconos';
-import { BotonesDeDecision } from './PiezasDeAlerta';
-
-const TIPO = { PERSON: 'PERSONA', VEHICLE: 'VEHÍCULO' } as const;
+import { IconoCampana, IconoChevronDerecha } from './Iconos';
+import { BotonesDeDecision, ChipDeTipo } from './PiezasDeAlerta';
 
 /**
  * Las alertas de detección son lo único de la consola que no se puede esperar a
@@ -109,7 +107,9 @@ export default function CampanaDeAlertas({
           {pendientes.map((a) => (
             <div key={a.id} className="campana-alerta">
               <div className="campana-alerta-head">
-                <span className={`badge ${a.type.toLowerCase()}`}>{TIPO[a.type as keyof typeof TIPO] ?? a.type}</span>
+                {/* La misma placa óxido con su ícono que la tarjeta y el pop-up:
+                    la alerta se reconoce igual venga de donde venga. */}
+                <ChipDeTipo tipo={a.type} tamanoIcono={18} />
                 <button type="button" className="enlace" onClick={() => { onVerDron(a.drone_id!); setAbierta(false); }} disabled={!a.drone_id}>
                   {nombre(a.drone_id)}
                 </button>
@@ -117,8 +117,9 @@ export default function CampanaDeAlertas({
                   {time(a.created_at)}
                 </time>
                 {abrirAlerta && (
-                  <button type="button" className="enlace alerta-ver-detalle" onClick={() => abrir(a, abrirAlerta)}>
+                  <button type="button" className="enlace versal alerta-ver-detalle" onClick={() => abrir(a, abrirAlerta)}>
                     Ver detalle
+                    <IconoChevronDerecha tamano={16} />
                   </button>
                 )}
               </div>
@@ -159,7 +160,7 @@ export default function CampanaDeAlertas({
                       {a.status === 'VALIDATED' ? 'Validada' : 'Descartada'}
                     </span>
                     <span className="muted">
-                      {TIPO[a.type as keyof typeof TIPO] ?? a.type} · {nombre(a.drone_id)}
+                      {tipoDeAlerta(a.type)} · {nombre(a.drone_id)}
                     </span>
                     <time className="mono muted" dateTime={a.created_at}>
                       {time(a.created_at)}

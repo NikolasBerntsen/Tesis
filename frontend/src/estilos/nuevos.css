@@ -314,7 +314,7 @@
 .icono-boton[aria-expanded='true'],
 .icono-boton[aria-expanded='true']:hover:not(:disabled) {
   color: var(--oro-texto);
-  border-color: var(--oro);
+  border-color: var(--filo-activo);
   background-color: var(--boton-fondo);
   background-image: var(--cara-activa);
 }
@@ -438,7 +438,7 @@
 .tabs button.active,
 .tabs button[aria-selected='true'] {
   color: var(--oro-texto);
-  border-color: var(--oro);
+  border-color: var(--filo-activo);
   background-color: var(--boton-fondo);
   background-image: var(--cara-activa);
   box-shadow: var(--resplandor-oro);
@@ -652,6 +652,16 @@
   text-align: left;
 }
 .lista-bases button:hover { background: var(--oro-velo); }
+/* Elegida (las rutas de una base): el velo y el filo izquierdo de la fila
+   seleccionada de una tabla. `.lista-bases button` le saca a button.active el
+   filo, el velo y el resplandor (misma especificidad y carga después), así que
+   acá se le devuelve la marca. El filo es forma y no sólo color: con la tinta
+   de oro sola, de día la ruta elegida se distinguía de la otra por 2,4:1
+   (WCAG 1.4.1), y el admin podía sacarle rutas a una base sin darse cuenta. */
+.lista-bases button.active {
+  background: var(--oro-velo);
+  box-shadow: inset var(--filo) 0 0 0 var(--filo-activo);
+}
 
 /* --- Rutas: catálogo y editor ----------------------------------------------
    <div class="rutas-cuerpo">
@@ -696,8 +706,8 @@
    resplandor de lo que está abierto (la sección de la barra). */
 .ruta-item.seleccionada,
 .ruta-item.seleccionada:hover {
-  border-color: var(--oro);
-  box-shadow: inset 0 0 0 1px var(--oro), var(--resplandor-oro);
+  border-color: var(--filo-activo);
+  box-shadow: inset 0 0 0 1px var(--filo-activo), var(--resplandor-oro);
 }
 .ruta-item-cabecera {
   display: flex;
@@ -908,6 +918,13 @@
   flex-wrap: wrap;
 }
 .campana-alerta-head time { margin-left: auto; font-size: var(--txt-xs); }
+/* En el desplegable la placa del tipo baja un escalón, como sus botones: es
+   la misma de la tarjeta, pero sin agrandar el renglón. */
+.campana-alerta-head .chip {
+  min-height: 32px;
+  padding-inline: var(--e-3);
+  font-size: var(--txt-sm);
+}
 .campana-decidida {
   display: flex;
   align-items: baseline;

@@ -8,7 +8,7 @@ import { ProveedorDeAvisos } from './AvisosFlotantes';
 import BasesView from './BasesView';
 import BotonTema from './BotonTema';
 import CampanaDeAlertas from './CampanaDeAlertas';
-import { ICONO_DE_SECCION, IconoEngranaje, IconoSalir } from './Iconos';
+import { ICONO_DE_SECCION, IconoPersona, IconoSalir } from './Iconos';
 import RutasView from './RutasView';
 import Dashboard from './Dashboard';
 import DroneDetail from './DroneDetail';
@@ -325,9 +325,11 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
               </span>
               <BotonTema />
               {/* En una tableta el nombre se recorta con puntos suspensivos: el
-                  title lo deja leer entero. */}
+                  title lo deja leer entero. La sesión no lleva menú: una silueta
+                  y no un engranaje, que se lee como "configuración" y el
+                  operador lo tocaría esperando algo. */}
               <span className="sesion-usuario">
-                <IconoEngranaje tamano={20} />
+                <IconoPersona tamano={20} />
                 <span className="username" title={usuario}>
                   {usuario}
                 </span>

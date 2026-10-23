@@ -193,11 +193,19 @@ def dia() -> np.ndarray:
     marmol = nubes(2)
     fondo = np.stack([240 + 8 * marmol, 236 + 8 * marmol, 227 + 7 * marmol], -1)
     # Vetas grises blandas: dos redes desenfocadas, una ancha y una fina.
+    # Dentro de la consola el lienzo de día (velo al .72) deja asomar sólo el
+    # 28 % de la piedra, y el tope lo pone AA: la veta más oscura, bajo el
+    # lienzo, es la que apaga la tinta. Por eso las vetas no ganan presencia
+    # con un tono más oscuro sino con cantidad y cobertura: muchas más grietas
+    # finas, más anchas y más enteras, que se acercan al extremo oscuro sin
+    # correrlo. Con la red anterior (12 grietas apagadas) el fondo de las
+    # vistas se leía como una página crema lisa.
     gris_ancha = desenfoque(red_de_grietas(41, 8, ancho=(3.0, 6.0), brillo=(0.6, 1.0), ramas=0.01, rumbo_medio=0.7), 7)
-    gris_fina = desenfoque(red_de_grietas(43, 12, ancho=(0.9, 1.6), brillo=(0.5, 0.9), ramas=0.008, rumbo_medio=0.62), 1.1)
-    gris = np.clip(gris_ancha * 0.34 + gris_fina * 0.42, 0, 1)
-    # Unas pocas vetas de oro, finas y nítidas.
-    oro = red_de_grietas(51, 4, ancho=(1.2, 2.0), brillo=(0.75, 1.0), ramas=0.007, rumbo_medio=0.58)
+    gris_fina = desenfoque(red_de_grietas(43, 28, ancho=(1.1, 2.0), brillo=(0.7, 1.0), ramas=0.008, rumbo_medio=0.62), 0.8)
+    gris = np.clip(gris_ancha * 0.4 + gris_fina * 0.7, 0, 1)
+    # Unas pocas vetas de oro, finas y nítidas. El tono no se oscurece: el
+    # borde de una veta de oro sobre una gris es el que marca el extremo oscuro.
+    oro = red_de_grietas(51, 6, ancho=(1.2, 2.0), brillo=(0.75, 1.0), ramas=0.007, rumbo_medio=0.58)
     tono_gris = np.array([150, 144, 134], np.float32)
     # Un oro claro: de día la veta más oscura es la que apaga la tinta de los
     # paneles que pasan por encima.

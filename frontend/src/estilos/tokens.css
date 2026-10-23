@@ -46,7 +46,11 @@
      un mapa en vez de piedra. */
   --panel-firme: rgba(255, 253, 248, .97);
   /* El gran lienzo que envuelve cada vista: más liviano que un panel, pero
-     encima va el título de la vista, así que también se mide. */
+     encima va el título de la vista, así que también se mide. No copia el .55
+     del prototipo: el alfa está atado a la veta más oscura de vetas.json, y
+     con .60 las pastillas (.badge.ok, .badge.info) sobre el lienzo bajan a
+     ~4,15. Las vetas ganan presencia en la textura (más grietas, no más
+     oscuras), no aflojando el velo. */
   --lienzo: rgba(255, 253, 248, .72);
   /* El halo detrás de la marca de la barra: la marca va sobre la piedra, sin
      panel, y el halo le borra la veta que pase justo por debajo. */
@@ -110,6 +114,13 @@
   /* El anillo de foco: un oro que llega a 3:1 sobre cualquier mármol. El
      --oro de los filos, sobre la piedra clara, apenas pasa de 2,3. */
   --anillo-foco: #8A6A1C;
+  /* El filo de lo encendido (la sección abierta, lo presionado, la pestaña, la
+     ruta o la fila elegida): es lo único que, fuera del lector de pantalla,
+     dice qué está elegido, así que llega a 3:1 contra la placa y contra su
+     propio velo (WCAG 1.4.11). El --oro de los filos, sobre el mármol, no pasa
+     de 2,6. Coincide con el anillo de foco, pero el anillo va por fuera y
+     separado del borde: el foco sobre algo encendido se sigue distinguiendo. */
+  --filo-activo: var(--oro-oscuro);
   /* La flecha del select, dibujada con la tinta media del tema. Vive acá
      porque el color va escrito adentro del SVG. */
   --flecha-select: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none' stroke='%23463F33' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5'/%3E%3C/svg%3E");
@@ -422,6 +433,9 @@
 
   --filo-campo: #8F7848;
   --anillo-foco: #D6AE5C;
+  /* De noche el que llega es el --oro: el --oro-oscuro nocturno, contra el
+     velo de lo encendido, queda en 2,4. */
+  --filo-activo: var(--oro);
   --flecha-select: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none' stroke='%23C7BEAD' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5'/%3E%3C/svg%3E");
 
   /* El callejero de OpenStreetMap, de noche. Las teselas son fotos de un mapa

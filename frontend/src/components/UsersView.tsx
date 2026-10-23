@@ -8,7 +8,7 @@ import DialogoConfirmacion, { type PedidoDeConfirmacion } from './DialogoConfirm
 import { CONSECUENCIA, DialogoEditarUsuario, DialogoNuevoUsuario, ROL, textoError } from './DialogosDeUsuario';
 import EncabezadoDeVista from './EncabezadoDeVista';
 import { EsqueletoDeTabla, EstadoVacio } from './EstadosDeVista';
-import { IconoMas } from './Iconos';
+import { IconoMas, IconoUsuarios } from './Iconos';
 import Modal from './Modal';
 
 /**
@@ -267,11 +267,16 @@ export default function UsersView({ me }: Readonly<{ me: Me }>) {
         {consultaMostrada !== null && !error && visibles.length === 0 && (
           <div aria-busy={cargando || undefined}>
             {hayBusqueda ? (
-              <EstadoVacio titulo="Ningún usuario coincide con la búsqueda.">
+              <EstadoVacio titulo="Ningún usuario coincide con la búsqueda." icono={<IconoUsuarios tamano={46} />}>
                 Probá con otra parte del nombre, el DNI sin puntos o el rol.
               </EstadoVacio>
             ) : (
-              <EstadoVacio titulo="No hay usuarios para mostrar." />
+              // En la práctica es el del supervisor, que ve sólo a los operadores:
+              // el admin siempre se ve a sí mismo. Sin texto, EstadoVacio no
+              // dibuja el medallón, así que lleva qué esperar.
+              <EstadoVacio titulo="No hay usuarios para mostrar." icono={<IconoUsuarios tamano={46} />}>
+                Las cuentas las crea el administrador; cuando haya operadores, van a aparecer acá.
+              </EstadoVacio>
             )}
           </div>
         )}

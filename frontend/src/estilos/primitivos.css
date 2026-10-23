@@ -182,6 +182,14 @@ button[aria-pressed='true']:hover:not(:disabled) {
   border-color: var(--oro);
   background-image: linear-gradient(var(--oro-velo), var(--oro-velo)), var(--cara-activa);
 }
+/* Lo encendido se distingue del botón común sólo por el filo: va en el que
+   llega a 3:1 de día (WCAG 1.4.11). La acción principal se lee por su rótulo
+   y conserva el --oro. Con el hover incluido, bajo el mouse no vuelve al
+   --oro; lo deshabilitado sigue ganando por especificidad. */
+button.active,
+button[aria-pressed='true'],
+button.active:hover:not(:disabled),
+button[aria-pressed='true']:hover:not(:disabled) { border-color: var(--filo-activo); }
 button.primario:disabled,
 button[type='submit']:disabled,
 .login-card button:disabled,
@@ -412,7 +420,7 @@ legend {
 /* Fila seleccionada: la piedra se abre en el borde izquierdo */
 .tabla tbody tr.seleccionada {
   background: var(--oro-velo);
-  box-shadow: inset var(--filo) 0 0 0 var(--oro);
+  box-shadow: inset var(--filo) 0 0 0 var(--filo-activo);
 }
 /* Fila de un registro borrado lógicamente. Los estados de adentro ("●
    Suspendido") se apagan con ella: en rojo o en verde seguían leyéndose como
@@ -457,8 +465,6 @@ legend {
 }
 /* Los filos salen del color del tema mezclado con transparente: escritos en
    rgba() eran los del mármol, y en obsidiana quedaban apagados de más. */
-.badge.person { background: var(--peligro-velo); border-color: color-mix(in srgb, var(--peligro) 40%, transparent); color: var(--peligro); }
-.badge.vehicle { background: var(--alerta-velo); border-color: color-mix(in srgb, var(--alerta) 45%, transparent); color: var(--alerta-texto); }
 .badge.ok { background: var(--ok-velo); border-color: color-mix(in srgb, var(--ok) 40%, transparent); color: var(--ok-texto); }
 .badge.info { background: var(--info-velo); border-color: color-mix(in srgb, var(--info) 40%, transparent); color: var(--info); }
 /* "Control manual: admin", "Sesión de campo": el oro escrito, no el de los

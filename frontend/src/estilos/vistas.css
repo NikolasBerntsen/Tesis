@@ -404,7 +404,7 @@
    hover, medido en contraste.test.ts) y el filo de oro de lo seleccionado. */
 .log-row-boton[aria-current='true'] {
   background: var(--oro-velo-fila);
-  box-shadow: inset var(--filo) 0 0 0 var(--oro);
+  box-shadow: inset var(--filo) 0 0 0 var(--filo-activo);
 }
 
 details.meta summary {
@@ -530,6 +530,9 @@ details.meta pre {
   gap: var(--e-3);
   margin: 0;
 }
+/* Los rótulos van en un renglón: si uno se parte, su cifra baja y la fila de
+   valores queda escalonada respecto de las otras columnas. */
+.tile-datos dt { white-space: nowrap; }
 .tile-datos dd {
   margin: var(--e-1) 0 0;
   line-height: 1.1;
@@ -663,6 +666,10 @@ details.meta pre {
   background-color: var(--marmol-2);
   color: var(--tinta-suave);
 }
+/* El +/− propio del mapa de la flota (DronesMap.tsx): es un .icono-boton y
+   heredaba el fondo translúcido de los botones; de noche, sobre un techo
+   claro del satélite, el trazo quedaba en 2,6:1. */
+.leaflet-control > .icono-boton { background-color: var(--marmol-0); }
 
 /* Los trazos que Leaflet dibuja en SVG con un color pasado por JS. El color
    del JS queda de respaldo; el CSS le gana al atributo y sigue al tema, que es
@@ -982,7 +989,14 @@ details.meta pre {
   overflow: hidden;
   box-shadow: var(--sombra-suave);
 }
-.mapa-fondos button { border-radius: 0; }
+/* Flota sobre las teselas, no sobre la piedra: con el fondo translúcido de
+   los botones, el techo o la calle de abajo se veían a través y el oro de
+   «Satélite» bajaba a 2,5:1. La base va opaca, como el +/− de Leaflet; la
+   cara (el velo de oro de lo elegido) sigue encima como background-image. */
+.mapa-fondos button {
+  border-radius: 0;
+  background-color: var(--marmol-0);
+}
 .mapa-fondos button + button { border-left: 0; }
 
 /* --- Estado del dron: dos niveles -------------------------------------------

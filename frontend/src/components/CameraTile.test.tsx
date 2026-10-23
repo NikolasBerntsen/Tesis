@@ -190,13 +190,13 @@ describe('CameraTile', () => {
 
     it('muestra el contador de alertas pendientes cuando hay', () => {
       renderTile({ pendingAlerts: 3 });
-      expect(screen.getByText('Alertas pendientes')).toBeInTheDocument();
+      expect(screen.getByText('Alertas')).toBeInTheDocument();
       expect(screen.getByText('3')).toBeInTheDocument();
     });
 
     it('no muestra contador de alertas cuando es 0', () => {
       renderTile({ pendingAlerts: 0 });
-      expect(screen.queryByText(/alertas pendientes/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/^alertas$/i)).not.toBeInTheDocument();
     });
   });
 

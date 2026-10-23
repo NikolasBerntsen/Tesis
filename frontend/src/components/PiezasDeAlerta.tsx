@@ -85,11 +85,18 @@ export function VisorDeCaptura({
  * Qué vio la detección, con su ícono, en la placa óxido de la alerta. Un tipo
  * que la consola no conoce va crudo y sin dibujo, pero se lee.
  */
-export function ChipDeTipo({ tipo }: Readonly<{ tipo: string }>) {
+export function ChipDeTipo({
+  tipo,
+  tamanoIcono = 20,
+}: Readonly<{
+  tipo: string;
+  /** En la campana va un escalón más chico, como sus botones. */
+  tamanoIcono?: number;
+}>) {
   const Icono = ICONO_DE_TIPO[tipo];
   return (
     <span className="chip rojo">
-      {Icono && <Icono tamano={20} />}
+      {Icono && <Icono tamano={tamanoIcono} />}
       {tipoDeAlerta(tipo)}
     </span>
   );

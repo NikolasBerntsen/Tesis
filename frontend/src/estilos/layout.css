@@ -137,10 +137,14 @@
   justify-content: center;
   gap: 6px;
   /* A 1280 px entran las seis secciones del admin al lado de la marca y de
-     la sesión: cada píxel de más acá mandaba "Registro" a otro renglón. */
-  min-width: 70px;
+     la sesión, aun en el peor caso: el nombre más largo que deja .username
+     (11ch), «sin conexión» (13 px más ancho que «conectado») y la barra de
+     scroll clásica de Windows, que la consulta de 1279 px no descuenta.
+     Con 70 px y 8 px de relleno, ese caso mandaba "Registro" a otro renglón
+     y la barra saltaba 62 px justo cuando se caía la conexión. */
+  min-width: 64px;
   min-height: var(--alto-tactil);
-  padding: 9px 8px 8px;
+  padding: 9px 6px 8px;
   border: 1px solid transparent;
   border-radius: var(--radio-chico);
   background: transparent;
@@ -162,7 +166,7 @@
 .topnav button.active,
 .topnav button.active:hover:not(:disabled) {
   color: var(--oro-texto);
-  border-color: var(--oro);
+  border-color: var(--filo-activo);
   background-color: transparent;
   background-image: var(--cara-activa);
   box-shadow: var(--resplandor-oro);
@@ -193,7 +197,9 @@
 }
 .topbar-right .icono-boton svg { width: 20px; height: 20px; }
 .topbar-right .icono-boton:hover:not(:disabled) { background: var(--oro-velo); }
-/* El usuario con su engranaje: es quien está de guardia, en versalitas. */
+/* El usuario con su silueta: es quien está de guardia, en versalitas. No es
+   un control (no hay menú de sesión), así que no lleva engranaje, ni borde ni
+   hover como Salir. */
 .sesion-usuario {
   display: inline-flex;
   align-items: center;
@@ -279,8 +285,9 @@
   .topnav button { min-width: 0; padding-inline: var(--e-1); }
 }
 /* Un nombre largo no empuja la barra: se recorta, y el title lo deja leer.
-   Entre 1280 y 1500 px la barra va justa (las seis secciones en una fila), así
-   que ahí el nombre se recorta antes. */
+   Entre 1280 y 1500 px la barra va justa (las seis secciones en una fila,
+   aun con la barra de scroll de Windows), así que ahí el nombre se recorta
+   antes. */
 .username {
   max-width: 11ch;
   overflow: hidden;

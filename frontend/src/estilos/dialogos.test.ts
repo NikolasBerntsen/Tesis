@@ -56,12 +56,28 @@ describe('diálogos', () => {
 
   it('el pie va a la derecha y sus botones hablan como los de la cabecera de una vista', () => {
     expect(valorDe(nuevos, '.modal-pie', 'justify-content')).toBe('flex-end');
-    const regla = reglaCon(pulido, '.vista-cabecera button:not(.icono-boton)');
-    expect(regla.selectores).toEqual(
-      expect.arrayContaining(['.modal-pie > button', '.login-card button', '.detail-head > .detalle-historial']),
+    const cabecera = ['.modal-pie > button', '.login-card button', '.detail-head > .detalle-historial'];
+    // El alto táctil: la cabecera, el pie, el ingreso y el historial.
+    const alto = reglaCon(pulido, '.vista-cabecera button:not(.icono-boton)');
+    expect(alto.selectores).toEqual(expect.arrayContaining(cabecera));
+    expect(alto.cuerpo).toMatch(/min-height:\s*var\(--alto-tactil\)/);
+    // La voz del .btn del prototipo: los mismos, y también las acciones del
+    // cuerpo (la principal, las fichas, las órdenes del dron), para que un
+    // mismo diálogo no diga "Ver feed en vivo" al lado de "CERRAR".
+    const voz = reglaCon(pulido, 'button.primario');
+    expect(voz.selectores).toEqual(
+      expect.arrayContaining([
+        ...cabecera,
+        '.vista-cabecera button:not(.icono-boton)',
+        '.ficha-acciones > button:not(.icono-boton)',
+        '.ruta-controles > button',
+      ]),
     );
-    expect(regla.cuerpo).toMatch(/min-height:\s*var\(--alto-tactil\)/);
-    expect(regla.cuerpo).toMatch(/text-transform:\s*uppercase/);
+    expect(voz.cuerpo).toMatch(/text-transform:\s*uppercase/);
+    // Validar y Descartar son la excepción, como en el prototipo: el par de
+    // una decisión va en oración, en la tarjeta, en el pop-up y en la campana.
+    expect(voz.selectores).not.toContain('button.validate');
+    expect(voz.selectores).toContain('button.dismiss:not(.alert-actions > button, .chico, .icono-boton)');
   });
 
   it('lo destructivo que se confirma lleva la placa óxido de Descartar, no sólo el filo', () => {

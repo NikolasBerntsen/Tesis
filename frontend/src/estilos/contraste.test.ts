@@ -77,7 +77,7 @@ interface Par {
 }
 
 const TEXTO = 4.5;
-/** Texto grande: la marca, de 21 px en negrita para arriba. */
+/** Texto grande: «Alta» y «Cielo» de la marca, de 21 px en negrita para arriba. «En el» va a .64em del nombre (13 a 20 px): es texto chico. */
 const TEXTO_GRANDE = 3;
 /** Bordes de controles y anillos de foco. */
 const CONTROL = 3;
@@ -139,8 +139,7 @@ sobreSuperficies('oro como texto (.accent, .enlace, a)', '--oro-texto');
 
 // --- Pastillas: el velo de su color sobre la superficie ------------------------
 sobreSuperficies('.badge.ok y .cat-sistema', '--ok-texto', ['--ok-velo']);
-sobreSuperficies('.badge.person y .aviso.malo', '--peligro', ['--peligro-velo']);
-sobreSuperficies('.badge.vehicle', '--alerta-texto', ['--alerta-velo']);
+sobreSuperficies('.aviso.malo', '--peligro', ['--peligro-velo']);
 sobreSuperficies('.badge.info y .cat-drone', '--info', ['--info-velo']);
 sobreSuperficies('.badge.oro ("Control manual"), .cat-usuarios y .chip.oro (el dron de una alerta)', '--oro-texto', [
   '--oro-velo',
@@ -159,6 +158,25 @@ sobreSuperficies(
   ['--cara-activa', '--boton-fondo'],
 );
 sobreSuperficies('botón dorado :hover', '--oro-texto', ['--oro-velo', '--cara-activa', '--boton-fondo']);
+// El conmutador Mapa/Satélite y el +/− de la flota flotan sobre las teselas:
+// no se miden sobre la piedra sino sobre su propia base opaca (vistas.css).
+pares.push(
+  {
+    donde: 'conmutador Mapa/Satélite elegido (sobre las teselas)',
+    texto: '--oro-texto',
+    sobre: ['--cara-activa'],
+    base: '--marmol-0',
+    minimo: TEXTO,
+  },
+  {
+    donde: 'conmutador Mapa/Satélite en reposo (sobre las teselas)',
+    texto: '--tinta',
+    sobre: ['--cara-boton'],
+    base: '--marmol-0',
+    minimo: TEXTO,
+  },
+  { donde: '+/− del mapa de la flota', texto: '--tinta-media', sobre: ['--cara-boton'], base: '--marmol-0', minimo: CONTROL },
+);
 sobreSuperficies('.validate / .resume ("Validar", "Devolver al patrullaje")', '--valida-texto', ['--valida-fondo']);
 sobreSuperficies(
   '.dismiss :hover y en una decisión ("Descartar", "Eliminar"), y .chip.rojo (la clase de una alerta)',
@@ -248,8 +266,8 @@ for (const [donde, texto] of EN_LA_FILA_DE_GESTION) {
 
 // --- La marca de la barra -------------------------------------------------------------
 // Va suelta sobre la piedra, sin panel: la protege su halo (--velo-marca), que
-// se mide sobre los dos extremos de la textura. El nombre es texto grande; el
-// lema, chico.
+// se mide sobre los dos extremos de la textura. «Alta» y «Cielo» son texto
+// grande; «en el» (a .64em del nombre, 15 px en la barra) y el lema, chicos.
 const PIEDRAS: [Base, string][] = [
   [vetaClara, 'la veta más clara'],
   [vetaOscura, 'la piedra más oscura'],
@@ -258,7 +276,7 @@ for (const [base, piedra] of PIEDRAS) {
   const sobre = ['--velo-marca'];
   pares.push(
     { donde: `marca: "Alta" sobre ${piedra}`, texto: '--tinta', sobre, base, minimo: TEXTO_GRANDE },
-    { donde: `marca: "en el" sobre ${piedra}`, texto: '--marca-azul', sobre, base, minimo: TEXTO_GRANDE },
+    { donde: `marca: "en el" sobre ${piedra}`, texto: '--marca-azul', sobre, base, minimo: TEXTO },
     { donde: `marca: "Cielo" sobre ${piedra}`, texto: '--oro-texto', sobre, base, minimo: TEXTO_GRANDE },
     { donde: `marca: "Comando de drones" sobre ${piedra}`, texto: '--tinta-media', sobre, base, minimo: TEXTO },
   );
@@ -280,6 +298,21 @@ for (const s of SUPERFICIES) {
   pares.push({ donde: `anillo de foco sobre ${s.nombre}`, texto: '--anillo-foco', sobre: s.sobre, base: s.base, minimo: CONTROL });
 }
 pares.push({ donde: 'borde de un campo', texto: '--filo-campo', base: '--marmol-0', minimo: CONTROL });
+// El filo de lo encendido: de día es lo único que dice qué sección está
+// abierta o qué botón está presionado (WCAG 1.4.11). Se mide contra la placa
+// de afuera y contra su propio velo.
+for (const s of [...PANELES, ...LIENZOS]) {
+  pares.push(
+    { donde: `filo de lo encendido sobre ${s.nombre}`, texto: '--filo-activo', sobre: s.sobre, base: s.base, minimo: CONTROL },
+    {
+      donde: `filo de lo encendido sobre su velo, en ${s.nombre}`,
+      texto: '--filo-activo',
+      sobre: ['--cara-activa', ...s.sobre],
+      base: s.base,
+      minimo: CONTROL,
+    },
+  );
+}
 
 // --- HUD de pilotaje: piedra translúcida sobre una imagen cualquiera ---------------
 // El video puede ser cielo blanco o noche cerrada: se mide contra los dos.
@@ -296,6 +329,24 @@ for (const imagen of ['#FFFFFF', '#000000']) {
       minimo: TEXTO,
     },
   );
+  // Los botones del HUD van directo sobre el video: su fondo es el panel
+  // firme (pilotaje.css), y encima la cara de cada uno.
+  const botonesDelHud: [string, string, string[]][] = [
+    ['botón común', '--tinta', ['--cara-boton']],
+    ['botón común :hover', '--tinta', ['--cara-boton-hover']],
+    ['dorado o presionado', '--oro-texto', ['--cara-activa']],
+    ['dorado :hover', '--oro-texto', ['--oro-velo', '--cara-activa']],
+    ['.dismiss :hover', '--descarta-texto', ['--descarta-fondo']],
+  ];
+  for (const [boton, texto, cara] of botonesDelHud) {
+    pares.push({
+      donde: `HUD: ${boton} sobre ${cuadro}`,
+      texto,
+      sobre: [...cara, '--panel-firme'],
+      base: imagen,
+      minimo: TEXTO,
+    });
+  }
 }
 
 const casos = TEMAS.flatMap((tema) => pares.map((p) => ({ tema, ...p })));
@@ -356,6 +407,7 @@ describe('los pares medidos son los que pintan las hojas', () => {
   const layout = leer('./layout.css');
   const nuevos = leer('./nuevos.css');
   const pulido = leer('./pulido.css');
+  const pilotaje = leer('./pilotaje.css');
 
   it.each([
     ['fila elegida', primitivos, '.tabla tbody tr.seleccionada', 'background', 'var(--oro-velo)'],
@@ -388,6 +440,17 @@ describe('los pares medidos son los que pintan las hojas', () => {
     ['halo de la marca', layout, '.marca', 'background-color', 'var(--velo-marca)'],
     // Los botones: la cara y la tinta que se miden arriba.
     ['botón común', primitivos, 'button', 'background-color', 'var(--boton-fondo)'],
+    // Lo que flota sobre una imagen no apoya en la piedra: se mide sobre su base.
+    ['fondo de los botones del HUD', pilotaje, '.pilotaje-capa', '--boton-fondo', 'var(--panel-firme)'],
+    [
+      'Salir y Aterrizar del HUD con el mouse encima',
+      pilotaje,
+      '.pilotaje-capa button.dismiss:hover:not(:disabled)',
+      'background',
+      'linear-gradient(var(--descarta-fondo), var(--descarta-fondo)), var(--panel-firme)',
+    ],
+    ['conmutador Mapa/Satélite', vistas, '.mapa-fondos button', 'background-color', 'var(--marmol-0)'],
+    ['+/− del mapa de la flota', vistas, '.leaflet-control > .icono-boton', 'background-color', 'var(--marmol-0)'],
     ['cara del botón común', primitivos, 'button', 'background-image', 'var(--cara-boton)'],
     ['botón dorado', primitivos, 'button.primario', 'background-image', 'var(--cara-activa)'],
     ['tinta del botón dorado', primitivos, 'button.primario', 'color', 'var(--oro-texto)'],
@@ -397,6 +460,11 @@ describe('los pares medidos son los que pintan las hojas', () => {
     ['Descartar en una decisión', primitivos, '.alert-actions button.dismiss', 'background-color', 'var(--descarta-fondo)'],
     ['tinta de Descartar', primitivos, '.alert-actions button.dismiss', 'color', 'var(--descarta-texto)'],
     ['sección abierta de la barra', layout, '.topnav button.active', 'color', 'var(--oro-texto)'],
+    // El filo de lo encendido, el que se mide contra la placa y su velo.
+    ['filo de la sección abierta', layout, '.topnav button.active', 'border-color', 'var(--filo-activo)'],
+    ['filo de lo presionado', primitivos, "button[aria-pressed='true']", 'border-color', 'var(--filo-activo)'],
+    ['filo de la categoría elegida', nuevos, ".tabs button[aria-selected='true']", 'border-color', 'var(--filo-activo)'],
+    ['filo de la ruta elegida', nuevos, '.ruta-item.seleccionada', 'border-color', 'var(--filo-activo)'],
     // Los filtros encendidos: el oro de lo presionado sobre el fondo del botón.
     ['categoría elegida del Registro', nuevos, ".tabs button[aria-selected='true']", 'color', 'var(--oro-texto)'],
     ['velo de la categoría elegida', nuevos, ".tabs button[aria-selected='true']", 'background-image', 'var(--cara-activa)'],

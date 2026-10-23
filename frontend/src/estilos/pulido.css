@@ -97,11 +97,9 @@
    "Nuevo dron" y el buscador medían 27, 25 y 35 px en la misma fila. Es el
    alto táctil, como los .btn del prototipo: "Nuevo dron", los filtros y el
    buscador se tocan con el dedo en la tableta de campo, igual que "Cámaras" y
-   "Mapa". El ícono redondo de al lado (actualizar) mide lo mismo.
-   Hablan igual los botones del pie de un diálogo ("Cancelar", "Guardar"),
-   "Ver historial de eventos" en la cabecera de un dron e "Ingresar": son el
-   .btn del prototipo, y una acción no puede leerse distinto según la pantalla
-   en la que aparece. */
+   "Mapa". El ícono redondo de al lado (actualizar) mide lo mismo. Lo mismo
+   los botones del pie de un diálogo, "Ver historial de eventos" en la
+   cabecera de un dron e "Ingresar". */
 .login-card button,
 .detail-head > .detalle-historial,
 .modal-pie > button,
@@ -109,8 +107,27 @@
   min-height: var(--alto-tactil);
   padding-block: 0;
   padding-inline: 16px;
-  /* En versalitas, como "Cámaras" y "Mapa" del prototipo: en la cabecera son
-     rótulos de la vista, no frases. */
+}
+/* La voz del .btn del prototipo, en toda la consola: versalitas espaciadas.
+   Una acción no puede leerse distinto según la pantalla en la que aparece, y
+   antes el mismo pop-up decía "Ver feed en vivo" al lado de "CERRAR". Cada
+   rol la pide (la cabecera, el pie de un diálogo, la acción principal, las
+   fichas, las órdenes del dron) en vez de ponerla en `button`: así quedan en
+   oración lo que se lee de corrido (el botón chico de una fila, el enlace, la
+   pastilla, la fila que se elige) y, como en el prototipo, Validar y
+   Descartar, el par de una decisión, que van grandes y en oración. */
+.login-card button,
+.detail-head > .detalle-historial,
+.modal-pie > button,
+.vista-cabecera button:not(.icono-boton),
+button.primario,
+button.resume,
+button.dismiss:not(.alert-actions > button, .chico, .icono-boton),
+.mapa-head > button,
+.ruta-controles > button,
+.control-panel > button,
+.pilotaje-acciones > button,
+.ficha-acciones > button:not(.icono-boton) {
   font-size: var(--txt-xs);
   font-weight: 600;
   letter-spacing: .1em;
