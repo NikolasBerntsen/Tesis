@@ -44,6 +44,9 @@ class DjiApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Antes que cualquier controlador: el que se cree tiene que encontrar el
+        // failsafe que haya quedado pendiente de un desvío (RELEVOS §4).
+        AlmacenDelFailsafe.iniciar(this)
 
         val apiKey = runCatching {
             packageManager.getApplicationInfo(packageName, PackageManager.GET_META_DATA)

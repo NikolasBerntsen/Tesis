@@ -56,6 +56,40 @@ object TomaDelDron {
         -> false
     }
 
+    /**
+     * Cuánto pesa una toma frente a otra, para dos cosas: qué avisar cuando el
+     * motivo de un mismo regreso cambia (ver [SeguidorDelRegreso]) y qué bloqueo
+     * queda cuando llegan dos (ver [bloqueoTrasLaToma]).
+     *
+     *  - [MotivoDelDron.OTRO] es "no se sabe": nunca tapa un motivo conocido.
+     *  - La señal pesa menos que la batería: un regreso por batería que arranca
+     *    después de uno por señal es otra noticia, y esa sí bloquea.
+     *  - El botón del control es una persona pidiendo el dron de vuelta: le gana
+     *    a la batería y la app no lo corta nunca (RELEVOS §4).
+     *  - El aterrizaje forzado le gana a todo: ya está bajando donde está.
+     */
+    fun fuerza(motivo: MotivoDelDron): Int = when (motivo) {
+        MotivoDelDron.OTRO -> 0
+        MotivoDelDron.RTH_SENIAL -> 1
+        MotivoDelDron.RTH_BATERIA -> 2
+        MotivoDelDron.RTH_DEL_CONTROL -> 3
+        MotivoDelDron.ATERRIZAJE_BATERIA_CRITICA -> 4
+    }
+
+    /** De dos motivos, el que pesa más; con [actual] null, [nuevo]. A igual peso queda el que estaba. */
+    fun masFuerte(actual: MotivoDelDron?, nuevo: MotivoDelDron): MotivoDelDron =
+        if (actual == null || fuerza(nuevo) > fuerza(actual)) nuevo else actual
+
+    /**
+     * Qué toma deja bloqueada a la app después de que llega [nueva], si la que
+     * bloqueaba era [actual]. Una que no bloquea no cambia nada; una que bloquea
+     * se queda solo si pesa más: un regreso por batería que el DJI anuncia
+     * durante el que pidió el control no convierte el pedido de una persona en
+     * uno que la app puede cortar.
+     */
+    fun bloqueoTrasLaToma(actual: MotivoDelDron?, nueva: MotivoDelDron): MotivoDelDron? =
+        if (bloqueaLaApp(nueva)) masFuerte(actual, nueva) else actual
+
     /** La fase del regreso según `GoHomeState`. */
     fun faseDelRegreso(estadoDelSdk: String): SeguidorDelRegreso.Fase = when (estadoDelSdk) {
         "IDLE" -> SeguidorDelRegreso.Fase.INACTIVO

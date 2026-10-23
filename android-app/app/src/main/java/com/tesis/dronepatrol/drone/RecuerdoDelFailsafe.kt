@@ -12,19 +12,46 @@ package com.tesis.dronepatrol.drone
  * los dos seguidos, y si la segunda activación guardara "el actual" guardaría
  * el aterrizaje que puso la primera, y al apagar nunca volvería el de verdad.
  *
+ * Lo guarda además en [almacen], que sobrevive al controlador: si la pantalla
+ * se cierra o la app se recrea en pleno desvío, el controlador nuevo arranca
+ * sabiendo que hay un failsafe por devolver y lo devuelve apenas el dron está en
+ * el suelo. Sin eso el aparato quedaba en "aterrizar" para todos los vuelos
+ * siguientes —también los de DJI Fly—, y la activación siguiente guardaba ese
+ * aterrizaje como si fuera el original.
+ *
+ * Lo olvida recién cuando el dron aceptó la restauración ([alRestaurar]): si la
+ * escritura falla (sin enlace, por ejemplo) queda pendiente y se reintenta la
+ * próxima vez que el dron toque el suelo o se conecte en tierra.
+ *
  * Genérico porque el valor es un enumerado del MSDK (`FailsafeAction`) y esto
  * vive en `main`, que se prueba sin el SDK.
  *
  * @param aterrizar el valor que se fija mientras está activo.
  * @param deFabrica el que se devuelve si al activar no se pudo leer el original
  *   (el de fábrica del Mini 4 Pro es volver a casa).
+ * @param almacen dónde queda guardado entre un controlador y otro; null, en memoria nomás.
  */
-class RecuerdoDelFailsafe<T : Any>(private val aterrizar: T, private val deFabrica: T) {
+class RecuerdoDelFailsafe<T : Enum<T>>(
+    private val aterrizar: T,
+    private val deFabrica: T,
+    private val almacen: AlmacenDeTexto?,
+) {
 
     private var guardado = false
     private var original: T? = null
 
-    /** Está activo: lo que haya que restaurar sigue guardado. */
+    init {
+        // Lo que dejó guardado un controlador anterior: sigue pendiente.
+        val texto = runCatching { almacen?.leer() }.getOrNull()
+        if (texto != null) {
+            guardado = true
+            // Un nombre que no es de este enumerado (otra versión de la app, o el
+            // "no se pudo leer") queda en null: al restaurar va el de fábrica.
+            original = runCatching { java.lang.Enum.valueOf(aterrizar.declaringJavaClass, texto) }.getOrNull()
+        }
+    }
+
+    /** Hay un failsafe por devolver (de este controlador o de uno anterior). */
     val activo: Boolean
         @Synchronized get() = guardado
 
@@ -37,20 +64,34 @@ class RecuerdoDelFailsafe<T : Any>(private val aterrizar: T, private val deFabri
         if (!guardado) {
             original = actual
             guardado = true
+            persistir(if (actual == null) DESCONOCIDO else actual.name)
         }
         return aterrizar
     }
 
     /**
-     * Se apaga. Devuelve lo que hay que volver a fijar, o null si no había
-     * nada activo (apagar dos veces no toca al dron).
+     * Lo que hay que volver a fijar para devolverle al dron el suyo, o null si
+     * no hay nada pendiente (apagar dos veces no toca al dron). No lo olvida:
+     * eso lo hace [alRestaurar] cuando el dron lo aceptó.
      */
     @Synchronized
-    fun alDesactivar(): T? {
-        if (!guardado) return null
-        val restaurar = original ?: deFabrica
+    fun porRestaurar(): T? = if (guardado) original ?: deFabrica else null
+
+    /** El dron aceptó el failsafe devuelto: no queda nada pendiente. */
+    @Synchronized
+    fun alRestaurar() {
         guardado = false
         original = null
-        return restaurar
+        persistir(null)
+    }
+
+    /** Un almacén que falla no puede llevarse puesto al controlador: queda en memoria. */
+    private fun persistir(valor: String?) {
+        runCatching { almacen?.escribir(valor) }
+    }
+
+    private companion object {
+        /** Se activó sin poder leer el original: al restaurar va el de fábrica. */
+        const val DESCONOCIDO = "?"
     }
 }

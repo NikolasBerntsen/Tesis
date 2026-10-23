@@ -91,6 +91,45 @@ class VigiaDelRthPorBateriaTest {
         assertNull(vigia.estado)
     }
 
+    /**
+     * En el suelo el desvío terminó: el regreso inteligente vuelve a estar
+     * permitido aunque la app no lo haya pedido, y un EXECUTED que queda del
+     * vuelo anterior no es un arranque en el siguiente.
+     */
+    @Test
+    fun alTocarElSueloVuelveAQuedarPermitido() {
+        vigia.alPermitir(false)
+        vigia.alCambiarEstado("COUNTING_DOWN")
+        vigia.alCambiarEstado("EXECUTED")
+
+        vigia.alTocarElSuelo()
+
+        assertFalse("ya no se le contesta que no", vigia.alCambiarEstado("COUNTING_DOWN").contestarQueNo)
+        assertFalse(vigia.alPermitir(true))
+        assertEquals("COUNTING_DOWN", vigia.estado)
+    }
+
+    @Test
+    fun alTocarElSueloConElMismoEstadoNoEsUnArranque() {
+        vigia.alCambiarEstado("EXECUTED")
+
+        vigia.alTocarElSuelo()
+
+        assertFalse(vigia.alCambiarEstado("EXECUTED").arrancoElRegreso)
+    }
+
+    /** Tocar el suelo en medio de una cuenta (raro) no deja una respuesta colgada para la siguiente. */
+    @Test
+    fun alTocarElSueloOlvidaLaCuentaEnCurso() {
+        vigia.alPermitir(false)
+        assertTrue(vigia.alCambiarEstado("COUNTING_DOWN").contestarQueNo)
+
+        vigia.alTocarElSuelo()
+
+        assertFalse("la cuenta de antes ya no está en curso", vigia.alPermitir(false))
+        assertTrue("la cuenta nueva sí se contesta", vigia.alCambiarEstado("COUNTING_DOWN").contestarQueNo)
+    }
+
     /** Al reconectar se olvida la cuenta de antes, pero no lo que la app pidió. */
     @Test
     fun reiniciarOlvidaLaCuentaYConservaElPermiso() {

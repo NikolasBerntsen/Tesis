@@ -41,6 +41,48 @@ class TomaDelDronTest {
         assertFalse(TomaDelDron.bloqueaLaApp(MotivoDelDron.OTRO))
     }
 
+    /** Lo desconocido pesa menos que la señal, la señal menos que la batería, y el botón y el forzado más. */
+    @Test
+    fun elOrdenDeLasTomas() {
+        val deMenorAMayor = listOf(
+            MotivoDelDron.OTRO,
+            MotivoDelDron.RTH_SENIAL,
+            MotivoDelDron.RTH_BATERIA,
+            MotivoDelDron.RTH_DEL_CONTROL,
+            MotivoDelDron.ATERRIZAJE_BATERIA_CRITICA,
+        )
+        assertEquals(deMenorAMayor, MotivoDelDron.entries.sortedBy(TomaDelDron::fuerza))
+        assertEquals(MotivoDelDron.entries.size, MotivoDelDron.entries.map(TomaDelDron::fuerza).toSet().size)
+    }
+
+    @Test
+    fun masFuerteQuedaConElQueMasPesaYAIgualPesoConElQueEstaba() {
+        assertEquals(MotivoDelDron.OTRO, TomaDelDron.masFuerte(null, MotivoDelDron.OTRO))
+        assertEquals(MotivoDelDron.RTH_BATERIA, TomaDelDron.masFuerte(MotivoDelDron.RTH_SENIAL, MotivoDelDron.RTH_BATERIA))
+        assertEquals(MotivoDelDron.RTH_DEL_CONTROL, TomaDelDron.masFuerte(MotivoDelDron.RTH_DEL_CONTROL, MotivoDelDron.RTH_BATERIA))
+        assertEquals(MotivoDelDron.RTH_BATERIA, TomaDelDron.masFuerte(MotivoDelDron.RTH_BATERIA, MotivoDelDron.RTH_BATERIA))
+    }
+
+    /**
+     * El bloqueo que queda: una toma que no bloquea no lo toca, y una de batería
+     * no convierte el pedido de una persona (el botón del control) en algo que
+     * la app pueda cortar.
+     */
+    @Test
+    fun elBloqueoTrasUnaTomaNueva() {
+        assertNull(TomaDelDron.bloqueoTrasLaToma(null, MotivoDelDron.RTH_SENIAL))
+        assertEquals(MotivoDelDron.RTH_BATERIA, TomaDelDron.bloqueoTrasLaToma(MotivoDelDron.RTH_BATERIA, MotivoDelDron.OTRO))
+        assertEquals(MotivoDelDron.RTH_BATERIA, TomaDelDron.bloqueoTrasLaToma(null, MotivoDelDron.RTH_BATERIA))
+        assertEquals(
+            MotivoDelDron.RTH_DEL_CONTROL,
+            TomaDelDron.bloqueoTrasLaToma(MotivoDelDron.RTH_DEL_CONTROL, MotivoDelDron.RTH_BATERIA),
+        )
+        assertEquals(
+            MotivoDelDron.ATERRIZAJE_BATERIA_CRITICA,
+            TomaDelDron.bloqueoTrasLaToma(MotivoDelDron.RTH_DEL_CONTROL, MotivoDelDron.ATERRIZAJE_BATERIA_CRITICA),
+        )
+    }
+
     @Test
     fun lasFasesDelRegresoSegunGoHomeState() {
         assertEquals(SeguidorDelRegreso.Fase.INACTIVO, TomaDelDron.faseDelRegreso("IDLE"))

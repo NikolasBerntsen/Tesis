@@ -75,12 +75,32 @@ class VigiaDelRthPorBateria {
         contestada = false
     }
 
-    /** Al reconectar: lo de antes era de otro enlace. Lo que la app pidió (permitir o no) se conserva. */
+    /**
+     * Al reconectar: lo de antes era de otro enlace. Lo que la app pidió
+     * (permitir o no) se conserva, porque el enlace se puede cortar y volver en
+     * pleno desvío; lo que lo devuelve es tocar el suelo ([alTocarElSuelo]).
+     */
     @Synchronized
     fun reiniciar() {
         contando = false
         contestada = false
         ultimoEstado = null
+    }
+
+    /**
+     * El dron está en el suelo: el desvío (o la emergencia) terminó, y el regreso
+     * inteligente vuelve a estar permitido. Si no, un solo `permitir(true)` que
+     * la app no llegó a mandar —se cerró la pantalla, se cortó el desvío por una
+     * orden— dejaba al vuelo siguiente sin el respaldo del propio DJI, y fuera
+     * de un desvío ese respaldo tiene que estar (RELEVOS §0 y §4). El último
+     * estado se conserva: un EXECUTED que queda del vuelo anterior no es un
+     * arranque en el siguiente.
+     */
+    @Synchronized
+    fun alTocarElSuelo() {
+        permitido = true
+        contando = false
+        contestada = false
     }
 
     private fun decidir(): Boolean {
