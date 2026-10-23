@@ -179,8 +179,20 @@ class SimulatedDroneController(
 
     // El modo lo escribe el hilo que comanda (hold/gotoPoint/...) y lo lee el
     // lazo de vuelo: volátil para que el cambio se vea enseguida.
+    //
+    // Dejar el RTH por cualquier camino (una orden de la app, el corte, otra
+    // toma, el suelo) es lo que en el real es `KeyGoHomeStatus` volviendo a
+    // IDLE: el regreso terminó, y el seguidor cierra ese episodio. Sin esto un
+    // regreso por señal que la app reemplazó al volver el enlace quedaba
+    // abierto hasta aterrizar, y la toma por señal siguiente pasaba muda.
     @Volatile
     private var mode = Mode.IDLE
+        set(nuevo) {
+            if (field == Mode.RTH && nuevo != Mode.RTH) {
+                seguidor.alCambiarFase(SeguidorDelRegreso.Fase.INACTIVO, SeguidorDelRegreso.Orden.NINGUNA, MotivoDelDron.OTRO)
+            }
+            field = nuevo
+        }
     private var homeLat = HOME_LAT
     private var homeLon = HOME_LON
     private var lat = HOME_LAT
@@ -694,8 +706,9 @@ class SimulatedDroneController(
                 emitEvent(FlightEvent.Problema("${DroneController.NO_SE_CORTO_EL_REGRESO}: $negativa"))
                 return
             }
+            // Primero se gasta el corte (cuenta solo con el regreso propio
+            // anotado); salir de RTH, abajo, cierra el regreso (ver [mode]).
             seguidor.alCortar()
-            seguidor.alCambiarFase(SeguidorDelRegreso.Fase.INACTIVO, SeguidorDelRegreso.Orden.NINGUNA, MotivoDelDron.OTRO)
             regresoDeLaApp = false
             tomaDelDron = null
             alturaObjetivo = altM

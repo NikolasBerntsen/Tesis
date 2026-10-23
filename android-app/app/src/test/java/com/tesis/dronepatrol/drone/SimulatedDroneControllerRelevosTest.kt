@@ -1100,6 +1100,29 @@ class SimulatedDroneControllerRelevosTest {
         assertEquals(listOf(MotivoDelDron.OTRO, MotivoDelDron.OTRO), b.tomas())
     }
 
+    /**
+     * Una orden de la app que saca al dron de su regreso lo termina, como en el
+     * real (`KeyGoHomeStatus` vuelve a IDLE): la pérdida de señal siguiente es
+     * otra toma y se avisa. Antes el episodio quedaba abierto hasta aterrizar y
+     * la segunda toma por señal pasaba muda.
+     */
+    @Test
+    fun retomarElVueloDespuesDeUnRegresoPorSenialCierraLaToma() = conDron { b ->
+        b.dron.setHome(alNorte(1_000.0), LON)
+        b.dron.hold()
+        b.dron.setSignalLost(true)
+        volar(7_000)
+        assertEquals(listOf(MotivoDelDron.RTH_SENIAL), b.tomas())
+
+        b.dron.setSignalLost(false)
+        b.dron.startRoute(RUTA, 0)
+        volar(1_000)
+        b.dron.setSignalLost(true)
+        volar(7_000)
+
+        assertEquals(listOf(MotivoDelDron.RTH_SENIAL, MotivoDelDron.RTH_SENIAL), b.tomas())
+    }
+
     /** Sin enlace la orden no llega: no es la app retomando el mando. */
     @Test
     fun unaOrdenSinEnlaceNoTerminaLaToma() = conDron { b ->
