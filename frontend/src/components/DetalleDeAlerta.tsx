@@ -12,6 +12,7 @@ import {
   stateLabel,
   textoSinGps,
 } from '../format';
+import { duenioDeLaAlerta } from '../relevos';
 import type { Alert, Drone, DroneStatus, MetaAlerta, MetaDron, ObjetivoEnSeguimiento } from '../types';
 import { useDecisionDeAlerta, type Decision } from '../useDecisionDeAlerta';
 import { IconoCamara } from './Iconos';
@@ -157,6 +158,7 @@ function DatosDelDron({
   dron,
   dronDeRespaldo,
   droneId,
+  detectadaPor,
   hayConsola,
   status,
   posicion,
@@ -165,16 +167,28 @@ function DatosDelDron({
   dron: Drone | null;
   dronDeRespaldo?: MetaDron;
   droneId: string | null;
+  /**
+   * El que la creó, si un relevo se la pasó a otro: la ficha es la del que la
+   * sigue ahora (el video que sirve es el suyo), pero quién la vio primero
+   * sigue siendo un dato del parte.
+   */
+  detectadaPor: string | null;
   hayConsola: boolean;
   status: DroneStatus | null;
   posicion: Punto | null;
 }>) {
   return (
     <>
-      <h3 className="etiqueta">Dron</h3>
+      <h3 className="etiqueta">{detectadaPor === null ? 'Dron' : 'Dron que la sigue'}</h3>
       <dl className="datos">
         <dt>Nombre</dt>
         <dd>{nombre || 'Dron desconocido'}</dd>
+        {detectadaPor !== null && (
+          <>
+            <dt>La detectó</dt>
+            <dd>{detectadaPor}</dd>
+          </>
+        )}
         <dt>Modelo</dt>
         <dd>{dron?.model || dronDeRespaldo?.model || '—'}</dd>
         <dt>Identificador</dt>
@@ -343,7 +357,10 @@ export default function DetalleDeAlerta({
   const alerta = viva ?? traida ?? conocida ?? null;
   const lat = alerta?.lat ?? referencia?.lat ?? null;
   const lon = alerta?.lon ?? referencia?.lon ?? null;
-  const droneId = alerta?.drone_id ?? null;
+  // El dron de la alerta es el que sigue al objetivo AHORA (RELEVOS §3.6): su
+  // video es el de «Ver feed en vivo» y su status dice dónde está el objetivo.
+  const droneId = alerta ? duenioDeLaAlerta(alerta) : null;
+  const relevada = !!alerta?.seguidaPor && alerta.seguidaPor !== alerta.drone_id;
   const dron = vivo.drones.find((d) => d.droneId === droneId) ?? null;
   const status = droneId ? (vivo.statuses[droneId] ?? null) : null;
   // El objetivo de ESTA alerta: el dron puede estar sobre otro, más nuevo.
@@ -355,8 +372,16 @@ export default function DetalleDeAlerta({
   const objetivo = seguido && posicionValida(seguido.lat, seguido.lon) ? seguido : null;
   const posicionDron = posicionDelDron(status);
   const deteccion: Punto | null = posicionValida(lat, lon) ? [lat as number, lon as number] : null;
-  const nombre = dron?.displayName || dronDeRespaldo?.displayName || '';
+  // La ficha guardada en el evento es la del que la creó: de respaldo sólo
+  // sirve si la sigue el mismo.
+  const respaldo = relevada ? undefined : dronDeRespaldo;
+  const nombre = dron?.displayName || respaldo?.displayName || '';
   const tipo = alerta?.type ?? referencia?.tipo ?? '';
+  let detectadaPor: string | null = null;
+  if (relevada) {
+    const creador = vivo.drones.find((d) => d.droneId === alerta.drone_id);
+    detectadaPor = creador?.displayName || dronDeRespaldo?.displayName || hashCorto(alerta.drone_id);
+  }
 
   return (
     <div className="detalle-alerta" data-testid="detalle-alerta">
@@ -418,8 +443,9 @@ export default function DetalleDeAlerta({
           <DatosDelDron
             nombre={nombre}
             dron={dron}
-            dronDeRespaldo={dronDeRespaldo}
+            dronDeRespaldo={respaldo}
             droneId={droneId}
+            detectadaPor={detectadaPor}
             hayConsola={vivo.verDron !== null}
             status={status}
             posicion={posicionDron}

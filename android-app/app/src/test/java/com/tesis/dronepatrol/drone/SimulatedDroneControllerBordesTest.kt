@@ -30,7 +30,7 @@ import org.robolectric.annotation.Config
  * que reiniciarse al reconectar o al cambiar la base.
  *
  * Usa Robolectric porque el video simulado dibuja con android.graphics; el
- * vuelo corre con tiempos reales (tick de 500 ms, 12 m/s, failsafe a los 6 s).
+ * vuelo corre con tiempos reales (tick de 500 ms, 8 m/s, failsafe a los 6 s).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -114,8 +114,8 @@ class SimulatedDroneControllerBordesTest {
         delay(1_200)
 
         // El regreso arranca en el primer tick pasados los 6 s y hasta la
-        // lectura van unos 2,4 s: 4 o 5 ticks de 6 m, entre 24 y 30 m. Con el
-        // tope de 45 m caben dos ticks de demora; un failsafe que saltara al
+        // lectura van unos 2,4 s: 4 o 5 ticks de 4 m, entre 16 y 20 m. Con el
+        // tope de 45 m caben seis ticks de demora; un failsafe que saltara al
         // cortar ya habría recorrido los 60 m hasta la base.
         val t = enElAire.telemetry.first()
         val recorrido = metrosAlNorte(t.lat)

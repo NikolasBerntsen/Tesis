@@ -1,0 +1,1556 @@
+{
+  "version": 1,
+  "contrato": "docs/PROTOCOLS.md §1 (status), §1.b, §2.b, §3, §5 y §7. Diseño: docs/RELEVOS.md (versión 2).",
+  "uso": "Un ejemplo válido de cada mensaje (y algunos inválidos, con el motivo en 'porque'). Lo leen las pruebas del backend (fs, relativo a la raíz del repo) y las de la app (File('../../docs/contrato/relevos.json'), relativo a android-app/app). Si cambia el contrato, cambian juntos el documento, este archivo y las dos puntas. Forma: mensajes.<app_al_hub|hub_a_la_app|hub_a_la_consola>.<type>.validos[].{caso, mensaje} e invalidos[].{caso, porque, mensaje}; rest.<'MÉTODO ruta'> con respuesta o cuerpos; eventos.<tipo> con la fila de events que deja el hub.",
+  "limites": {
+    "refMaxCaracteres": 64,
+    "detalleMaxCaracteres": 200,
+    "altMinimaM": -200,
+    "altMaximaM": 1000,
+    "velocidadObjetivoMaximaMs": 40,
+    "segundosDisponiblesMaximo": 3600,
+    "seqMaximo": 7,
+    "jpegBase64MaxCaracteres": 400000,
+    "jpegBase64Prefijo": "/9j/",
+    "basesMaximas": 200,
+    "nombreBaseMaxCaracteres": 60,
+    "nodosMinimos": 2,
+    "nodosMaximos": 60,
+    "altNodoMaximaM": 500,
+    "apodoNodoMaxCaracteres": 40,
+    "aterrizajeVisitanteMinimoM": 10,
+    "aterrizajeVisitanteMaximoM": 50,
+    "pctParaVolverMaximo": 100,
+    "alcanceMaximoM": 100000,
+    "segundosParaVolverMaximo": 36000
+  },
+  "plazos": {
+    "reintentoRelayRequestMs": 5000,
+    "respuestaDeBMs": 10000,
+    "cuentaRegresivaMs": 10000,
+    "relayStatusEnCaminoMs": 5000,
+    "relayTargetSinEnlaceMs": 5000,
+    "aSinStatusParaSinEnlaceMs": 5000,
+    "ventanaRelayStatusMs": 10000,
+    "relevoDespegueMs": 120000,
+    "traspasoSinConfirmarMs": 30000,
+    "relevoDesconectadoMs": 20000,
+    "bloqueoBaseDestinoMs": 600000,
+    "reusoEmergenciaAbiertaMs": 1800000,
+    "reintentoColaMinimoMs": 5000,
+    "reintentoColaMaximoMs": 60000
+  },
+  "enumerados": {
+    "estadosDelRelevo": ["RESERVADO", "ORDENADO", "EN_CAMINO", "TRASPASO", "SIN_RELEVO", "COMPLETADO", "CANCELADO", "FALLIDO"],
+    "estadosActivos": ["RESERVADO", "ORDENADO", "EN_CAMINO", "TRASPASO", "SIN_RELEVO"],
+    "estadosTerminales": ["COMPLETADO", "CANCELADO", "FALLIDO"],
+    "motivoFin": {
+      "COMPLETADO": ["origen_sin_confirmar"],
+      "CANCELADO": ["orden_del_operador", "alerta_descartada", "sin_relevo", "origen_se_fue"],
+      "FALLIDO": ["relevo_abortado", "relevo_desconectado", "sin_despegue", "relevo_perdio_estado"]
+    },
+    "motivoRelayRequest": ["patrulla", "seguimiento"],
+    "motivoRelayReject": ["no_disponible", "virtual_stick", "cancelado_en_campo", "ocupado", "mensaje_invalido"],
+    "motivoRelayAbort": ["subida", "virtual_stick", "senial", "bateria", "dji", "orden_de_campo", "otro"],
+    "motivoRelayAbandon": ["piso", "dji", "orden_del_operador", "orden_de_campo", "senial"],
+    "motivoRelayCancel": ["alerta_descartada", "vencido", "terminado", "inexistente"],
+    "motivoRthDiverted": ["otra_base", "emergencia"],
+    "motivoEmergencia": ["autonomia", "bateria_critica_dji"],
+    "tipoDeFoto": ["oblicua", "cenital", "panoramica"],
+    "origenRelayTarget": ["en_linea", "sin_enlace", "retirado"],
+    "rolEnElRelevo": ["origen", "relevo"],
+    "faseDelOrigen": ["pedido", "ventana", "soltando", "aterrizando", "desviado"],
+    "faseDelRelevo": ["cuenta_regresiva", "esperando_despegue", "despegando", "en_camino", "traspaso"],
+    "estadosNuevosDelPatrullaje": ["RELEVANDO", "ATERRIZAJE_EMERGENCIA"],
+    "eventosDelHub": [
+      "RELAY_REQUESTED",
+      "RELAY_ASSIGNED",
+      "RELAY_REJECTED",
+      "RELAY_STARTED",
+      "RELAY_HANDOVER",
+      "RELAY_COMPLETED",
+      "RELAY_UNAVAILABLE",
+      "RELAY_CANCELLED",
+      "RELAY_FAILED",
+      "RTH_DIVERTED",
+      "EMERGENCY_LANDING",
+      "EMERGENCY_LANDED",
+      "EMERGENCY_RECOVERED"
+    ]
+  },
+  "drones": {
+    "alfa": { "droneId": "a3f9c1b27d5e4408f61a9c3e772b7e42", "displayName": "Alfa" },
+    "bravo": { "droneId": "b7e4209c3f1a4d6e8b2c5a7f9d1e3c40", "displayName": "Bravo" }
+  },
+  "mensajes": {
+    "app_al_hub": {
+      "status": {
+        "nota": "Solo los campos nuevos importan acá; el resto es el status de siempre (§1). Un 'relevo' o una 'autonomia' inválidos NO descartan el status: el hub los saca del que reenvía.",
+        "validos": [
+          {
+            "caso": "A siguiendo un objetivo, con un relevo pedido y autonomía informada",
+            "mensaje": {
+              "type": "status",
+              "state": "FOLLOWING",
+              "battery": 38,
+              "lat": -34.8521,
+              "lon": -56.2012,
+              "gpsFix": true,
+              "routeId": 1,
+              "waypointIndex": 2,
+              "waypointTotal": 4,
+              "signal": "OK",
+              "signalPct": 81,
+              "heading": 118,
+              "mode": "TEST",
+              "alt": 40,
+              "satellites": 17,
+              "flying": true,
+              "flightMode": "VIRTUAL_STICK",
+              "gimbalPitch": -55,
+              "target": {
+                "alertId": 12,
+                "type": "VEHICLE",
+                "lat": -34.85062,
+                "lon": -56.19951,
+                "speedMs": 4.2,
+                "courseDeg": 90,
+                "moving": true,
+                "lost": false,
+                "lastSeenMs": 600,
+                "decision": "VALIDATED",
+                "vNorteMs": 0,
+                "vEsteMs": 4.2
+              },
+              "relevo": { "enEspera": false, "disponible": false, "relayId": 7, "rol": "origen", "fase": "pedido" },
+              "autonomia": { "pctParaVolver": 14, "pctParaAterrizar": 3, "alcanceM": 2400, "segundosParaVolver": 95 }
+            }
+          },
+          {
+            "caso": "B en el suelo, en espera y disponible, sin autonomía informada (simulador recién conectado)",
+            "mensaje": {
+              "type": "status",
+              "state": "IDLE",
+              "battery": 96,
+              "lat": -34.8565,
+              "lon": -56.2075,
+              "gpsFix": true,
+              "routeId": null,
+              "waypointIndex": 0,
+              "waypointTotal": 0,
+              "signal": "OK",
+              "signalPct": 100,
+              "heading": 0,
+              "mode": "TEST",
+              "alt": 0,
+              "satellites": 14,
+              "flying": false,
+              "flightMode": "",
+              "target": null,
+              "relevo": { "enEspera": true, "disponible": true, "relayId": null, "rol": null, "fase": null },
+              "autonomia": { "pctParaVolver": null, "pctParaAterrizar": null, "alcanceM": null, "segundosParaVolver": null }
+            }
+          },
+          {
+            "caso": "B relevando: estado nuevo RELEVANDO",
+            "mensaje": {
+              "type": "status",
+              "state": "RELEVANDO",
+              "battery": 91,
+              "lat": -34.854,
+              "lon": -56.204,
+              "gpsFix": true,
+              "routeId": null,
+              "waypointIndex": 0,
+              "waypointTotal": 0,
+              "signal": "OK",
+              "signalPct": 88,
+              "heading": 45,
+              "mode": "TEST",
+              "alt": 60,
+              "satellites": 16,
+              "flying": true,
+              "flightMode": "VIRTUAL_STICK",
+              "target": null,
+              "relevo": { "enEspera": false, "disponible": false, "relayId": 7, "rol": "relevo", "fase": "en_camino" }
+            }
+          },
+          {
+            "caso": "Protocolo de última ubicación: estado nuevo ATERRIZAJE_EMERGENCIA",
+            "mensaje": {
+              "type": "status",
+              "state": "ATERRIZAJE_EMERGENCIA",
+              "battery": 9,
+              "lat": -34.8702,
+              "lon": -56.1902,
+              "gpsFix": true,
+              "routeId": 1,
+              "waypointIndex": 1,
+              "waypointTotal": 4,
+              "signal": "OK",
+              "signalPct": 40,
+              "heading": 270,
+              "mode": "TEST",
+              "alt": 38,
+              "satellites": 15,
+              "flying": true,
+              "flightMode": "VIRTUAL_STICK",
+              "gimbalPitch": -90,
+              "target": null,
+              "relevo": { "enEspera": false, "disponible": false, "relayId": null, "rol": null, "fase": null },
+              "autonomia": { "pctParaVolver": 22, "pctParaAterrizar": 4, "alcanceM": 300, "segundosParaVolver": 160 }
+            }
+          }
+        ],
+        "invalidos": [
+          {
+            "caso": "disponible sin estar en espera",
+            "porque": "relevo.disponible true con relevo.enEspera false es inválido: el hub saca 'relevo' y el dron no es candidato",
+            "mensaje": {
+              "type": "status",
+              "state": "IDLE",
+              "battery": 96,
+              "lat": -34.8565,
+              "lon": -56.2075,
+              "gpsFix": true,
+              "flying": false,
+              "relevo": { "enEspera": false, "disponible": true, "relayId": null, "rol": null, "fase": null }
+            }
+          },
+          {
+            "caso": "fase del otro rol",
+            "porque": "'ventana' es una fase del origen, no del relevo",
+            "mensaje": {
+              "type": "status",
+              "state": "RELEVANDO",
+              "battery": 91,
+              "lat": -34.854,
+              "lon": -56.204,
+              "gpsFix": true,
+              "flying": true,
+              "relevo": { "enEspera": false, "disponible": false, "relayId": 7, "rol": "relevo", "fase": "ventana" }
+            }
+          },
+          {
+            "caso": "rol sin relevo",
+            "porque": "rol es null si y solo si relayId es null",
+            "mensaje": {
+              "type": "status",
+              "state": "FOLLOWING",
+              "battery": 38,
+              "lat": -34.8521,
+              "lon": -56.2012,
+              "gpsFix": true,
+              "flying": true,
+              "relevo": { "enEspera": false, "disponible": false, "relayId": null, "rol": "origen", "fase": "pedido" }
+            }
+          },
+          {
+            "caso": "autonomía fuera de rango",
+            "porque": "pctParaVolver va en [0, 100]: el hub saca 'autonomia' entera",
+            "mensaje": {
+              "type": "status",
+              "state": "PATROLLING",
+              "battery": 70,
+              "lat": -34.8521,
+              "lon": -56.2012,
+              "gpsFix": true,
+              "flying": true,
+              "autonomia": { "pctParaVolver": 130, "pctParaAterrizar": 3, "alcanceM": 2400, "segundosParaVolver": 95 }
+            }
+          }
+        ]
+      },
+      "relay_request": {
+        "validos": [
+          {
+            "caso": "patrulla: A vuelve por batería en medio de la ruta 1, volaba hacia el nodo 2",
+            "mensaje": { "type": "relay_request", "ref": "3b0f6f5e-7c1a-4d2b-9e1f-2a6c8d4e0b11", "motivo": "patrulla", "routeId": 1, "fromIndex": 2 }
+          },
+          {
+            "caso": "seguimiento con autonomía informada",
+            "mensaje": {
+              "type": "relay_request",
+              "ref": "c2d9e7a4-1f3b-4c6d-8e5a-9b0c1d2e3f40",
+              "motivo": "seguimiento",
+              "alertId": 12,
+              "segundosDisponibles": 95.5
+            }
+          },
+          {
+            "caso": "seguimiento sin autonomía informada",
+            "mensaje": {
+              "type": "relay_request",
+              "ref": "d4e5f6a7-b8c9-4d0e-8f1a-2b3c4d5e6f70",
+              "motivo": "seguimiento",
+              "alertId": 12,
+              "segundosDisponibles": null
+            }
+          }
+        ],
+        "invalidos": [
+          {
+            "caso": "motivo desconocido",
+            "porque": "motivo es 'patrulla' o 'seguimiento'",
+            "mensaje": { "type": "relay_request", "ref": "e1", "motivo": "rescate", "routeId": 1, "fromIndex": 0 }
+          },
+          {
+            "caso": "patrulla sin routeId",
+            "porque": "routeId es obligatorio con motivo 'patrulla'",
+            "mensaje": { "type": "relay_request", "ref": "e2", "motivo": "patrulla", "fromIndex": 2 }
+          },
+          {
+            "caso": "fromIndex negativo",
+            "porque": "fromIndex es un entero >= 0",
+            "mensaje": { "type": "relay_request", "ref": "e3", "motivo": "patrulla", "routeId": 1, "fromIndex": -1 }
+          },
+          {
+            "caso": "segundosDisponibles en texto",
+            "porque": "nada se convierte: un texto no es un número",
+            "mensaje": { "type": "relay_request", "ref": "e4", "motivo": "seguimiento", "alertId": 12, "segundosDisponibles": "90" }
+          },
+          {
+            "caso": "seguimiento sin el campo segundosDisponibles",
+            "porque": "el campo tiene que estar (puede ser null)",
+            "mensaje": { "type": "relay_request", "ref": "e5", "motivo": "seguimiento", "alertId": 12 }
+          },
+          {
+            "caso": "ref de 65 caracteres",
+            "porque": "ref va de 1 a 64 caracteres y no se recorta",
+            "mensaje": {
+              "type": "relay_request",
+              "ref": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "motivo": "patrulla",
+              "routeId": 1,
+              "fromIndex": 0
+            }
+          }
+        ]
+      },
+      "relay_accept": {
+        "validos": [{ "caso": "B acepta el relevo 7", "mensaje": { "type": "relay_accept", "relayId": 7 } }],
+        "invalidos": [
+          { "caso": "relayId cero", "porque": "relayId es un entero >= 1", "mensaje": { "type": "relay_accept", "relayId": 0 } },
+          { "caso": "relayId en texto", "porque": "nada se convierte", "mensaje": { "type": "relay_accept", "relayId": "7" } }
+        ]
+      },
+      "relay_reject": {
+        "validos": [
+          {
+            "caso": "el operador apretó Cancelar en la cuenta regresiva",
+            "mensaje": { "type": "relay_reject", "relayId": 7, "motivo": "cancelado_en_campo", "detalle": "Cancelado desde el teléfono" }
+          },
+          {
+            "caso": "la orden no pasó la validación",
+            "mensaje": { "type": "relay_reject", "relayId": 8, "motivo": "mensaje_invalido", "detalle": "fromIndex fuera de la ruta" }
+          },
+          {
+            "caso": "al reevaluar dejó de estar disponible, sin detalle",
+            "mensaje": { "type": "relay_reject", "relayId": 7, "motivo": "no_disponible" }
+          }
+        ],
+        "invalidos": [
+          {
+            "caso": "motivo desconocido",
+            "porque": "no está en la lista de motivos de relay_reject",
+            "mensaje": { "type": "relay_reject", "relayId": 7, "motivo": "no_quiero" }
+          },
+          { "caso": "sin motivo", "porque": "motivo es obligatorio", "mensaje": { "type": "relay_reject", "relayId": 7 } }
+        ]
+      },
+      "relay_ready": {
+        "validos": [{ "caso": "B llegó a 60 m del objetivo con su rastreador sembrado", "mensaje": { "type": "relay_ready", "relayId": 7 } }],
+        "invalidos": [{ "caso": "sin relayId", "porque": "relayId es obligatorio", "mensaje": { "type": "relay_ready" } }]
+      },
+      "relay_abort": {
+        "validos": [
+          { "caso": "B perdió la señal en RELEVANDO", "mensaje": { "type": "relay_abort", "relayId": 7, "motivo": "senial" } },
+          {
+            "caso": "falló la subida: B aterriza",
+            "mensaje": { "type": "relay_abort", "relayId": 9, "motivo": "subida", "detalle": "no llegó a 60 m en 40 s" }
+          }
+        ],
+        "invalidos": [{ "caso": "sin motivo", "porque": "motivo es obligatorio en relay_abort", "mensaje": { "type": "relay_abort", "relayId": 7 } }]
+      },
+      "relay_abandon": {
+        "validos": [
+          { "caso": "A llegó a su piso de energía", "mensaje": { "type": "relay_abandon", "relayId": 7, "motivo": "piso" } },
+          { "caso": "sin motivo (es opcional)", "mensaje": { "type": "relay_abandon", "relayId": 7 } }
+        ],
+        "invalidos": [{ "caso": "relayId negativo", "porque": "relayId es un entero >= 1", "mensaje": { "type": "relay_abandon", "relayId": -3 } }]
+      },
+      "relay_released": {
+        "validos": [{ "caso": "A ya se alejó 100 m y arranca su regreso", "mensaje": { "type": "relay_released", "relayId": 7 } }],
+        "invalidos": [{ "caso": "relayId con decimales", "porque": "relayId es un entero", "mensaje": { "type": "relay_released", "relayId": 7.5 } }]
+      },
+      "landing_at_base": {
+        "validos": [
+          {
+            "caso": "A empieza a bajar en su base con el relevo ya reservado",
+            "mensaje": {
+              "type": "landing_at_base",
+              "ref": "3b0f6f5e-7c1a-4d2b-9e1f-2a6c8d4e0b11",
+              "relayId": 5,
+              "baseId": 1,
+              "lat": -34.85651,
+              "lon": -56.20748,
+              "routeId": 1,
+              "fromIndex": 2
+            }
+          },
+          {
+            "caso": "autosuficiente: el pedido se perdió y la app no recibió bases",
+            "mensaje": {
+              "type": "landing_at_base",
+              "ref": "3b0f6f5e-7c1a-4d2b-9e1f-2a6c8d4e0b11",
+              "relayId": null,
+              "baseId": null,
+              "lat": -34.85651,
+              "lon": -56.20748,
+              "routeId": 1,
+              "fromIndex": 2
+            }
+          }
+        ],
+        "invalidos": [
+          {
+            "caso": "una sola coordenada en null",
+            "porque": "lat y lon van los dos con número o los dos en null",
+            "mensaje": { "type": "landing_at_base", "ref": "r1", "relayId": 5, "baseId": 1, "lat": null, "lon": -56.20748, "routeId": 1, "fromIndex": 2 }
+          },
+          {
+            "caso": "sin routeId",
+            "porque": "routeId es obligatorio en landing_at_base",
+            "mensaje": { "type": "landing_at_base", "ref": "r1", "relayId": 5, "baseId": 1, "lat": -34.85651, "lon": -56.20748, "fromIndex": 2 }
+          }
+        ]
+      },
+      "landed_at_base": {
+        "validos": [
+          { "caso": "A tocó tierra en su base", "mensaje": { "type": "landed_at_base", "relayId": 5, "baseId": 1, "lat": -34.8565, "lon": -56.2075 } },
+          {
+            "caso": "un desviado aterrizó en la base 2, sin GPS en ese momento",
+            "mensaje": { "type": "landed_at_base", "relayId": null, "baseId": 2, "lat": null, "lon": null }
+          }
+        ],
+        "invalidos": [
+          {
+            "caso": "posición 0,0",
+            "porque": "0,0 no es una posición: sin fix van los dos en null",
+            "mensaje": { "type": "landed_at_base", "relayId": 5, "baseId": 1, "lat": 0, "lon": 0 }
+          }
+        ]
+      },
+      "rth_diverted": {
+        "validos": [
+          {
+            "caso": "se desvía a la base 2",
+            "mensaje": { "type": "rth_diverted", "relayId": 5, "baseId": 2, "lat": -34.879, "lon": -56.185, "motivo": "otra_base" }
+          },
+          {
+            "caso": "no llega a ninguna: protocolo de última ubicación",
+            "mensaje": { "type": "rth_diverted", "relayId": null, "baseId": null, "lat": -34.8702, "lon": -56.1902, "motivo": "emergencia" }
+          }
+        ],
+        "invalidos": [
+          {
+            "caso": "otra_base sin base",
+            "porque": "con 'otra_base' el baseId es un entero",
+            "mensaje": { "type": "rth_diverted", "relayId": 5, "baseId": null, "lat": -34.879, "lon": -56.185, "motivo": "otra_base" }
+          },
+          {
+            "caso": "emergencia con base",
+            "porque": "con 'emergencia' el baseId es null",
+            "mensaje": { "type": "rth_diverted", "relayId": null, "baseId": 2, "lat": -34.8702, "lon": -56.1902, "motivo": "emergencia" }
+          }
+        ]
+      },
+      "emergency_landing": {
+        "validos": [
+          {
+            "caso": "lo disparó el cálculo de autonomía",
+            "mensaje": {
+              "type": "emergency_landing",
+              "ref": "9f8e7d6c-5b4a-4392-8172-6a5b4c3d2e1f",
+              "motivo": "autonomia",
+              "lat": -34.8702,
+              "lon": -56.1902,
+              "alt": 38,
+              "bateria": 9,
+              "ts": 1792767845000
+            }
+          },
+          {
+            "caso": "el propio DJI forzó el aterrizaje, sin GPS",
+            "mensaje": {
+              "type": "emergency_landing",
+              "ref": "0a1b2c3d-4e5f-4061-8273-94a5b6c7d8e9",
+              "motivo": "bateria_critica_dji",
+              "lat": null,
+              "lon": null,
+              "alt": 25.5,
+              "bateria": 6,
+              "ts": 1792767900000
+            }
+          }
+        ],
+        "invalidos": [
+          {
+            "caso": "batería fuera de rango",
+            "porque": "bateria va en [0, 100]",
+            "mensaje": {
+              "type": "emergency_landing",
+              "ref": "x1",
+              "motivo": "autonomia",
+              "lat": -34.8702,
+              "lon": -56.1902,
+              "alt": 38,
+              "bateria": 140,
+              "ts": 1792767845000
+            }
+          },
+          {
+            "caso": "motivo desconocido",
+            "porque": "motivo es 'autonomia' o 'bateria_critica_dji'",
+            "mensaje": {
+              "type": "emergency_landing",
+              "ref": "x2",
+              "motivo": "choque",
+              "lat": -34.8702,
+              "lon": -56.1902,
+              "alt": 38,
+              "bateria": 9,
+              "ts": 1792767845000
+            }
+          }
+        ]
+      },
+      "emergency_photo": {
+        "validos": [
+          {
+            "caso": "foto oblicua, la primera",
+            "mensaje": {
+              "type": "emergency_photo",
+              "ref": "9f8e7d6c-5b4a-4392-8172-6a5b4c3d2e1f",
+              "seq": 0,
+              "tipo": "oblicua",
+              "rumbo": 270,
+              "inclinacion": -70,
+              "lat": -34.8702,
+              "lon": -56.1902,
+              "alt": 38,
+              "jpegBase64": "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=",
+              "ts": 1792767847000
+            }
+          },
+          {
+            "caso": "panorámica a 180°",
+            "mensaje": {
+              "type": "emergency_photo",
+              "ref": "9f8e7d6c-5b4a-4392-8172-6a5b4c3d2e1f",
+              "seq": 4,
+              "tipo": "panoramica",
+              "rumbo": 180,
+              "inclinacion": -30,
+              "lat": -34.8702,
+              "lon": -56.1902,
+              "alt": 38,
+              "jpegBase64": "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=",
+              "ts": 1792767856000
+            }
+          }
+        ],
+        "invalidos": [
+          {
+            "caso": "seq fuera de rango",
+            "porque": "seq va en [0, 7]",
+            "mensaje": {
+              "type": "emergency_photo",
+              "ref": "9f8e7d6c-5b4a-4392-8172-6a5b4c3d2e1f",
+              "seq": 8,
+              "tipo": "cenital",
+              "rumbo": 270,
+              "inclinacion": -90,
+              "lat": -34.8702,
+              "lon": -56.1902,
+              "alt": 38,
+              "jpegBase64": "/9j/4AAQ",
+              "ts": 1792767849000
+            }
+          },
+          {
+            "caso": "no es un JPEG",
+            "porque": "jpegBase64 tiene que empezar con /9j/ (esto es un PNG)",
+            "mensaje": {
+              "type": "emergency_photo",
+              "ref": "9f8e7d6c-5b4a-4392-8172-6a5b4c3d2e1f",
+              "seq": 1,
+              "tipo": "cenital",
+              "rumbo": 270,
+              "inclinacion": -90,
+              "lat": -34.8702,
+              "lon": -56.1902,
+              "alt": 38,
+              "jpegBase64": "iVBORw0KGgo=",
+              "ts": 1792767849000
+            }
+          },
+          {
+            "caso": "inclinación imposible",
+            "porque": "inclinacion va en [-90, 30]",
+            "mensaje": {
+              "type": "emergency_photo",
+              "ref": "9f8e7d6c-5b4a-4392-8172-6a5b4c3d2e1f",
+              "seq": 1,
+              "tipo": "cenital",
+              "rumbo": 270,
+              "inclinacion": -120,
+              "lat": -34.8702,
+              "lon": -56.1902,
+              "alt": 38,
+              "jpegBase64": "/9j/4AAQ",
+              "ts": 1792767849000
+            }
+          }
+        ]
+      },
+      "emergency_landed": {
+        "validos": [
+          {
+            "caso": "tocó tierra: la última posición GPS",
+            "mensaje": {
+              "type": "emergency_landed",
+              "ref": "9f8e7d6c-5b4a-4392-8172-6a5b4c3d2e1f",
+              "lat": -34.87021,
+              "lon": -56.19018,
+              "alt": 0.2,
+              "ts": 1792767870000
+            }
+          }
+        ],
+        "invalidos": [
+          {
+            "caso": "ts cero",
+            "porque": "ts es un entero > 0",
+            "mensaje": { "type": "emergency_landed", "ref": "9f8e7d6c-5b4a-4392-8172-6a5b4c3d2e1f", "lat": -34.87021, "lon": -56.19018, "alt": 0.2, "ts": 0 }
+          }
+        ]
+      }
+    },
+    "hub_a_la_app": {
+      "bases": {
+        "validos": [
+          {
+            "caso": "dos bases activas; la propia con punto para visitantes",
+            "mensaje": {
+              "type": "bases",
+              "propiaId": 1,
+              "bases": [
+                { "id": 1, "nombre": "Base Norte", "lat": -34.8565, "lon": -56.2075, "aterrizajeLat": -34.85632, "aterrizajeLon": -56.2075 },
+                { "id": 2, "nombre": "Base Sur", "lat": -34.9011, "lon": -56.1645, "aterrizajeLat": null, "aterrizajeLon": null }
+              ]
+            }
+          },
+          { "caso": "un dron sin base y sin bases activas", "mensaje": { "type": "bases", "propiaId": null, "bases": [] } }
+        ],
+        "invalidos": [
+          {
+            "caso": "punto de visitantes a medias",
+            "porque": "aterrizajeLat y aterrizajeLon van juntos",
+            "mensaje": {
+              "type": "bases",
+              "propiaId": 1,
+              "bases": [{ "id": 1, "nombre": "Base Norte", "lat": -34.8565, "lon": -56.2075, "aterrizajeLat": -34.85632, "aterrizajeLon": null }]
+            }
+          },
+          {
+            "caso": "la propia no está en la lista",
+            "porque": "propiaId es null o el id de una de las bases",
+            "mensaje": {
+              "type": "bases",
+              "propiaId": 3,
+              "bases": [{ "id": 1, "nombre": "Base Norte", "lat": -34.8565, "lon": -56.2075, "aterrizajeLat": null, "aterrizajeLon": null }]
+            }
+          }
+        ]
+      },
+      "relay_status": {
+        "validos": [
+          {
+            "caso": "patrulla con B reservado",
+            "mensaje": {
+              "type": "relay_status",
+              "ref": "3b0f6f5e-7c1a-4d2b-9e1f-2a6c8d4e0b11",
+              "relayId": 5,
+              "estado": "RESERVADO",
+              "relevo": { "droneId": "b7e4209c3f1a4d6e8b2c5a7f9d1e3c40", "displayName": "Bravo" },
+              "etaS": null,
+              "motivoFin": null
+            }
+          },
+          {
+            "caso": "seguimiento con B en camino",
+            "mensaje": {
+              "type": "relay_status",
+              "ref": "c2d9e7a4-1f3b-4c6d-8e5a-9b0c1d2e3f40",
+              "relayId": 7,
+              "estado": "EN_CAMINO",
+              "relevo": { "droneId": "b7e4209c3f1a4d6e8b2c5a7f9d1e3c40", "displayName": "Bravo" },
+              "etaS": 74,
+              "motivoFin": null
+            }
+          },
+          {
+            "caso": "sin candidato todavía",
+            "mensaje": {
+              "type": "relay_status",
+              "ref": "c2d9e7a4-1f3b-4c6d-8e5a-9b0c1d2e3f40",
+              "relayId": 7,
+              "estado": "SIN_RELEVO",
+              "relevo": null,
+              "etaS": null,
+              "motivoFin": null
+            }
+          },
+          {
+            "caso": "el pedido sin candidato venció",
+            "mensaje": {
+              "type": "relay_status",
+              "ref": "3b0f6f5e-7c1a-4d2b-9e1f-2a6c8d4e0b11",
+              "relayId": 5,
+              "estado": "CANCELADO",
+              "relevo": null,
+              "etaS": null,
+              "motivoFin": "sin_relevo"
+            }
+          }
+        ],
+        "invalidos": [
+          {
+            "caso": "estado con espacio",
+            "porque": "estado es uno de la lista, exacto",
+            "mensaje": { "type": "relay_status", "ref": "r", "relayId": 7, "estado": "EN CAMINO", "relevo": null, "etaS": null, "motivoFin": null }
+          },
+          {
+            "caso": "eta negativa",
+            "porque": "etaS es un número >= 0 o null",
+            "mensaje": { "type": "relay_status", "ref": "r", "relayId": 7, "estado": "EN_CAMINO", "relevo": null, "etaS": -5, "motivoFin": null }
+          }
+        ]
+      },
+      "relay_start": {
+        "validos": [
+          {
+            "caso": "B releva la ruta 1 desde el nodo 2",
+            "mensaje": {
+              "type": "relay_start",
+              "relayId": 5,
+              "motivo": "patrulla",
+              "ruta": {
+                "id": 1,
+                "name": "Perímetro norte",
+                "waypoints": [
+                  { "lat": -34.855, "lon": -56.206, "alt": 40, "label": "Portón" },
+                  { "lat": -34.853, "lon": -56.203, "alt": 40 },
+                  { "lat": -34.851, "lon": -56.206, "alt": 45, "label": "Galpón" },
+                  { "lat": -34.853, "lon": -56.209, "alt": 40 }
+                ]
+              },
+              "fromIndex": 2,
+              "de": { "droneId": "a3f9c1b27d5e4408f61a9c3e772b7e42", "displayName": "Alfa" }
+            }
+          }
+        ],
+        "invalidos": [
+          {
+            "caso": "fromIndex fuera de la ruta",
+            "porque": "fromIndex < cantidad de nodos: la app contesta relay_reject 'mensaje_invalido'",
+            "mensaje": {
+              "type": "relay_start",
+              "relayId": 8,
+              "motivo": "patrulla",
+              "ruta": {
+                "id": 1,
+                "name": "Perímetro norte",
+                "waypoints": [{ "lat": -34.855, "lon": -56.206, "alt": 40 }, { "lat": -34.853, "lon": -56.203, "alt": 40 }]
+              },
+              "fromIndex": 2,
+              "de": { "droneId": "a3f9c1b27d5e4408f61a9c3e772b7e42", "displayName": "Alfa" }
+            }
+          },
+          {
+            "caso": "ruta de un solo nodo",
+            "porque": "una ruta tiene de 2 a 60 nodos",
+            "mensaje": {
+              "type": "relay_start",
+              "relayId": 8,
+              "motivo": "patrulla",
+              "ruta": { "id": 1, "name": "Perímetro norte", "waypoints": [{ "lat": -34.855, "lon": -56.206, "alt": 40 }] },
+              "fromIndex": 0,
+              "de": { "droneId": "a3f9c1b27d5e4408f61a9c3e772b7e42", "displayName": "Alfa" }
+            }
+          },
+          {
+            "caso": "droneId que no es un hash",
+            "porque": "droneId son 32 hexadecimales en minúsculas",
+            "mensaje": {
+              "type": "relay_start",
+              "relayId": 8,
+              "motivo": "patrulla",
+              "ruta": {
+                "id": 1,
+                "name": "Perímetro norte",
+                "waypoints": [{ "lat": -34.855, "lon": -56.206, "alt": 40 }, { "lat": -34.853, "lon": -56.203, "alt": 40 }]
+              },
+              "fromIndex": 0,
+              "de": { "droneId": "ALFA", "displayName": "Alfa" }
+            }
+          }
+        ]
+      },
+      "relay_tracking": {
+        "validos": [
+          {
+            "caso": "B releva el seguimiento de la alerta 12",
+            "mensaje": {
+              "type": "relay_tracking",
+              "relayId": 7,
+              "alertId": 12,
+              "decision": "VALIDATED",
+              "objetivo": {
+                "alertId": 12,
+                "type": "VEHICLE",
+                "lat": -34.85062,
+                "lon": -56.19951,
+                "speedMs": 4.2,
+                "courseDeg": 90,
+                "moving": true,
+                "lost": false,
+                "lastSeenMs": 600,
+                "decision": "VALIDATED",
+                "vNorteMs": 0,
+                "vEsteMs": 4.2
+              },
+              "de": { "droneId": "a3f9c1b27d5e4408f61a9c3e772b7e42", "displayName": "Alfa" },
+              "ts": 1792767845120
+            }
+          }
+        ],
+        "invalidos": [
+          {
+            "caso": "objetivo de otra alerta",
+            "porque": "objetivo.alertId tiene que ser igual al alertId del mensaje",
+            "mensaje": {
+              "type": "relay_tracking",
+              "relayId": 7,
+              "alertId": 12,
+              "decision": "PENDING",
+              "objetivo": {
+                "alertId": 11,
+                "type": "VEHICLE",
+                "lat": -34.85062,
+                "lon": -56.19951,
+                "speedMs": 4.2,
+                "courseDeg": 90,
+                "moving": true,
+                "lost": false,
+                "lastSeenMs": 600,
+                "decision": "PENDING",
+                "vNorteMs": 0,
+                "vEsteMs": 4.2
+              },
+              "de": { "droneId": "a3f9c1b27d5e4408f61a9c3e772b7e42", "displayName": "Alfa" },
+              "ts": 1792767845120
+            }
+          },
+          {
+            "caso": "velocidad increíble",
+            "porque": "el módulo de (vNorteMs, vEsteMs) es <= 40 m/s",
+            "mensaje": {
+              "type": "relay_tracking",
+              "relayId": 7,
+              "alertId": 12,
+              "decision": "PENDING",
+              "objetivo": {
+                "alertId": 12,
+                "type": "VEHICLE",
+                "lat": -34.85062,
+                "lon": -56.19951,
+                "speedMs": 4.2,
+                "courseDeg": 90,
+                "moving": true,
+                "lost": false,
+                "lastSeenMs": 600,
+                "decision": "PENDING",
+                "vNorteMs": 30,
+                "vEsteMs": 40
+              },
+              "de": { "droneId": "a3f9c1b27d5e4408f61a9c3e772b7e42", "displayName": "Alfa" },
+              "ts": 1792767845120
+            }
+          }
+        ]
+      },
+      "relay_target": {
+        "validos": [
+          {
+            "caso": "con el status de A recién llegado",
+            "mensaje": {
+              "type": "relay_target",
+              "relayId": 7,
+              "alertId": 12,
+              "decision": "VALIDATED",
+              "objetivo": {
+                "alertId": 12,
+                "type": "VEHICLE",
+                "lat": -34.8506,
+                "lon": -56.1993,
+                "speedMs": 4,
+                "courseDeg": 92,
+                "moving": true,
+                "lost": false,
+                "lastSeenMs": 400,
+                "decision": "VALIDATED",
+                "vNorteMs": -0.14,
+                "vEsteMs": 4
+              },
+              "origen": "en_linea",
+              "aLat": -34.8507,
+              "aLon": -56.1999,
+              "aAlt": 40,
+              "aEnTierra": false,
+              "ts": 1792767846130
+            }
+          },
+          {
+            "caso": "A ya se fue y no hay status suyo",
+            "mensaje": {
+              "type": "relay_target",
+              "relayId": 7,
+              "alertId": 12,
+              "decision": "VALIDATED",
+              "objetivo": {
+                "alertId": 12,
+                "type": "VEHICLE",
+                "lat": -34.8506,
+                "lon": -56.1993,
+                "speedMs": 0,
+                "courseDeg": 0,
+                "moving": false,
+                "lost": true,
+                "lastSeenMs": 11000,
+                "decision": "VALIDATED",
+                "vNorteMs": 0,
+                "vEsteMs": 0
+              },
+              "origen": "retirado",
+              "aLat": null,
+              "aLon": null,
+              "aAlt": null,
+              "aEnTierra": false,
+              "ts": 1792767846130
+            }
+          },
+          {
+            "caso": "A detenido por un operador sobre el objetivo: retirado, pero todavía ahí",
+            "mensaje": {
+              "type": "relay_target",
+              "relayId": 7,
+              "alertId": 12,
+              "decision": "VALIDATED",
+              "objetivo": {
+                "alertId": 12,
+                "type": "VEHICLE",
+                "lat": -34.8506,
+                "lon": -56.1993,
+                "speedMs": 4,
+                "courseDeg": 92,
+                "moving": true,
+                "lost": false,
+                "lastSeenMs": 400,
+                "decision": "VALIDATED",
+                "vNorteMs": -0.14,
+                "vEsteMs": 4
+              },
+              "origen": "retirado",
+              "aLat": -34.8504,
+              "aLon": -56.1996,
+              "aAlt": 40,
+              "aEnTierra": false,
+              "ts": 1792767846130
+            }
+          },
+          {
+            "caso": "A en tierra",
+            "mensaje": {
+              "type": "relay_target",
+              "relayId": 7,
+              "alertId": 12,
+              "decision": "VALIDATED",
+              "objetivo": {
+                "alertId": 12,
+                "type": "VEHICLE",
+                "lat": -34.8506,
+                "lon": -56.1993,
+                "speedMs": 4,
+                "courseDeg": 92,
+                "moving": true,
+                "lost": false,
+                "lastSeenMs": 400,
+                "decision": "VALIDATED",
+                "vNorteMs": -0.14,
+                "vEsteMs": 4
+              },
+              "origen": "retirado",
+              "aLat": -34.8565,
+              "aLon": -56.2075,
+              "aAlt": 0,
+              "aEnTierra": true,
+              "ts": 1792767846130
+            }
+          }
+        ],
+        "invalidos": [
+          {
+            "caso": "origen desconocido",
+            "porque": "origen es 'en_linea', 'sin_enlace' o 'retirado'",
+            "mensaje": {
+              "type": "relay_target",
+              "relayId": 7,
+              "alertId": 12,
+              "decision": "VALIDATED",
+              "objetivo": {
+                "alertId": 12,
+                "type": "VEHICLE",
+                "lat": -34.8506,
+                "lon": -56.1993,
+                "speedMs": 4,
+                "courseDeg": 92,
+                "moving": true,
+                "lost": false,
+                "lastSeenMs": 400,
+                "decision": "VALIDATED",
+                "vNorteMs": -0.14,
+                "vEsteMs": 4
+              },
+              "origen": "perdido",
+              "aLat": -34.8507,
+              "aLon": -56.1999,
+              "aAlt": 40,
+              "aEnTierra": false,
+              "ts": 1792767846130
+            }
+          },
+          {
+            "caso": "objetivo fuera de rango",
+            "porque": "objetivo.lat y objetivo.lon son una posición válida, sin null: lat 95 está fuera de rango",
+            "mensaje": {
+              "type": "relay_target",
+              "relayId": 7,
+              "alertId": 12,
+              "decision": "VALIDATED",
+              "objetivo": {
+                "alertId": 12,
+                "type": "VEHICLE",
+                "lat": 95,
+                "lon": -56.1993,
+                "speedMs": 4,
+                "courseDeg": 92,
+                "moving": true,
+                "lost": false,
+                "lastSeenMs": 400,
+                "decision": "VALIDATED",
+                "vNorteMs": -0.14,
+                "vEsteMs": 4
+              },
+              "origen": "en_linea",
+              "aLat": -34.8507,
+              "aLon": -56.1999,
+              "aAlt": 40,
+              "aEnTierra": false,
+              "ts": 1792767846130
+            }
+          },
+          {
+            "caso": "aEnTierra ausente",
+            "porque": "aEnTierra es obligatorio y booleano: sin él B no sabe si A ya aterrizó",
+            "mensaje": {
+              "type": "relay_target",
+              "relayId": 7,
+              "alertId": 12,
+              "decision": "VALIDATED",
+              "objetivo": {
+                "alertId": 12,
+                "type": "VEHICLE",
+                "lat": -34.8506,
+                "lon": -56.1993,
+                "speedMs": 4,
+                "courseDeg": 92,
+                "moving": true,
+                "lost": false,
+                "lastSeenMs": 400,
+                "decision": "VALIDATED",
+                "vNorteMs": -0.14,
+                "vEsteMs": 4
+              },
+              "origen": "retirado",
+              "aLat": -34.8507,
+              "aLon": -56.1999,
+              "aAlt": 40,
+              "ts": 1792767846130
+            }
+          },
+          {
+            "caso": "aEnTierra no es booleano",
+            "porque": "aEnTierra es booleano: nada se convierte",
+            "mensaje": {
+              "type": "relay_target",
+              "relayId": 7,
+              "alertId": 12,
+              "decision": "VALIDATED",
+              "objetivo": {
+                "alertId": 12,
+                "type": "VEHICLE",
+                "lat": -34.8506,
+                "lon": -56.1993,
+                "speedMs": 4,
+                "courseDeg": 92,
+                "moving": true,
+                "lost": false,
+                "lastSeenMs": 400,
+                "decision": "VALIDATED",
+                "vNorteMs": -0.14,
+                "vEsteMs": 4
+              },
+              "origen": "retirado",
+              "aLat": -34.8507,
+              "aLon": -56.1999,
+              "aAlt": 0,
+              "aEnTierra": "si",
+              "ts": 1792767846130
+            }
+          }
+        ]
+      },
+      "relay_go": {
+        "validos": [{ "caso": "A ya está abajo", "mensaje": { "type": "relay_go", "relayId": 5 } }],
+        "invalidos": [
+          {
+            "caso": "relayId null",
+            "porque": "relayId es obligatorio y entero: sin él no se despega",
+            "mensaje": { "type": "relay_go", "relayId": null }
+          }
+        ]
+      },
+      "relay_done": {
+        "validos": [
+          {
+            "caso": "traspaso: A ya puede soltar",
+            "mensaje": {
+              "type": "relay_done",
+              "relayId": 7,
+              "alertId": 12,
+              "relevadoPor": { "droneId": "b7e4209c3f1a4d6e8b2c5a7f9d1e3c40", "displayName": "Bravo" }
+            }
+          }
+        ],
+        "invalidos": [{ "caso": "sin relevadoPor", "porque": "relevadoPor es obligatorio", "mensaje": { "type": "relay_done", "relayId": 7, "alertId": 12 } }]
+      },
+      "relay_cancel": {
+        "validos": [
+          { "caso": "se descartó la alerta con B en camino", "mensaje": { "type": "relay_cancel", "relayId": 7, "motivo": "alerta_descartada" } },
+          { "caso": "reconexión con un relevo que ya terminó", "mensaje": { "type": "relay_cancel", "relayId": 4, "motivo": "terminado" } }
+        ],
+        "invalidos": [
+          {
+            "caso": "motivo desconocido",
+            "porque": "no está en la lista; aun así, con el relayId del relevo activo la app lo aplica (cancelar es el lado seguro) y lo anota como 'otro'",
+            "mensaje": { "type": "relay_cancel", "relayId": 7, "motivo": "porque_si" }
+          }
+        ]
+      },
+      "emergency_ack": {
+        "validos": [
+          {
+            "caso": "acuse del emergency_landing",
+            "mensaje": { "type": "emergency_ack", "ref": "9f8e7d6c-5b4a-4392-8172-6a5b4c3d2e1f", "emergencyId": 3, "aterrizada": false }
+          },
+          {
+            "caso": "acuse del emergency_landed",
+            "mensaje": { "type": "emergency_ack", "ref": "9f8e7d6c-5b4a-4392-8172-6a5b4c3d2e1f", "emergencyId": 3, "aterrizada": true }
+          }
+        ],
+        "invalidos": [
+          {
+            "caso": "sin aterrizada",
+            "porque": "aterrizada es obligatorio: sin él no se sabe si sacar de la cola el emergency_landed",
+            "mensaje": { "type": "emergency_ack", "ref": "9f8e7d6c-5b4a-4392-8172-6a5b4c3d2e1f", "emergencyId": 3 }
+          }
+        ]
+      },
+      "emergency_photo_ack": {
+        "validos": [{ "caso": "se guardó la foto 4", "mensaje": { "type": "emergency_photo_ack", "ref": "9f8e7d6c-5b4a-4392-8172-6a5b4c3d2e1f", "seq": 4 } }],
+        "invalidos": [
+          {
+            "caso": "seq fuera de rango",
+            "porque": "seq va en [0, 7]",
+            "mensaje": { "type": "emergency_photo_ack", "ref": "9f8e7d6c-5b4a-4392-8172-6a5b4c3d2e1f", "seq": 9 }
+          }
+        ]
+      }
+    },
+    "hub_a_la_consola": {
+      "relay_updated": {
+        "validos": [
+          {
+            "caso": "B en camino a un seguimiento",
+            "mensaje": {
+              "type": "relay_updated",
+              "relay": {
+                "id": 7,
+                "motivo": "seguimiento",
+                "estado": "EN_CAMINO",
+                "motivoFin": null,
+                "origen": { "droneId": "a3f9c1b27d5e4408f61a9c3e772b7e42", "displayName": "Alfa" },
+                "relevo": { "droneId": "b7e4209c3f1a4d6e8b2c5a7f9d1e3c40", "displayName": "Bravo" },
+                "baseId": 1,
+                "alertId": 12,
+                "routeId": null,
+                "fromIndex": null,
+                "etaS": 74,
+                "rechazados": [],
+                "venceEn": null,
+                "creadoEn": "2026-10-23T15:04:05.000Z",
+                "actualizadoEn": "2026-10-23T15:04:20.000Z"
+              }
+            }
+          }
+        ]
+      },
+      "emergency_updated": {
+        "validos": [
+          {
+            "caso": "aterrizó y ya tiene dos fotos; todavía abierta",
+            "mensaje": {
+              "type": "emergency_updated",
+              "emergencia": {
+                "id": 3,
+                "droneId": "a3f9c1b27d5e4408f61a9c3e772b7e42",
+                "displayName": "Alfa",
+                "motivo": "autonomia",
+                "lat": -34.8702,
+                "lon": -56.1902,
+                "alt": 38,
+                "bateria": 9,
+                "ts": 1792767845000,
+                "creadaEn": "2026-10-23T15:04:05.300Z",
+                "aterrizadaEn": "2026-10-23T15:04:30.100Z",
+                "aterrizajeLat": -34.87021,
+                "aterrizajeLon": -56.19018,
+                "aterrizajeAlt": 0.2,
+                "recuperadaEn": null,
+                "recuperadaPor": null,
+                "fotos": 2
+              }
+            }
+          }
+        ]
+      },
+      "emergency_photo": {
+        "validos": [
+          {
+            "caso": "foto nueva de la emergencia 3",
+            "mensaje": {
+              "type": "emergency_photo",
+              "emergenciaId": 3,
+              "seq": 0,
+              "tipo": "oblicua",
+              "rumbo": 270,
+              "inclinacion": -70,
+              "lat": -34.8702,
+              "lon": -56.1902,
+              "alt": 38,
+              "ts": 1792767847000,
+              "jpegBase64": "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA="
+            }
+          }
+        ]
+      },
+      "alert_updated": {
+        "validos": [
+          {
+            "caso": "traspaso: Bravo sigue la alerta que creó Alfa",
+            "mensaje": {
+              "type": "alert_updated",
+              "alert": {
+                "id": 12,
+                "created_at": "2026-10-23T14:58:00.000Z",
+                "type": "VEHICLE",
+                "status": "VALIDATED",
+                "drone_id": "a3f9c1b27d5e4408f61a9c3e772b7e42",
+                "lat": -34.85062,
+                "lon": -56.19951,
+                "snapshot": null,
+                "decided_by": "operador1",
+                "decided_at": "2026-10-23T14:59:10.000Z",
+                "seguidaPor": "b7e4209c3f1a4d6e8b2c5a7f9d1e3c40"
+              }
+            }
+          }
+        ]
+      },
+      "base_updated": {
+        "validos": [
+          {
+            "caso": "se le agregó el punto para visitantes",
+            "mensaje": {
+              "type": "base_updated",
+              "base": {
+                "id": 1,
+                "name": "Base Norte",
+                "lat": -34.8565,
+                "lon": -56.2075,
+                "active": true,
+                "createdAt": "2026-09-01T12:00:00.000Z",
+                "createdBy": "supervisor1",
+                "deleted": false,
+                "deletedAt": null,
+                "aterrizajeLat": -34.85632,
+                "aterrizajeLon": -56.2075
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "rest": {
+    "GET /api/relevos?activos=1": {
+      "respuesta": [
+        {
+          "id": 7,
+          "motivo": "seguimiento",
+          "estado": "EN_CAMINO",
+          "motivoFin": null,
+          "origen": { "droneId": "a3f9c1b27d5e4408f61a9c3e772b7e42", "displayName": "Alfa" },
+          "relevo": { "droneId": "b7e4209c3f1a4d6e8b2c5a7f9d1e3c40", "displayName": "Bravo" },
+          "baseId": 1,
+          "alertId": 12,
+          "routeId": null,
+          "fromIndex": null,
+          "etaS": 74,
+          "rechazados": [],
+          "venceEn": null,
+          "creadoEn": "2026-10-23T15:04:05.000Z",
+          "actualizadoEn": "2026-10-23T15:04:20.000Z"
+        },
+        {
+          "id": 5,
+          "motivo": "patrulla",
+          "estado": "SIN_RELEVO",
+          "motivoFin": null,
+          "origen": { "droneId": "a3f9c1b27d5e4408f61a9c3e772b7e42", "displayName": "Alfa" },
+          "relevo": null,
+          "baseId": null,
+          "alertId": null,
+          "routeId": 1,
+          "fromIndex": 2,
+          "etaS": null,
+          "rechazados": ["b7e4209c3f1a4d6e8b2c5a7f9d1e3c40"],
+          "venceEn": null,
+          "creadoEn": "2026-10-23T14:50:00.000Z",
+          "actualizadoEn": "2026-10-23T14:50:11.000Z"
+        }
+      ]
+    },
+    "GET /api/emergencias?abiertas=1": {
+      "respuesta": [
+        {
+          "id": 3,
+          "droneId": "a3f9c1b27d5e4408f61a9c3e772b7e42",
+          "displayName": "Alfa",
+          "motivo": "autonomia",
+          "lat": -34.8702,
+          "lon": -56.1902,
+          "alt": 38,
+          "bateria": 9,
+          "ts": 1792767845000,
+          "creadaEn": "2026-10-23T15:04:05.300Z",
+          "aterrizadaEn": "2026-10-23T15:04:30.100Z",
+          "aterrizajeLat": -34.87021,
+          "aterrizajeLon": -56.19018,
+          "aterrizajeAlt": 0.2,
+          "recuperadaEn": null,
+          "recuperadaPor": null,
+          "fotos": 2
+        }
+      ]
+    },
+    "GET /api/emergencias/:id": {
+      "respuesta": {
+        "id": 3,
+        "droneId": "a3f9c1b27d5e4408f61a9c3e772b7e42",
+        "displayName": "Alfa",
+        "motivo": "autonomia",
+        "lat": -34.8702,
+        "lon": -56.1902,
+        "alt": 38,
+        "bateria": 9,
+        "ts": 1792767845000,
+        "creadaEn": "2026-10-23T15:04:05.300Z",
+        "aterrizadaEn": "2026-10-23T15:04:30.100Z",
+        "aterrizajeLat": -34.87021,
+        "aterrizajeLon": -56.19018,
+        "aterrizajeAlt": 0.2,
+        "recuperadaEn": null,
+        "recuperadaPor": null,
+        "fotos": [
+          {
+            "seq": 0,
+            "tipo": "oblicua",
+            "rumbo": 270,
+            "inclinacion": -70,
+            "lat": -34.8702,
+            "lon": -56.1902,
+            "alt": 38,
+            "ts": 1792767847000,
+            "jpegBase64": "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA="
+          },
+          {
+            "seq": 4,
+            "tipo": "panoramica",
+            "rumbo": 180,
+            "inclinacion": -30,
+            "lat": -34.8702,
+            "lon": -56.1902,
+            "alt": 38,
+            "ts": 1792767856000,
+            "jpegBase64": "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA="
+          }
+        ]
+      }
+    },
+    "POST /api/emergencias/:id/recuperada": {
+      "cuerpo": {},
+      "respuesta": {
+        "id": 3,
+        "droneId": "a3f9c1b27d5e4408f61a9c3e772b7e42",
+        "displayName": "Alfa",
+        "motivo": "autonomia",
+        "lat": -34.8702,
+        "lon": -56.1902,
+        "alt": 38,
+        "bateria": 9,
+        "ts": 1792767845000,
+        "creadaEn": "2026-10-23T15:04:05.300Z",
+        "aterrizadaEn": "2026-10-23T15:04:30.100Z",
+        "aterrizajeLat": -34.87021,
+        "aterrizajeLon": -56.19018,
+        "aterrizajeAlt": 0.2,
+        "recuperadaEn": "2026-10-23T15:40:00.000Z",
+        "recuperadaPor": "campo1",
+        "fotos": 2
+      },
+      "errores": { "404": "la emergencia no existe", "409": "ya estaba recuperada" }
+    },
+    "POST /api/bases": {
+      "validos": [
+        {
+          "caso": "con punto para visitantes a 20 m al norte",
+          "cuerpo": { "name": "Base Norte", "lat": -34.8565, "lon": -56.2075, "aterrizajeLat": -34.85632, "aterrizajeLon": -56.2075 }
+        },
+        { "caso": "sin punto para visitantes", "cuerpo": { "name": "Base Sur", "lat": -34.9011, "lon": -56.1645 } }
+      ],
+      "invalidos": [
+        {
+          "caso": "a 5 m de la plataforma",
+          "porque": "el punto va a entre 10 y 50 m de la base",
+          "cuerpo": { "name": "Base Norte", "lat": -34.8565, "lon": -56.2075, "aterrizajeLat": -34.856455, "aterrizajeLon": -56.2075 }
+        },
+        {
+          "caso": "una sola coordenada",
+          "porque": "aterrizajeLat y aterrizajeLon van juntos",
+          "cuerpo": { "name": "Base Norte", "lat": -34.8565, "lon": -56.2075, "aterrizajeLat": -34.85632 }
+        }
+      ]
+    },
+    "PATCH /api/bases/:id": {
+      "validos": [
+        { "caso": "borrar el punto para visitantes", "cuerpo": { "aterrizajeLat": null, "aterrizajeLon": null } },
+        {
+          "caso": "mover la base y su punto juntos",
+          "cuerpo": { "lat": -34.857, "lon": -56.208, "aterrizajeLat": -34.85682, "aterrizajeLon": -56.208 }
+        }
+      ],
+      "invalidos": [
+        {
+          "caso": "punto a más de 50 m",
+          "porque": "el punto va a entre 10 y 50 m de la base (esto son ~90 m)",
+          "cuerpo": { "aterrizajeLat": -34.8557, "aterrizajeLon": -56.2075 }
+        }
+      ]
+    }
+  },
+  "eventos": {
+    "RELAY_STARTED": {
+      "type": "RELAY_STARTED",
+      "source": "backend",
+      "category": "drone",
+      "drone_id": "a3f9c1b27d5e4408f61a9c3e772b7e42",
+      "alert_id": 12,
+      "meta": {
+        "drone": { "hash": "a3f9c1b27d5e4408f61a9c3e772b7e42", "displayName": "Alfa", "model": "DJI Mini 4 Pro" },
+        "alerta": { "id": 12, "tipo": "VEHICLE", "lat": -34.85062, "lon": -56.19951, "ts": "2026-10-23T14:58:00.000Z" },
+        "detalle": {
+          "relevoId": 7,
+          "motivo": "seguimiento",
+          "estado": "EN_CAMINO",
+          "motivoFin": null,
+          "origen": "Alfa",
+          "relevo": "Bravo",
+          "relevoHash": "b7e4209c3f1a4d6e8b2c5a7f9d1e3c40",
+          "rutaId": null,
+          "desdeNodo": null,
+          "motivoDeB": null
+        }
+      }
+    },
+    "RTH_DIVERTED": {
+      "type": "RTH_DIVERTED",
+      "source": "backend",
+      "category": "drone",
+      "drone_id": "a3f9c1b27d5e4408f61a9c3e772b7e42",
+      "alert_id": null,
+      "meta": {
+        "drone": { "hash": "a3f9c1b27d5e4408f61a9c3e772b7e42", "displayName": "Alfa", "model": "DJI Mini 4 Pro" },
+        "ubicacion": { "lat": -34.879, "lon": -56.185, "accuracyM": null },
+        "detalle": { "motivo": "otra_base", "baseId": 2, "base": "Base Sur", "relevoId": 5 }
+      }
+    },
+    "EMERGENCY_LANDING": {
+      "type": "EMERGENCY_LANDING",
+      "source": "backend",
+      "category": "drone",
+      "drone_id": "a3f9c1b27d5e4408f61a9c3e772b7e42",
+      "alert_id": null,
+      "meta": {
+        "drone": { "hash": "a3f9c1b27d5e4408f61a9c3e772b7e42", "displayName": "Alfa", "model": "DJI Mini 4 Pro" },
+        "emergencia": { "id": 3, "motivo": "autonomia", "lat": -34.8702, "lon": -56.1902, "ts": "2026-10-23T15:04:05.300Z" },
+        "ubicacion": { "lat": -34.8702, "lon": -56.1902, "accuracyM": null },
+        "detalle": { "alt": 38, "bateria": 9 }
+      }
+    },
+    "EMERGENCY_RECOVERED": {
+      "type": "EMERGENCY_RECOVERED",
+      "source": "backend",
+      "category": "drone",
+      "drone_id": "a3f9c1b27d5e4408f61a9c3e772b7e42",
+      "alert_id": null,
+      "meta": {
+        "drone": { "hash": "a3f9c1b27d5e4408f61a9c3e772b7e42", "displayName": "Alfa", "model": "DJI Mini 4 Pro" },
+        "emergencia": { "id": 3, "motivo": "autonomia", "lat": -34.8702, "lon": -56.1902, "ts": "2026-10-23T15:04:05.300Z" },
+        "detalle": { "por": "campo1" }
+      }
+    }
+  }
+}

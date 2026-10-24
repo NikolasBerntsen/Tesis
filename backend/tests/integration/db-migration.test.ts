@@ -653,3 +653,68 @@ describe('integración — los DNI guardados pasan a su forma canónica', () => 
     db = otra;
   });
 });
+
+// Relevos, desvíos y emergencias (RELEVOS.md) sobre una base que ya tiene
+// alertas y bases: se suman las columnas y las tablas sin tocar lo que había.
+describe('integración — migración: relevos y emergencias', () => {
+  let tmpFile = '';
+  let db: DbLike;
+
+  beforeAll(async () => {
+    tmpFile = archivoTemporal('migracion-relevos');
+    const old = new Database(tmpFile);
+    old.exec(`
+      CREATE TABLE bases (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, created_by TEXT,
+        deleted INTEGER NOT NULL DEFAULT 0, deleted_at TEXT, deleted_by TEXT
+      );
+      CREATE TABLE alerts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL,
+        type TEXT NOT NULL CHECK (type IN ('PERSON', 'VEHICLE')),
+        status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'VALIDATED', 'DISMISSED')),
+        drone_id TEXT, lat REAL, lon REAL, snapshot TEXT, decided_by TEXT, decided_at TEXT
+      );
+    `);
+    old.prepare("INSERT INTO bases (name, lat, lon, created_at) VALUES ('Base Norte', -34.85, -56.2, '2024-01-01')").run();
+    old.prepare("INSERT INTO alerts (created_at, type, drone_id) VALUES ('2024-01-01', 'PERSON', 'aaaa')").run();
+    old.close();
+    db = await abrirConMigraciones(tmpFile);
+  });
+
+  afterAll(() => {
+    try {
+      db.close();
+    } catch {
+      /* ignorar */
+    }
+    borrarBase(tmpFile);
+  });
+
+  it('suma seguida_por a las alertas y el punto para visitantes a las bases, vacíos', () => {
+    expect(columnas(db, 'alerts')).toContain('seguida_por');
+    expect(columnas(db, 'bases')).toEqual(expect.arrayContaining(['aterrizaje_lat', 'aterrizaje_lon']));
+    expect(db.prepare('SELECT drone_id, seguida_por FROM alerts').get()).toEqual({ drone_id: 'aaaa', seguida_por: null });
+    expect(db.prepare('SELECT name, aterrizaje_lat, aterrizaje_lon FROM bases').get()).toEqual({
+      name: 'Base Norte', aterrizaje_lat: null, aterrizaje_lon: null,
+    });
+  });
+
+  it('crea las tablas de relevos y de emergencias', () => {
+    for (const tabla of ['relevos', 'relevo_refs', 'emergencias', 'emergencia_refs', 'emergencia_fotos']) {
+      expect(columnas(db, tabla).length, tabla).toBeGreaterThan(0);
+    }
+    expect(columnas(db, 'relevos')).toEqual(expect.arrayContaining([
+      'id', 'motivo', 'origen', 'relevo', 'base_id', 'alert_id', 'route_id', 'from_index', 'ref_origen', 'estado',
+      'motivo_fin', 'rechazados', 'vence_en', 'creado_en', 'actualizado_en',
+    ]));
+  });
+
+  it('correr las migraciones de nuevo no cambia nada', async () => {
+    db.prepare("UPDATE alerts SET seguida_por = 'bbbb'").run();
+    db.close();
+    const otra = await abrirConMigraciones(tmpFile);
+    expect(otra.prepare('SELECT seguida_por FROM alerts').get()).toEqual({ seguida_por: 'bbbb' });
+    db = otra;
+  });
+});

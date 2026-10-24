@@ -293,6 +293,26 @@ pares.push(
   { donde: '"En vivo" sobre un cuadro negro', texto: '--visor-tinta', sobre: ['--visor-velo'], base: '#000000', minimo: TEXTO },
 );
 
+// --- Aterrizajes de emergencia y relevos (relevos.css) --------------------------------
+// El aviso de arriba de la consola es un panel translúcido con el velo de
+// óxido encima: apoya en la piedra como cualquier tarjeta, así que se mide
+// sobre los dos extremos de la veta. El texto va en la tinta del tema, el
+// motivo en la media, el título en óxido y «Ver la ficha» en el oro de los
+// enlaces; el anillo de foco tiene que verse sobre el mismo fondo.
+const VELO_DEL_AVISO = ['--peligro-velo'];
+sobreSuperficies('aviso de emergencias: el dron y desde cuándo', '--tinta', VELO_DEL_AVISO, TEXTO, PANELES);
+sobreSuperficies('aviso de emergencias: motivo', '--tinta-media', VELO_DEL_AVISO, TEXTO, PANELES);
+sobreSuperficies('aviso de emergencias: título', '--peligro', VELO_DEL_AVISO, TEXTO, PANELES);
+sobreSuperficies('aviso de emergencias: «Ver la ficha»', '--oro-texto', VELO_DEL_AVISO, TEXTO, PANELES);
+sobreSuperficies('aviso de emergencias: anillo de foco', '--anillo-foco', VELO_DEL_AVISO, CONTROL, PANELES);
+// La esquina del mosaico apoya en mármol 0 macizo, como las otras esquinas.
+pares.push({ donde: 'esquina "EMERGENCIA" del mosaico', texto: '--peligro', base: '--marmol-0', minimo: TEXTO });
+// Las insignias de relevo son pastillas de estado (sin relleno): su tinta va
+// directo sobre la ficha de la cámara o el lienzo de la cabecera, y eso ya lo
+// miden «estado ok», «información», «oro como texto» y «peligro». La galería
+// de una emergencia es el visor de siempre (su pie, arriba) y sus miniaturas
+// son botones: la elegida es un botón presionado, también medido arriba.
+
 // --- Bordes de los controles y foco ----------------------------------------------
 for (const s of SUPERFICIES) {
   pares.push({ donde: `anillo de foco sobre ${s.nombre}`, texto: '--anillo-foco', sobre: s.sobre, base: s.base, minimo: CONTROL });
@@ -408,6 +428,7 @@ describe('los pares medidos son los que pintan las hojas', () => {
   const nuevos = leer('./nuevos.css');
   const pulido = leer('./pulido.css');
   const pilotaje = leer('./pilotaje.css');
+  const relevos = leer('./relevos.css');
 
   it.each([
     ['fila elegida', primitivos, '.tabla tbody tr.seleccionada', 'background', 'var(--oro-velo)'],
@@ -491,6 +512,21 @@ describe('los pares medidos son los que pintan las hojas', () => {
     // La columna "después" de un cambio es mármol 0 opaco, que se mide arriba
     // con la tinta: el hilo de oro que la marca no le pone velo encima.
     ['columna "después" de un cambio', nuevos, '.comparacion-despues', 'background', 'var(--marmol-0)'],
+    // El aviso de emergencias: el panel, con el velo de óxido encima.
+    ['aviso de emergencias: panel', relevos, '.aviso-emergencias', 'background-color', 'var(--panel)'],
+    [
+      'aviso de emergencias: velo',
+      relevos,
+      '.aviso-emergencias',
+      'background-image',
+      'linear-gradient(var(--peligro-velo), var(--peligro-velo)), var(--piedra-cara)',
+    ],
+    ['aviso de emergencias: texto', relevos, '.aviso-emergencias', 'color', 'var(--tinta)'],
+    ['aviso de emergencias: título', relevos, '.aviso-emergencias-titulo', 'color', 'var(--peligro)'],
+    ['aviso de emergencias: motivo', relevos, '.aviso-emergencia-motivo', 'color', 'var(--tinta-media)'],
+    ['esquina "EMERGENCIA" del mosaico', relevos, '.esquina-roja', 'color', 'var(--peligro)'],
+    // Las miniaturas de la galería: visores, negros en los dos temas.
+    ['miniatura de la galería', relevos, '.galeria-miniatura-cuadro', 'background-color', 'var(--recuadro-video)'],
   ])('%s', (_donde, hoja, selector, propiedad, esperado) => {
     expect(valorDe(hoja, selector, propiedad)).toBe(esperado);
   });

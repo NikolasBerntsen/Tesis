@@ -1,11 +1,21 @@
 import type { Server } from 'node:http';
 import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import { ROLE_RANK, SESION_DE_OTRO_ROL, esDeOtroRol, verifyToken } from './auth';
+import { posicionValida, validarAutonomia, validarRelevoInformado } from './contrato';
+import { Emergencias } from './emergencias';
+import { metaAlerta, metaDron } from './meta';
+import { CoordinadorDeRelevos } from './relevos';
+import { relojDelHub } from './reloj';
 import {
-  createAlert, createLog, getActiveUser, getAlert, getDrone, getDroneIdentity, listDecisionsSince, listDrones,
-  renameDrone,
+  createAlert, createLog, getActiveUser, getAlert, getDrone, getDroneIdentity, listBases, listDecisionsSince, listDrones,
+  renameDrone, seguidorDeAlerta,
   type Alert, type DroneAssetView, type DroneBase, type EventRow, type Role,
 } from './store';
+
+// Se reexportan para quien ya las tomaba del hub: viven en módulos propios para
+// que el coordinador de relevos y el de emergencias las usen sin importar ws.ts.
+export { metaDron, type MetaDron } from './meta';
+export { posicionValida } from './contrato';
 
 /** Todo lo que sale hacia las consolas lleva `type`: es lo que decide quién lo ve. */
 export interface MensajeHub {
@@ -76,12 +86,19 @@ const controlledBy = new Map<string, string>(); // droneId -> username
 const TIPOS_DE_ACTIVO = new Set(['drone_updated', 'drone_online', 'drone_offline', 'drone_renamed']);
 
 /**
+ * Las novedades de un aterrizaje de emergencia también le llegan al operador de
+ * campo: es quien sale a buscar el dron (PROTOCOLS §3), y la última posición y
+ * las fotos del lugar son justo lo que necesita en el teléfono.
+ */
+const TIPOS_DE_EMERGENCIA = new Set(['emergency_updated', 'emergency_photo']);
+
+/**
  * El canal en vivo respeta los mismos permisos que la API REST: sin esto un
  * operador de campo recibía por WebSocket el video, las alertas y el registro
  * de usuarios que sus propias requests reciben con un 403.
  */
 function puedeVer(sesion: SesionConsola, msg: MensajeHub): boolean {
-  if (sesion.role === 'field_operator') return TIPOS_DE_ACTIVO.has(msg.type);
+  if (sesion.role === 'field_operator') return TIPOS_DE_ACTIVO.has(msg.type) || TIPOS_DE_EMERGENCIA.has(msg.type);
   // El registro de usuarios y de sistema es del admin, igual que GET /api/logs
   if (msg.type === 'event') {
     return (msg.event as EventRow | undefined)?.category === 'drone' || sesion.role === 'admin';
@@ -202,57 +219,6 @@ export function listDroneCards(opts: { includeDeleted?: boolean } = {}): DroneCa
   return listDrones(opts).map(cardDesdeActivo);
 }
 
-/** Lo que el pop-up del registro pinta bajo la clave `drone` de la `meta`. */
-export interface MetaDron {
-  hash: string;
-  displayName: string;
-  model: string;
-}
-
-export function metaDron(droneId: string): MetaDron | undefined {
-  const d = getDrone(droneId);
-  return d ? { hash: d.hash, displayName: d.displayName, model: d.model } : undefined;
-}
-
-/**
- * Lo que el pop-up pinta bajo la clave `alerta`: con el id trae la alerta
- * completa y muestra la captura. Es la misma forma en el `ALERT_CREATED` y en
- * los eventos de seguimiento que la app encadena a esa alerta.
- */
-function metaAlerta(a: Alert) {
-  return { id: a.id, tipo: a.type, lat: a.lat, lon: a.lon, ts: a.created_at };
-}
-
-/** Por debajo de esto, en grados, una coordenada se toma como cero (~11 cm). */
-const CASI_CERO = 1e-6;
-
-/**
- * Una posición que llega del celular, validada: dos números finitos, dentro de
- * rango y que no sean el 0,0. Devuelve null si no es una posición de verdad, y
- * las dos coordenadas van juntas: una latitud buena con la longitud rota no
- * ubica nada.
- *
- * El 0,0 se descarta porque es lo que entrega el SDK de DJI SIN fix de GPS (su
- * `LocationCoordinate3D` arranca en 0.0, no en NaN): no es una posición, es
- * "no sé". Creerle dibuja al dron en el golfo de Guinea ("Null Island") y deja
- * en el registro un objetivo a miles de kilómetros del equipo de tierra. Nadie
- * patrulla ahí, así que descartarlo no pierde nada real; la comparación es
- * contra un umbral y no contra `=== 0` porque lo que venga redondeado o con
- * ruido del filtro de la app sigue siendo el mismo "no sé".
- *
- * `Number.isFinite` y no `Number(...)` porque no convierte: `Number(null)` es 0
- * y `Number('')` también, así que con la conversión un campo ausente o un texto
- * se colaría como coordenada.
- */
-export function posicionValida(lat: unknown, lon: unknown): { lat: number; lon: number } | null {
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-  const la = lat as number;
-  const lo = lon as number;
-  if (Math.abs(la) > 90 || Math.abs(lo) > 180) return null;
-  if (Math.abs(la) < CASI_CERO && Math.abs(lo) < CASI_CERO) return null;
-  return { lat: la, lon: lo };
-}
-
 /** Aplica un renombre y avisa a los dos lados: operadores y el propio dron. */
 export function applyRename(droneId: string, displayName: string, notifyDrone: boolean) {
   const identity = renameDrone(droneId, displayName);
@@ -266,6 +232,104 @@ export function applyRename(droneId: string, displayName: string, notifyDrone: b
 export function broadcastDroneUpdated(droneId: string) {
   const card = droneCard(droneId);
   if (card) broadcastOperators({ type: 'drone_updated', drone: card });
+}
+
+// ---- Relevos, desvíos y emergencias ----
+
+/**
+ * Coordinador de relevos del hub (relevos.ts). Manda por los mismos caminos que
+ * el resto del hub y mide los plazos con `relojDelHub`, que las pruebas
+ * reemplazan para mover el tiempo a mano.
+ */
+export const relevos = new CoordinadorDeRelevos({
+  enviar: sendToDrone,
+  difundir: broadcastOperators,
+  ahora: () => relojDelHub.ahora(),
+  conectado: isOnline,
+});
+
+/** Protocolo de última ubicación del lado del hub (emergencias.ts). */
+export const emergencias = new Emergencias({
+  enviar: sendToDrone,
+  difundir: broadcastOperators,
+  ahora: () => relojDelHub.ahora(),
+  alAterrizar: (droneId) => relevos.alAterrizarFueraDeBase(droneId),
+});
+
+/** Tope de bases por mensaje (§2.b): un dron no necesita más para elegir dónde bajar. */
+const TOPE_BASES_AL_DRON = 200;
+const TOPE_NOMBRE_DE_BASE = 60;
+
+/**
+ * El mensaje `bases` para un dron (PROTOCOLS §2.b): las bases activas, con su
+ * punto para visitantes, y cuál es la suya. La app reemplaza su lista entera
+ * con cada uno y descarta el mensaje completo si algo no cumple, y sin lista no
+ * hay desvío posible: por eso acá se dejan afuera las bases que no se podrían
+ * mandar —una cargada en 0,0, que la API de bases acepta, o una vieja con un
+ * nombre fuera de rango— en vez de arruinar el mensaje entero.
+ */
+export function mensajeDeBases(droneId: string): MensajeHub {
+  const enviables = listBases({ soloActivas: true }).filter(
+    (b) => posicionValida(b.lat, b.lon) !== null && b.name.length >= 1 && b.name.length <= TOPE_NOMBRE_DE_BASE,
+  );
+  const propia = getDrone(droneId)?.baseId ?? null;
+  let lista = enviables.slice(0, TOPE_BASES_AL_DRON);
+  const suya = enviables.find((b) => b.id === propia);
+  // La propia va siempre, aunque la lista se corte: es la base a la que vuelve.
+  if (suya && !lista.includes(suya)) lista = [...lista.slice(0, TOPE_BASES_AL_DRON - 1), suya];
+  return {
+    type: 'bases',
+    propiaId: suya ? suya.id : null,
+    bases: lista.map((b) => {
+      const visitantes = posicionValida(b.aterrizajeLat, b.aterrizajeLon);
+      return {
+        id: b.id,
+        nombre: b.name,
+        lat: b.lat,
+        lon: b.lon,
+        aterrizajeLat: visitantes?.lat ?? null,
+        aterrizajeLon: visitantes?.lon ?? null,
+      };
+    }),
+  };
+}
+
+/** Manda `bases` a un dron: al conectarse y cuando le cambian la base asignada. */
+export function enviarBases(droneId: string): boolean {
+  return sendToDrone(droneId, mensajeDeBases(droneId));
+}
+
+/** Manda `bases` a todos los drones conectados: en cada alta, edición, baja o restauración de una base. */
+export function enviarBasesATodos(): void {
+  for (const droneId of drones.keys()) enviarBases(droneId);
+}
+
+/**
+ * `relevo` y `autonomia` del status (§1): el hub los reenvía tal cual si pasan
+ * la validación y, si no, los saca —el status sale igual, porque es lo único
+ * que dice si el dron vuela— y anota el motivo. Una app vieja no los manda, y
+ * entonces no salen.
+ */
+function camposDeRelevo(droneId: string, relevo: unknown, autonomia: unknown): Record<string, unknown> {
+  const campos: Record<string, unknown> = {};
+  if (relevo !== undefined) {
+    if (validarRelevoInformado(relevo)) campos.relevo = relevo;
+    else console.warn(`[hub] status de ${droneId}: se sacó 'relevo' porque no cumple el contrato`);
+  }
+  if (autonomia !== undefined) {
+    if (validarAutonomia(autonomia)) campos.autonomia = autonomia;
+    else console.warn(`[hub] status de ${droneId}: se sacó 'autonomia' porque no cumple el contrato`);
+  }
+  return campos;
+}
+
+/**
+ * Tipos de evento que crea SOLO el hub (PROTOCOLS §1): viniendo del teléfono
+ * serían falsificables, y el registro de un relevo o de una emergencia tiene
+ * que salir del estado que guarda el hub, no de lo que un dron diga.
+ */
+function eventoReservadoAlHub(tipo: string): boolean {
+  return tipo.startsWith('RELAY_') || tipo.startsWith('EMERGENCY_') || tipo === 'RTH_DIVERTED';
 }
 
 // ---- Control manual exclusivo ----
@@ -335,8 +399,13 @@ export function releaseControl(droneId: string, byUser: string, opts: ReleaseOpt
  * vehículo que el dron tenía a la vista. Sin objetivo, 'last' como siempre: el
  * dron vuelve a su ruta en vez de quedarse estacionario esperando a alguien que
  * ya no está.
+ *
+ * Un dron que participa de un relevo activo también se suelta con 'none'
+ * (RELEVOS §3.9): a B un `resume_patrol` lo sacaría del relevo, y a A lo
+ * mandaría a patrullar con la batería que lo hizo pedir uno.
  */
 function reanudacionAlSoltar(droneId: string): 'none' | 'last' {
+  if (relevos.participaDeUnRelevoActivo(droneId)) return 'none';
   const target = lastStatus.get(droneId)?.target;
   return typeof target === 'object' && target !== null && !Array.isArray(target) ? 'none' : 'last';
 }
@@ -427,11 +496,15 @@ function normalizarPosicion(msg: MensajeDron): { lat: number | null; lon: number
  *
  * `isSafeInteger` y no `isInteger`: un 1e300 es "entero" para JS pero no es un
  * id que SQLite pueda tener, y no hace falta preguntarle.
+ *
+ * "De ese dron" es el que la SIGUE ahora, `COALESCE(seguida_por, drone_id)`
+ * (RELEVOS §3.6): después de un traspaso los eventos de seguimiento los manda
+ * el que relevó, y son los que cuentan cómo sigue la historia de la alerta.
  */
 function alertaDelDron(alertId: unknown, droneId: string): Alert | null {
   if (!Number.isSafeInteger(alertId) || (alertId as number) <= 0) return null;
   const alerta = getAlert(alertId as number);
-  return alerta?.drone_id === droneId ? alerta : null;
+  return alerta && seguidorDeAlerta(alerta) === droneId ? alerta : null;
 }
 
 /** Valor de `meta.detalle`: el pop-up lo pinta como lista de clave/valor, así que va plano. */
@@ -553,13 +626,14 @@ function handleDroneMessage(droneId: string, raw: string) {
 
   switch (msg.type) {
     case 'status': {
-      // La inclinación se saca del resto para que una que no sirva no viaje
-      // por la copia tal cual: vuelve solo si es un número.
-      const { gimbalPitch, ...resto } = msg;
+      // La inclinación, el relevo y la autonomía se sacan del resto para que
+      // uno que no sirva no viaje por la copia tal cual: vuelven solo si pasan.
+      const { gimbalPitch, relevo, autonomia, ...resto } = msg;
       const status: MensajeHub = {
         ...resto,
         ...normalizarPosicion(msg),
         ...inclinacionInformada(gimbalPitch),
+        ...camposDeRelevo(droneId, relevo, autonomia),
         type: 'status',
         droneId,
         displayName,
@@ -567,6 +641,7 @@ function handleDroneMessage(droneId: string, raw: string) {
       };
       lastStatus.set(droneId, status);
       broadcastOperators(status);
+      relevos.alRecibirStatus(droneId, status);
       break;
     }
     case 'video_frame':
@@ -578,6 +653,10 @@ function handleDroneMessage(droneId: string, raw: string) {
       // cuenta la historia entera de esa detección, y con la posición el equipo
       // de tierra sabe dónde quedó el objetivo aunque el dron ya no lo vea. Lo
       // que venga mal se ignora sin perder el evento, que igual se registra.
+      if (eventoReservadoAlHub(String(msg.eventType))) {
+        console.warn(`[hub] se descartó un event ${String(msg.eventType)} de ${droneId}: ese tipo lo crea solo el hub`);
+        break;
+      }
       const alerta = alertaDelDron(msg.alertId, droneId);
       const ubicacion = posicionValida(msg.lat, msg.lon);
       const meta: Record<string, unknown> = { drone: metaDron(droneId) };
@@ -640,6 +719,10 @@ function handleDroneMessage(droneId: string, raw: string) {
       }
       break;
     }
+    // Relevos, desvíos y emergencias (§1.b): cada coordinador dice si el tipo
+    // es suyo. Cualquier otro tipo se ignora, como siempre.
+    default:
+      if (!relevos.alRecibirMensaje(droneId, msg)) emergencias.alRecibirMensaje(droneId, msg);
   }
 }
 
@@ -924,8 +1007,23 @@ function reenviarDecisionesRecientes(droneId: string) {
   }
 }
 
+/** Cada cuánto revisa el hub los plazos de los relevos (RELEVOS §7). */
+const INTERVALO_BARRIDO_MS = 1000;
+
 export function setupWebSocket(server: Server) {
   const wss = new WebSocketServer({ server, path: '/ws', maxPayload: TOPE_FRAME_BYTES });
+
+  // Arranque del hub: los relevos que quedaron activos en la tabla empiezan a
+  // contar el plazo de sus B desde ahora, y el barrido de 1 s vence lo que
+  // corresponda. `unref` para que el barrido no tenga vivo al proceso por sí
+  // solo, y se corta con el servidor.
+  relevos.iniciar();
+  const barrido = setInterval(
+    () => sinTumbarElHub('el barrido de relevos', () => relevos.barrer()),
+    INTERVALO_BARRIDO_MS,
+  );
+  barrido.unref();
+  server.on('close', () => clearInterval(barrido));
 
   wss.on('connection', (ws, req) => {
     // `ws` emite 'error' cuando el otro lado manda un frame que viola el
@@ -973,6 +1071,10 @@ export function setupWebSocket(server: Server) {
       broadcastOperators({ type: 'event', event: ev });
       broadcastOperators({ type: 'drone_online', drone: droneCard(droneId) });
       reenviarDecisionesRecientes(droneId);
+      // Las bases donde puede bajar (desvío, RELEVOS §4), y el primer status
+      // que llegue decide qué relevo se le reenvía (PROTOCOLS §1.b, "Reconexión").
+      enviarBases(droneId);
+      relevos.alConectar(droneId);
 
       ws.on('message', (data) => sinTumbarElHub(`el dron ${droneId}`, () => handleDroneMessage(droneId, data.toString())));
       ws.on('close', () => {
@@ -980,6 +1082,7 @@ export function setupWebSocket(server: Server) {
           drones.delete(droneId);
           lastStatus.delete(droneId);
           controlledBy.delete(droneId);
+          relevos.alDesconectar(droneId);
           const evc = createLog('drone', 'DRONE_DISCONNECTED', 'backend', `${name} desconectado del Comando Central`, {
             droneId,
             meta: { drone: metaDron(droneId) },

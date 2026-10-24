@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { useAlertasEnVivo } from '../alertasEnVivo';
 import { time, tipoDeAlerta } from '../format';
+import { duenioDeLaAlerta } from '../relevos';
 import type { Alert, Drone } from '../types';
 import { useDecisionDeAlerta, type DecidirAlerta } from '../useDecisionDeAlerta';
 import { IconoCampana, IconoChevronDerecha } from './Iconos';
@@ -104,50 +105,67 @@ export default function CampanaDeAlertas({
 
           {pendientes.length === 0 && <p className="vacio">Sin alertas pendientes.</p>}
 
-          {pendientes.map((a) => (
-            <div key={a.id} className="campana-alerta">
-              <div className="campana-alerta-head">
-                {/* La misma placa óxido con su ícono que la tarjeta y el pop-up:
-                    la alerta se reconoce igual venga de donde venga. */}
-                <ChipDeTipo tipo={a.type} tamanoIcono={18} />
-                <button type="button" className="enlace" onClick={() => { onVerDron(a.drone_id!); setAbierta(false); }} disabled={!a.drone_id}>
-                  {nombre(a.drone_id)}
-                </button>
-                <time className="mono muted" dateTime={a.created_at}>
-                  {time(a.created_at)}
-                </time>
-                {abrirAlerta && (
-                  <button type="button" className="enlace versal alerta-ver-detalle" onClick={() => abrir(a, abrirAlerta)}>
-                    Ver detalle
-                    <IconoChevronDerecha tamano={16} />
+          {pendientes.map((a) => {
+            // El nombre lleva al dron que sigue al objetivo ahora (un relevo
+            // se la pudo pasar a otro): es ahí donde está el video para decidir.
+            const duenio = duenioDeLaAlerta(a);
+            return (
+              <div key={a.id} className="campana-alerta">
+                <div className="campana-alerta-head">
+                  {/* La misma placa óxido con su ícono que la tarjeta y el pop-up:
+                      la alerta se reconoce igual venga de donde venga. */}
+                  <ChipDeTipo tipo={a.type} tamanoIcono={18} />
+                  <button
+                    type="button"
+                    className="enlace"
+                    onClick={
+                      duenio
+                        ? () => {
+                            onVerDron(duenio);
+                            setAbierta(false);
+                          }
+                        : undefined
+                    }
+                    disabled={!duenio}
+                  >
+                    {nombre(duenio)}
+                  </button>
+                  <time className="mono muted" dateTime={a.created_at}>
+                    {time(a.created_at)}
+                  </time>
+                  {abrirAlerta && (
+                    <button type="button" className="enlace versal alerta-ver-detalle" onClick={() => abrir(a, abrirAlerta)}>
+                      Ver detalle
+                      <IconoChevronDerecha tamano={16} />
+                    </button>
+                  )}
+                </div>
+                {a.snapshot && abrirAlerta && (
+                  <button
+                    type="button"
+                    className="snapshot-boton"
+                    aria-label={`Ampliar la captura de la alerta #${a.id}`}
+                    onClick={() => abrir(a, abrirAlerta)}
+                  >
+                    <img className="snapshot" src={`data:image/jpeg;base64,${a.snapshot}`} alt="Detección" />
                   </button>
                 )}
-              </div>
-              {a.snapshot && abrirAlerta && (
-                <button
-                  type="button"
-                  className="snapshot-boton"
-                  aria-label={`Ampliar la captura de la alerta #${a.id}`}
-                  onClick={() => abrir(a, abrirAlerta)}
-                >
+                {a.snapshot && !abrirAlerta && (
                   <img className="snapshot" src={`data:image/jpeg;base64,${a.snapshot}`} alt="Detección" />
-                </button>
-              )}
-              {a.snapshot && !abrirAlerta && (
-                <img className="snapshot" src={`data:image/jpeg;base64,${a.snapshot}`} alt="Detección" />
-              )}
-              {/* El mismo par de la tarjeta del tablero, con el tilde y el tacho:
-                  se reconoce igual en los dos lugares. */}
-              <BotonesDeDecision ocupado={decidiendo(a.id)} tamanoIcono={18} onDecidir={(d) => decidir(a.id, d)} />
-              {/* Pegado a los botones de ESA alerta: con tres pendientes en la
-                  lista, un aviso suelto arriba no diría cuál falló. */}
-              {errorDe(a.id) && (
-                <p className="aviso malo" role="alert">
-                  {errorDe(a.id)}
-                </p>
-              )}
-            </div>
-          ))}
+                )}
+                {/* El mismo par de la tarjeta del tablero, con el tilde y el tacho:
+                    se reconoce igual en los dos lugares. */}
+                <BotonesDeDecision ocupado={decidiendo(a.id)} tamanoIcono={18} onDecidir={(d) => decidir(a.id, d)} />
+                {/* Pegado a los botones de ESA alerta: con tres pendientes en la
+                    lista, un aviso suelto arriba no diría cuál falló. */}
+                {errorDe(a.id) && (
+                  <p className="aviso malo" role="alert">
+                    {errorDe(a.id)}
+                  </p>
+                )}
+              </div>
+            );
+          })}
 
           {decididas.length > 0 && (
             <>
@@ -160,7 +178,7 @@ export default function CampanaDeAlertas({
                       {a.status === 'VALIDATED' ? 'Validada' : 'Descartada'}
                     </span>
                     <span className="muted">
-                      {tipoDeAlerta(a.type)} · {nombre(a.drone_id)}
+                      {tipoDeAlerta(a.type)} · {nombre(duenioDeLaAlerta(a))}
                     </span>
                     <time className="mono muted" dateTime={a.created_at}>
                       {time(a.created_at)}

@@ -18,6 +18,11 @@ export const STATE_LABELS: Record<string, string> = {
   PAUSED: 'Patrulla interrumpida',
   MANUAL: 'Control manual',
   FORCED: 'Desvío a nodo',
+  // Los mismos rótulos que la pantalla del teléfono (strings.xml de la app):
+  // el operador de campo y el de la consola tienen que estar hablando de lo
+  // mismo cuando se llaman por radio.
+  RELEVANDO: 'Relevando a otro dron',
+  ATERRIZAJE_EMERGENCIA: 'Aterrizaje de emergencia',
 };
 
 export function stateLabel(state: string): string {
@@ -34,6 +39,18 @@ export const SOBRE_OBJETIVO: readonly string[] = ['ORBITING', 'FOLLOWING'];
 
 export function sobreObjetivo(state: string | null | undefined): boolean {
   return !!state && SOBRE_OBJETIVO.includes(state);
+}
+
+/**
+ * El tono del estado de un dron, en la pastilla de su cámara y en la
+ * telemetría: oro mientras trabaja sobre una alerta —orbitándola, siguiéndola
+ * o yendo a relevar al que la sigue—, óxido mientras baja de emergencia, y la
+ * tinta de siempre para todo lo demás.
+ */
+export function tonoDelEstadoDelDron(state: string | null | undefined): 'accent' | 'bad' | 'muted' {
+  if (state === 'ATERRIZAJE_EMERGENCIA') return 'bad';
+  if (sobreObjetivo(state) || state === 'RELEVANDO') return 'accent';
+  return 'muted';
 }
 
 export function batteryClass(battery: number): string {
@@ -234,6 +251,69 @@ export function fechaHoraLarga(ts: string | null, estilo: 'long' | 'short' = 'lo
 export function hashCorto(hash: string | null | undefined): string {
   if (!hash) return '—';
   return hash.length > 14 ? `${hash.slice(0, 6)}…${hash.slice(-4)}` : hash;
+}
+
+/**
+ * "3 min 20 s": un tiempo que el dron calcula (lo que tarda en volver, lo que
+ * tarda el relevo en llegar). Con el dato que falta, la raya.
+ */
+export function duracion(segundos: number | null | undefined): string {
+  if (typeof segundos !== 'number' || !Number.isFinite(segundos) || segundos < 0) return SIN_ESTIMAR;
+  const s = Math.round(segundos);
+  if (s < 60) return `${s} s`;
+  const min = Math.floor(s / 60);
+  return s % 60 === 0 ? `${min} min` : `${min} min ${s % 60} s`;
+}
+
+/**
+ * Rótulos de los eventos que deja el hub con los relevos, los desvíos y las
+ * emergencias (§7 del contrato). En la lista se sigue viendo el código —es lo
+ * que se busca en el Registro—; el rótulo va en el detalle y en el globo de
+ * ayuda, para que nadie tenga que adivinar qué es un `RELAY_HANDOVER`.
+ */
+export const ETIQUETAS_DE_EVENTO: Record<string, string> = {
+  RELAY_REQUESTED: 'Pidió un relevo',
+  RELAY_ASSIGNED: 'Relevo asignado',
+  RELAY_REJECTED: 'Relevo rechazado',
+  RELAY_STARTED: 'Relevo en camino',
+  RELAY_HANDOVER: 'Traspaso del objetivo',
+  RELAY_COMPLETED: 'Relevo completado',
+  RELAY_UNAVAILABLE: 'Sin relevo disponible',
+  RELAY_CANCELLED: 'Relevo cancelado',
+  RELAY_FAILED: 'Relevo fallido',
+  RTH_DIVERTED: 'Regreso desviado',
+  EMERGENCY_LANDING: 'Aterrizaje de emergencia',
+  EMERGENCY_LANDED: 'Aterrizó fuera de base',
+  EMERGENCY_RECOVERED: 'Dron recuperado',
+};
+
+/** El rótulo de un tipo de evento, o `null` si la consola no le conoce uno. */
+export function etiquetaDeEvento(tipo: string): string | null {
+  return ETIQUETAS_DE_EVENTO[tipo] ?? null;
+}
+
+/**
+ * Los tipos de evento que se resaltan en una lista de eventos (el historial de
+ * un dron y el Registro): en óxido lo grave, en ámbar lo que hay que mirar.
+ */
+const TONO_DE_EVENTO: Record<string, 'bad' | 'warn'> = {
+  ALERT_CREATED: 'bad',
+  ALERT_VALIDATED: 'warn',
+  SIGNAL_LOST: 'bad',
+  RTH_LOW_BATTERY: 'warn',
+  RTH_SIGNAL_LOSS: 'warn',
+  // Un dron que bajó fuera de base es lo más grave que puede pasar en vuelo;
+  // un relevo que falla o que no encuentra dron deja un hueco en la guardia.
+  EMERGENCY_LANDING: 'bad',
+  EMERGENCY_LANDED: 'bad',
+  RELAY_FAILED: 'bad',
+  RELAY_UNAVAILABLE: 'warn',
+  RTH_DIVERTED: 'warn',
+};
+
+/** El tono de un tipo de evento en la lista, o '' si va con la tinta de siempre. */
+export function tonoDeEvento(tipo: string): 'bad' | 'warn' | '' {
+  return TONO_DE_EVENTO[tipo] ?? '';
 }
 
 /** Las coordenadas de `coordenadas`, o la raya si el dato no vino. */

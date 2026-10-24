@@ -89,6 +89,45 @@ class BotonesDeVueloTest {
             assertFalse(regreso.name, BotonesDeVuelo.despegarAquiHabilitado(regreso, listo))
         }
     }
+
+    /**
+     * El aterrizaje de emergencia baja donde está porque la batería no alcanza
+     * para ninguna base, y un relevo despega por su cuenta: "Despegar aquí" en
+     * cualquiera de los dos le pisaría al dron lo que está haciendo.
+     */
+    @Test
+    fun despegarAquiNiEnUnAterrizajeDeEmergenciaNiEnUnRelevo() {
+        assertFalse(BotonesDeVuelo.despegarAquiHabilitado(PatrolState.ATERRIZAJE_EMERGENCIA, listo))
+        assertFalse(BotonesDeVuelo.despegarAquiHabilitado(PatrolState.RELEVANDO, listo))
+        assertFalse("tampoco se comienza una ruta", BotonesDeVuelo.comenzarHabilitado(true, PatrolState.RELEVANDO, listo))
+    }
+
+    // ---- Volver a base ----
+
+    @Test
+    fun volverABaseEnElAireSinOtroRegresoEnCurso() {
+        assertTrue(BotonesDeVuelo.volverABaseHabilitado(PatrolState.PATROLLING, enElAire))
+        assertTrue("B relevando también puede volver", BotonesDeVuelo.volverABaseHabilitado(PatrolState.RELEVANDO, enElAire))
+        assertFalse("en el suelo no hay a dónde", BotonesDeVuelo.volverABaseHabilitado(PatrolState.IDLE, listo))
+        assertFalse(BotonesDeVuelo.volverABaseHabilitado(PatrolState.RETURNING_HOME, enElAire))
+        assertFalse(BotonesDeVuelo.volverABaseHabilitado(PatrolState.RETURNING_HOME_BATTERY, enElAire))
+        assertFalse(
+            "el aterrizaje de emergencia baja donde está: mandarlo a volver es tirarlo en el camino",
+            BotonesDeVuelo.volverABaseHabilitado(PatrolState.ATERRIZAJE_EMERGENCIA, enElAire),
+        )
+    }
+
+    // ---- En espera para relevos ----
+
+    @Test
+    fun elInterruptorSePrendeEnElSueloEnlazadoYEnReposoYSeApagaSiempre() {
+        assertTrue(BotonesDeVuelo.enEsperaHabilitado(false, PatrolState.IDLE, listo))
+        assertFalse("en el aire", BotonesDeVuelo.enEsperaHabilitado(false, PatrolState.IDLE, enElAire))
+        assertFalse("sin enlace", BotonesDeVuelo.enEsperaHabilitado(false, PatrolState.IDLE, sinEnlace))
+        assertFalse("con la batería por cambiar", BotonesDeVuelo.enEsperaHabilitado(false, PatrolState.LANDED, listo))
+        assertFalse("con el control tomado", BotonesDeVuelo.enEsperaHabilitado(false, PatrolState.MANUAL, listo))
+        assertTrue("prendido, apagarlo se puede siempre", BotonesDeVuelo.enEsperaHabilitado(true, PatrolState.PATROLLING, enElAire))
+    }
 }
 
 /** Los textos de los avisos salen de los recursos: hace falta un Context de verdad. */

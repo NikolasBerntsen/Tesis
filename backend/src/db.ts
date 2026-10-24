@@ -417,3 +417,112 @@ for (const tabla of ['drones', 'users']) {
     if (cols.includes(col)) db.exec(`ALTER TABLE ${tabla} DROP COLUMN ${col}`);
   }
 }
+
+// --- Relevos, desvíos y emergencias (docs/RELEVOS.md) ---
+
+// Quién sigue al objetivo de una alerta ahora (RELEVOS §3.6). NULL es "el que
+// la creó" (`drone_id`): así las alertas de antes del cambio, y todas las que
+// nunca pasaron por un relevo, no necesitan que nadie les escriba nada, y la
+// pregunta es siempre COALESCE(seguida_por, drone_id).
+const alertCols = (db.prepare('PRAGMA table_info(alerts)').all() as { name: string }[]).map((c) => c.name);
+if (!alertCols.includes('seguida_por')) db.exec('ALTER TABLE alerts ADD COLUMN seguida_por TEXT');
+
+// Punto de aterrizaje para visitantes (RELEVOS §0): opcional, los dos o
+// ninguno. Una base sin él recibe al visitante 15 m al norte de su punto.
+const basesCols = (db.prepare('PRAGMA table_info(bases)').all() as { name: string }[]).map((c) => c.name);
+for (const col of ['aterrizaje_lat', 'aterrizaje_lon']) {
+  if (!basesCols.includes(col)) db.exec(`ALTER TABLE bases ADD COLUMN ${col} REAL`);
+}
+
+db.exec(`
+  -- Un relevo entre dos drones (RELEVOS §7). El hub es la única fuente de
+  -- verdad de las reservas: lo que dice esta tabla es lo que vale, y por eso
+  -- sobrevive a un reinicio del proceso. Los tiempos que el barrido compara
+  -- (vence_en, ordenado_en, ...) son milisegundos del reloj del HUB: el del
+  -- teléfono no está sincronizado y nunca se usa para vencer nada.
+  CREATE TABLE IF NOT EXISTS relevos (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    motivo          TEXT NOT NULL,              -- 'patrulla' | 'seguimiento'
+    origen          TEXT NOT NULL,              -- A: el dron que pidió
+    relevo          TEXT,                       -- B: el reservado u ordenado; NULL sin candidato
+    base_id         INTEGER,                    -- de dónde sale B; NULL sin B
+    base_origen     INTEGER,                    -- patrulla: la base de A, donde se busca a B
+    alert_id        INTEGER,
+    route_id        INTEGER,
+    from_index      INTEGER,
+    ref_origen      TEXT NOT NULL,              -- el último ref que se adoptó
+    estado          TEXT NOT NULL,
+    motivo_fin      TEXT,
+    rechazados      TEXT NOT NULL DEFAULT '[]', -- JSON: droneIds en orden
+    vence_en        INTEGER,
+    segundos_disponibles REAL,
+    pedido_en       INTEGER NOT NULL,
+    eta_s           REAL,
+    asignado_en     INTEGER,
+    ordenado_en     INTEGER,
+    go_enviado      INTEGER NOT NULL DEFAULT 0,
+    descendiendo    INTEGER NOT NULL DEFAULT 0, -- llegó el landing_at_base
+    a_abajo         INTEGER NOT NULL DEFAULT 0, -- A abajo o desviado: B puede despegar
+    aterrizado      INTEGER NOT NULL DEFAULT 0, -- llegó el landed_at_base
+    origen_retirado INTEGER NOT NULL DEFAULT 0, -- relay_released o relay_abandon
+    abandonado      INTEGER NOT NULL DEFAULT 0, -- relay_abandon antes del traspaso
+    objetivo        TEXT,                       -- JSON: el último objetivo válido de A
+    objetivo_ts     INTEGER,
+    creado_en       TEXT NOT NULL,
+    actualizado_en  TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_relevos_estado ON relevos(estado);
+
+  -- Idempotencia por (origen, ref): cada ref que un dron usó para pedir apunta
+  -- al relevo que le tocó, aunque después haya adoptado otro (§1.b).
+  CREATE TABLE IF NOT EXISTS relevo_refs (
+    origen    TEXT NOT NULL,
+    ref       TEXT NOT NULL,
+    relevo_id INTEGER NOT NULL REFERENCES relevos(id),
+    PRIMARY KEY (origen, ref)
+  );
+
+  -- Protocolo de última ubicación (RELEVOS §5). Queda abierta hasta que alguien
+  -- la marca recuperada: es la única pista de dónde quedó un dron en el campo.
+  CREATE TABLE IF NOT EXISTS emergencias (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    drone_id       TEXT NOT NULL,
+    motivo         TEXT NOT NULL,
+    lat            REAL,
+    lon            REAL,
+    alt            REAL NOT NULL,
+    bateria        REAL NOT NULL,
+    ts             INTEGER NOT NULL,            -- reloj del teléfono: dato, no orden
+    creada_en      TEXT NOT NULL,
+    aterrizada_en  TEXT,
+    aterrizaje_lat REAL,
+    aterrizaje_lon REAL,
+    aterrizaje_alt REAL,
+    recuperada_en  TEXT,
+    recuperada_por TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_emergencias_dron ON emergencias(drone_id, id DESC);
+
+  CREATE TABLE IF NOT EXISTS emergencia_refs (
+    drone_id      TEXT NOT NULL,
+    ref           TEXT NOT NULL,
+    emergencia_id INTEGER NOT NULL REFERENCES emergencias(id),
+    PRIMARY KEY (drone_id, ref)
+  );
+
+  -- Una foto por (emergencia, seq): la repetida no pisa la guardada.
+  CREATE TABLE IF NOT EXISTS emergencia_fotos (
+    emergencia_id INTEGER NOT NULL REFERENCES emergencias(id),
+    seq           INTEGER NOT NULL,
+    tipo          TEXT NOT NULL,
+    rumbo         REAL NOT NULL,
+    inclinacion   REAL NOT NULL,
+    lat           REAL,
+    lon           REAL,
+    alt           REAL NOT NULL,
+    ts            INTEGER NOT NULL,
+    jpeg_base64   TEXT NOT NULL,
+    recibida_en   TEXT NOT NULL,
+    PRIMARY KEY (emergencia_id, seq)
+  );
+`);

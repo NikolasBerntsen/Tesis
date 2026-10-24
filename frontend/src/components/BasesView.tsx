@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react';
 import L from 'leaflet';
 import { LEJOS_M, api, distanciaM, rutasDeBase, traerBases, traerRutas } from '../api';
-import { CENTRO_POR_DEFECTO, iconoBase, useFondo, vestirAtribucion } from '../mapa';
+import { CENTRO_POR_DEFECTO, PALETA, iconoBase, useFondo, vestirAtribucion } from '../mapa';
 import type { BaseAsset, Me, PatrolRoute } from '../types';
 import { BotonEditar, BotonEliminar, BotonRestaurar } from './AccionesDeGestion';
 import { useAvisar } from './AvisosFlotantes';
@@ -13,8 +13,53 @@ import { EsqueletoDeTabla, EstadoVacio } from './EstadosDeVista';
 import { IconoBase, IconoCerrar, IconoMas, IconoRutas, IconoUbicacion } from './Iconos';
 import Modal from './Modal';
 
-type Formulario = { name: string; lat: string; lon: string };
-const VACIO: Formulario = { name: '', lat: '', lon: '' };
+type Formulario = { name: string; lat: string; lon: string; aterrizajeLat: string; aterrizajeLon: string };
+const VACIO: Formulario = { name: '', lat: '', lon: '', aterrizajeLat: '', aterrizajeLon: '' };
+
+/**
+ * Entre cuánto y cuánto de la base va el punto de aterrizaje para visitantes
+ * (§5 del contrato, RELEVOS §0): más cerca bajaría sobre la plataforma; más
+ * lejos ya no está "en la base" para el hub. El backend lo vuelve a controlar.
+ */
+const VISITANTES_MINIMO_M = 10;
+const VISITANTES_MAXIMO_M = 50;
+
+/** El punto para visitantes en el mapa: un aro azul, que no se confunde con el rombo de la base. */
+const ARO_VISITANTES: L.CircleMarkerOptions = {
+  radius: 7,
+  color: PALETA.info,
+  weight: 2.5,
+  fillColor: PALETA.marfil,
+  fillOpacity: 0.95,
+};
+
+/** Lo bastante cerca para distinguir 10 m de 50 alrededor de la base. */
+const ZOOM_DEL_PUNTO_PARA_VISITANTES = 19;
+
+/** "23,4 m": con un decimal, porque 50,4 redondeado a 50 parecería estar en rango. */
+function metros(m: number): string {
+  return `${(Math.round(m * 10) / 10).toLocaleString('es-AR')} m`;
+}
+
+/**
+ * Qué le pasa al punto para visitantes, o '' si está bien (o si no se cargó:
+ * es opcional). Se mide contra el punto de la base que está en el formulario,
+ * no contra el guardado: mover la base sin mover el punto lo puede dejar
+ * fuera de rango, y el backend lo rechazaría.
+ */
+function problemaDelPuntoDeVisitantes(
+  cargado: boolean,
+  punto: { lat: number; lon: number } | null,
+  distancia: number | null,
+): string {
+  if (!cargado) return '';
+  if (!punto) return 'Completá la latitud y la longitud del punto para visitantes, o dejá las dos vacías.';
+  if (distancia === null) return '';
+  if (distancia < VISITANTES_MINIMO_M || distancia > VISITANTES_MAXIMO_M) {
+    return `El punto para visitantes tiene que estar entre ${VISITANTES_MINIMO_M} y ${VISITANTES_MAXIMO_M} m de la base: ahora está a ${metros(distancia)}.`;
+  }
+  return '';
+}
 
 function coordValida(v: string, tope: number): boolean {
   const n = Number(v);
@@ -104,14 +149,20 @@ function AccionesDeBase({ base, esSupervisor, onEditar, onRutas, onAlternarActiv
 
 /**
  * La ficha de una base, como en el prototipo: el nombre en Cinzel, el alfiler
- * con sus coordenadas debajo y la pastilla de si está activa. Lo que el
- * prototipo dibuja además (los drones de la base, el relevo en espera) no
- * existe todavía en el Comando Central, así que no se inventa acá.
+ * con sus coordenadas debajo y la pastilla de si está activa; si tiene punto
+ * para visitantes, a cuánto queda. Lo que el prototipo dibuja además (los
+ * drones de la base, el relevo en espera) no lo trae la lista de bases, así
+ * que no se inventa acá: quién espera para relevos lo dice cada dron, en su
+ * cámara del tablero y en su vista.
  */
 function FichaDeBase(props: PropsDeFichaDeBase) {
   const { base, puedeCrear } = props;
   const idNombre = useId();
   const pastilla = pastillaDeBase(base);
+  const visitantes =
+    base.aterrizajeLat != null && base.aterrizajeLon != null
+      ? distanciaM(base, { lat: base.aterrizajeLat, lon: base.aterrizajeLon })
+      : null;
   return (
     <li>
       <article className={base.deleted ? 'ficha eliminada' : 'ficha'} aria-labelledby={idNombre}>
@@ -127,6 +178,16 @@ function FichaDeBase(props: PropsDeFichaDeBase) {
           </div>
           <span className={`estado pastilla ${pastilla.clase}`}>{pastilla.texto}</span>
         </header>
+        {/* El punto donde aterriza un dron de otra base que viene a relevar
+            (RELEVOS §6): un dato de la base, a cuánto queda de ella. */}
+        {visitantes !== null && (
+          <dl className="ficha-datos">
+            <div className="ficha-dato-ancho">
+              <dt className="rotulo">Punto para visitantes</dt>
+              <dd>{`A ${metros(visitantes)} de la base`}</dd>
+            </div>
+          </dl>
+        )}
         {puedeCrear && <AccionesDeBase {...props} />}
       </article>
     </li>
@@ -137,10 +198,25 @@ function FichaDeBase(props: PropsDeFichaDeBase) {
  * Mapa para elegir el punto de una base. Clickear pone el marcador y completa
  * las coordenadas del formulario: en el terreno nadie tipea una latitud.
  */
-function MapaElector({ lat, lon, onElegir }: { lat: number | null; lon: number | null; onElegir: (lat: number, lon: number) => void }) {
+function MapaElector({
+  lat,
+  lon,
+  visitante = null,
+  acercar = false,
+  onElegir,
+}: {
+  lat: number | null;
+  lon: number | null;
+  /** El punto de aterrizaje para visitantes, si hay uno cargado. */
+  visitante?: { lat: number; lon: number } | null;
+  /** Acercarse a la base: se está eligiendo algo a pocos metros de ella. */
+  acercar?: boolean;
+  onElegir: (lat: number, lon: number) => void;
+}) {
   const caja = useRef<HTMLDivElement>(null);
   const mapa = useRef<L.Map | null>(null);
   const marca = useRef<L.Marker | null>(null);
+  const marcaVisitante = useRef<L.CircleMarker | null>(null);
   const elegir = useRef(onElegir);
   elegir.current = onElegir;
 
@@ -156,6 +232,7 @@ function MapaElector({ lat, lon, onElegir }: { lat: number | null; lon: number |
       m.remove();
       mapa.current = null;
       marca.current = null;
+      marcaVisitante.current = null;
     };
   }, []);
 
@@ -173,6 +250,34 @@ function MapaElector({ lat, lon, onElegir }: { lat: number | null; lon: number |
     else marca.current = L.marker([lat, lon], { icon: iconoBase() }).addTo(m);
     m.panTo([lat, lon]);
   }, [lat, lon]);
+
+  // El punto para visitantes va a entre 10 y 50 m de la base: con el zoom de
+  // la ciudad no se distingue de ella. Al pasar a elegirlo, el mapa se acerca
+  // a la base; al volver a la base, se queda donde el operador lo dejó.
+  useEffect(() => {
+    const m = mapa.current;
+    if (!m || !acercar || lat == null || lon == null) return;
+    m.setView([lat, lon], ZOOM_DEL_PUNTO_PARA_VISITANTES);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [acercar]);
+
+  const latVisitante = visitante?.lat;
+  const lonVisitante = visitante?.lon;
+  useEffect(() => {
+    const m = mapa.current;
+    if (!m) return;
+    if (latVisitante === undefined || lonVisitante === undefined) {
+      marcaVisitante.current?.remove();
+      marcaVisitante.current = null;
+      return;
+    }
+    if (marcaVisitante.current) marcaVisitante.current.setLatLng([latVisitante, lonVisitante]);
+    else {
+      marcaVisitante.current = L.circleMarker([latVisitante, lonVisitante], ARO_VISITANTES)
+        .bindTooltip('Punto para visitantes')
+        .addTo(m);
+    }
+  }, [latVisitante, lonVisitante]);
 
   return (
     <div className="mapa-caja">
@@ -199,6 +304,9 @@ export default function BasesView({ me }: Readonly<{ me: Me }>) {
   const [errorForm, setErrorForm] = useState('');
   const [guardando, setGuardando] = useState(false);
   const [ubicando, setUbicando] = useState(false);
+  // Qué pone el clic en el mapa del formulario: el punto de la base o el de
+  // aterrizaje para visitantes. Arranca en la base, que es lo que se carga primero.
+  const [marcando, setMarcando] = useState<'base' | 'visitantes'>('base');
   // Qué rutas puede patrullar un dron que sale de esta base. Se abre solo
   // después de dar de alta una base y a pedido desde la fila de cualquier otra:
   // las rutas de una base cambian mucho después del alta.
@@ -295,16 +403,26 @@ export default function BasesView({ me }: Readonly<{ me: Me }>) {
   const lat = coordValida(form.lat, 90) ? Number(form.lat) : null;
   const lon = coordValida(form.lon, 180) ? Number(form.lon) : null;
   const hayNombre = form.name.trim().length > 0;
-  const completo = hayNombre && lat != null && lon != null;
   // Una coordenada a medio escribir no es un error; una escrita y fuera de
   // rango, sí, y se marca en el campo para no tener que adivinar cuál es.
   const latMal = form.lat.trim() !== '' && lat == null;
   const lonMal = form.lon.trim() !== '' && lon == null;
-  const faltante = queFalta(hayNombre, lat != null && lon != null);
+  // El punto para visitantes es opcional, pero si se empezó a cargar tiene que
+  // quedar entero y a la distancia que pide el contrato.
+  const latVisitante = coordValida(form.aterrizajeLat, 90) ? Number(form.aterrizajeLat) : null;
+  const lonVisitante = coordValida(form.aterrizajeLon, 180) ? Number(form.aterrizajeLon) : null;
+  const visitante = latVisitante != null && lonVisitante != null ? { lat: latVisitante, lon: lonVisitante } : null;
+  const visitanteCargado = form.aterrizajeLat.trim() !== '' || form.aterrizajeLon.trim() !== '';
+  const distanciaVisitante = visitante && lat != null && lon != null ? distanciaM({ lat, lon }, visitante) : null;
+  const errorVisitante = problemaDelPuntoDeVisitantes(visitanteCargado, visitante, distanciaVisitante);
+  const completo = hayNombre && lat != null && lon != null && errorVisitante === '';
+  const faltante =
+    queFalta(hayNombre, lat != null && lon != null) || (errorVisitante ? 'Revisá el punto para visitantes.' : '');
 
   function abrirAlta() {
     setEditando(null);
     setForm(VACIO);
+    setMarcando('base');
     setErrorForm('');
     setElegidas([]);
     setBusqueda('');
@@ -379,7 +497,15 @@ export default function BasesView({ me }: Readonly<{ me: Me }>) {
 
   function abrirEdicion(b: BaseAsset) {
     setEditando(b);
-    setForm({ name: b.name, lat: String(b.lat), lon: String(b.lon) });
+    setForm({
+      name: b.name,
+      lat: String(b.lat),
+      lon: String(b.lon),
+      // Un backend viejo no manda el punto: es lo mismo que no tenerlo.
+      aterrizajeLat: b.aterrizajeLat == null ? '' : String(b.aterrizajeLat),
+      aterrizajeLon: b.aterrizajeLon == null ? '' : String(b.aterrizajeLon),
+    });
+    setMarcando('base');
     setErrorForm('');
     setAbierto(true);
   }
@@ -424,7 +550,12 @@ export default function BasesView({ me }: Readonly<{ me: Me }>) {
     // Con el botón apagado esto no debería pasar; cubre el Enter de un
     // navegador que igual intente mandar el formulario a medio completar.
     if (!completo) return;
-    const cuerpo = JSON.stringify({ name: form.name.trim(), lat, lon });
+    // En la edición el punto viaja siempre, nuevo o en null: el backend lo
+    // controla contra la posición final de la base, y "sin cambios" con la
+    // base movida podía dejarlo fuera de rango. En el alta, sin punto no va.
+    const datos = { name: form.name.trim(), lat, lon };
+    const punto = { aterrizajeLat: visitante?.lat ?? null, aterrizajeLon: visitante?.lon ?? null };
+    const cuerpo = JSON.stringify(editando !== null || visitante !== null ? { ...datos, ...punto } : datos);
     setErrorForm('');
     setGuardando(true);
     let creada: BaseAsset | null = null;
@@ -569,10 +700,38 @@ export default function BasesView({ me }: Readonly<{ me: Me }>) {
               </label>
 
               <p className="muted">Marcá el punto en el mapa o escribí las coordenadas.</p>
+              <div className="view-switch elector-de-punto" role="group" aria-label="Qué marca el clic en el mapa">
+                <button
+                  type="button"
+                  className={marcando === 'base' ? 'active' : ''}
+                  aria-pressed={marcando === 'base'}
+                  onClick={() => setMarcando('base')}
+                >
+                  <IconoBase tamano={18} />
+                  La base
+                </button>
+                <button
+                  type="button"
+                  className={marcando === 'visitantes' ? 'active' : ''}
+                  aria-pressed={marcando === 'visitantes'}
+                  onClick={() => setMarcando('visitantes')}
+                >
+                  <IconoUbicacion tamano={18} />
+                  El punto para visitantes
+                </button>
+              </div>
               <MapaElector
                 lat={lat}
                 lon={lon}
-                onElegir={(la, lo) => setForm((f) => ({ ...f, lat: la.toFixed(6), lon: lo.toFixed(6) }))}
+                visitante={visitante}
+                acercar={marcando === 'visitantes'}
+                onElegir={(la, lo) =>
+                  setForm((f) =>
+                    marcando === 'visitantes'
+                      ? { ...f, aterrizajeLat: la.toFixed(6), aterrizajeLon: lo.toFixed(6) }
+                      : { ...f, lat: la.toFixed(6), lon: lo.toFixed(6) },
+                  )
+                }
               />
 
               <div className="fila-coords">
@@ -607,6 +766,57 @@ export default function BasesView({ me }: Readonly<{ me: Me }>) {
                   La latitud va de -90 a 90 y la longitud de -180 a 180, en grados con punto decimal.
                 </p>
               )}
+
+              {/* Opcional: sin él, un dron que se desvía hasta esta base baja
+                  15 m al norte del punto de la base (RELEVOS §0). */}
+              <fieldset className="campo-grupo">
+                <legend>Punto de aterrizaje para visitantes (opcional)</legend>
+                <p className="campo-ayuda">
+                  Dónde baja un dron que se desvía desde otra base: un lugar libre, a 10 m o más de toda plataforma, y a
+                  entre {VISITANTES_MINIMO_M} y {VISITANTES_MAXIMO_M} m de la base. Sin este punto, baja 15 m al norte
+                  de la base.
+                </p>
+                <div className="fila-coords">
+                  <label className="campo">
+                    <span className="campo-rotulo">Latitud para visitantes</span>
+                    <input
+                      value={form.aterrizajeLat}
+                      onChange={(e) => setForm({ ...form, aterrizajeLat: e.target.value })}
+                      inputMode="decimal"
+                      aria-invalid={errorVisitante !== ''}
+                      aria-describedby={errorVisitante ? 'error-visitantes-base' : undefined}
+                    />
+                  </label>
+                  <label className="campo">
+                    <span className="campo-rotulo">Longitud para visitantes</span>
+                    <input
+                      value={form.aterrizajeLon}
+                      onChange={(e) => setForm({ ...form, aterrizajeLon: e.target.value })}
+                      inputMode="decimal"
+                      aria-invalid={errorVisitante !== ''}
+                      aria-describedby={errorVisitante ? 'error-visitantes-base' : undefined}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setForm((f) => ({ ...f, aterrizajeLat: '', aterrizajeLon: '' }))}
+                    disabled={!visitanteCargado}
+                  >
+                    Quitar el punto
+                  </button>
+                </div>
+                {errorVisitante ? (
+                  <p className="campo-error" id="error-visitantes-base">
+                    {errorVisitante}
+                  </p>
+                ) : (
+                  distanciaVisitante !== null && (
+                    <p className="campo-ayuda" data-testid="distancia-visitantes">
+                      {`A ${metros(distanciaVisitante)} de la base.`}
+                    </p>
+                  )
+                )}
+              </fieldset>
             </div>
 
             <footer className="modal-pie">

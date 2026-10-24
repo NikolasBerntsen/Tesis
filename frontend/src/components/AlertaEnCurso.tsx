@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { useAlertasEnVivo } from '../alertasEnVivo';
 import { cronometro, time } from '../format';
+import { duenioDeLaAlerta } from '../relevos';
 import type { Alert, Drone } from '../types';
 import { useCarruselDeAlertas } from '../useCarruselDeAlertas';
 import { useDecisionDeAlerta, type DecidirAlerta, type Decision } from '../useDecisionDeAlerta';
@@ -227,13 +228,14 @@ function DecisionDeLaAlerta({
   onDecidir: (decision: Decision) => void;
   onAbrir?: () => void;
 }>) {
+  // El dron al que lleva el nombre es el que sigue al objetivo ahora: después
+  // de un relevo, el video que sirve para decidir es el suyo.
+  const duenio = duenioDeLaAlerta(alerta);
   return (
     <div className="alerta-detalle">
       <div className="alert-head">
         <ChipDeTipo tipo={alerta.type} />
-        {onVerDron && (
-          <ChipDelDron dron={drones?.find((d) => d.droneId === alerta.drone_id) ?? null} onVerDron={onVerDron} />
-        )}
+        {onVerDron && <ChipDelDron dron={drones?.find((d) => d.droneId === duenio) ?? null} onVerDron={onVerDron} />}
       </div>
       <p className="alerta-consigna">
         {siguiendo

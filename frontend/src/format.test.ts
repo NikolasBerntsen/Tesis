@@ -6,6 +6,9 @@ import {
   coordenadasODato,
   cronometro,
   decisionDelObjetivo,
+  duracion,
+  ETIQUETAS_DE_EVENTO,
+  etiquetaDeEvento,
   fechaHoraLarga,
   hashCorto,
   tipoDeAlerta,
@@ -19,6 +22,8 @@ import {
   situacionDelObjetivo,
   sobreObjetivo,
   fechaYHora,
+  tonoDeEvento,
+  tonoDelEstadoDelDron,
   STATE_LABELS,
   stateLabel,
   textoSinGps,
@@ -85,11 +90,47 @@ describe('stateLabel', () => {
     'PAUSED',
     'MANUAL',
     'FORCED',
+    // RELEVOS §1: los dos que sumó el diseño de relevos y emergencias.
+    'RELEVANDO',
+    'ATERRIZAJE_EMERGENCIA',
   ];
 
   it.each(ESTADOS_DEL_CONTRATO)('%s tiene etiqueta en castellano', (estado) => {
     expect(STATE_LABELS[estado]).toBeTruthy();
     expect(stateLabel(estado)).not.toBe(estado);
+  });
+
+  it('los estados nuevos se leen igual que en la pantalla del teléfono', () => {
+    expect(stateLabel('RELEVANDO')).toBe('Relevando a otro dron');
+    expect(stateLabel('ATERRIZAJE_EMERGENCIA')).toBe('Aterrizaje de emergencia');
+  });
+});
+
+describe('duracion', () => {
+  it('segundos, minutos y minutos con segundos', () => {
+    expect(duracion(0)).toBe('0 s');
+    expect(duracion(42.4)).toBe('42 s');
+    expect(duracion(120)).toBe('2 min');
+    expect(duracion(200)).toBe('3 min 20 s');
+  });
+
+  it('lo que no es un tiempo es la raya', () => {
+    expect(duracion(null)).toBe('—');
+    expect(duracion(undefined)).toBe('—');
+    expect(duracion(Number.NaN)).toBe('—');
+    expect(duracion(-5)).toBe('—');
+  });
+});
+
+describe('etiquetaDeEvento', () => {
+  it('rotula los eventos de relevos, desvíos y emergencias', () => {
+    expect(etiquetaDeEvento('RELAY_HANDOVER')).toBe('Traspaso del objetivo');
+    expect(etiquetaDeEvento('EMERGENCY_RECOVERED')).toBe('Dron recuperado');
+    expect(Object.keys(ETIQUETAS_DE_EVENTO)).toHaveLength(13);
+  });
+
+  it('un tipo que no conoce no lleva rótulo', () => {
+    expect(etiquetaDeEvento('PATROL_STARTED')).toBeNull();
   });
 });
 
@@ -104,6 +145,44 @@ describe('sobreObjetivo', () => {
     expect(sobreObjetivo('MANUAL')).toBe(false);
     expect(sobreObjetivo(null)).toBe(false);
     expect(sobreObjetivo(undefined)).toBe(false);
+  });
+});
+
+describe('tonoDelEstadoDelDron', () => {
+  it('va en oro sobre un objetivo y cuando va a relevar al que lo sigue', () => {
+    expect(tonoDelEstadoDelDron('ORBITING')).toBe('accent');
+    expect(tonoDelEstadoDelDron('FOLLOWING')).toBe('accent');
+    expect(tonoDelEstadoDelDron('RELEVANDO')).toBe('accent');
+  });
+
+  it('va en óxido mientras baja de emergencia', () => {
+    expect(tonoDelEstadoDelDron('ATERRIZAJE_EMERGENCIA')).toBe('bad');
+  });
+
+  it('lo demás, y la falta de estado, en la tinta de siempre', () => {
+    expect(tonoDelEstadoDelDron('PATROLLING')).toBe('muted');
+    expect(tonoDelEstadoDelDron('RETURNING_HOME_BATTERY')).toBe('muted');
+    expect(tonoDelEstadoDelDron(null)).toBe('muted');
+  });
+});
+
+describe('tonoDeEvento', () => {
+  it('en óxido lo grave: un dron en el piso fuera de base o un relevo que falló', () => {
+    expect(tonoDeEvento('EMERGENCY_LANDING')).toBe('bad');
+    expect(tonoDeEvento('EMERGENCY_LANDED')).toBe('bad');
+    expect(tonoDeEvento('RELAY_FAILED')).toBe('bad');
+    expect(tonoDeEvento('ALERT_CREATED')).toBe('bad');
+  });
+
+  it('en ámbar lo que hay que mirar: sin relevo disponible, un regreso desviado', () => {
+    expect(tonoDeEvento('RELAY_UNAVAILABLE')).toBe('warn');
+    expect(tonoDeEvento('RTH_DIVERTED')).toBe('warn');
+  });
+
+  it('lo demás, con la tinta de siempre', () => {
+    expect(tonoDeEvento('RELAY_COMPLETED')).toBe('');
+    expect(tonoDeEvento('EMERGENCY_RECOVERED')).toBe('');
+    expect(tonoDeEvento('LOGIN')).toBe('');
   });
 });
 

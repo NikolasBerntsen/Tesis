@@ -1,6 +1,6 @@
 import { useEffect, useState, type KeyboardEvent } from 'react';
 import { TAMANIOS_PAGINA, TAMANIO_PAGINA_POR_DEFECTO, traerLogs, type ParametrosLogs } from '../api';
-import { fechaYHora } from '../format';
+import { etiquetaDeEvento, fechaYHora, tonoDeEvento } from '../format';
 import type { EventRow, PaginaLogs, TamanioPagina } from '../types';
 import EncabezadoDeVista from './EncabezadoDeVista';
 import { EsqueletoDeTabla, EstadoVacio } from './EstadosDeVista';
@@ -195,7 +195,11 @@ export default function LogsView() {
                     {fechaYHora(l.ts)}
                   </time>
                   <span className={`cat-badge cat-${l.category}`}>{CATEGORIA[l.category]}</span>
-                  <span className="event-type mono">{l.type}</span>
+                  {/* Como en el historial de un dron: el código, resaltado si es
+                      grave, y el rótulo de los que la consola conoce en el globo. */}
+                  <span className={`event-type mono ${tonoDeEvento(l.type)}`} title={etiquetaDeEvento(l.type) ?? undefined}>
+                    {l.type}
+                  </span>
                   <span>{l.message}</span>
                 </div>
               ))}

@@ -341,6 +341,29 @@ describe('LogsView — filtros en la cabecera', () => {
     expect(container.querySelector('.log-row time')).not.toHaveClass('mono');
   });
 
+  it('los relevos y las emergencias se resaltan como en el historial del dron, con su rótulo en el globo', async () => {
+    traerLogsMock.mockResolvedValue(
+      pagina([
+        makeEvent({ id: 1, type: 'EMERGENCY_LANDED', message: 'Alfa tocó tierra fuera de base' }),
+        makeEvent({ id: 2, type: 'RELAY_UNAVAILABLE', message: 'Ningún dron puede relevar a Alfa' }),
+        makeEvent({ id: 3, type: 'RELAY_COMPLETED', message: 'Bravo relevó a Alfa' }),
+        makeEvent({ id: 4, type: 'LOGIN', message: 'entró admin' }),
+      ]),
+    );
+    render(<LogsView />);
+    await screen.findByText('entró admin');
+    const tipo = (codigo: string) => screen.getByText(codigo, { selector: '.event-type' });
+    expect(tipo('EMERGENCY_LANDED')).toHaveClass('bad');
+    expect(tipo('EMERGENCY_LANDED')).toHaveAttribute('title', 'Aterrizó fuera de base');
+    expect(tipo('RELAY_UNAVAILABLE')).toHaveClass('warn');
+    // Un relevo que salió bien no es una alarma: va con la tinta de siempre, pero rotulado.
+    expect(tipo('RELAY_COMPLETED')).not.toHaveClass('bad');
+    expect(tipo('RELAY_COMPLETED')).not.toHaveClass('warn');
+    expect(tipo('RELAY_COMPLETED')).toHaveAttribute('title', 'Relevo completado');
+    // Lo que la consola no rotula queda sin globo.
+    expect(tipo('LOGIN')).not.toHaveAttribute('title');
+  });
+
   it('sin registros, el vacío lleva el medallón de la hoja', async () => {
     traerLogsMock.mockResolvedValue(pagina([]));
     const { container } = render(<LogsView />);

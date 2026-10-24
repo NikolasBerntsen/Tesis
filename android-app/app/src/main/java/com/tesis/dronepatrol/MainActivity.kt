@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
 import android.graphics.BitmapFactory
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.os.SystemClock
@@ -29,7 +31,12 @@ import com.tesis.dronepatrol.model.EstadoDelDron
 import com.tesis.dronepatrol.model.FlightEvent
 import com.tesis.dronepatrol.model.PatrolRoute
 import com.tesis.dronepatrol.model.PatrolState
+import com.tesis.dronepatrol.patrol.AlmacenDeCola
+import com.tesis.dronepatrol.patrol.AlmacenEnArchivo
+import com.tesis.dronepatrol.patrol.CuentaRegresiva
 import com.tesis.dronepatrol.patrol.PatrolManager
+import com.tesis.dronepatrol.patrol.UbicacionFijada
+import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -67,7 +74,12 @@ class MainActivity : AppCompatActivity() {
         /** Cuánto queda a la vista un aviso de vuelo que no es un problema. */
         private const val DURACION_AVISO_MS = 8_000L
 
-        private val ETIQUETAS_ESTADO = mapOf(
+        /**
+         * El texto de cada estado del patrullaje. Interno para que el banco de
+         * pruebas verifique que no falta ninguno: un estado sin etiqueta deja en
+         * pantalla la del estado anterior, sin que nada lo delate.
+         */
+        internal val ETIQUETAS_ESTADO = mapOf(
             PatrolState.IDLE to R.string.estado_idle,
             PatrolState.PATROLLING to R.string.estado_patrullando,
             PatrolState.ORBITING to R.string.estado_orbitando,
@@ -79,19 +91,41 @@ class MainActivity : AppCompatActivity() {
             PatrolState.PAUSED to R.string.estado_pausado,
             PatrolState.MANUAL to R.string.estado_manual,
             PatrolState.FORCED to R.string.estado_forzado,
+            PatrolState.RELEVANDO to R.string.estado_relevando,
+            PatrolState.ATERRIZAJE_EMERGENCIA to R.string.estado_aterrizaje_emergencia,
         )
 
-        /** Estados en los que "Detener" tiene algo que detener. */
+        /** Estados en los que "Detener" tiene algo que detener (un relevo en camino también: lo aborta). */
         private val ESTADOS_DETENIBLES = setOf(
             PatrolState.PATROLLING,
             PatrolState.ORBITING,
             PatrolState.FOLLOWING,
             PatrolState.FORCED,
             PatrolState.MANUAL,
+            PatrolState.RELEVANDO,
         )
 
         /** Estados desde los que "Reanudar" retoma la ruta. */
         private val ESTADOS_REANUDABLES = setOf(PatrolState.PAUSED, PatrolState.ORBITING, PatrolState.FOLLOWING, PatrolState.MANUAL)
+
+        /** Volumen de los pitidos de la cuenta regresiva de un relevo (0..100). */
+        private const val VOLUMEN_CUENTA = 80
+
+        /** Cuánto dura cada pitido de la cuenta regresiva. */
+        private const val PITIDO_MS = 150
+
+        /** Donde la cola de la emergencia guarda lo pendiente (sobrevive a un reinicio). */
+        private const val ARCHIVO_EMERGENCIAS = "emergencias.json"
+
+        /**
+         * Dónde guarda la patrulla la cola de la emergencia. La app usa un
+         * archivo propio; el banco de pruebas lo cambia por memoria, por lo
+         * mismo que [crearComandoCentral]: una prueba no puede dejarle una
+         * emergencia pendiente a la siguiente.
+         */
+        internal var crearAlmacenDeEmergencias: (Context) -> AlmacenDeCola = { contexto ->
+            AlmacenEnArchivo(File(contexto.filesDir, ARCHIVO_EMERGENCIAS))
+        }
 
         /**
          * De dónde sale el cliente del Comando Central. La app usa siempre este;
@@ -121,6 +155,13 @@ class MainActivity : AppCompatActivity() {
          * señal perdida se ve en la pantalla sin dormir cuatro segundos de verdad.
          */
         internal var relojDeLaSenial: () -> Long = System::currentTimeMillis
+
+        /**
+         * El reloj de la patrulla (PatrolManager.reloj): el del seguimiento y el
+         * de los relevos. Por lo mismo que [relojDeLaSenial]: la cuenta
+         * regresiva de un despegue de relevo se prueba sin esperar diez segundos.
+         */
+        internal var reloj: () -> Long = System::currentTimeMillis
     }
 
     private lateinit var binding: ActivityMainBinding
@@ -143,6 +184,13 @@ class MainActivity : AppCompatActivity() {
     private var ultimoEstadoDron = EstadoDelDron.DESCONOCIDO
     private var ultimoCuadroMs = 0L
     private var avisoJob: Job? = null
+
+    /** Mientras la pantalla acomoda el interruptor al estado de la patrulla, no es el operador quien lo mueve. */
+    private var acomodandoEspera = false
+
+    /** El pitido de la cuenta regresiva de un relevo; null si el teléfono no lo da. */
+    private var pitido: ToneGenerator? = null
+    private var ultimoSegundoPitado = -1
 
     /**
      * Para que los anuncios UDP de la laptop lleguen al teléfono: sin este lock
@@ -172,7 +220,9 @@ class MainActivity : AppCompatActivity() {
             detection,
             lifecycleScope,
             modo,
+            reloj = reloj,
             relojDeLaSenial = relojDeLaSenial,
+            almacenDeEmergencias = crearAlmacenDeEmergencias(this),
         )
         commandCenter.onRenamed = { nombre -> lifecycleScope.launch { aplicarNombre(nombre) } }
 
@@ -181,7 +231,9 @@ class MainActivity : AppCompatActivity() {
         ubicarBaseDelDron()
         configurarSimulacion()
         configurarAccionesDeVuelo()
+        configurarRelevos()
         observarEstado()
+        observarRelevos()
         conectar()
         conectarDeteccion()
     }
@@ -425,10 +477,77 @@ class MainActivity : AppCompatActivity() {
         )
         binding.btnDespegarAqui.isEnabled = BotonesDeVuelo.despegarAquiHabilitado(estado, dron)
         binding.btnStopPatrol.isEnabled = estado in ESTADOS_DETENIBLES
-        binding.btnResumePatrol.isEnabled = manager.tieneRuta && estado in ESTADOS_REANUDABLES
-        binding.btnReturnHome.isEnabled =
-            dron.enVuelo && estado != PatrolState.RETURNING_HOME && estado != PatrolState.RETURNING_HOME_BATTERY
+        binding.btnResumePatrol.isEnabled = manager.puedeReanudar && estado in ESTADOS_REANUDABLES
+        binding.btnReturnHome.isEnabled = BotonesDeVuelo.volverABaseHabilitado(estado, dron)
         binding.btnLand.isEnabled = dron.enVuelo
+        binding.switchEnEspera.isEnabled = BotonesDeVuelo.enEsperaHabilitado(manager.enEspera.value, estado, dron)
+    }
+
+    // ---- Relevos y emergencias (docs/RELEVOS.md) ----
+
+    private fun configurarRelevos() {
+        val vistas = binding
+        vistas.switchEnEspera.setOnCheckedChangeListener { _, prendido ->
+            // Si no se pudo (el dron en el aire, sin enlace) la patrulla avisa
+            // por qué y el interruptor vuelve a como estaba. Mientras la
+            // pantalla lo acomoda, el que lo mueve no es el operador.
+            if (!acomodandoEspera && !manager.ponerEnEspera(prendido)) acomodarEspera(manager.enEspera.value)
+        }
+        vistas.btnCancelarRelevo.setOnClickListener { manager.cancelarRelevoEnCampo() }
+        pitido = runCatching { ToneGenerator(AudioManager.STREAM_ALARM, VOLUMEN_CUENTA) }.getOrNull()
+    }
+
+    private fun acomodarEspera(prendido: Boolean) {
+        acomodandoEspera = true
+        binding.switchEnEspera.isChecked = prendido
+        acomodandoEspera = false
+        actualizarBotones()
+    }
+
+    private fun observarRelevos() {
+        lifecycleScope.launch { manager.enEspera.collect { acomodarEspera(it) } }
+        lifecycleScope.launch { manager.cuentaRegresiva.collect { mostrarCuentaRegresiva(it) } }
+        lifecycleScope.launch { manager.ultimaUbicacion.collect { mostrarUltimaUbicacion(it) } }
+        lifecycleScope.launch { manager.avisos.collect { avisar(it, R.color.estado_info) } }
+    }
+
+    /**
+     * La cuenta regresiva de un despegue de relevo: grande, con lo que va a
+     * hacer el dron, «Cancelar» y un pitido por segundo, para que el que está
+     * al lado del dron se entere aunque no esté mirando el teléfono.
+     */
+    private fun mostrarCuentaRegresiva(cuenta: CuentaRegresiva?) {
+        val vistas = binding
+        vistas.cardCuentaRegresiva.visibility = if (cuenta == null) View.GONE else View.VISIBLE
+        if (cuenta == null) {
+            ultimoSegundoPitado = -1
+            return
+        }
+        vistas.txtCuentaRegresiva.text = when {
+            cuenta.habilitando -> getString(R.string.main_relevo_habilitando)
+            cuenta.esperandoQueBajeA -> getString(R.string.main_relevo_esperando, cuenta.de)
+            else -> getString(R.string.main_relevo_cuenta, cuenta.segundos)
+        }
+        vistas.txtCuentaRegresivaDetalle.text = getString(
+            if (cuenta.esSeguimiento) R.string.main_relevo_detalle_seguimiento else R.string.main_relevo_detalle_patrulla,
+            cuenta.de,
+        )
+        // Un pitido por segundo mientras cuenta, uno solo por número.
+        val contando = !cuenta.habilitando && !cuenta.esperandoQueBajeA && cuenta.segundos > 0
+        if (contando && cuenta.segundos != ultimoSegundoPitado) {
+            ultimoSegundoPitado = cuenta.segundos
+            pitido?.startTone(ToneGenerator.TONE_PROP_BEEP, PITIDO_MS)
+        }
+    }
+
+    private fun mostrarUltimaUbicacion(ubicacion: UbicacionFijada?) {
+        val vistas = binding
+        vistas.cardUltimaUbicacion.visibility = if (ubicacion == null) View.GONE else View.VISIBLE
+        if (ubicacion == null) return
+        vistas.txtUltimaUbicacionEstado.setText(
+            if (ubicacion.aterrizado) R.string.main_emergencia_aterrizo else R.string.main_emergencia_bajando,
+        )
+        vistas.txtUltimaUbicacion.text = getString(R.string.main_emergencia_posicion, ubicacion.lat, ubicacion.lon)
     }
 
     private fun configurarSimulacion() {
@@ -631,6 +750,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // Cerrar la pantalla apaga «En espera para relevos»: nadie está mirando el dron.
+        manager.alCerrarLaPantalla()
+        pitido?.release()
+        pitido = null
         runCatching { multicastLock?.release() }
         controller.disconnect()
         DronEnCurso.soltar()

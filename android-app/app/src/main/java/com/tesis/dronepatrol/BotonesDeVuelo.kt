@@ -12,11 +12,18 @@ import com.tesis.dronepatrol.model.PatrolState
  */
 internal object BotonesDeVuelo {
 
-    /** Con un regreso a base en curso no se despega ni se arranca nada: el regreso manda. */
-    private val REGRESOS = setOf(
+    /**
+     * Con un regreso a base en curso no se despega ni se arranca nada: el
+     * regreso manda. El aterrizaje de emergencia también es un regreso (el que
+     * baja donde está porque no alcanza ninguna base), y un relevo despega por
+     * su cuenta: "Despegar aquí" en el medio le pisaría el despegue.
+     */
+    private val SIN_DESPEGUE_A_MANO = setOf(
         PatrolState.RETURNING_HOME,
         PatrolState.RETURNING_HOME_BATTERY,
         PatrolState.RETURNING_HOME_SIGNAL,
+        PatrolState.ATERRIZAJE_EMERGENCIA,
+        PatrolState.RELEVANDO,
     )
 
     /**
@@ -29,10 +36,28 @@ internal object BotonesDeVuelo {
 
     /**
      * "Despegar aquí": en el suelo, con enlace con la aeronave, sin un regreso a
-     * base en curso y sin la batería por cambiar (LANDED). No exige GPS.
+     * base ni un relevo en curso y sin la batería por cambiar (LANDED). No exige
+     * GPS.
      */
     fun despegarAquiHabilitado(estado: PatrolState, dron: EstadoDelDron): Boolean =
-        !dron.enVuelo && dron.conectado && estado !in REGRESOS && estado != PatrolState.LANDED
+        !dron.enVuelo && dron.conectado && estado !in SIN_DESPEGUE_A_MANO && estado != PatrolState.LANDED
+
+    /**
+     * "Volver a base": en el aire y sin otro regreso en curso. El aterrizaje de
+     * emergencia también es uno —el que baja donde está porque la batería no
+     * alcanza para ninguna base—, y mandarlo a volver sería tirarlo en el camino.
+     */
+    fun volverABaseHabilitado(estado: PatrolState, dron: EstadoDelDron): Boolean =
+        dron.enVuelo && estado != PatrolState.RETURNING_HOME && estado != PatrolState.RETURNING_HOME_BATTERY &&
+            estado != PatrolState.ATERRIZAJE_EMERGENCIA
+
+    /**
+     * «En espera para relevos» (docs/RELEVOS.md §0): se prende con el dron en
+     * el suelo, enlazado y en reposo, que es lo que el operador acaba de
+     * revisar; apagarlo se puede siempre.
+     */
+    fun enEsperaHabilitado(prendido: Boolean, estado: PatrolState, dron: EstadoDelDron): Boolean =
+        prendido || (!dron.enVuelo && dron.conectado && estado == PatrolState.IDLE)
 
     /** Lo que se explica debajo de los botones de vuelo cuando están apagados. */
     sealed interface Aviso {

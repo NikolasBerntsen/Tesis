@@ -21,11 +21,17 @@ import kotlinx.coroutines.flow.SharedFlow
  * La telemetría la empuja el test: dejar de empujarla es el corte del enlace de
  * radio con el dron, igual que en el campo.
  */
-internal class DronEspia : DroneController {
+internal class DronEspia(
+    /** Si anota las órdenes de los relevos o las deja con el cuerpo por defecto (ver abajo). */
+    private val conRelevos: Boolean = false,
+) : DroneController {
 
     companion object {
         /** Cómo queda anotado [cancelarInclinacionManual]. */
         const val CANCELAR_CAMARA = "cancelarInclinacionManual"
+
+        /** Un JPEG mínimo (empieza con FF D8): lo que devuelve [capturarFoto] por defecto. */
+        val FOTO = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte(), 0xE0.toByte(), 0x00, 0x10, 0x4A, 0x46)
     }
 
     private val telemetria = MutableSharedFlow<Telemetry>(replay = 1, extraBufferCapacity = 8)
@@ -65,8 +71,65 @@ internal class DronEspia : DroneController {
         rumbo: Double = 0.0,
         gimbal: Double = Telemetry.GIMBAL_PATRULLA,
         ts: Long = System.currentTimeMillis(),
+        // La autonomía que informa el DJI (docs/RELEVOS.md §0); NaN es "no se sabe".
+        pctParaVolver: Double = Double.NaN,
+        pctParaAterrizar: Double = Double.NaN,
+        alcanceM: Double = Double.NaN,
     ) {
-        telemetria.emit(Telemetry(lat, lon, alt, bateria, 90, rumbo, ts, gimbal))
+        val t = Telemetry(
+            lat, lon, alt, bateria, 90, rumbo, ts, gimbal,
+            pctParaVolver = pctParaVolver,
+            pctParaAterrizar = pctParaAterrizar,
+            alcanceM = alcanceM,
+        )
+        ultimaTelemetria = t
+        telemetria.emit(t)
+    }
+
+    /** La última telemetría empujada: la base de la que confirma la cámara y el giro (ver [confirmarCamaraYRumbo]). */
+    @Volatile
+    var ultimaTelemetria: Telemetry? = null
+        private set
+
+    /**
+     * Si son true, apuntar la cámara ([confirmarCamara]) y girar en el lugar
+     * ([confirmarRumbo]) emiten en el acto la telemetría que lo confirma, como
+     * haría el dron: la secuencia de última ubicación espera esa confirmación
+     * antes de cada foto. Van por separado porque un giro que no se confirma
+     * es un mando virtual que no está, y eso corta la panorámica; una cámara
+     * que no confirma, no.
+     */
+    @Volatile
+    var confirmarCamara = false
+
+    @Volatile
+    var confirmarRumbo = false
+
+    /** Las dos confirmaciones juntas (ver [confirmarCamara] y [confirmarRumbo]). */
+    var confirmarCamaraYRumbo: Boolean
+        get() = confirmarCamara && confirmarRumbo
+        set(valor) {
+            confirmarCamara = valor
+            confirmarRumbo = valor
+        }
+
+    /** Lo que contesta [prepararDespegue]. */
+    @Volatile
+    var mandoVirtualEnTierra = true
+
+    /** Lo que devuelve [capturarFoto]; null es la cámara que no manda nada. */
+    @Volatile
+    var foto: ByteArray? = FOTO
+
+    /** El último punto que se le pidió con [volarHacia]. */
+    @Volatile
+    var ultimoDestino: Pair<Double, Double>? = null
+
+    private fun confirmar(si: Boolean, cambio: (Telemetry) -> Telemetry) {
+        if (!si) return
+        val t = cambio(ultimaTelemetria ?: return).copy(ts = System.currentTimeMillis())
+        ultimaTelemetria = t
+        telemetria.tryEmit(t)
     }
 
     /**
@@ -120,4 +183,78 @@ internal class DronEspia : DroneController {
     override fun vincularControl() = anotar("vincularControl")
     override fun cancelarVinculacion() = anotar("cancelarVinculacion")
     override fun disconnect() = anotar("disconnect")
+
+    // ---- Relevos, desvío y última ubicación (docs/RELEVOS.md) ----
+    // Con [conRelevos] en false (el valor por defecto) estas órdenes quedan con
+    // el cuerpo por defecto de DroneController: es el controlador viejo, el que
+    // DroneControllerPorDefectoTest prueba. Las pruebas de los relevos lo crean
+    // con true y ven cada orden anotada.
+
+    override fun despegarHasta(alturaM: Double) =
+        if (conRelevos) anotar("despegarHasta($alturaM)") else super.despegarHasta(alturaM)
+
+    override fun volarHacia(lat: Double, lon: Double) {
+        if (!conRelevos) return super.volarHacia(lat, lon)
+        ultimoDestino = lat to lon
+        anotar("volarHacia")
+    }
+
+    override fun girarEnElLugar(rumboGrados: Double) {
+        if (!conRelevos) return super.girarEnElLugar(rumboGrados)
+        anotar("girar($rumboGrados)")
+        confirmar(confirmarRumbo) { it.copy(heading = rumboGrados, rumboCamara = rumboGrados) }
+    }
+
+    override fun apuntarCamara(pitchGrados: Double) {
+        if (!conRelevos) return super.apuntarCamara(pitchGrados)
+        anotar("apuntar($pitchGrados)")
+        confirmar(confirmarCamara) { it.copy(gimbalPitch = pitchGrados) }
+    }
+
+    override fun cambiarAltura(alturaM: Double) =
+        if (conRelevos) anotar("cambiarAltura(${alturaM.toInt()})") else super.cambiarAltura(alturaM)
+
+    override fun cancelarRegreso() = if (conRelevos) anotar("cancelarRegreso") else super.cancelarRegreso()
+
+    override fun fijarPuntoDeRetornoAqui() =
+        if (conRelevos) anotar("fijarPuntoDeRetornoAqui") else super.fijarPuntoDeRetornoAqui()
+
+    override fun permitirRthPropioPorBateria(permitir: Boolean) =
+        if (conRelevos) anotar("permitirRthPropio($permitir)") else super.permitirRthPropioPorBateria(permitir)
+
+    override fun fijarFailsafeAterrizar(activo: Boolean) =
+        if (conRelevos) anotar("failsafeAterrizar($activo)") else super.fijarFailsafeAterrizar(activo)
+
+    override suspend fun capturarFoto(): ByteArray? {
+        if (!conRelevos) return super.capturarFoto()
+        anotar("capturarFoto")
+        alCapturar?.invoke(capturas.incrementAndGet())
+        return foto
+    }
+
+    private val capturas = java.util.concurrent.atomic.AtomicInteger()
+
+    /**
+     * Se llama en cada [capturarFoto] con su número (1, 2, …) antes de
+     * devolver la foto: una prueba puede frenar ahí la secuencia de última
+     * ubicación, en un punto exacto, sin depender de cuánto tarda.
+     */
+    @Volatile
+    var alCapturar: (suspend (Int) -> Unit)? = null
+
+    /** Si no es null, [prepararDespegue] lo tira: el SDK que falla en vez de contestar. */
+    @Volatile
+    var fallaDelMandoVirtual: Exception? = null
+
+    override suspend fun prepararDespegue(): Boolean {
+        if (!conRelevos) return super.prepararDespegue()
+        anotar("prepararDespegue")
+        fallaDelMandoVirtual?.let { throw it }
+        return mandoVirtualEnTierra
+    }
+
+    override fun soltarDespegue() = if (conRelevos) anotar("soltarDespegue") else super.soltarDespegue()
+
+    override fun fijarPuntoDeRetornoEn(lat: Double, lon: Double) =
+        if (conRelevos) anotar("fijarPuntoDeRetornoEn") else super.fijarPuntoDeRetornoEn(lat, lon)
 }

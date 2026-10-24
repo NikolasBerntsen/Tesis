@@ -1,6 +1,7 @@
 import { useId } from 'react';
 import { useAlertasEnVivo } from '../alertasEnVivo';
 import { time, tipoDeObjetivo } from '../format';
+import { duenioDeLaAlerta } from '../relevos';
 import type { Alert } from '../types';
 import DetalleDeAlerta from './DetalleDeAlerta';
 import { IconoCerrar } from './Iconos';
@@ -25,7 +26,9 @@ export default function ModalDeAlerta({
   const vivo = useAlertasEnVivo();
   // La cabecera también sigue a la consola: es la misma alerta, más fresca.
   const actual = vivo.alertas.find((a) => a.id === alerta.id) ?? alerta;
-  const dron = vivo.drones.find((d) => d.droneId === actual.drone_id);
+  // El dron que la sigue ahora, como el resto del pop-up (ver duenioDeLaAlerta).
+  const duenio = duenioDeLaAlerta(actual);
+  const dron = vivo.drones.find((d) => d.droneId === duenio);
 
   return (
     <Modal etiquetadoPor={idTitulo} ancho onCerrar={onCerrar} onDevolverFoco={onDevolverFoco}>

@@ -99,6 +99,19 @@ open class CommandCenterClient(
     var onControlReleased: ((by: String) -> Unit)? = null
     /** El Comando Central renombró al dron. */
     var onRenamed: ((displayName: String) -> Unit)? = null
+
+    /**
+     * Un mensaje de relevos, desvíos o emergencias (docs/PROTOCOLS.md §2.b) ya
+     * validado y con tipo (ver [LectorDelHub]). Corre en el hilo lector del
+     * socket, como el resto de los avisos.
+     */
+    var onMensajeDelHub: ((MensajeDelHub) -> Unit)? = null
+
+    /**
+     * Un mensaje de §2.b que no pasó la validación, con el motivo: se ignora y
+     * queda en el registro local (§2.b, "Validación en la app").
+     */
+    var onMensajeInvalido: ((motivo: String) -> Unit)? = null
     val connected = MutableStateFlow(false)
 
     private val json = "application/json".toMediaType()
@@ -341,7 +354,15 @@ open class CommandCenterClient(
      */
     internal fun manejarMensaje(text: String) {
         val msg = runCatching { JSONObject(text) }.getOrNull() ?: return
-        when (msg.optString("type")) {
+        val tipo = msg.optString("type")
+        if (tipo in LectorDelHub.TIPOS_DE_MENSAJE) {
+            when (val lectura = LectorDelHub.leer(msg)) {
+                is LectorDelHub.Lectura.Valido -> onMensajeDelHub?.invoke(lectura.mensaje)
+                is LectorDelHub.Lectura.Invalido -> onMensajeInvalido?.invoke(lectura.porque)
+            }
+            return
+        }
+        when (tipo) {
             "alert_decision" -> onAlertDecision?.invoke(
                 if (msg.has("alertId") && !msg.isNull("alertId")) msg.optLong("alertId") else null,
                 msg.optString("decision"),
@@ -469,6 +490,13 @@ open class CommandCenterClient(
          * consola sabe qué suponer cuando falta, y no hay que inventarle un valor.
          */
         gimbalPitch: Double = Double.NaN,
+        /**
+         * `relevo` (§1): en espera, disponible o en un relevo. null no lo
+         * manda, como una app vieja; PatrolManager lo manda siempre.
+         */
+        relevo: RelevoReportado? = null,
+        /** `autonomia` (§1): lo que cuesta volver; null no lo manda. */
+        autonomia: AutonomiaReportada? = null,
     ) {
         val gpsFix = lat.isFinite() && lon.isFinite()
         send(
@@ -493,22 +521,39 @@ open class CommandCenterClient(
                 // Opcional en el contrato (§1): ausente y no null, que es como lo
                 // manda una app vieja y lo que la consola ya sabe interpretar.
                 .apply { if (gimbalPitch.isFinite()) put("gimbalPitch", gimbalPitch) }
-                .put("target", target?.let(::objetivoEnJson) ?: JSONObject.NULL),
+                .put("target", target?.let(::objetivoEnJson) ?: JSONObject.NULL)
+                .apply { if (relevo != null) put("relevo", MensajesDeLaApp.relevo(relevo)) }
+                .apply { if (autonomia != null) put("autonomia", MensajesDeLaApp.autonomia(autonomia)) },
         )
     }
 
-    /** El objetivo con los nombres del contrato (§1, `target`). */
-    internal fun objetivoEnJson(o: ObjetivoReportado): JSONObject = JSONObject()
-        .put("alertId", o.alertId ?: JSONObject.NULL)
-        .put("type", o.tipo)
-        .put("lat", numero(o.lat))
-        .put("lon", numero(o.lon))
-        .put("speedMs", numero(o.velocidadMs))
-        .put("courseDeg", numero(o.rumboGrados))
-        .put("moving", o.enMovimiento)
-        .put("lost", o.perdido)
-        .put("lastSeenMs", o.vistoHaceMs)
-        .put("decision", o.decision)
+    /**
+     * El objetivo con los nombres del contrato (§1, `target`). Las componentes
+     * de la velocidad son opcionales: salen solo si son números creíbles.
+     */
+    internal fun objetivoEnJson(o: ObjetivoReportado): JSONObject = MensajesDeLaApp.conVelocidad(
+        JSONObject()
+            .put("alertId", o.alertId ?: JSONObject.NULL)
+            .put("type", o.tipo)
+            .put("lat", numero(o.lat))
+            .put("lon", numero(o.lon))
+            .put("speedMs", numero(o.velocidadMs))
+            .put("courseDeg", numero(o.rumboGrados))
+            .put("moving", o.enMovimiento)
+            .put("lost", o.perdido)
+            .put("lastSeenMs", o.vistoHaceMs)
+            .put("decision", o.decision),
+        o.vNorteMs,
+        o.vEsteMs,
+    )
+
+    /**
+     * Un mensaje de relevos, desvíos o emergencias ya armado
+     * ([MensajesDeLaApp]). Sin socket abierto se pierde, como todo lo demás:
+     * los que no se pueden perder los reintenta quien los manda (el pedido de
+     * relevo cada 5 s, la cola de la emergencia hasta su acuse).
+     */
+    fun enviar(mensaje: JSONObject) = send(mensaje)
 
     /** Un número para el JSON, o null si no es finito (org.json no acepta NaN). */
     private fun numero(valor: Double): Any = if (valor.isFinite()) valor else JSONObject.NULL

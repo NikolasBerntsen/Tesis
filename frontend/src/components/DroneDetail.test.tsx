@@ -6,7 +6,7 @@ import DroneDetail from './DroneDetail';
 import ProveedorDeAlertas from './ProveedorDeAlertas';
 import type { MapItem, WaypointsLayer } from './DronesMap';
 import { api, rutasDeBase } from '../api';
-import { makeAlert, makeDrone, makeEvent, makeMe, makeRoute, makeStatus } from '../test/fixtures';
+import { makeAlert, makeDrone, makeEvent, makeMe, makeRelevo, makeRoute, makeStatus } from '../test/fixtures';
 import type { Alert, ObjetivoEnSeguimiento } from '../types';
 
 // El mapa anota los items que recibe: es la forma de ver que el rastro del
@@ -1578,5 +1578,148 @@ describe('DroneDetail — sin GPS', () => {
     renderDetail({ status: makeStatus({ gpsFix: true }) });
     await esperarCarga();
     expect(screen.queryByTestId('mapa-sin-gps')).not.toBeInTheDocument();
+  });
+});
+
+describe('DroneDetail — soltar el control de un dron en un relevo (RELEVOS §3.9)', () => {
+  /** Alfa (d1) va a relevar a Charlie: está en camino y todavía no tiene objetivo (§3.5). */
+  const VA_A_RELEVAR = makeRelevo({
+    estado: 'EN_CAMINO',
+    origen: { droneId: 'c3', displayName: 'Charlie' },
+    relevo: { droneId: 'd1', displayName: 'Alfa' },
+  });
+  /** Alfa (d1) pidió el relevo de un seguimiento: tiene el objetivo y Bravo viene en camino. */
+  const PIDIO_RELEVO = makeRelevo({ estado: 'EN_CAMINO', origen: { droneId: 'd1', displayName: 'Alfa' } });
+
+  const conControl = (status: Parameters<typeof makeStatus>[0] = {}) => ({
+    me: makeMe({ username: 'admin1', canControl: true }),
+    drone: makeDrone({ controlledBy: 'admin1', online: true }),
+    status: makeStatus({ state: 'MANUAL', controlledBy: 'admin1', flying: true, routeId: null, target: null, ...status }),
+  });
+
+  const soltoCon = (resume: 'none' | 'last') =>
+    waitFor(() =>
+      expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', { method: 'DELETE', body: JSON.stringify({ resume }) }),
+    );
+
+  async function salirDelPilotaje(): Promise<HTMLElement> {
+    const vista = await abrirPilotaje();
+    fireEvent.click(within(vista).getByRole('button', { name: 'Salir del control manual' }));
+    const dialogo = screen.getByRole('dialog', { name: '¿Salir del control manual?' });
+    fireEvent.click(within(dialogo).getByRole('button', { name: 'Salir del control manual' }));
+    return dialogo;
+  }
+
+  it('salir de la vista de pilotaje del que va a relevar lo suelta sin orden: el relevo sigue', async () => {
+    renderDetail({ ...conControl(), relevos: [VA_A_RELEVAR] });
+    const vista = await abrirPilotaje();
+    fireEvent.click(within(vista).getByRole('button', { name: 'Salir del control manual' }));
+    expect(screen.getByRole('dialog', { name: '¿Salir del control manual?' })).toHaveTextContent('sigue con el relevo');
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: '¿Salir del control manual?' })).getByRole('button', {
+        name: 'Salir del control manual',
+      }),
+    );
+    await soltoCon('none');
+    expect(apiMock).not.toHaveBeenCalledWith('/drones/d1/control', { method: 'DELETE', body: JSON.stringify({ resume: 'last' }) });
+  });
+
+  it('el supervisor que le quita el control al que va a relevar tampoco cancela el relevo', async () => {
+    renderDetail({
+      me: makeMe({ username: 'super1', role: 'supervisor', canControl: true }),
+      drone: makeDrone({ controlledBy: 'oper9' }),
+      status: makeStatus({ state: 'MANUAL', controlledBy: 'oper9', target: null }),
+      relevos: [VA_A_RELEVAR],
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'Quitar control' }));
+    const dialogo = await screen.findByRole('dialog', { name: 'Quitarle el control a oper9' });
+    expect(dialogo).toHaveTextContent('oper9 deja de pilotear Alfa en el acto y el dron sigue con el relevo.');
+    await userEvent.click(within(dialogo).getByRole('button', { name: 'Quitar control' }));
+    await soltoCon('none');
+  });
+
+  it('en la tarjeta, soltar sin orden va primero; reanudar queda aparte y dice qué le hace al relevo', async () => {
+    renderDetail({ ...conControl(), relevos: [VA_A_RELEVAR] });
+    await esperarCarga();
+    expect(screen.queryByRole('button', { name: 'Devolver al patrullaje' })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Soltar control (sigue el relevo)' }));
+    await soltoCon('none');
+
+    const aviso = screen.getByTestId('aviso-reanudar-en-relevo');
+    expect(aviso).toHaveTextContent(
+      'Está yendo a relevar a Charlie: reanudar el patrullaje cancela el relevo y Charlie se queda sin relevo.',
+    );
+    const reanudar = screen.getByRole('button', { name: 'Soltar y reanudar patrullaje' });
+    expect(reanudar).toHaveAccessibleDescription(aviso.textContent ?? '');
+    apiMock.mockClear();
+    await userEvent.click(reanudar);
+    // Es una orden explícita, y va por donde el hub la cuenta para el relevo:
+    // soltar con 'last' a un dron en relevo el hub lo suelta sin orden.
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/drones/d1/resume', { method: 'POST', body: '{}' }));
+    expect(apiMock).not.toHaveBeenCalledWith('/drones/d1/control', expect.anything());
+  });
+
+  it('el que pidió el relevo también reanuda con la orden explícita, no soltando con "last"', async () => {
+    renderDetail({ ...conControl({ target: OBJETIVO }), relevos: [PIDIO_RELEVO] });
+    await esperarCarga();
+    apiMock.mockClear();
+    await userEvent.click(screen.getByRole('button', { name: 'Soltar y reanudar patrullaje' }));
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/drones/d1/resume', { method: 'POST', body: '{}' }));
+    expect(apiMock).not.toHaveBeenCalledWith('/drones/d1/control', expect.anything());
+  });
+
+  it('si el hub rechaza reanudar, el motivo queda a la vista', async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path.startsWith('/events')) return Promise.resolve([]);
+      if (path.endsWith('/resume')) return Promise.reject(new Error('El dron está controlado por oper9'));
+      return Promise.resolve({});
+    });
+    renderDetail({ ...conControl(), relevos: [VA_A_RELEVAR] });
+    await esperarCarga();
+    await userEvent.click(screen.getByRole('button', { name: 'Soltar y reanudar patrullaje' }));
+    expect(await screen.findByText('El dron está controlado por oper9')).toHaveAttribute('role', 'alert');
+  });
+
+  it('el que pidió el relevo con el objetivo cargado vuelve al objetivo, y el relevo sigue', async () => {
+    renderDetail({ ...conControl({ target: OBJETIVO }), relevos: [PIDIO_RELEVO] });
+    await esperarCarga();
+    expect(screen.getByRole('button', { name: 'Soltar control (vuelve al objetivo, sigue el relevo)' })).toBeInTheDocument();
+    expect(screen.getByTestId('aviso-reanudar-en-relevo')).toHaveTextContent('antes de que llegue Bravo');
+    const dialogo = await salirDelPilotaje();
+    expect(dialogo).toHaveTextContent('vuelve al objetivo que estaba siguiendo; el relevo sigue en marcha');
+    await soltoCon('none');
+  });
+
+  it('el supervisor que se lo quita al que pidió el relevo dice las dos cosas', async () => {
+    renderDetail({
+      me: makeMe({ username: 'super1', role: 'supervisor', canControl: true }),
+      drone: makeDrone({ controlledBy: 'oper9' }),
+      status: makeStatus({ state: 'MANUAL', controlledBy: 'oper9', target: OBJETIVO }),
+      relevos: [PIDIO_RELEVO],
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'Quitar control' }));
+    expect(await screen.findByRole('dialog', { name: 'Quitarle el control a oper9' })).toHaveTextContent(
+      'el dron vuelve al objetivo que estaba siguiendo, y el relevo sigue en marcha.',
+    );
+  });
+
+  it('alcanza con el relevo que informa el teléfono, aunque la consola no lo conozca', async () => {
+    renderDetail(
+      conControl({ relevo: { enEspera: false, disponible: false, relayId: 9, rol: 'relevo', fase: 'en_camino' } }),
+    );
+    await esperarCarga();
+    expect(screen.getByTestId('aviso-reanudar-en-relevo')).toHaveTextContent('Está en un relevo');
+    await salirDelPilotaje();
+    await soltoCon('none');
+  });
+
+  it('un relevo que ya terminó no cuenta: soltar lo devuelve a su ruta, como siempre', async () => {
+    renderDetail({ ...conControl(), relevos: [{ ...VA_A_RELEVAR, estado: 'CANCELADO' }] });
+    await esperarCarga();
+    expect(screen.getByRole('button', { name: 'Devolver al patrullaje' })).toBeInTheDocument();
+    expect(screen.queryByTestId('aviso-reanudar-en-relevo')).not.toBeInTheDocument();
+    await salirDelPilotaje();
+    await soltoCon('last');
   });
 });

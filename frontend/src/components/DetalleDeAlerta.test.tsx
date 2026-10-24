@@ -341,4 +341,52 @@ describe('DetalleDeAlerta', () => {
     const dron = estadoMapa.puestas.filter((c) => c.clase === 'marker').at(-1);
     expect(dron?.etiqueta).toBe('Dron');
   });
+
+  describe('una alerta relevada (RELEVOS §3.6)', () => {
+    const BRAVO = makeDrone({ droneId: 'd2', hash: 'b7e4209c3f1a4d6e8b2c5a7f9d1e3c40', displayName: 'Bravo' });
+    const relevada = makeAlert({ id: 7, drone_id: 'd1', seguidaPor: 'd2', snapshot: 'QUFB' });
+
+    it('la ficha y «Ver feed en vivo» son las del dron que la sigue, y dice quién la detectó', async () => {
+      const vivo = consola({
+        alertas: [relevada],
+        drones: [ALFA, BRAVO],
+        statuses: {
+          d1: makeStatus({ droneId: 'd1', state: 'RETURNING_HOME_BATTERY', battery: 30 }),
+          d2: makeStatus({ droneId: 'd2', state: 'ORBITING', battery: 88, target: OBJETIVO }),
+        },
+      });
+      const { onIrAlVideo } = montar({}, vivo);
+      expect(screen.getByRole('heading', { name: 'Dron que la sigue' })).toBeInTheDocument();
+      expect(dato('Nombre')).toHaveTextContent('Bravo');
+      expect(dato('La detectó')).toHaveTextContent('Alfa');
+      expect(dato('Batería')).toHaveTextContent('88 %');
+      // El objetivo ahora sale del status del que la sigue.
+      expect(screen.getByText('Objetivo ahora', { selector: 'dt' })).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Ver feed en vivo' }));
+      expect(vivo.verDron).toHaveBeenCalledWith('d2');
+      expect(onIrAlVideo).toHaveBeenCalled();
+    });
+
+    it('si el que la creó ya no está en la flota, lo nombra la ficha del evento, o su hash', () => {
+      montar({ dronDeRespaldo: { hash: 'd1', displayName: 'Alfa (del evento)', model: 'DJI' } }, consola({
+        alertas: [relevada],
+        drones: [BRAVO],
+      }));
+      expect(dato('La detectó')).toHaveTextContent('Alfa (del evento)');
+      // La ficha guardada es la del creador: no se le presta al que la sigue.
+      expect(dato('Modelo')).toHaveTextContent('DJI Mini 3');
+    });
+
+    it('sin ficha del evento ni dron en la flota queda el hash del que la creó', () => {
+      montar({}, consola({ alertas: [makeAlert({ id: 7, drone_id: 'c54ae4a0aad98bdc6ae5ab810751335c', seguidaPor: 'd2' })], drones: [BRAVO] }));
+      expect(dato('La detectó')).toHaveTextContent('c54ae4…335c');
+    });
+
+    it('seguidaPor igual al creador no es un relevo', () => {
+      montar({}, consola({ alertas: [makeAlert({ id: 7, drone_id: 'd1', seguidaPor: 'd1' })] }));
+      expect(screen.getByRole('heading', { name: 'Dron' })).toBeInTheDocument();
+      expect(screen.queryByText('La detectó')).not.toBeInTheDocument();
+    });
+  });
 });

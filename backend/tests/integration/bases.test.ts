@@ -49,7 +49,9 @@ describe('integración — bases como activo propio', () => {
 
     const ev = await ultimoEvento('BASE_CREATED');
     const meta = JSON.parse(ev.meta);
-    expect(meta.despues).toEqual({ nombre: 'Base Río', lat: -34.9, lon: -56.15, activa: true, eliminada: false });
+    expect(meta.despues).toEqual({
+      nombre: 'Base Río', lat: -34.9, lon: -56.15, activa: true, eliminada: false, aterrizajeLat: null, aterrizajeLon: null,
+    });
     // la coordenada se guarda como ubicación para que el pop-up dibuje el mapa
     expect(meta.ubicacion).toEqual({ lat: -34.9, lon: -56.15, accuracyM: null });
     expect(ev.source).toBe('campo');
@@ -149,7 +151,7 @@ describe('integración — bases como activo propio', () => {
   it('la base del dron es una referencia viva: renombrarla se refleja en su ficha', async () => {
     const b = await crearBase(srv.base, sup, { name: 'Base Vieja', lat: -34.6, lon: -56.0 });
     const dron = await crearDron(srv.base, sup, { displayName: 'Referenciado', baseId: b.id });
-    expect(dron.base).toEqual({ name: 'Base Vieja', lat: -34.6, lon: -56.0 });
+    expect(dron.base).toEqual({ name: 'Base Vieja', lat: -34.6, lon: -56.0, aterrizajeLat: null, aterrizajeLon: null });
 
     await api(srv.base, `/api/bases/${b.id}`, sup, { method: 'PATCH', body: JSON.stringify({ name: 'Base Nueva' }) });
     const ficha = await api(srv.base, '/api/drones', sup);
