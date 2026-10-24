@@ -3,7 +3,7 @@ import { Fragment, useEffect, useMemo, useRef } from 'react';
 import { parsearMeta } from '../api';
 import { MOTIVO_DE_EMERGENCIA } from '../emergencias';
 import { coordenadasODato, duracion, fechaHoraLarga, hashCorto } from '../format';
-import { useFondo, vestirAtribucion } from '../mapa';
+import { PALETA, useFondo, vestirAtribucion } from '../mapa';
 import {
   ESTADO_DEL_RELEVO,
   MOTIVO_DE_FIN,
@@ -121,27 +121,27 @@ export function alertaDelEvento(fila: EventRow, meta = parsearMeta(fila.meta)): 
 
 /* --- Mini mapa de la instantánea GPS -------------------------------------- */
 
-/* Leaflet pinta sus capas desde JS, no desde CSS: los tokens se repiten acá,
-   igual que en mapa.ts. */
-const ORO = '#B8912F';
-const MARFIL = '#FBFAF7';
+/* Leaflet pinta sus capas con colores pasados por JS, no con CSS: se toman de
+   PALETA (mapa.ts), la única copia de los tokens, que teselas.test.ts compara
+   con tokens.css. Una copia propia acá se había quedado en el oro de antes del
+   ajuste del tema, y el alfiler salía distinto del de los demás mapas. */
 
 const PIN_UBICACION = L.divIcon({
   className: 'drone-pin-icon',
   html: `<svg width="26" height="32" viewBox="0 0 26 32" xmlns="http://www.w3.org/2000/svg">
-      <path d="M13 31 7.6 20.6h10.8z" fill="${ORO}" stroke="${MARFIL}" stroke-width="1.6" stroke-linejoin="round"/>
-      <circle cx="13" cy="12" r="9" fill="${ORO}" stroke="${MARFIL}" stroke-width="2"/>
-      <circle cx="13" cy="12" r="3.2" fill="${MARFIL}"/>
+      <path d="M13 31 7.6 20.6h10.8z" fill="${PALETA.oro}" stroke="${PALETA.marfil}" stroke-width="1.6" stroke-linejoin="round"/>
+      <circle cx="13" cy="12" r="9" fill="${PALETA.oro}" stroke="${PALETA.marfil}" stroke-width="2"/>
+      <circle cx="13" cy="12" r="3.2" fill="${PALETA.marfil}"/>
     </svg>`,
   iconSize: [26, 32],
   iconAnchor: [13, 30],
 });
 
 const CIRCULO_PRECISION: L.CircleMarkerOptions = {
-  color: ORO,
+  color: PALETA.oro,
   weight: 1,
   opacity: 0.7,
-  fillColor: ORO,
+  fillColor: PALETA.oro,
   fillOpacity: 0.12,
   interactive: false,
 };
@@ -249,7 +249,9 @@ function ColumnaComparada({
   return (
     <div className={despues ? 'comparacion-col comparacion-despues' : 'comparacion-col'}>
       <span className="comparacion-titulo">{titulo}</span>
-      <dl className="datos">
+      {/* Sin los hilos de las demás listas: acá lo que se marca es el campo
+          que cambió, y su resaltado abraza al texto, no a la fila. */}
+      <dl className="datos sin-filetes">
         {claves.map((clave) => (
           <Fragment key={clave}>
             <dt>{etiquetaCampo(clave)}</dt>

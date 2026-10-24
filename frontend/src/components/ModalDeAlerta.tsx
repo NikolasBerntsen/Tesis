@@ -4,7 +4,7 @@ import { time, tipoDeObjetivo } from '../format';
 import { duenioDeLaAlerta } from '../relevos';
 import type { Alert } from '../types';
 import DetalleDeAlerta from './DetalleDeAlerta';
-import IconoCerrar from './IconoCerrar';
+import { IconoCerrar } from './Iconos';
 import Modal from './Modal';
 
 /**
@@ -42,7 +42,7 @@ export default function ModalDeAlerta({
           </p>
         </div>
         <button type="button" className="modal-cerrar" aria-label="Cerrar la alerta" onClick={onCerrar}>
-          <IconoCerrar />
+          <IconoCerrar tamano={18} />
         </button>
       </header>
 

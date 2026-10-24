@@ -146,11 +146,18 @@ describe('Console', () => {
     expect(screen.getByRole('button', { name: 'Drones' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Bases' })).toBeInTheDocument();
     expect(screen.getByRole('navigation', { name: 'Secciones de la consola' })).toBeInTheDocument();
-    // La barra lleva el escudo del proyecto, decorativo: el nombre lo dice el título.
+    // La barra lleva el escudo del proyecto, decorativo: el nombre lo dice el
+    // título, escrito como se dice aunque la hoja lo pase a mayúsculas.
     const marca = screen.getByRole('heading', { name: 'Alta en el Cielo', level: 1 });
-    expect(marca.querySelector('img.marca-escudo')).toHaveAttribute('alt', '');
+    expect(marca.closest('.marca')!.querySelector('img.marca-escudo')).toHaveAttribute('alt', '');
+    expect(screen.getByText('Comando de drones')).toHaveClass('marca-lema');
+    // Cada sección lleva su ícono, oculto al lector: el nombre es el rótulo.
+    const operacion = screen.getByRole('button', { name: 'Operación' });
+    expect(operacion.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
     // El nombre se recorta en una tableta: el title lo deja leer entero.
     expect(screen.getByText('oper1', { selector: '.username' })).toHaveAttribute('title', 'oper1');
+    // Y no se presenta como un control: no hay menú de sesión que abrir.
+    expect(screen.getByText('oper1', { selector: '.username' }).closest('button')).toBeNull();
     // La región de los avisos de "guardado" está desde el arranque, vacía.
     expect(document.querySelector('.avisos-flotantes')).toBeEmptyDOMElement();
     expect(screen.queryByRole('button', { name: 'Usuarios' })).not.toBeInTheDocument();
@@ -295,23 +302,23 @@ describe('Console', () => {
     expect(within(estado).getByText('Base Vieja')).toBeInTheDocument();
   });
 
-  it('la conexión y el renombre de un dron también refrescan la tabla de activos', async () => {
+  it('la conexión y el renombre de un dron también refrescan las fichas de activos', async () => {
     meFix = makeMe({ username: 'super1', role: 'supervisor' });
     dronesFix = [makeDrone({ hash: 'd1', droneId: 'd1', displayName: 'Alfa', online: false })];
     render(<Console onLogout={() => {}} />);
     await userEvent.click(await screen.findByRole('button', { name: 'Drones' }));
 
-    const filaAlfa = (await screen.findByText('Alfa', { selector: 'div' })).closest('tr') as HTMLElement;
-    expect(within(filaAlfa).getByText('No')).toBeInTheDocument();
+    const fichaAlfa = (await screen.findByText('Alfa', { selector: 'h3' })).closest('article') as HTMLElement;
+    expect(within(fichaAlfa).getByText('Desconectado')).toBeInTheDocument();
 
     // El dron que se conecta emite `drone_online`, no `drone_updated`: sin esto
-    // la columna "En línea" quedaba congelada hasta salir y volver a la sección.
+    // la pastilla de "En línea" quedaba congelada hasta salir y volver a la sección.
     fire({ type: 'drone_online', drone: makeDrone({ hash: 'd1', droneId: 'd1', displayName: 'Alfa', online: true }) });
-    await waitFor(() => expect(within(filaAlfa).getByText('Sí')).toBeInTheDocument());
+    await waitFor(() => expect(within(fichaAlfa).getByText('En línea')).toBeInTheDocument());
 
     // Y el renombre iniciado desde la app llega solo, como `drone_renamed`
     fire({ type: 'drone_renamed', droneId: 'd1', displayName: 'Bravo' });
-    expect(await screen.findByText('Bravo', { selector: 'div' })).toBeInTheDocument();
+    expect(await screen.findByText('Bravo', { selector: 'h3' })).toBeInTheDocument();
   });
 
   it('un activo eliminado desaparece de la operación', async () => {

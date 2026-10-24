@@ -42,6 +42,7 @@ import { ProveedorDeAvisos } from './AvisosFlotantes';
 import BasesView from './BasesView';
 import BotonTema from './BotonTema';
 import CampanaDeAlertas from './CampanaDeAlertas';
+import { ICONO_DE_SECCION, IconoPersona, IconoSalir } from './Iconos';
 import RutasView from './RutasView';
 import Dashboard from './Dashboard';
 import DroneDetail from './DroneDetail';
@@ -391,22 +392,34 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
         >
           <div className="dashboard">
             <header className="topbar">
-              {/* El escudo es decorativo: el nombre del proyecto ya lo dice el texto. */}
-              <h1 className="marca">
+              <div className="marca">
+                {/* El escudo es decorativo: el nombre del proyecto ya lo dice el texto. */}
                 <img className="marca-escudo" src={escudo} alt="" />
-                <span>Alta en el Cielo</span>
-              </h1>
+                <div className="marca-textos">
+                  {/* Escrito como se dice, que es lo que anuncia el lector de
+                      pantalla: las mayúsculas y los colores los pone la hoja. */}
+                  <h1 className="marca-nombre">
+                    Alta <span className="marca-en">en el</span> <span className="marca-cielo">Cielo</span>
+                  </h1>
+                  <p className="marca-lema">Comando de drones</p>
+                </div>
+              </div>
               <nav className="topnav" aria-label="Secciones de la consola">
-                {secciones.map((s) => (
-                  <button
-                    key={s}
-                    className={abierta === s ? 'active' : ''}
-                    aria-current={abierta === s ? 'page' : undefined}
-                    onClick={() => setSeccion(s)}
-                  >
-                    {ETIQUETA[s]}
-                  </button>
-                ))}
+                {secciones.map((s) => {
+                  const Icono = ICONO_DE_SECCION[s];
+                  return (
+                    <button
+                      key={s}
+                      type="button"
+                      className={abierta === s ? 'active' : ''}
+                      aria-current={abierta === s ? 'page' : undefined}
+                      onClick={() => setSeccion(s)}
+                    >
+                      <Icono />
+                      <span>{ETIQUETA[s]}</span>
+                    </button>
+                  );
+                })}
               </nav>
               <div className="topbar-right">
                 {/* El operador de campo entra a una consola recortada: conviene que lo
@@ -428,11 +441,17 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
                 </span>
                 <BotonTema />
                 {/* En una tableta el nombre se recorta con puntos suspensivos: el
-                    title lo deja leer entero. */}
-                <span className="username" title={usuario}>
-                  {usuario}
+                    title lo deja leer entero. La sesión no lleva menú: una silueta
+                    y no un engranaje, que se lee como "configuración" y el
+                    operador lo tocaría esperando algo. */}
+                <span className="sesion-usuario">
+                  <IconoPersona tamano={20} />
+                  <span className="username" title={usuario}>
+                    {usuario}
+                  </span>
                 </span>
-                <button className="ghost versalita" onClick={onLogout}>
+                <button type="button" className="ghost salir" onClick={onLogout}>
+                  <IconoSalir tamano={20} />
                   Salir
                 </button>
               </div>

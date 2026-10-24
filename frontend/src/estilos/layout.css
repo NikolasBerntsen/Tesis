@@ -12,78 +12,256 @@
   min-height: 100vh;
 }
 
-/* --- Barra superior: una cornisa de mármol -------------------------------- */
-/* En una pantalla ancha va todo en una línea: la marca, las secciones al medio
-   y la sesión a la derecha. Por debajo de 1280 px las secciones del admin ya
-   no entran entre las otras dos: con el flex de antes se partían en dos
-   renglones apretados en el medio de la barra. Ahora bajan a su propia fila,
-   a todo el ancho (ver la consulta de abajo). */
+/* --- Barra superior -------------------------------------------------------
+   <header class="topbar">
+     <div class="marca"><img class="marca-escudo"/>
+       <div class="marca-textos"><h1 class="marca-nombre">Alta <span class="marca-en">en el</span>
+         <span class="marca-cielo">Cielo</span></h1><p class="marca-lema">Comando de drones</p></div></div>
+     <nav class="topnav"> <button><svg/><span>Operación</span></button> … </nav>
+     <div class="topbar-right"> campana · conexión · tema · usuario · Salir </div>
+   </header>
+   La marca va suelta sobre la piedra; las secciones y la sesión, en una barra
+   translúcida con filo de oro. En una pantalla ancha va todo en una línea: la
+   marca, las secciones al medio y la sesión a la derecha. Por debajo de
+   1280 px las secciones ya no entran entre las otras dos y bajan a su propia
+   fila, a todo el ancho (ver la consulta de abajo). */
 .topbar {
   position: relative;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   grid-template-areas: 'marca secciones sesion';
   align-items: center;
-  gap: var(--e-3) var(--e-5);
-  padding: var(--e-4) var(--e-6);
-  border-bottom: 1px solid var(--veta);
-  background-color: var(--marmol-0);
-  background-image:
-    var(--grano-textura),
-    linear-gradient(180deg, var(--realce-cara) 0%, var(--marmol-0) 62%, var(--marmol-1) 100%);
-  box-shadow: var(--sombra-cornisa);
+  /* Sin hueco entre columnas: a lo ancho, secciones y sesión son UNA barra
+     (el ::before de abajo) y el aire lo pone el margen de la marca. */
+  gap: var(--e-3) 0;
+  padding: var(--e-4) var(--e-5) 0;
 }
-/* Hilo dorado al pie de la cornisa: el único oro permanente de la pantalla */
-.topbar::after {
+/* La barra translúcida: un ítem de la grilla que cubre las secciones y la
+   sesión, pintado antes que ellas (es el primer hijo). Un solo panel con un
+   solo filo y una sola sombra: dos paneles pegados se solapaban la sombra
+   justo en la unión. */
+.topbar::before {
   content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--oro-claro) 18%, var(--oro) 50%, var(--oro-claro) 82%, transparent);
-  opacity: .7;
+  grid-row: 1;
+  grid-column: 2 / -1;
+  align-self: stretch;
+  border: 1px solid var(--veta-fuerte);
+  border-radius: var(--radio);
+  background-color: var(--panel);
+  background-image: var(--piedra-cara);
+  box-shadow: var(--sombra-relieve);
 }
-.topbar h1 {
+
+/* La marca: el escudo y el nombre en Cinzel, sobre un halo de piedra lisa que
+   le borra la veta que pase justo por debajo (tokens.css, --velo-marca). El
+   halo es la sombra difusa de una píldora del mismo color: un borde que se
+   desvanece, sin recuadro que se vea. */
+.marca {
   grid-area: marca;
   display: flex;
   align-items: center;
-  gap: var(--e-2);
-  margin: 0;
-  font-family: var(--fuente-serif);
-  font-size: var(--txt-lg);
-  letter-spacing: .01em;
-  white-space: nowrap;
+  gap: var(--e-3);
+  margin-right: var(--e-5);
+  padding-right: var(--e-2);
+  border-radius: 999px;
+  background-color: var(--velo-marca);
+  box-shadow: 0 0 22px 14px var(--velo-marca);
 }
+/* El escudo del proyecto: alto fijo y ancho proporcional, así la piedra no se
+   deforma en ninguna de las dos escalas. */
+.marca-escudo {
+  height: 3.6rem;
+  width: auto;
+  flex: none;
+  filter: drop-shadow(var(--sombra-escudo));
+}
+.marca-textos {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+/* El nombre se escribe en el marcado como se dice ("Alta en el Cielo"), que
+   es lo que anuncia el lector de pantalla; las mayúsculas las pone la hoja. */
+.marca-nombre {
+  margin: 0;
+  font-family: var(--fuente-marca);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--tinta);
+}
+.marca-en {
+  font-size: .64em;
+  color: var(--marca-azul);
+}
+.marca-cielo { color: var(--oro-texto); }
+/* "Comando de drones" bajo un hilo de oro. El espaciado ancho deja un hueco
+   después de la última letra: el relleno de la izquierda lo compensa y el
+   lema queda centrado bajo el nombre. */
+.marca-lema {
+  align-self: stretch;
+  margin: 0;
+  padding: 7px 0 0 .5em;
+  border-top: 1px solid var(--veta-fuerte);
+  font-family: var(--fuente-marca);
+  font-size: var(--txt-xxs);
+  font-weight: 600;
+  letter-spacing: .5em;
+  line-height: 1;
+  text-align: center;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--tinta-media);
+}
+
+/* Las secciones: el ícono arriba y el nombre abajo, en versalitas. */
 .topbar > .topnav {
   grid-area: secciones;
-  justify-content: center;
+  display: flex;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: var(--e-1);
+  min-width: 0;
+  padding: var(--e-2);
 }
+.topnav button {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  /* A 1280 px entran las seis secciones del admin al lado de la marca y de
+     la sesión, aun en el peor caso: el nombre más largo que deja .username
+     (11ch), «sin conexión» (13 px más ancho que «conectado») y la barra de
+     scroll clásica de Windows, que la consulta de 1279 px no descuenta.
+     Con 70 px y 8 px de relleno, ese caso mandaba "Registro" a otro renglón
+     y la barra saltaba 62 px justo cuando se caía la conexión. */
+  min-width: 64px;
+  min-height: var(--alto-tactil);
+  padding: 9px 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radio-chico);
+  background: transparent;
+  box-shadow: none;
+  color: var(--tinta-media);
+  font-size: var(--txt-xs);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.topnav button:hover:not(:disabled) {
+  color: var(--tinta);
+  border-color: transparent;
+  background: var(--oro-velo);
+}
+/* La sección abierta: velo, filo y tinta de oro, con su resplandor (el
+   botón dorado de primitivos.css, en versión de pestaña). */
+.topnav button.active,
+.topnav button.active:hover:not(:disabled) {
+  color: var(--oro-texto);
+  border-color: var(--filo-activo);
+  background-color: transparent;
+  background-image: var(--cara-activa);
+  box-shadow: var(--resplandor-oro);
+}
+
+/* La sesión: campana, conexión, tema, usuario y Salir, separados de las
+   secciones por un hilo de oro. */
 .topbar-right {
   grid-area: sesion;
   display: flex;
   align-items: center;
   justify-content: flex-end;
   flex-wrap: wrap;
-  gap: var(--e-4);
+  gap: var(--e-1);
+  min-height: calc(var(--alto-tactil) + var(--e-2) * 2);
+  padding: var(--e-2) var(--e-2) var(--e-2) var(--e-3);
+  border-left: 1px solid var(--veta);
   font-size: var(--txt-sm);
+}
+/* Los controles redondos de la barra (el tema) miden lo mismo que la campana
+   y van sin tecla: un ícono sobre el panel, como en el prototipo. */
+.topbar-right .icono-boton {
+  width: var(--alto-tactil);
+  height: var(--alto-tactil);
+  border-color: transparent;
+  background: none;
+  box-shadow: none;
+}
+.topbar-right .icono-boton svg { width: 20px; height: 20px; }
+.topbar-right .icono-boton:hover:not(:disabled) { background: var(--oro-velo); }
+/* El usuario con su silueta: es quien está de guardia, en versalitas. No es
+   un control (no hay menú de sesión), así que no lleva engranaje, ni borde ni
+   hover como Salir. */
+.sesion-usuario {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 var(--e-1);
+  color: var(--tinta-media);
+}
+.sesion-usuario svg { flex: none; }
+/* Salir cierra la fila, detrás de su propio hilo de oro. */
+.topbar-right .salir {
+  position: relative;
+  min-height: var(--alto-tactil);
+  padding: 0 var(--e-2) 0 var(--e-3);
+  font-size: var(--txt-xs);
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.topbar-right .salir::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 22%;
+  bottom: 22%;
+  width: 1px;
+  background: var(--veta);
+}
+/* En una pantalla muy ancha la marca crece a la medida del prototipo. */
+@media (min-width: 1500px) {
+  .marca-escudo { height: 4.75rem; }
+  .marca-nombre { font-size: 31px; }
+  .marca-lema { font-size: var(--txt-xs); }
+  .topnav button { min-width: 88px; padding-inline: 14px; letter-spacing: .06em; }
+  .topbar-right { gap: var(--e-1) var(--e-2); }
 }
 @media (max-width: 1279px) {
   .topbar {
     /* El título conserva su ancho y la que se encoge (partiéndose en
        renglones) es la sesión. Al revés, con la marca en `minmax(0, 1fr)`,
-       en un teléfono la sesión se quedaba con todo el ancho y "Comando
-       Central" caía en una columna de 0 px, encimado sobre la campana. */
+       en un teléfono la sesión se quedaba con todo el ancho y el nombre
+       caía en una columna de 0 px, encimado sobre la campana. */
     grid-template-columns: auto minmax(0, 1fr);
     grid-template-areas:
       'marca sesion'
       'secciones secciones';
   }
-  .topbar > .topnav { justify-content: flex-start; }
+  /* La barra queda para las secciones; la sesión, al lado de la marca, lleva
+     su propio panel: suelta sobre la piedra, una veta de oro le podía pasar
+     por debajo del "conectado". */
+  .topbar::before { grid-area: secciones; }
+  .topbar-right {
+    justify-self: end;
+    border: 1px solid var(--veta-fuerte);
+    border-radius: var(--radio);
+    background-color: var(--panel);
+    background-image: var(--piedra-cara);
+    box-shadow: var(--sombra-relieve);
+  }
 }
 /* En un teléfono la marca y la sesión ya no entran en una fila: se apilan, y
    la sesión arranca a la izquierda, debajo del título. Es el ancho en que más
-   se usa la sesión de campo. */
+   se usa la sesión de campo. Las secciones reparten el ancho entre todas. */
 @media (max-width: 640px) {
   .topbar {
     grid-template-columns: minmax(0, 1fr);
@@ -91,12 +269,27 @@
       'marca'
       'sesion'
       'secciones';
+    padding-inline: var(--e-4);
   }
-  .topbar-right { justify-content: flex-start; }
+  .marca { justify-self: start; margin-right: 0; }
+  .marca-escudo { height: 3.25rem; }
+  .marca-nombre { font-size: 21px; }
+  .topbar-right { justify-self: stretch; justify-content: flex-start; }
+  /* Si Salir baja de renglón, el hilo que lo separa quedaría colgando al
+     principio de la línea. */
+  .topbar-right .salir::before { display: none; }
+  .topbar > .topnav {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(70px, 1fr));
+  }
+  .topnav button { min-width: 0; padding-inline: var(--e-1); }
 }
-/* Un nombre largo no empuja la barra: se recorta, y el title lo deja leer. */
+/* Un nombre largo no empuja la barra: se recorta, y el title lo deja leer.
+   Entre 1280 y 1500 px la barra va justa (las seis secciones en una fila,
+   aun con la barra de scroll de Windows), así que ahí el nombre se recorta
+   antes. */
 .username {
-  max-width: 16ch;
+  max-width: 11ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -106,52 +299,51 @@
   letter-spacing: var(--versalita);
   font-weight: 600;
 }
-/* Sin letter-spacing propio: comparte el de las versalitas de al lado */
-.conn { font-size: var(--txt-xs); }
+@media (min-width: 1500px) {
+  .username { max-width: 16ch; }
+}
+/* La conexión: verde con un punto que brilla, o "sin conexión" en óxido. El
+   punto lo dibuja .estado con currentColor, así que toma el color solo. */
+.conn {
+  padding: 0 var(--e-1);
+  font-size: var(--txt-xs);
+  letter-spacing: .06em;
+  white-space: nowrap;
+}
+.conn.estado::before {
+  width: 9px;
+  height: 9px;
+  box-shadow: 0 0 8px currentColor;
+}
 .conn.ok { color: var(--ok-texto); }
 .conn.bad { color: var(--peligro); }
 
-/* --- Navegación por secciones y conmutadores de vista --------------------- */
-.topnav,
+/* --- Conmutadores de vista y pestañas -------------------------------------- */
+/* "Cámaras / Mapa" vive en la cabecera de Operación: su tamaño y sus
+   versalitas los pone pulido.css, y el elegido lleva el oro de lo presionado
+   (aria-pressed, primitivos.css). */
 .view-switch,
 .tabs {
   display: flex;
   gap: var(--e-2);
   flex-wrap: wrap;
 }
-.topnav button,
-.view-switch button {
-  background: transparent;
-  background-image: none;
-  border-color: transparent;
-  box-shadow: none;
-  color: var(--tinta-media);
-  font-size: var(--txt-sm);
-  text-transform: uppercase;
-  letter-spacing: var(--versalita);
-  font-weight: 600;
-  padding: 7px 14px;
-}
-.topnav button:hover:not(:disabled),
-.view-switch button:hover:not(:disabled) {
-  color: var(--tinta);
-  border-color: var(--veta);
-  background: var(--realce-70);
-}
-.topnav button.active,
-.view-switch button.active {
-  color: var(--tinta);
-  background-image: var(--cara-activa);
-}
 
-/* --- Cuerpo de la página -------------------------------------------------- */
+/* --- Cuerpo de la página: el lienzo ---------------------------------------
+   Cada vista va en un lienzo grande y translúcido, con un hilo de oro: un
+   escalón entre la piedra de la página y los paneles. Encima va el título de
+   la vista, así que su velo también se mide (contraste.test.ts). */
 .page-main,
 .dashboard-main,
 .detail-main {
   display: flex;
   flex-direction: column;
   gap: var(--e-5);
-  padding: var(--e-6);
+  margin: var(--e-4) var(--e-5) var(--e-5);
+  padding: var(--e-5) var(--e-6) var(--e-6);
+  border: 1px solid var(--veta);
+  border-radius: var(--radio-grande);
+  background-color: var(--lienzo);
   flex: 1;
   min-height: 0; /* deja que el hijo con overflow scrollee en vez de estirar */
 }
@@ -168,14 +360,18 @@
   .page-main,
   .dashboard-main,
   .detail-main { padding: var(--e-5); }
-  .topbar { padding-inline: var(--e-5); }
 }
+/* En una tableta el lienzo casi toca los bordes: el margen es para la
+   piedra, no para el dato. */
 @media (max-width: 900px) {
   .grid { grid-template-columns: 1fr; }
   .page-main,
   .dashboard-main,
-  .detail-main { padding: var(--e-4); }
-  .topbar { padding: var(--e-3) var(--e-4); }
+  .detail-main {
+    margin: var(--e-3);
+    padding: var(--e-4);
+  }
+  .topbar { padding: var(--e-3) var(--e-3) 0; }
 }
 .col {
   display: flex;
@@ -184,33 +380,59 @@
   min-width: 0;
 }
 
-/* La cabecera del detalle lleva la misma línea grabada que la de las demás
-   vistas (.vista-cabecera), con su tramo de oro donde arranca. */
+/* --- Cabecera del detalle de un dron (DroneDetail) -------------------------
+   <header class="detail-head">
+     <div class="detail-titulos">
+       <button class="enlace versal detalle-volver"/> <h2 class="vista-titulo"/>
+       <p class="vista-subtitulo"/></div>
+     <span class="estado pastilla"/> <span class="badge oro"/>
+     <button class="detalle-historial"/>
+   </header>
+   La de las demás vistas (.vista-cabecera, pulido.css): el nombre del dron es
+   el título, en Cormorant con su barra de oro, el modelo va debajo en
+   versalitas anchas y un hilo cierra la fila. Arriba del título, el camino de
+   vuelta; los controles, alineados con el pie del título. */
 .detail-head {
-  position: relative;
   display: flex;
-  align-items: center;
-  gap: var(--e-4);
+  align-items: flex-end;
   flex-wrap: wrap;
-  padding-bottom: var(--e-3);
+  gap: var(--e-3) var(--e-4);
+  padding-bottom: var(--e-4);
   border-bottom: 1px solid var(--veta);
 }
-.detail-head::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  bottom: -1px;
-  width: 38px;
-  height: 1px;
-  background: linear-gradient(90deg, var(--oro-oscuro) 0%, var(--oro-claro) 100%);
+/* Los títulos se quedan con el ancho: lo demás va a la derecha, y en una
+   pantalla angosta baja a su propio renglón. */
+.detail-titulos {
+  flex: 1 1 20rem;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--e-3);
 }
-.detail-head h2 {
-  margin: 0;
-  font-size: var(--txt-xl);
-}
+/* El camino de vuelta, alineado con el nombre: pasada la barra de oro. */
+.detalle-volver { margin-left: 22px; }
+.detail-head > .estado.pastilla { min-height: 32px; }
 /* "Ver historial de eventos" va al final de la cabecera, contra el borde
-   derecho, arriba de la tarjeta de telemetría. */
+   derecho, arriba de la tarjeta de telemetría. Su alto y sus versalitas son
+   los de los botones de cualquier cabecera (pulido.css). */
 .detail-head .detalle-historial { margin-left: auto; }
+/* El nombre se renombra en el título mismo: el campo toma la letra del título
+   (en el cuerpo del texto, el renglón de 150 px de la teja no alcanzaba para
+   un nombre a 46 px) y el lápiz crece hasta poder tocarse con el dedo. */
+.vista-titulo .editable-name input {
+  width: min(9em, 62vw);
+  font-size: inherit;
+  line-height: 1.1;
+}
+.vista-titulo .editable-name button.icon {
+  min-width: var(--alto-tactil);
+  min-height: var(--alto-tactil);
+}
+.vista-titulo .editable-name button.icon svg {
+  width: 20px;
+  height: 20px;
+}
 
 /* Barra de acciones de una vista (título a la izquierda, botones a la derecha) */
 .barra-acciones {
@@ -233,83 +455,71 @@ td.barra-acciones {
 }
 td.barra-acciones > * + * { margin-left: var(--e-2); }
 
-/* --- Login: una placa de mármol sola en el centro ------------------------- */
+/* --- Login: una placa translúcida sola en el centro -----------------------
+   Sobre la piedra con vetas, como el prototipo: el escudo grande, la marca
+   con "Comando de drones" bajo su hilo de oro, los dos campos y "Ingresar"
+   en oro a todo el ancho. Sin filo dorado en el canto: el panel lleva el hilo
+   de oro de todos, y una lámina encima era otra pieza que mirar. */
+/* La columna en `minmax(0, 1fr)`: en una pista `auto` la placa medía sus
+   420 px aunque el teléfono tuviera 375, y la página scrolleaba de costado. */
 .login-wrapper {
   min-height: 100vh;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   place-items: center;
-  padding: var(--e-6);
+  padding: var(--e-6) var(--e-4);
 }
 .login-card {
   position: relative;
-  width: 380px;
+  width: 420px;
   max-width: 100%;
   display: flex;
   flex-direction: column;
   gap: var(--e-4);
-  padding: var(--e-7) var(--e-6) var(--e-6);
-  border: 1px solid var(--veta);
+  padding: 36px var(--e-6) var(--e-6);
+  border: 1px solid var(--veta-fuerte);
   border-radius: var(--radio-grande);
-  background-color: var(--marmol-0);
+  background-color: var(--panel);
   background-image: var(--piedra-cara);
   box-shadow: var(--sombra-flotante);
 }
-/* Filo dorado superior: la piedra abierta en el canto de la placa */
-.login-card::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 12%;
-  right: 12%;
-  height: var(--filo);
-  border-radius: 0 0 3px 3px;
-  background: var(--oro-lamina);
-}
-.login-card .regla-ornamental { margin-block: var(--e-2); }
-/* El escudo del proyecto: alto fijo y ancho proporcional, así la piedra no se
-   deforma en ninguna de las dos escalas. */
-.marca-escudo {
-  height: 2.6rem;
-  width: auto;
-  flex: none;
-}
+.login-card .regla-ornamental { margin-block: var(--e-1); }
 .login-escudo {
   display: block;
-  width: 7.5rem;
+  width: 8.25rem;
   height: auto;
-  margin: 0 auto var(--e-3);
+  margin: 0 auto var(--e-1);
+  filter: drop-shadow(var(--sombra-escudo));
 }
-.login-card h1 {
-  margin: 0;
-  font-family: var(--fuente-serif);
-  font-size: var(--txt-xl);
-  text-align: center;
-}
-.login-subtitle {
-  margin: 0 0 var(--e-3);
-  text-align: center;
-  color: var(--tinta-media);
-  font-size: var(--txt-xs);
-  text-transform: uppercase;
-  letter-spacing: var(--versalita);
-}
+/* La misma marca que la barra (.marca-nombre, .marca-lema), más grande: acá
+   es lo único que hay para leer antes de escribir. */
+.login-marca { align-self: center; }
+.login-marca .marca-nombre { font-size: var(--txt-2xl); }
+.login-marca .marca-lema { font-size: var(--txt-xs); }
+/* Los rótulos son los .rotulo del prototipo, arriba de cada campo. */
 .login-card label {
   display: flex;
   flex-direction: column;
-  gap: var(--e-2);
+  gap: 6px;
   color: var(--tinta-media);
-  font-size: var(--txt-xs);
+  font-size: var(--txt-xxs);
   text-transform: uppercase;
-  letter-spacing: var(--versalita);
+  letter-spacing: .14em;
   font-weight: 600;
 }
 .login-card input {
   font-size: var(--txt-base);
   text-transform: none;
   letter-spacing: normal;
-  padding: 10px 12px;
+  padding: 0 14px;
 }
-.login-card button { margin-top: var(--e-2); }
+/* "Ingresar" ocupa el ancho de la placa (es un ítem de la columna, se estira
+   solo); el oro y las versalitas son los de todo botón dorado. */
+.login-card button { margin-top: var(--e-1); }
+@media (max-width: 480px) {
+  .login-card { padding: var(--e-6) var(--e-5) var(--e-5); }
+  .login-marca .marca-nombre { font-size: var(--txt-xl); }
+}
 /* El color y el recuadro los pone .aviso.malo, como en el resto de la consola:
    acá sólo va lo que es de la placa (centrado y sin margen propio). */
 .login-error {
@@ -400,6 +610,12 @@ td.barra-acciones > * + * { margin-left: var(--e-2); }
 @media (max-height: 900px) {
   .par-video-mapa .video,
   .par-video-mapa .map { height: 340px; min-height: 340px; }
+}
+/* Apilado, el video toma todo el ancho y su alto sale de la proporción de la
+   cámara: con el alto fijo de escritorio, en un teléfono quedaba una franja de
+   imagen entre dos bandas negras más altas que ella. */
+@media (max-width: 900px) {
+  .par-video-mapa .video { height: auto; min-height: 0; }
 }
 /* Sin margen propio: el detalle es una columna con `gap`, y el margen que
    tenían el par video/mapa y la grilla de operación se sumaba a ese hueco

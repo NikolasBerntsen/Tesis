@@ -126,9 +126,49 @@ describe('CameraTile', () => {
       expect(img.src).toContain('data:image/jpeg;base64,AAAA');
     });
 
-    it('encuadra la cámara en un marco de mármol con filo dorado', () => {
+    it('encuadra la cámara en el visor negro, el mismo de la captura de una alerta', () => {
       renderTile({ frame: 'AAAA' });
-      expect(document.querySelector('.hueco.filo-oro .tile-video img.video')).toBeInTheDocument();
+      expect(document.querySelector('.visor.tile-video .visor-cuadro img.video')).toBeInTheDocument();
+    });
+
+    it('dice "En vivo" sólo con imagen y con señal: sin ellas no hay nada en vivo', () => {
+      renderTile({ frame: 'AAAA' });
+      expect(screen.getByText('En vivo')).toHaveClass('visor-vivo');
+    });
+
+    it('sin imagen no dice "En vivo"', () => {
+      renderTile({ frame: null });
+      expect(screen.queryByText('En vivo')).not.toBeInTheDocument();
+    });
+
+    it('con la señal perdida no dice "En vivo": el cuadro que queda es viejo', () => {
+      renderTile({ frame: 'AAAA', status: makeStatus({ signal: 'LOST' }) });
+      expect(screen.queryByText('En vivo')).not.toBeInTheDocument();
+    });
+
+    it('la batería también va en una barra, del ancho del nivel y teñida como la cifra', () => {
+      const { container } = render(
+        <CameraTile
+          drone={makeDrone()}
+          status={makeStatus({ battery: 32.4 })}
+          frame={null}
+          pendingAlerts={0}
+          onOpen={vi.fn()}
+          onRename={vi.fn()}
+        />,
+      );
+      const barra = container.querySelector('.medidor.barra') as HTMLElement;
+      // Es dibujo: la cifra de al lado ya lo dice.
+      expect(barra).toHaveAttribute('aria-hidden', 'true');
+      const relleno = barra.querySelector('.medidor-relleno') as HTMLElement;
+      expect(relleno).toHaveClass('warn');
+      expect(relleno.style.width).toBe('32.4%');
+      expect(screen.getByText('32%')).toHaveClass('warn');
+    });
+
+    it('sin estado no dibuja la barra de batería', () => {
+      renderTile({ status: null });
+      expect(document.querySelector('.medidor.barra')).toBeNull();
     });
 
     it('muestra el placeholder sin señal de video', () => {
@@ -150,13 +190,13 @@ describe('CameraTile', () => {
 
     it('muestra el contador de alertas pendientes cuando hay', () => {
       renderTile({ pendingAlerts: 3 });
-      expect(screen.getByText('Alertas pendientes')).toBeInTheDocument();
+      expect(screen.getByText('Alertas')).toBeInTheDocument();
       expect(screen.getByText('3')).toBeInTheDocument();
     });
 
     it('no muestra contador de alertas cuando es 0', () => {
       renderTile({ pendingAlerts: 0 });
-      expect(screen.queryByText(/alertas pendientes/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/^alertas$/i)).not.toBeInTheDocument();
     });
   });
 

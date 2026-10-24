@@ -3,12 +3,79 @@ import L from 'leaflet';
 import { api, traerRutas } from '../api';
 import { CENTRO_POR_DEFECTO, TRAZO, etiquetaDeNodo, useFondo, vestirAtribucion } from '../mapa';
 import type { Me, PatrolRoute } from '../types';
+import { BotonEditar, BotonEliminar, BotonRestaurar } from './AccionesDeGestion';
 import { useAvisar } from './AvisosFlotantes';
 import ConmutadorDeFondo from './ConmutadorDeFondo';
 import DialogoConfirmacion, { type PedidoDeConfirmacion } from './DialogoConfirmacion';
 import EditorDeRuta from './EditorDeRuta';
 import EncabezadoDeVista from './EncabezadoDeVista';
 import { EsqueletoDeTabla, EstadoVacio } from './EstadosDeVista';
+import { IconoMas, IconoRutas } from './Iconos';
+
+/** El dato corto de la cabecera, como "3 rutas · 14 nodos" en el prototipo. */
+function resumenDeRutas(rutas: PatrolRoute[]): string {
+  const vivas = rutas.filter((r) => !r.deleted);
+  const nodos = vivas.reduce((total, r) => total + r.waypoints.length, 0);
+  return `${vivas.length} ${vivas.length === 1 ? 'ruta' : 'rutas'} · ${nodos} ${nodos === 1 ? 'nodo' : 'nodos'}`;
+}
+
+type PropsDeItem = Readonly<{
+  ruta: PatrolRoute;
+  elegida: boolean;
+  esSupervisor: boolean;
+  onElegir: () => void;
+  onEditar: () => void;
+  onEliminar: () => void;
+  onRestaurar: () => void;
+}>;
+
+/**
+ * Una ruta del catálogo: una placa con el nombre en Cinzel, cuántos nodos
+ * tiene y su descripción. La elegida (la que se dibuja en el mapa) lleva el
+ * filo de oro. Elegirla era un clic en la fila, y con el teclado no había
+ * forma: el nombre es el botón que lo hace, y la placa entera sigue
+ * respondiendo al mouse para no tener que apuntarle al texto.
+ */
+function ItemDeRuta({ ruta, elegida, esSupervisor, onElegir, onEditar, onEliminar, onRestaurar }: PropsDeItem) {
+  const clases = ['ruta-item', elegida && 'seleccionada', ruta.deleted && 'eliminada'].filter(Boolean).join(' ');
+  const nodos = ruta.waypoints.length;
+  return (
+    <li // NOSONAR(S6847, S1082): el clic en la placa es comodidad del mouse; con el teclado se elige desde el botón del nombre, ver arriba
+      className={clases}
+      onClick={onElegir}
+    >
+      <div className="ruta-item-cabecera">
+        <button
+          type="button"
+          className="fila-elegir ruta-item-nombre"
+          aria-current={elegida ? 'true' : undefined}
+          title="Ver el recorrido en el mapa"
+          onClick={onElegir}
+        >
+          {ruta.name}
+        </button>
+        {esSupervisor && (
+          <div className="acciones-fila" role="group" aria-label={`Acciones de ${ruta.name}`}>
+            {ruta.deleted ? (
+              <BotonRestaurar chico onClick={onRestaurar} />
+            ) : (
+              <>
+                <BotonEditar onClick={onEditar} />
+                <BotonEliminar onClick={onEliminar} />
+              </>
+            )}
+          </div>
+        )}
+      </div>
+      <p className="ruta-item-detalle">
+        <span className="ruta-item-nodos">
+          {nodos} {nodos === 1 ? 'nodo' : 'nodos'}
+        </span>
+        {ruta.description && ` · ${ruta.description}`}
+      </p>
+    </li>
+  );
+}
 
 /** Mapa de sólo lectura con el recorrido de la ruta elegida. */
 function MapaDeRuta({ ruta }: { ruta: PatrolRoute | null }) {
@@ -68,7 +135,7 @@ function MapaDeRuta({ ruta }: { ruta: PatrolRoute | null }) {
 }
 
 /** Catálogo de rutas de patrullaje, con su recorrido dibujado en el mapa. */
-export default function RutasView({ me }: { me: Me }) {
+export default function RutasView({ me }: Readonly<{ me: Me }>) {
   const [rutas, setRutas] = useState<PatrolRoute[]>([]);
   const [elegida, setElegida] = useState<PatrolRoute | null>(null);
   const [cargando, setCargando] = useState(true);
@@ -133,6 +200,7 @@ export default function RutasView({ me }: { me: Me }) {
     <main className="page-main">
       <EncabezadoDeVista
         titulo="Rutas de patrullaje"
+        subtitulo={rutas.length > 0 ? resumenDeRutas(rutas) : undefined}
         opciones={
           esSupervisor && (
             <button
@@ -148,6 +216,7 @@ export default function RutasView({ me }: { me: Me }) {
         accion={
           puedeCrear && (
             <button type="button" className="primario" onClick={() => setEditando(null)}>
+              <IconoMas tamano={18} />
               Nueva ruta
             </button>
           )
@@ -160,98 +229,55 @@ export default function RutasView({ me }: { me: Me }) {
         </p>
       )}
 
-      <section className="card">
-        {/* El esqueleto sólo hasta que llega la primera lista: después, una
-            recarga apaga la tabla un momento en vez de empujarla con un cartel. */}
-        {cargando && rutas.length === 0 && <EsqueletoDeTabla texto="Trayendo las rutas…" />}
-        {!cargando && !error && rutas.length === 0 && (
-          <EstadoVacio titulo="Todavía no hay rutas de patrullaje.">
-            {puedeCrear
-              ? 'Con «Nueva ruta» marcás los nodos en el mapa, en el orden en que el dron los tiene que recorrer.'
-              : 'Las rutas las dibujan los operadores de campo y los supervisores; cuando haya alguna, va a aparecer acá.'}
-          </EstadoVacio>
-        )}
+      {/* El esqueleto sólo hasta que llega la primera lista: después, una
+          recarga apaga la lista un momento en vez de empujarla con un cartel. */}
+      {rutas.length === 0 && (cargando || !error) && (
+        <section className="card">
+          {cargando ? (
+            <EsqueletoDeTabla texto="Trayendo las rutas…" />
+          ) : (
+            <EstadoVacio titulo="Todavía no hay rutas de patrullaje." icono={<IconoRutas tamano={46} />}>
+              {puedeCrear
+                ? 'Con «Nueva ruta» marcás los nodos en el mapa, en el orden en que el dron los tiene que recorrer.'
+                : 'Las rutas las dibujan los operadores de campo y los supervisores; cuando haya alguna, va a aparecer acá.'}
+            </EstadoVacio>
+          )}
+        </section>
+      )}
 
-        {rutas.length > 0 && (
-          <div className="rutas-cuerpo">
-            <div className="tabla-envoltorio" aria-busy={cargando || undefined}>
-              <table className="tabla tabla-gestion">
-                <thead>
-                  <tr>
-                    <th>Ruta</th>
-                    <th>Nodos</th>
-                    {esSupervisor && <th className="columna-acciones">Acciones</th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rutas.map((r) => (
-                    <tr
-                      key={r.id}
-                      className={`${r.id === elegida?.id ? 'seleccionada ' : ''}${r.deleted ? 'fila-eliminada' : ''}`.trim() || undefined}
-                      onClick={() => setElegida(r)}
-                    >
-                      <td>
-                        {/* Elegir la ruta que se dibuja era un clic en la fila,
-                            y con el teclado no había forma: el nombre es el
-                            botón que lo hace (la fila sigue respondiendo al
-                            mouse, para no apuntarle al texto). */}
-                        <button
-                          type="button"
-                          className="fila-elegir inscripcion"
-                          aria-current={r.id === elegida?.id ? 'true' : undefined}
-                          title="Ver el recorrido en el mapa"
-                          onClick={() => setElegida(r)}
-                        >
-                          {r.name}
-                        </button>
-                        {r.description && <div className="muted">{r.description}</div>}
-                      </td>
-                      <td className="mono">{r.waypoints.length}</td>
-                      {esSupervisor && (
-                        <td className="barra-acciones">
-                          <div className="acciones-fila" role="group" aria-label={`Acciones de ${r.name}`}>
-                            {r.deleted ? (
-                              <button
-                                type="button"
-                                className="chico"
-                                onClick={() =>
-                                  accion(() => api(`/routes/${r.id}/restore`, { method: 'POST' }), `Ruta ${r.name} restaurada.`)
-                                }
-                              >
-                                Restaurar
-                              </button>
-                            ) : (
-                              <>
-                                <button type="button" className="chico" onClick={() => setEditando(r)}>
-                                  Editar
-                                </button>
-                                <button type="button" className="chico dismiss" onClick={() => pedirBaja(r)}>
-                                  Eliminar
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </td>
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+      {/* Como en el prototipo: el catálogo a la izquierda, cada ruta en su
+          placa, y a la derecha el recorrido de la elegida en su panel. */}
+      {rutas.length > 0 && (
+        <div className="rutas-cuerpo">
+          <ul className="lista-rutas" aria-label="Rutas de patrullaje" aria-busy={cargando || undefined}>
+            {rutas.map((r) => (
+              <ItemDeRuta
+                key={r.id}
+                ruta={r}
+                elegida={r.id === elegida?.id}
+                esSupervisor={esSupervisor}
+                onElegir={() => setElegida(r)}
+                onEditar={() => setEditando(r)}
+                onEliminar={() => pedirBaja(r)}
+                onRestaurar={() =>
+                  void accion(() => api(`/routes/${r.id}/restore`, { method: 'POST' }), `Ruta ${r.name} restaurada.`)
+                }
+              />
+            ))}
+          </ul>
 
-            <div>
-              <div className="mapa-head">
-                <h2>{elegida ? elegida.name : 'Recorrido'}</h2>
-              </div>
-              <MapaDeRuta ruta={elegida} />
-              <div className="mapa-leyenda">
-                <span className="estado warn">Primer nodo</span>
-                <span className="estado bad">Nodo</span>
-              </div>
+          <section className="card">
+            <div className="mapa-head">
+              <h2>{elegida ? elegida.name : 'Recorrido'}</h2>
             </div>
-          </div>
-        )}
-      </section>
+            <MapaDeRuta ruta={elegida} />
+            <div className="mapa-leyenda">
+              <span className="estado warn">Primer nodo</span>
+              <span className="estado bad">Nodo</span>
+            </div>
+          </section>
+        </div>
+      )}
 
       {editando !== undefined && (
         <EditorDeRuta

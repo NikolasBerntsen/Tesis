@@ -10,6 +10,7 @@ import {
   velocidad,
 } from '../format';
 import type { ObjetivoEnSeguimiento } from '../types';
+import { IconoOperacion } from './Iconos';
 
 /**
  * Las coordenadas del objetivo con su botón de copiar. Es el dato que el
@@ -78,7 +79,11 @@ export default function PanelObjetivo({ objetivo }: { objetivo: ObjetivoEnSeguim
 
   return (
     <div className="card con-esquina">
-      <h2>Objetivo</h2>
+      {/* La mira de "Operación": es lo que el dron tiene en la mira ahora. */}
+      <h2>
+        <IconoOperacion />
+        Objetivo
+      </h2>
       <dl className="datos">
         <dt>Tipo</dt>
         <dd>

@@ -276,11 +276,11 @@ describe('Console — la alerta cambia de dueño', () => {
     alertasFix = [makeAlert({ id: 12, drone_id: 'a1', status: 'PENDING' })];
     render(<Console onLogout={() => {}} />);
     const alfa = await mosaico('Alfa');
-    expect(await within(alfa).findByText('Alertas pendientes')).toBeInTheDocument();
+    expect(await within(alfa).findByText('Alertas')).toBeInTheDocument();
 
     fire({ type: 'alert_updated', alert: { ...alertasFix[0], seguidaPor: 'b2' } });
-    expect(within(alfa).queryByText('Alertas pendientes')).not.toBeInTheDocument();
-    expect(within(await mosaico('Bravo')).getByText('Alertas pendientes')).toBeInTheDocument();
+    expect(within(alfa).queryByText('Alertas')).not.toBeInTheDocument();
+    expect(within(await mosaico('Bravo')).getByText('Alertas')).toBeInTheDocument();
   });
 
   it('«Ver feed en vivo» de una alerta relevada lleva al dron que la sigue', async () => {
@@ -574,14 +574,14 @@ describe('Console — los ejemplos del contrato (docs/contrato/relevos.json)', (
     // Del REST: Alfa tiene un seguimiento en camino y un pedido de patrulla sin candidato.
     expect(await within(mosaicoAlfa).findByText('Relevo en camino: Bravo')).toBeInTheDocument();
     expect(within(mosaicoAlfa).getByText('Sin relevo disponible')).toHaveClass('badge', 'malo');
-    expect(within(mosaicoAlfa).getByText('Alertas pendientes')).toBeInTheDocument();
+    expect(within(mosaicoAlfa).getByText('Alertas')).toBeInTheDocument();
 
     for (const tipo of ['relay_updated', 'emergency_updated', 'emergency_photo', 'base_updated']) fire(mensaje(tipo));
     fire({ ...mensaje('alert_updated'), alert: { ...alerta, status: 'PENDING' } });
 
     expect(within(await mosaico('Bravo')).getByText('Relevando a Alfa')).toBeInTheDocument();
-    expect(within(await mosaico('Bravo')).getByText('Alertas pendientes')).toBeInTheDocument();
-    expect(within(mosaicoAlfa).queryByText('Alertas pendientes')).not.toBeInTheDocument();
+    expect(within(await mosaico('Bravo')).getByText('Alertas')).toBeInTheDocument();
+    expect(within(mosaicoAlfa).queryByText('Alertas')).not.toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Aterrizaje de emergencia sin recuperar' })).toHaveTextContent(
       'En tierra desde las',
     );

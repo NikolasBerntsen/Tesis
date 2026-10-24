@@ -44,9 +44,12 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--veta);
+  /* El panel del prototipo con su hilo de oro, pero firme: atrás del velo
+     puede haber un video o un mapa, y el formulario no tiene que leerse sobre
+     ellos. Lo deja apenas translúcido (--panel-firme), más que una tarjeta. */
+  border: 1px solid var(--veta-fuerte);
   border-radius: var(--radio-grande);
-  background-color: var(--marmol-0);
+  background-color: var(--panel-firme);
   background-image: var(--piedra-cara);
   box-shadow: var(--sombra-flotante);
   animation: caja-entra var(--duracion-entrada) var(--curva-entrada);
@@ -55,57 +58,53 @@
   from { opacity: 0; transform: translateY(10px) scale(.985); }
   to { opacity: 1; transform: none; }
 }
-/* Filo dorado en el canto superior: la piedra abierta donde se corta la caja */
-.modal-caja::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: var(--filo);
-  background: var(--oro-lamina);
-}
 .modal-ancho { width: min(1000px, 100%); }
 
+/* La cabecera: el título en Cormorant, lo que lo acompaña en versalitas
+   debajo, y la cruz en una tecla cuadrada a la derecha. */
 .modal-cabecera {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--e-4);
-  padding: var(--e-5) var(--e-6) var(--e-3);
+  padding: var(--e-5) var(--e-6) var(--e-4);
   border-bottom: 1px solid var(--veta);
 }
 .modal-titulo {
   margin: 0;
   font-family: var(--fuente-serif);
-  font-size: var(--txt-lg);
-  font-weight: 400;
+  font-size: var(--txt-2xl);
+  font-weight: 600;
+  line-height: 1.1;
 }
 .modal-subtitulo {
-  margin: var(--e-1) 0 0;
+  margin: 6px 0 0;
   font-size: var(--txt-xs);
   text-transform: uppercase;
-  letter-spacing: var(--versalita);
+  letter-spacing: .14em;
   color: var(--tinta-media);
 }
+/* La cruz es el .icono-btn del prototipo: una tecla cuadrada de piedra, al
+   alto táctil (se cierra con el dedo en la tableta de campo), que bajo el
+   mouse enciende el hilo y el trazo en oro. La cara y el fondo son los del
+   botón común. */
 .modal-cerrar {
   flex: none;
-  width: 32px;
-  height: 32px;
+  width: var(--alto-tactil);
+  height: var(--alto-tactil);
   padding: 0;
   display: grid;
   place-items: center;
-  border-radius: 50%;
-  background: transparent;
-  background-image: none;
-  border-color: transparent;
-  box-shadow: none;
+  border-color: var(--veta);
   color: var(--tinta-media);
 }
 .modal-cerrar:hover:not(:disabled) {
   border-color: var(--oro);
-  color: var(--tinta);
-  background: var(--realce-70);
+  color: var(--oro-texto);
+}
+@media (max-width: 640px) {
+  .modal-cabecera { padding: var(--e-4) var(--e-4) var(--e-3); }
+  .modal-titulo { font-size: var(--txt-xl); }
 }
 .modal-cuerpo {
   padding: var(--e-5) var(--e-6);
@@ -120,20 +119,31 @@
   flex-direction: column;
   gap: var(--e-4);
 }
+/* El pie: las acciones a la derecha, "Cancelar" (el botón común) antes que la
+   acción dorada. Sin franja propia: el hilo de oro de arriba alcanza para
+   separarlo del cuerpo. El alto y las versalitas de los botones los pone
+   pulido.css, con los de la cabecera de las vistas. */
 .modal-pie {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: var(--e-3);
   padding: var(--e-4) var(--e-6) var(--e-5);
   border-top: 1px solid var(--veta);
-  background: var(--realce-55);
+}
+@media (max-width: 640px) {
+  .modal-cuerpo { padding: var(--e-4); }
+  .modal-pie { padding: var(--e-3) var(--e-4) var(--e-4); }
 }
 
-/* Lista de clave/valor para el detalle del registro (meta.detalle) */
+/* Lista de clave/valor: el detalle de un evento, de una alerta, del objetivo.
+   Cada fila va sobre un hilo de oro, como los .datos del prototipo; la
+   primera no, porque arriba ya hay un título o el canto de la tarjeta. Los
+   hilos van en las celdas y no en un hueco de la grilla: con hueco entre
+   columnas la línea quedaba cortada entre el rótulo y el valor. */
 .datos {
   display: grid;
   grid-template-columns: minmax(120px, max-content) 1fr;
-  gap: var(--e-2) var(--e-5);
   margin: 0;
 }
 .datos dt {
@@ -142,9 +152,32 @@
   letter-spacing: var(--versalita);
   font-weight: 600;
   color: var(--tinta-media);
-  padding-top: 2px;
 }
-.datos dd { margin: 0; }
+.datos dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.datos:not(.sin-filetes) > :is(dt, dd) {
+  padding-block: 9px;
+  border-top: 1px solid var(--veta);
+}
+/* El rótulo es más chico que el valor: baja un poco para leerse en la misma
+   línea. */
+.datos:not(.sin-filetes) > dt {
+  padding-top: 11px;
+  padding-right: var(--e-5);
+}
+.datos:not(.sin-filetes) > dt:first-of-type,
+.datos:not(.sin-filetes) > dt:first-of-type + dd {
+  border-top: 0;
+  padding-top: 0;
+}
+.datos:not(.sin-filetes) > dt:first-of-type { padding-top: 2px; }
+/* Sin hilos: las columnas del antes y el después, donde lo que se marca es
+   el campo que cambió (y su resaltado abraza al texto, no a la fila). */
+.datos.sin-filetes { gap: var(--e-2) var(--e-5); }
+.datos.sin-filetes dt { padding-top: 2px; }
 
 /* ---------------------------------------------------------------------------
    COMPARACIÓN antes/después — dos columnas con una flecha en el medio.
@@ -173,25 +206,14 @@
   box-shadow: var(--sombra-hundida);
   min-width: 0;
 }
-/* La columna "después" es la que importa: mármol claro y filo dorado */
+/* La columna "después" es la que importa: la piedra más clara y el hilo de
+   oro de lo elegido, con su resplandor (el de la sección abierta). Un hilo y
+   no la lámina gruesa de antes: en un diálogo de hilos finos, el filo de dos
+   píxeles se leía como un botón. */
 .comparacion-despues {
-  position: relative;
   background: var(--marmol-0);
-  border-color: transparent;
-  box-shadow: none;
-}
-.comparacion-despues::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  padding: var(--filo);
-  background: var(--oro-lamina);
-  -webkit-mask: var(--mascara-llena) content-box, var(--mascara-llena);
-  mask: var(--mascara-llena) content-box, var(--mascara-llena);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  pointer-events: none;
+  border-color: var(--oro);
+  box-shadow: var(--resplandor-oro);
 }
 .comparacion-titulo {
   font-size: var(--txt-xs);
@@ -248,9 +270,12 @@
   display: flex;
   gap: var(--e-2);
 }
+/* Del alto de los botones de una fila: los de "chico" quedaban como tiras
+   más bajas que el sello y el texto de al lado. */
 .paginador-botones button {
   min-width: 34px;
-  padding: 4px 10px;
+  min-height: var(--alto-control);
+  padding: 4px 12px;
   font-size: var(--txt-sm);
   font-variant-numeric: tabular-nums;
 }
@@ -289,8 +314,8 @@
 .icono-boton[aria-expanded='true'],
 .icono-boton[aria-expanded='true']:hover:not(:disabled) {
   color: var(--oro-texto);
-  border-color: var(--oro);
-  background-color: var(--marmol-1);
+  border-color: var(--filo-activo);
+  background-color: var(--boton-fondo);
   background-image: var(--cara-activa);
 }
 .icono-boton svg {
@@ -302,6 +327,11 @@
 }
 .icono-boton.chico { width: 26px; height: 26px; }
 .icono-boton.chico svg { width: 14px; height: 14px; }
+/* Cuadrado: el .icono-btn del prototipo, el de las acciones de una ficha o
+   de una fila (el lápiz, el tacho) y de los nodos del editor de rutas. Al
+   lado de botones escritos, que son rectángulos, uno redondo se leía como
+   otra clase de control. */
+.icono-boton.cuadrado { border-radius: var(--radio-chico); }
 .girando svg { animation: girar 900ms linear infinite; }
 @keyframes girar { to { transform: rotate(360deg); } }
 
@@ -370,89 +400,48 @@
 .switch-texto { user-select: none; }
 
 /* ---------------------------------------------------------------------------
-   TOGGLE-ELIMINADOS — "Ver eliminados / Ocultar eliminados".
-   Es un botón normal; con .activo queda con filo dorado.
-   <button class="toggle-eliminados activo">Ocultar eliminados</button>
------------------------------------------------------------------------------- */
-.toggle-eliminados {
-  font-size: var(--txt-sm);
-  padding: 5px 13px;
-  color: var(--tinta-media);
-  background: transparent;
-  background-image: none;
-  border-color: var(--veta);
-  box-shadow: none;
-}
-.toggle-eliminados:hover:not(:disabled) { border-color: var(--oro); color: var(--tinta); }
-.toggle-eliminados.activo {
-  position: relative;
-  color: var(--tinta);
-  font-weight: 600;
-  border-color: transparent;
-  background-image: var(--cara-activa);
-}
-.toggle-eliminados.activo::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  padding: var(--filo);
-  background: var(--oro-lamina);
-  -webkit-mask: var(--mascara-llena) content-box, var(--mascara-llena);
-  mask: var(--mascara-llena) content-box, var(--mascara-llena);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  pointer-events: none;
-}
-
-/* ---------------------------------------------------------------------------
-   TABS — pestañas del registro (Todos / Drones / Usuarios / Sistema).
+   FILTROS — fichas redondas con filo, como los .filtro del prototipo.
+   <button class="toggle-eliminados [activo]" aria-pressed="…">Ver eliminados</button>
    <div class="tabs" role="tablist">
      <button role="tab" aria-selected="true" class="active">Todos</button> … </div>
-   El subrayado dorado marca la pestaña activa (filo, no relleno).
+   Los dos son lo mismo a la vista: un filtro de la lista, apagado o
+   encendido. Encendido lleva el oro de lo presionado (primitivos.css): velo,
+   filo y tinta de oro, con su resplandor. Las categorías del Registro siguen
+   siendo pestañas para el lector, con su panel abajo.
 ------------------------------------------------------------------------------ */
 .tabs {
   display: flex;
-  gap: var(--e-1);
-  border-bottom: 1px solid var(--veta);
+  flex-wrap: wrap;
+  gap: var(--e-2);
 }
+.toggle-eliminados,
 .tabs button {
-  position: relative;
-  padding: 8px 16px 10px;
-  border: 0;
-  border-radius: var(--radio-chico) var(--radio-chico) 0 0;
+  padding: 5px 16px;
+  border: 1px solid var(--veta);
+  border-radius: 999px;
+  color: var(--tinta-media);
   background: transparent;
   background-image: none;
   box-shadow: none;
-  color: var(--tinta-media);
-  font-size: var(--txt-sm);
-  text-transform: uppercase;
-  letter-spacing: var(--versalita);
+  font-size: var(--txt-xs);
   font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
 }
-.tabs button:hover:not(:disabled) {
+.toggle-eliminados:not(.activo):hover:not(:disabled),
+.tabs button:not([aria-selected='true']):hover:not(:disabled) {
   color: var(--tinta);
-  background: var(--realce-70);
+  border-color: var(--veta-fuerte);
+  background-image: none;
 }
+.toggle-eliminados.activo,
 .tabs button.active,
 .tabs button[aria-selected='true'] {
-  color: var(--tinta);
-  background: linear-gradient(180deg, transparent 40%, var(--oro-velo) 100%);
-}
-/* Subrayado de lámina: monta sobre la línea de veta del contenedor.
-   Hay que anular el anillo enmascarado que trae button.active::after, si no el
-   `inset:0` de aquella regla estira este pseudo-elemento a toda la pestaña. */
-.tabs button.active::after,
-.tabs button[aria-selected='true']::after {
-  content: '';
-  position: absolute;
-  inset: auto 6px -1px 6px;
-  height: var(--filo);
-  padding: 0;
-  border-radius: 2px;
-  background: var(--oro-lamina);
-  -webkit-mask: none;
-  mask: none;
+  color: var(--oro-texto);
+  border-color: var(--filo-activo);
+  background-color: var(--boton-fondo);
+  background-image: var(--cara-activa);
+  box-shadow: var(--resplandor-oro);
 }
 
 /* ---------------------------------------------------------------------------
@@ -472,6 +461,13 @@
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+/* En un teléfono (o en una ventana muy baja) la barra y la cabecera apilan
+   sus fichas y al cuerpo no le quedaba alto: el Registro era un panel vacío
+   con su paginador. Ahí se lee como cualquier otra vista: el lienzo vuelve a
+   medir lo que su contenido, la lista crece entera y scrollea la página. */
+@media (max-width: 640px), (max-height: 600px) {
+  .page-main:has(> .vista-alta) { min-height: auto; }
 }
 
 /* ---------------------------------------------------------------------------
@@ -656,18 +652,99 @@
   text-align: left;
 }
 .lista-bases button:hover { background: var(--oro-velo); }
+/* Elegida (las rutas de una base): el velo y el filo izquierdo de la fila
+   seleccionada de una tabla. `.lista-bases button` le saca a button.active el
+   filo, el velo y el resplandor (misma especificidad y carga después), así que
+   acá se le devuelve la marca. El filo es forma y no sólo color: con la tinta
+   de oro sola, de día la ruta elegida se distinguía de la otra por 2,4:1
+   (WCAG 1.4.1), y el admin podía sacarle rutas a una base sin darse cuenta. */
+.lista-bases button.active {
+  background: var(--oro-velo);
+  box-shadow: inset var(--filo) 0 0 0 var(--filo-activo);
+}
 
-/* --- Rutas: catálogo y editor ---------------------------------------------- */
+/* --- Rutas: catálogo y editor ----------------------------------------------
+   <div class="rutas-cuerpo">
+     <ul class="lista-rutas"><li class="ruta-item [seleccionada] [eliminada]">
+       <div class="ruta-item-cabecera"><button class="fila-elegir ruta-item-nombre"/> acciones</div>
+       <p class="ruta-item-detalle"><span class="ruta-item-nodos">4 nodos</span> · descripción</p>
+     </li></ul>
+     <section class="card"> el mapa del recorrido </section>
+   </div>
+   Como en el prototipo: el catálogo a la izquierda, cada ruta en su placa, y
+   el recorrido de la elegida en su panel a la derecha. */
 .rutas-cuerpo {
   display: grid;
   grid-template-columns: minmax(280px, 4fr) 6fr;
-  gap: var(--e-4);
+  gap: var(--e-5);
   align-items: start;
 }
 @media (max-width: 1000px) {
-  .rutas-cuerpo { grid-template-columns: 1fr; }
+  .rutas-cuerpo { grid-template-columns: minmax(0, 1fr); }
 }
-.rutas-cuerpo .tabla tbody tr { cursor: pointer; }
+.lista-rutas {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* La placa es la del panel (primitivos.css), con el hilo más fino en reposo:
+   el filo fuerte queda para el mouse y el de oro, para la elegida. */
+.ruta-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-2);
+  padding: var(--e-4) 18px;
+  border-color: var(--veta);
+  cursor: pointer;
+  transition: border-color var(--transicion), box-shadow var(--transicion);
+}
+.ruta-item:hover { border-color: var(--veta-fuerte); }
+/* La que se dibuja en el mapa: el filo de oro por dentro y por fuera, con el
+   resplandor de lo que está abierto (la sección de la barra). */
+.ruta-item.seleccionada,
+.ruta-item.seleccionada:hover {
+  border-color: var(--filo-activo);
+  box-shadow: inset 0 0 0 1px var(--filo-activo), var(--resplandor-oro);
+}
+.ruta-item-cabecera {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--e-3);
+  min-height: var(--alto-control);
+}
+/* El nombre en Cinzel, como el de una ficha. `.fila-elegir` (pulido.css) le
+   hace heredar el cuerpo y el peso: por eso va con la placa delante. */
+.ruta-item .ruta-item-nombre {
+  min-width: 0;
+  font-family: var(--fuente-marca);
+  font-size: var(--txt-md);
+  font-weight: 600;
+  letter-spacing: .04em;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.ruta-item-detalle {
+  margin: 0;
+  color: var(--tinta-media);
+  font-size: var(--txt-sm);
+  line-height: 1.45;
+}
+.ruta-item-nodos {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums lining-nums;
+  white-space: nowrap;
+}
+/* Una ruta eliminada (con «Ver eliminadas»): el nombre tachado y apagado; si
+   es la elegida, en la tinta media, como la fila eliminada de una tabla. */
+.ruta-item.eliminada .ruta-item-nombre {
+  color: var(--tinta-suave);
+  text-decoration: line-through;
+}
+.ruta-item.eliminada.seleccionada .ruta-item-nombre { color: var(--tinta-media); }
 
 .editor-ruta { display: flex; flex-direction: column; gap: var(--e-3); }
 .editor-ruta-cuerpo {
@@ -727,6 +804,12 @@
 .nodo-orden { font-weight: 700; text-align: center; }
 .nodo-coord { font-size: var(--txt-xs); }
 .nodo-apodo, .nodo-alt { padding: 4px 6px; font-size: var(--txt-sm); }
+/* Subir, bajar y quitar: cuadrados del alto de los campos de al lado, para
+   que la fila no crezca y la lista siga mostrando cinco nodos. */
+.lista-nodos .icono-boton {
+  width: 30px;
+  height: 30px;
+}
 @media (max-width: 700px) {
   .nodos-encabezado { display: none; }
   .lista-nodos li { grid-template-columns: 26px 1fr auto; }
@@ -737,22 +820,40 @@
    Las detecciones no se pueden esperar a mirar: llegan solas y hay que
    decidirlas, así que viven en el encabezado y no al pie de una vista. */
 .campana { position: relative; display: flex; align-items: center; }
+/* Un círculo con anillo de oro, del alto táctil de la barra (el tema, al
+   lado, mide lo mismo). La cuenta de pendientes cuelga del borde, arriba a la
+   derecha, como la insignia de una app. */
 .campana-boton {
   position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--e-2);
-  /* Mide lo mismo que el botón redondo del tema que tiene al lado: antes era
-     una tecla rectangular de otro alto entre dos piezas redondas. */
-  min-height: var(--alto-control);
-  padding: 0 var(--e-3);
-  border-radius: 999px;
-}
-/* Con pendientes el botón se enciende: es la única pieza de la barra que pide
-   atención por sí sola. */
-.campana-boton.con-pendientes {
-  border-color: var(--oro);
+  display: inline-grid;
+  place-items: center;
+  width: var(--alto-tactil);
+  height: var(--alto-tactil);
+  padding: 0;
+  border: 1.5px solid var(--oro);
+  border-radius: 50%;
   color: var(--oro-texto);
+  background-color: var(--panel-firme);
+  background-image: none;
+}
+.campana-boton svg { width: 21px; height: 21px; }
+.campana-boton:hover:not(:disabled) {
+  background-color: var(--panel-firme);
+  background-image: var(--cara-activa);
+}
+.campana-boton .badge-count {
+  position: absolute;
+  top: -5px;
+  right: -6px;
+  min-width: 20px;
+  padding: 1px 5px;
+  line-height: 16px;
+}
+/* Con pendientes la campana se enciende: es la única pieza de la barra que
+   pide atención por sí sola. */
+.campana-boton.con-pendientes {
+  box-shadow: var(--resplandor-oro);
+  background-image: var(--cara-activa);
 }
 .campana-panel {
   position: absolute;
@@ -768,9 +869,9 @@
   flex-direction: column;
   gap: var(--e-3);
   padding: var(--e-4);
-  border: 1px solid var(--veta);
+  border: 1px solid var(--veta-fuerte);
   border-radius: var(--radio);
-  background-color: var(--marmol-0);
+  background-color: var(--panel-firme);
   background-image: var(--piedra-cara);
   box-shadow: var(--sombra-flotante);
   /* Se despliega desde la campana, no aparece de golpe. Con movimiento
@@ -817,6 +918,13 @@
   flex-wrap: wrap;
 }
 .campana-alerta-head time { margin-left: auto; font-size: var(--txt-xs); }
+/* En el desplegable la placa del tipo baja un escalón, como sus botones: es
+   la misma de la tarjeta, pero sin agrandar el renglón. */
+.campana-alerta-head .chip {
+  min-height: 32px;
+  padding-inline: var(--e-3);
+  font-size: var(--txt-sm);
+}
 .campana-decidida {
   display: flex;
   align-items: baseline;
@@ -849,3 +957,19 @@
 /* El hover se marca en el subrayado, como en un enlace de verdad. */
 .enlace:hover:not(:disabled) { text-decoration-thickness: 2px; }
 .enlace:disabled { color: var(--tinta-suave); text-decoration: none; cursor: default; }
+/* En versalitas de oro y con su flecha, como el .enlace del prototipo: un
+   camino ("Ver detalle" en la tarjeta de una alerta, "Volver a Operación"
+   arriba del nombre de un dron), no un enlace en medio de un texto. El
+   subrayado aparece recién bajo el mouse. */
+.enlace.versal {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  font-size: var(--txt-sm);
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  text-decoration-color: transparent;
+}
+.enlace.versal:hover:not(:disabled) { text-decoration-color: var(--oro); }

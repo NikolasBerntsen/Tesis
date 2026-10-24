@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import type { RastroObjetivo } from '../rastro';
 import type { Alert, Drone, DroneStatus, Relevo } from '../types';
 import type { DecidirAlerta } from '../useDecisionDeAlerta';
@@ -7,6 +7,7 @@ import CameraTile from './CameraTile';
 import DronesMap, { type MapItem } from './DronesMap';
 import EncabezadoDeVista from './EncabezadoDeVista';
 import { EstadoVacio } from './EstadosDeVista';
+import { IconoCamara, IconoDron, IconoMapa } from './Iconos';
 
 // Fijo y no `{}` en la firma: un objeto nuevo en cada render rehacía los
 // items del mapa en cada render, y el mapa los redibuja cuando cambian.
@@ -24,7 +25,7 @@ export default function Dashboard({
   onDecidir,
   onOpenDrone,
   onRename,
-}: {
+}: Readonly<{
   drones: Drone[];
   statuses: Record<string, DroneStatus>;
   frames: Record<string, string>;
@@ -38,8 +39,10 @@ export default function Dashboard({
   onDecidir: DecidirAlerta;
   onOpenDrone: (droneId: string) => void;
   onRename: (droneId: string, displayName: string) => void;
-}) {
+}>) {
   const [view, setView] = useState<'cameras' | 'map'>('cameras');
+  const idActivos = useId();
+  const idMapa = useId();
   const active = drones.filter((d) => d.online);
   // "En vuelo" quiere decir en el aire: un dron conectado y apoyado en su base
   // tiene cámara para mostrar, pero contarlo como volando era lo mismo que el
@@ -73,6 +76,32 @@ export default function Dashboard({
     [statuses],
   );
 
+  // Sin drones conectados, el medallón del prototipo con qué esperar; sobre el
+  // panel translúcido y la veta de la página, sin foto detrás.
+  const camaras =
+    active.length === 0 ? (
+      <EstadoVacio titulo="No hay drones activos." icono={<IconoDron tamano={46} />}>
+        Cuando un dron se conecte al Comando Central, su cámara aparece acá.
+        <br />
+        Los que están dados de alta se ven en Drones.
+      </EstadoVacio>
+    ) : (
+      <div className="camera-grid">
+        {active.map((d) => (
+          <CameraTile
+            key={d.droneId}
+            drone={d}
+            status={statuses[d.droneId] ?? null}
+            frame={frames[d.droneId] ?? null}
+            pendingAlerts={pendingAlerts[d.droneId] ?? 0}
+            relevos={relevos}
+            onOpen={() => onOpenDrone(d.droneId)}
+            onRename={(name) => onRename(d.droneId, name)}
+          />
+        ))}
+      </div>
+    );
+
   return (
     <main className="dashboard-main">
       {/* La misma cabecera que el resto de las vistas: el título, el conteo de
@@ -88,6 +117,7 @@ export default function Dashboard({
               aria-pressed={view === 'cameras'}
               onClick={() => setView('cameras')}
             >
+              <IconoCamara />
               Cámaras
             </button>
             <button
@@ -96,6 +126,7 @@ export default function Dashboard({
               aria-pressed={view === 'map'}
               onClick={() => setView('map')}
             >
+              <IconoMapa />
               Mapa
             </button>
           </div>
@@ -116,35 +147,25 @@ export default function Dashboard({
         />
       )}
 
+      {/* Cada vista en su panel, con el rótulo en versalitas y su ícono. La
+          `key` los rehace al cambiar de vista: así entra con el fundido de
+          las vistas (pulido.css) en vez de cambiar el contenido en el lugar. */}
       {view === 'cameras' ? (
-        active.length === 0 ? (
-          <div className="card con-esquina">
-            <EstadoVacio titulo="No hay drones activos.">
-              Cuando un dron se conecte al Comando Central, su cámara aparece acá. Los que están dados de alta se ven
-              en Drones.
-            </EstadoVacio>
-          </div>
-        ) : (
-          <div className="camera-grid">
-            {active.map((d) => (
-              <CameraTile
-                key={d.droneId}
-                drone={d}
-                status={statuses[d.droneId] ?? null}
-                frame={frames[d.droneId] ?? null}
-                pendingAlerts={pendingAlerts[d.droneId] ?? 0}
-                relevos={relevos}
-                onOpen={() => onOpenDrone(d.droneId)}
-                onRename={(name) => onRename(d.droneId, name)}
-              />
-            ))}
-          </div>
-        )
+        <section key="camaras" className="card flota-activa" aria-labelledby={idActivos}>
+          <h2 id={idActivos}>
+            <IconoDron />
+            Drones activos
+          </h2>
+          {camaras}
+        </section>
       ) : (
-        <div className="card">
-          <h2>Posición de la flota</h2>
+        <section key="mapa" className="card" aria-labelledby={idMapa}>
+          <h2 id={idMapa}>
+            <IconoMapa />
+            Posición de la flota
+          </h2>
           <DronesMap items={items} />
-        </div>
+        </section>
       )}
     </main>
   );

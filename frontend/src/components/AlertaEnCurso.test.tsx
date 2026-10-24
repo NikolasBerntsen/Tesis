@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import AlertaEnCurso from './AlertaEnCurso';
 import ProveedorDeAlertas from './ProveedorDeAlertas';
+import { time } from '../format';
 import { makeAlert, makeDrone } from '../test/fixtures';
 import type { Alert } from '../types';
 import { ESPERA_DEL_RELEVO_MS } from '../useCarruselDeAlertas';
@@ -45,22 +46,52 @@ describe('AlertaEnCurso', () => {
   it('muestra la captura, el tipo y la hora de la alerta', () => {
     montar();
     expect(screen.getByRole('heading', { name: 'Alerta en curso' })).toBeInTheDocument();
-    expect(screen.getByText('VEHÍCULO')).toHaveClass('badge', 'vehicle');
+    // El tipo va en la placa óxido de la alerta, con su dibujo (oculto al lector).
+    const tipo = screen.getByText('VEHÍCULO');
+    expect(tipo).toHaveClass('chip', 'rojo');
+    expect(tipo.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
     expect(screen.getByAltText('Captura que disparó la detección')).toHaveAttribute(
       'src',
       'data:image/jpeg;base64,QUFB',
     );
-    expect(tarjeta()).toBeInTheDocument();
+    const hora = makeAlert().created_at;
+    expect(within(tarjeta()).getByText(time(hora))).toHaveAttribute('datetime', hora);
+  });
+
+  it('el pie del visor dice que es una captura: lo que está en vivo es el video del dron', () => {
+    montar();
+    const pie = document.querySelector('.visor-pie') as HTMLElement;
+    expect(pie).toHaveTextContent('Captura');
+    expect(pie).not.toHaveTextContent(/en vivo/i);
   });
 
   it('un tipo que la consola no conoce se muestra tal cual, y no en blanco', () => {
     montar({ alertas: [makeAlert({ type: 'ANIMAL' as never })] });
-    expect(screen.getByText('ANIMAL')).toHaveClass('badge', 'animal');
+    const tipo = screen.getByText('ANIMAL');
+    expect(tipo).toHaveClass('chip', 'rojo');
+    // Sin dibujo: no hay uno que le corresponda.
+    expect(tipo.querySelector('svg')).toBeNull();
   });
 
   it('sin captura lo dice en lugar de dejar un hueco', () => {
     montar({ alertas: [makeAlert({ snapshot: null })] });
-    expect(screen.getByText('La alerta llegó sin captura')).toBeInTheDocument();
+    expect(screen.getByText('La detección no dejó captura.')).toBeInTheDocument();
+    expect(document.querySelector('.visor-pie')).toHaveTextContent('Detección');
+  });
+
+  it('cuenta cuánto hace que la alerta espera, al segundo', () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    try {
+      vi.setSystemTime(new Date('2024-01-01T12:08:17.000Z'));
+      montar({ alertas: [makeAlert({ created_at: '2024-01-01T12:00:00.000Z' })] });
+      const espera = () => document.querySelector('.alerta-espera time') as HTMLElement;
+      expect(espera()).toHaveTextContent('00:08:17');
+      expect(espera()).toHaveAttribute('datetime', 'PT497S');
+      act(() => vi.advanceTimersByTime(1000));
+      expect(espera()).toHaveTextContent('00:08:18');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('sin alertas no dibuja nada', () => {
@@ -360,6 +391,7 @@ describe('AlertaEnCurso — en el tablero', () => {
     });
     const bravo = screen.getByRole('button', { name: 'Bravo' });
     expect(bravo).toHaveAttribute('title', 'Abrir la vista de Bravo');
+    expect(bravo).toHaveClass('chip', 'oro');
     await userEvent.click(bravo);
     expect(onVerDron).toHaveBeenCalledWith('d2');
 
@@ -465,8 +497,9 @@ describe('AlertaEnCurso — abrir la alerta en su pop-up', () => {
     expect(screen.queryByRole('button', { name: /Ampliar la captura/ })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Ver detalle' }));
-    expect(screen.getByRole('dialog', { name: 'Alerta de persona #9' })).toBeInTheDocument();
-    expect(screen.getByText('La detección no dejó captura.')).toBeInTheDocument();
+    const dialogo = screen.getByRole('dialog', { name: 'Alerta de persona #9' });
+    // El pop-up lo dice con el mismo visor que la tarjeta de atrás.
+    expect(within(dialogo).getByText('La detección no dejó captura.')).toBeInTheDocument();
   });
 
   it('desde el pop-up se va al video del dron', async () => {

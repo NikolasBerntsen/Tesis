@@ -182,6 +182,21 @@ export function haceCuanto(ms: number): string {
   return s < 60 ? `hace ${s} s` : `hace ${Math.floor(s / 60)} min ${s % 60} s`;
 }
 
+const dosCifras = (n: number) => String(n).padStart(2, '0');
+
+/**
+ * Un cronómetro: cuánto lleva esperando una alerta, "00:08:17". Pasado un día
+ * se antepone la cuenta de días ("2 d 03:14:05") en vez de llegar a "51:14:05",
+ * que a la pasada se lee como minutos. Lo que no es una cuenta válida
+ * (negativo, NaN) es cero: el reloj del navegador puede ir atrás del servidor.
+ */
+export function cronometro(segundos: number): string {
+  const s = Number.isFinite(segundos) && segundos > 0 ? Math.floor(segundos) : 0;
+  const dias = Math.floor(s / 86_400);
+  const reloj = `${dosCifras(Math.floor((s % 86_400) / 3600))}:${dosCifras(Math.floor((s % 3600) / 60))}:${dosCifras(s % 60)}`;
+  return dias > 0 ? `${dias} d ${reloj}` : reloj;
+}
+
 export function tipoDeObjetivo(tipo: ObjetivoEnSeguimiento['type'] | string): string {
   return tipo === 'PERSON' ? 'Persona' : tipo === 'VEHICLE' ? 'Vehículo' : tipo;
 }

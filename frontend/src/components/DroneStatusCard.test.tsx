@@ -58,6 +58,24 @@ describe('DroneStatusCard', () => {
     render(<DroneStatusCard status={makeStatus({ battery: 15 })} onResumePatrol={() => {}} />);
     expect(screen.getByText('15')).toHaveClass('bad');
   });
+
+  it('la batería va en grande, con su barra teñida como la cifra', () => {
+    const { container } = render(<DroneStatusCard status={makeStatus({ battery: 15 })} onResumePatrol={() => {}} />);
+    const bateria = container.querySelector('.telemetria-bateria') as HTMLElement;
+    expect(within(bateria).getByText('Batería').tagName).toBe('DT');
+    const relleno = bateria.querySelector('.medidor.barra > .medidor-relleno') as HTMLElement;
+    expect(relleno).toHaveClass('bad');
+    expect(relleno.style.width).toBe('15%');
+    // La barra es dibujo: la cifra de arriba ya lo dice.
+    expect(bateria.querySelector('.medidor')).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('cada dato es un rótulo con su valor, en una lista de definiciones', () => {
+    render(<DroneStatusCard status={makeStatus({ signalPct: 72 })} onResumePatrol={() => {}} />);
+    for (const rotulo of ['Batería', 'Señal RC', 'Estado', 'Nodo']) {
+      expect(screen.getByText(rotulo, { selector: 'dt' }).nextElementSibling?.tagName).toBe('DD');
+    }
+  });
 });
 
 describe('DroneStatusCard — siguiendo al objetivo', () => {

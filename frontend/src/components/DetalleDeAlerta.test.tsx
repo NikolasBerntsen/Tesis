@@ -77,7 +77,13 @@ describe('DetalleDeAlerta', () => {
     expect(apiMock).not.toHaveBeenCalled();
     expect(screen.getByRole('heading', { name: /Alerta #7/ })).toHaveTextContent('Pendiente');
     expect(screen.getByAltText('Captura de la detección')).toHaveAttribute('src', 'data:image/jpeg;base64,QUFB');
-    expect(screen.getByText('PERSONA')).toHaveClass('badge', 'person');
+    // En el visor de la tarjeta del tablero, con su pie: es una captura, no el video en vivo.
+    const visor = screen.getByAltText('Captura de la detección').closest('.visor') as HTMLElement;
+    expect(visor.querySelector('.visor-pie')).toHaveTextContent('Captura');
+    // La clase va en la placa óxido de la tarjeta del tablero, con su ícono.
+    const clase = screen.getByText('PERSONA');
+    expect(clase).toHaveClass('chip', 'rojo');
+    expect(clase.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
     expect(dato('Coordenadas')).toHaveTextContent('-34.600000, -58.400000');
     expect(dato('Objetivo ahora')).toHaveTextContent('-34.604100, -58.381700 · En movimiento');
     expect(dato('Resolución')).toHaveTextContent('Sin resolver');
@@ -104,6 +110,12 @@ describe('DetalleDeAlerta', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Descartar' }));
     expect(vivo!.decidir).toHaveBeenCalledWith(7, 'DISMISSED');
     expect(screen.getByText(/Validar: el dron se queda sobre el objetivo/)).toBeInTheDocument();
+    // El tilde y el tacho de la tarjeta del tablero, y la decisión antes que
+    // la ficha del dron: es para lo que se abre el pop-up.
+    const validar = screen.getByRole('button', { name: 'Validar' });
+    expect(validar.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+    const fichaDelDron = screen.getByText('Nombre', { selector: 'dt' });
+    expect(validar.compareDocumentPosition(fichaDelDron) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // Está en la lista de la consola: la decisión vuelve por el WebSocket, no hay que pedirla.
     expect(apiMock).not.toHaveBeenCalled();
   });
@@ -281,7 +293,8 @@ describe('DetalleDeAlerta', () => {
     apiMock.mockRejectedValue('se cortó');
     montar({}, null);
     expect(await screen.findByText('No se pudo traer la alerta: se cortó')).toBeInTheDocument();
-    expect(dato('Tipo')).toHaveTextContent('—');
+    // Sin la alerta no se sabe qué vio: no se inventa una placa de clase.
+    expect(document.querySelector('.chip.rojo')).toBeNull();
     expect(dato('Detectada')).toHaveTextContent('—');
   });
 

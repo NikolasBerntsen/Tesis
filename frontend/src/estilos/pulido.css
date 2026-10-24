@@ -13,46 +13,56 @@
      <div class="vista-acciones"><div class="vista-opciones"> … </div> <button class="primario"/></div>
    </header>
    Título a la izquierda, filtros al medio, opciones y acción principal a la
-   derecha. La línea grabada de abajo es la de `.card > h2`, con su tramo de
-   oro: la cabecera se lee como el título de la página entera.
+   derecha. El título es el nombre de la página: Cormorant grande con una
+   barra de oro a la izquierda, y debajo el dato corto en versalitas anchas
+   ("0 EN VUELO · 3 REGISTRADOS"). Un hilo de oro cierra la fila.
 ------------------------------------------------------------------------------ */
 .vista-cabecera {
   position: relative;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   grid-template-areas: 'titulo filtros acciones';
-  align-items: center;
+  /* Los controles se alinean con el pie del título, no con su centro: con un
+     título de 46 px, centrados quedaban flotando a media altura. */
+  align-items: end;
   gap: var(--e-3) var(--e-5);
-  padding-bottom: var(--e-3);
+  padding-bottom: var(--e-4);
   border-bottom: 1px solid var(--veta);
-}
-.vista-cabecera::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  bottom: -1px;
-  width: 38px;
-  height: 1px;
-  background: linear-gradient(90deg, var(--oro-oscuro) 0%, var(--oro-claro) 100%);
 }
 .vista-encabezado {
   grid-area: titulo;
   display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: var(--e-1) var(--e-3);
+  flex-direction: column;
+  gap: var(--e-3);
   min-width: 0;
 }
 .vista-titulo {
+  position: relative;
   margin: 0;
-  font-size: var(--txt-lg);
+  padding-left: 22px;
+  font-family: var(--fuente-serif);
+  font-size: var(--txt-titulo-vista);
+  font-weight: 600;
+  line-height: 1;
+}
+/* La barra de oro: el canto de la piedra abierto al lado del nombre. */
+.vista-titulo::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: .12em;
+  bottom: 0;
+  width: 4px;
+  border-radius: 2px;
+  background: var(--oro);
 }
 .vista-subtitulo {
-  margin: 0;
+  margin: 0 0 0 24px;
   font-size: var(--txt-xs);
-  font-weight: 600;
+  font-weight: 500;
+  line-height: 1.3;
   text-transform: uppercase;
-  letter-spacing: var(--versalita);
+  letter-spacing: var(--versalita-ancha);
   color: var(--tinta-media);
 }
 .vista-filtros {
@@ -84,17 +94,64 @@
 }
 
 /* Un solo alto para todo lo que vive en la cabecera: antes "Ver eliminados",
-   "Nuevo dron" y el buscador medían 27, 25 y 35 px en la misma fila. El ícono
-   redondo ya mide --alto-control y no se toca. */
+   "Nuevo dron" y el buscador medían 27, 25 y 35 px en la misma fila. Es el
+   alto táctil, como los .btn del prototipo: "Nuevo dron", los filtros y el
+   buscador se tocan con el dedo en la tableta de campo, igual que "Cámaras" y
+   "Mapa". El ícono redondo de al lado (actualizar) mide lo mismo. Lo mismo
+   los botones del pie de un diálogo, "Ver historial de eventos" en la
+   cabecera de un dron e "Ingresar". */
+.login-card button,
+.detail-head > .detalle-historial,
+.modal-pie > button,
 .vista-cabecera button:not(.icono-boton) {
-  min-height: var(--alto-control);
+  min-height: var(--alto-tactil);
   padding-block: 0;
-  padding-inline: 14px;
+  padding-inline: 16px;
+}
+/* La voz del .btn del prototipo, en toda la consola: versalitas espaciadas.
+   Una acción no puede leerse distinto según la pantalla en la que aparece, y
+   antes el mismo pop-up decía "Ver feed en vivo" al lado de "CERRAR". Cada
+   rol la pide (la cabecera, el pie de un diálogo, la acción principal, las
+   fichas, las órdenes del dron) en vez de ponerla en `button`: así quedan en
+   oración lo que se lee de corrido (el botón chico de una fila, el enlace, la
+   pastilla, la fila que se elige) y, como en el prototipo, Validar y
+   Descartar, el par de una decisión, que van grandes y en oración. */
+.login-card button,
+.detail-head > .detalle-historial,
+.modal-pie > button,
+.vista-cabecera button:not(.icono-boton),
+button.primario,
+button.resume,
+button.dismiss:not(.alert-actions > button, .chico, .icono-boton),
+.mapa-head > button,
+.ruta-controles > button,
+.control-panel > button,
+.pilotaje-acciones > button,
+.ficha-acciones > button:not(.icono-boton) {
+  font-size: var(--txt-xs);
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+.vista-cabecera .icono-boton {
+  width: var(--alto-tactil);
+  height: var(--alto-tactil);
+}
+/* "Cámaras / Mapa" es lo único de la cabecera de Operación: con su ícono y un
+   ancho mínimo común, para que las dos teclas midan lo mismo y el oro de la
+   elegida no haga saltar a la otra. */
+.vista-cabecera .view-switch button {
+  min-width: 150px;
+  padding-inline: 18px;
+  gap: 10px;
   font-size: var(--txt-sm);
+}
+.vista-cabecera .view-switch {
+  gap: var(--e-3);
 }
 .vista-cabecera input,
 .vista-cabecera select {
-  height: var(--alto-control);
+  height: var(--alto-tactil);
   padding-block: 0;
 }
 
@@ -110,6 +167,13 @@
   font-weight: 400;
 }
 
+/* En un teléfono el título achica un escalón y el subtítulo se cierra: a
+   46 px, "Usuarios" ya ocupaba media pantalla. */
+@media (max-width: 760px) {
+  .vista-titulo { font-size: var(--txt-2xl); }
+  .vista-subtitulo { letter-spacing: .18em; }
+}
+
 /* En una tableta el buscador baja a su propia fila, a todo el ancho. */
 @media (max-width: 900px) {
   .vista-cabecera {
@@ -122,6 +186,19 @@
     justify-self: stretch;
     width: auto;
   }
+}
+/* En un teléfono el título de 32 px y dos botones ya no entran en una fila:
+   el título se quedaba debajo de "Ver eliminados". Todo se apila, con las
+   acciones a la izquierda, debajo del título. */
+@media (max-width: 640px) {
+  .vista-cabecera {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'titulo'
+      'acciones'
+      'filtros';
+  }
+  .vista-acciones { justify-content: flex-start; }
 }
 
 /* ---------------------------------------------------------------------------
@@ -146,11 +223,12 @@
 
 /* ---------------------------------------------------------------------------
    AVISOS FLOTANTES (AvisosFlotantes.tsx)
-   <div class="avisos-flotantes" role="status"><p class="aviso-flotante">…</p></div>
+   <div class="avisos-flotantes" role="status"><p class="aviso-flotante"><svg/>…</p></div>
    La confirmación de que algo salió bien: abajo a la derecha, chica, sin
    botones, y se va sola. Por encima del velo de los diálogos (el sticker que
    se abre después de un alta no la tapa) pero sin recibir el mouse: nunca se
-   interpone entre el operador y un botón.
+   interpone entre el operador y un botón. Es el .aviso del prototipo: un
+   panel con su hilo de oro y el ícono adelante.
 ------------------------------------------------------------------------------ */
 .avisos-flotantes {
   position: fixed;
@@ -167,31 +245,27 @@
 .aviso-flotante {
   margin: 0;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--e-3);
-  padding: var(--e-3) var(--e-4);
-  border: 1px solid var(--veta);
+  padding: 14px var(--e-4);
+  border: 1px solid var(--veta-fuerte);
   border-radius: var(--radio);
-  background-color: var(--marmol-0);
+  background-color: var(--panel-firme);
   background-image: var(--piedra-cara);
-  /* El filo de oro a la izquierda, como la fila seleccionada. */
-  box-shadow: inset var(--filo) 0 0 0 var(--oro), var(--sombra-flotante);
+  box-shadow: var(--sombra-flotante);
   color: var(--tinta);
-  font-size: var(--txt-sm);
-  line-height: var(--interlinea-titulo);
+  font-size: var(--txt-base);
+  line-height: 1.45;
   animation:
     aviso-entra var(--duracion-entrada) var(--curva-entrada),
     aviso-sale var(--duracion) var(--curva) calc(var(--duracion-aviso) - var(--duracion)) forwards;
 }
-/* El punto verde del "listo": el mismo de .estado.ok. */
-.aviso-flotante::before {
-  content: '';
+/* El tilde del "listo", en el verde de .estado.ok: dice que salió bien antes
+   de leer la línea. Va a la altura del primer renglón, no al medio de dos. */
+.aviso-flotante > svg {
   flex: none;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--ok-texto);
-  box-shadow: 0 0 0 2px var(--ok-velo);
+  margin-top: 1px;
+  color: var(--ok-texto);
 }
 @keyframes aviso-entra {
   from { opacity: 0; transform: translateY(8px); }
@@ -265,12 +339,18 @@
 }
 
 /* Una recarga con la lista ya a la vista no la saca: la apaga un poco
-   mientras llega la nueva. Así no salta a un cartel y de vuelta. */
+   mientras llega la nueva. Así no salta a un cartel y de vuelta. Vale igual
+   para una tabla, para las fichas de Drones y Bases y para el catálogo de
+   rutas. */
 .tabla-envoltorio,
+.fichas,
+.lista-rutas,
 .vista-alta-cuerpo > .log {
   transition: opacity var(--transicion);
 }
 .tabla-envoltorio[aria-busy='true'],
+.fichas[aria-busy='true'],
+.lista-rutas[aria-busy='true'],
 .vista-alta-cuerpo[aria-busy='true'] > .log {
   opacity: .6;
 }
@@ -347,6 +427,9 @@
     animation: none;
   }
   .tabla-envoltorio,
+  .fichas,
+  .lista-rutas,
+  .ruta-item,
   .vista-alta-cuerpo > .log,
   .fila-elegir {
     transition: none;

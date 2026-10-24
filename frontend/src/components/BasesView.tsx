@@ -1,15 +1,16 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react';
 import L from 'leaflet';
 import { LEJOS_M, api, distanciaM, rutasDeBase, traerBases, traerRutas } from '../api';
 import { CENTRO_POR_DEFECTO, PALETA, iconoBase, useFondo, vestirAtribucion } from '../mapa';
 import type { BaseAsset, Me, PatrolRoute } from '../types';
+import { BotonEditar, BotonEliminar, BotonRestaurar } from './AccionesDeGestion';
 import { useAvisar } from './AvisosFlotantes';
 import ConmutadorDeFondo from './ConmutadorDeFondo';
 import DialogoConfirmacion, { type PedidoDeConfirmacion } from './DialogoConfirmacion';
 import EditorDeRuta from './EditorDeRuta';
 import EncabezadoDeVista from './EncabezadoDeVista';
 import { EsqueletoDeTabla, EstadoVacio } from './EstadosDeVista';
-import IconoCerrar from './IconoCerrar';
+import { IconoBase, IconoCerrar, IconoMas, IconoRutas, IconoUbicacion } from './Iconos';
 import Modal from './Modal';
 
 type Formulario = { name: string; lat: string; lon: string; aterrizajeLat: string; aterrizajeLon: string };
@@ -87,6 +88,110 @@ function queFalta(hayNombre: boolean, hayPunto: boolean): string {
   if (hayNombre && hayPunto) return '';
   if (hayNombre) return 'Falta el punto: marcalo en el mapa o escribí las coordenadas.';
   return hayPunto ? 'Falta el nombre de la base.' : 'Faltan el nombre y el punto de la base.';
+}
+
+/** El dato corto de la cabecera: cuántas bases hay y cuántas se pueden asignar. */
+function resumenDeBases(bases: BaseAsset[]): string {
+  const vivas = bases.filter((b) => !b.deleted);
+  const activas = vivas.filter((b) => b.active).length;
+  return `${vivas.length} ${vivas.length === 1 ? 'base' : 'bases'} · ${activas} ${activas === 1 ? 'activa' : 'activas'}`;
+}
+
+/** La pastilla de la ficha: si se le puede asignar a un dron, o si es una baja. */
+function pastillaDeBase(b: BaseAsset): { clase: string; texto: string } {
+  if (b.deleted) return { clase: 'muted', texto: 'Eliminada' };
+  return b.active ? { clase: 'ok', texto: 'Activa' } : { clase: 'muted', texto: 'Inactiva' };
+}
+
+type PropsDeFichaDeBase = Readonly<{
+  base: BaseAsset;
+  esSupervisor: boolean;
+  /** El operador de campo y el supervisor: los que ven las acciones. */
+  puedeCrear: boolean;
+  onEditar: () => void;
+  onRutas: () => void;
+  onAlternarActiva: () => void;
+  onEliminar: () => void;
+  onRestaurar: () => void;
+}>;
+
+/**
+ * Las acciones de una base, en el orden de todas las vistas de gestión:
+ * Editar primero, Eliminar al final. Las eliminadas sólo llegan cuando el
+ * supervisor las pide con el interruptor: restaurar no necesita preguntar el
+ * rol otra vez.
+ */
+function AccionesDeBase({ base, esSupervisor, onEditar, onRutas, onAlternarActiva, onEliminar, onRestaurar }: PropsDeFichaDeBase) {
+  return (
+    <div className="ficha-acciones" role="group" aria-label={`Acciones de ${base.name}`}>
+      {base.deleted ? (
+        <BotonRestaurar onClick={onRestaurar} />
+      ) : (
+        <>
+          {esSupervisor && <BotonEditar onClick={onEditar} />}
+          <button type="button" onClick={onRutas}>
+            <IconoRutas tamano={18} />
+            Rutas
+          </button>
+          {esSupervisor && (
+            <>
+              <button type="button" onClick={onAlternarActiva}>
+                {base.active ? 'Desactivar' : 'Activar'}
+              </button>
+              <BotonEliminar onClick={onEliminar} />
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * La ficha de una base, como en el prototipo: el nombre en Cinzel, el alfiler
+ * con sus coordenadas debajo y la pastilla de si está activa; si tiene punto
+ * para visitantes, a cuánto queda. Lo que el prototipo dibuja además (los
+ * drones de la base, el relevo en espera) no lo trae la lista de bases, así
+ * que no se inventa acá: quién espera para relevos lo dice cada dron, en su
+ * cámara del tablero y en su vista.
+ */
+function FichaDeBase(props: PropsDeFichaDeBase) {
+  const { base, puedeCrear } = props;
+  const idNombre = useId();
+  const pastilla = pastillaDeBase(base);
+  const visitantes =
+    base.aterrizajeLat != null && base.aterrizajeLon != null
+      ? distanciaM(base, { lat: base.aterrizajeLat, lon: base.aterrizajeLon })
+      : null;
+  return (
+    <li>
+      <article className={base.deleted ? 'ficha eliminada' : 'ficha'} aria-labelledby={idNombre}>
+        <header className="ficha-cabecera">
+          <div className="ficha-titulos">
+            <h3 className="ficha-nombre" id={idNombre}>
+              {base.name}
+            </h3>
+            <p className="ficha-sub">
+              <IconoUbicacion tamano={16} />
+              {base.lat.toFixed(5)}, {base.lon.toFixed(5)}
+            </p>
+          </div>
+          <span className={`estado pastilla ${pastilla.clase}`}>{pastilla.texto}</span>
+        </header>
+        {/* El punto donde aterriza un dron de otra base que viene a relevar
+            (RELEVOS §6): un dato de la base, a cuánto queda de ella. */}
+        {visitantes !== null && (
+          <dl className="ficha-datos">
+            <div className="ficha-dato-ancho">
+              <dt className="rotulo">Punto para visitantes</dt>
+              <dd>{`A ${metros(visitantes)} de la base`}</dd>
+            </div>
+          </dl>
+        )}
+        {puedeCrear && <AccionesDeBase {...props} />}
+      </article>
+    </li>
+  );
 }
 
 /**
@@ -186,7 +291,7 @@ function MapaElector({
  * Bases de retorno de los drones. El operador de campo las da de alta parado en
  * el lugar; el supervisor las edita y las da de baja.
  */
-export default function BasesView({ me }: { me: Me }) {
+export default function BasesView({ me }: Readonly<{ me: Me }>) {
   const [bases, setBases] = useState<BaseAsset[]>([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState('');
@@ -487,6 +592,7 @@ export default function BasesView({ me }: { me: Me }) {
     <main className="page-main">
       <EncabezadoDeVista
         titulo="Bases"
+        subtitulo={visibles.length > 0 ? resumenDeBases(visibles) : undefined}
         opciones={
           esSupervisor && (
             // Rótulo fijo y aria-pressed, como en Drones y Usuarios: antes este
@@ -504,6 +610,7 @@ export default function BasesView({ me }: { me: Me }) {
         accion={
           puedeCrear && (
             <button type="button" className="primario" onClick={abrirAlta}>
+              <IconoMas tamano={18} />
               Nueva base
             </button>
           )
@@ -516,97 +623,42 @@ export default function BasesView({ me }: { me: Me }) {
         </p>
       )}
 
-      <section className="card">
-        {/* El esqueleto sólo la primera vez: después de cada acción la lista se
-            recarga, y el cartel de "Trayendo…" aparecía arriba de la tabla y
-            la empujaba para abajo y para arriba en cada clic. */}
-        {cargando && visibles.length === 0 && <EsqueletoDeTabla texto="Trayendo las bases…" />}
-        {!cargando && !error && visibles.length === 0 && (
-          <EstadoVacio titulo="Todavía no hay bases dadas de alta.">
-            {puedeCrear
-              ? 'Con «Nueva base» la das de alta: parado en el lugar, usá tu ubicación; si no, marcá el punto en el mapa.'
-              : 'Las bases las dan de alta los operadores de campo y los supervisores; cuando haya alguna, va a aparecer acá.'}
-          </EstadoVacio>
-        )}
+      {/* El esqueleto sólo la primera vez: después de cada acción la lista se
+          recarga, y el cartel de "Trayendo…" aparecía arriba de las bases y
+          las empujaba para abajo y para arriba en cada clic. */}
+      {visibles.length === 0 && (cargando || !error) && (
+        <section className="card">
+          {cargando ? (
+            <EsqueletoDeTabla texto="Trayendo las bases…" />
+          ) : (
+            <EstadoVacio titulo="Todavía no hay bases dadas de alta." icono={<IconoBase tamano={46} />}>
+              {puedeCrear
+                ? 'Con «Nueva base» la das de alta: parado en el lugar, usá tu ubicación; si no, marcá el punto en el mapa.'
+                : 'Las bases las dan de alta los operadores de campo y los supervisores; cuando haya alguna, va a aparecer acá.'}
+            </EstadoVacio>
+          )}
+        </section>
+      )}
 
-        {visibles.length > 0 && (
-          <div className="tabla-envoltorio" aria-busy={cargando || undefined}>
-            <table className="tabla tabla-gestion">
-              <thead>
-                <tr>
-                  <th>Nombre</th>
-                  <th>Coordenadas</th>
-                  <th>Estado</th>
-                  {puedeCrear && <th className="columna-acciones">Acciones</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {visibles.map((b) => (
-                  <tr key={b.id} className={b.deleted ? 'fila-eliminada' : undefined}>
-                    <td className="inscripcion">{b.name}</td>
-                    <td className="mono">
-                      {b.lat.toFixed(5)}, {b.lon.toFixed(5)}
-                      {b.aterrizajeLat != null && b.aterrizajeLon != null && (
-                        <span className="muted base-visitantes">
-                          {`Visitantes a ${metros(distanciaM(b, { lat: b.aterrizajeLat, lon: b.aterrizajeLon }))}`}
-                        </span>
-                      )}
-                    </td>
-                    <td>
-                      {b.deleted ? (
-                        <span className="estado muted">Eliminada</span>
-                      ) : (
-                        <span className={b.active ? 'estado ok' : 'estado muted'}>{b.active ? 'Activa' : 'Inactiva'}</span>
-                      )}
-                    </td>
-                    {puedeCrear && (
-                      <td className="barra-acciones">
-                        <div className="acciones-fila" role="group" aria-label={`Acciones de ${b.name}`}>
-                          {/* Las eliminadas sólo llegan cuando el supervisor las
-                              pide con el interruptor: restaurar no necesita
-                              preguntar el rol otra vez. */}
-                          {b.deleted ? (
-                            <button
-                              type="button"
-                              className="chico"
-                              onClick={() =>
-                                accion(() => api(`/bases/${b.id}/restore`, { method: 'POST' }), `Base ${b.name} restaurada.`)
-                              }
-                            >
-                              Restaurar
-                            </button>
-                          ) : (
-                            <>
-                              {esSupervisor && (
-                                <button type="button" className="chico" onClick={() => abrirEdicion(b)}>
-                                  Editar
-                                </button>
-                              )}
-                              <button type="button" className="chico" onClick={() => void abrirRutas(b)}>
-                                Rutas
-                              </button>
-                              {esSupervisor && (
-                                <>
-                                  <button type="button" className="chico" onClick={() => alternarActiva(b)}>
-                                    {b.active ? 'Desactivar' : 'Activar'}
-                                  </button>
-                                  <button type="button" className="chico dismiss" onClick={() => pedirBaja(b)}>
-                                    Eliminar
-                                  </button>
-                                </>
-                              )}
-                            </>
-                          )}
-                        </div>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+      {visibles.length > 0 && (
+        <ul className="fichas" aria-label="Bases dadas de alta" aria-busy={cargando || undefined}>
+          {visibles.map((b) => (
+            <FichaDeBase
+              key={b.id}
+              base={b}
+              esSupervisor={esSupervisor}
+              puedeCrear={puedeCrear}
+              onEditar={() => abrirEdicion(b)}
+              onRutas={() => void abrirRutas(b)}
+              onAlternarActiva={() => alternarActiva(b)}
+              onEliminar={() => pedirBaja(b)}
+              onRestaurar={() =>
+                void accion(() => api(`/bases/${b.id}/restore`, { method: 'POST' }), `Base ${b.name} restaurada.`)
+              }
+            />
+          ))}
+        </ul>
+      )}
 
       {abierto && (
         <Modal etiquetadoPor="titulo-base" enfocarPrimerCampo onCerrar={cerrarFormulario}>
@@ -626,7 +678,7 @@ export default function BasesView({ me }: { me: Me }) {
               onClick={cerrarFormulario}
               disabled={guardando}
             >
-              <IconoCerrar />
+              <IconoCerrar tamano={18} />
             </button>
           </header>
           <form className="modal-formulario" onSubmit={guardar} noValidate>
@@ -765,7 +817,7 @@ export default function BasesView({ me }: { me: Me }) {
 
             <footer className="modal-pie">
               {faltante && <p className="pie-nota">{faltante}</p>}
-              <button type="button" className="ghost" onClick={cerrarFormulario} disabled={guardando}>
+              <button type="button" onClick={cerrarFormulario} disabled={guardando}>
                 Cancelar
               </button>
               <button type="submit" className="primario" disabled={!completo || guardando}>
@@ -783,7 +835,7 @@ export default function BasesView({ me }: { me: Me }) {
               Rutas de {asignando.name}
             </h2>
             <button type="button" className="modal-cerrar" aria-label="Cerrar" onClick={() => setAsignando(null)}>
-              <IconoCerrar />
+              <IconoCerrar tamano={18} />
             </button>
           </header>
           <div className="modal-cuerpo form-base">
@@ -842,7 +894,7 @@ export default function BasesView({ me }: { me: Me }) {
             </ul>
           </div>
           <div className="modal-pie">
-            <button type="button" className="ghost" onClick={() => setAsignando(null)}>
+            <button type="button" onClick={() => setAsignando(null)}>
               {reciencreada ? 'Después' : 'Cancelar'}
             </button>
             <button type="button" className="primario" onClick={() => guardarRutas(asignando)}>
