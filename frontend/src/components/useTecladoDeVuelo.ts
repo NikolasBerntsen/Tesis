@@ -17,10 +17,42 @@ import { EJES_EN_CERO, type Ejes } from './MandoVirtual';
 
 export type EjeDeVuelo = keyof Ejes;
 
+/**
+ * Cuánto recorrido de palanca pide cada grupo de teclas, y cuánto lo multiplica
+ * Shift. Son de la persona (los ajustes del control, ver
+ * preferenciasDeControl.ts): avanzar, subir y girar no se sienten igual a la
+ * misma velocidad, y cada mano tiene la suya.
+ */
+export type VelocidadesDeTeclado = Readonly<{
+  /** W, A, S y D: avance y desplazamiento lateral. */
+  avance: number;
+  /** Espacio, C y Ctrl. */
+  subida: number;
+  /** Q y E. */
+  giro: number;
+  /** Lo que multiplica Shift sostenida, con tope en el fondo de la palanca. */
+  rapido: number;
+}>;
+
 /** Velocidad por defecto: la mitad del recorrido de la palanca. */
 export const VELOCIDAD_NORMAL = 0.5;
-/** Con Shift sostenido, a fondo. */
-export const VELOCIDAD_RAPIDA = 1;
+/** Con Shift sostenido, el doble: de la mitad, a fondo. */
+export const MULTIPLICADOR_RAPIDO = 2;
+
+export const VELOCIDADES_POR_DEFECTO: VelocidadesDeTeclado = {
+  avance: VELOCIDAD_NORMAL,
+  subida: VELOCIDAD_NORMAL,
+  giro: VELOCIDAD_NORMAL,
+  rapido: MULTIPLICADOR_RAPIDO,
+};
+
+/** Qué velocidad mueve cada eje. */
+const VELOCIDAD_DEL_EJE: Readonly<Record<EjeDeVuelo, Exclude<keyof VelocidadesDeTeclado, 'rapido'>>> = {
+  pitch: 'avance',
+  roll: 'avance',
+  yaw: 'giro',
+  throttle: 'subida',
+};
 
 /**
  * 10 Hz, el mismo ritmo que el mando virtual: la app corta el vuelo sola si
@@ -127,16 +159,30 @@ export function esRapido(estado: TeclasSostenidas): boolean {
   return estado.rapidas.length > 0;
 }
 
-/** Los ejes que piden las teclas sostenidas: la última de cada eje, a la velocidad elegida. */
-export function ejesDeTeclas(estado: TeclasSostenidas): Ejes {
-  const magnitud = esRapido(estado) ? VELOCIDAD_RAPIDA : VELOCIDAD_NORMAL;
+/** Si esta tecla está sostenida para volar (en su pila, o entre las Shift). */
+export function estaSostenida(estado: TeclasSostenidas, code: string): boolean {
+  if (TECLAS_RAPIDAS.includes(code)) return estado.rapidas.includes(code);
+  const tecla = TECLAS_DE_VUELO[code];
+  return tecla !== undefined && estado.pilas[tecla.eje].includes(code);
+}
+
+/**
+ * Los ejes que piden las teclas sostenidas: la última de cada eje, a la
+ * velocidad de su grupo, multiplicada por Shift si está sostenida y con tope en
+ * el fondo de la palanca.
+ */
+export function ejesDeTeclas(estado: TeclasSostenidas, velocidades: VelocidadesDeTeclado = VELOCIDADES_POR_DEFECTO): Ejes {
+  const multiplicador = esRapido(estado) ? velocidades.rapido : 1;
   const valor = (eje: EjeDeVuelo): number => {
     const pila = estado.pilas[eje];
     const ultima = pila.length > 0 ? TECLAS_DE_VUELO[pila[pila.length - 1]] : undefined;
-    return ultima ? ultima.sentido * magnitud : 0;
+    return ultima ? ultima.sentido * Math.min(1, velocidades[VELOCIDAD_DEL_EJE[eje]] * multiplicador) : 0;
   };
   return { pitch: valor('pitch'), roll: valor('roll'), yaw: valor('yaw'), throttle: valor('throttle') };
 }
+
+/** Por defecto ninguna tecla es de otro: todas las de vuelo vuelan. */
+const NINGUNA_AJENA = () => false;
 
 /** ¿Hay algo comandado? */
 function hayComando(ejes: Ejes): boolean {
@@ -164,7 +210,9 @@ export function useTecladoDeVuelo({
   giroExtra = 0,
   sticks = EJES_EN_CERO,
   ctrlBaja = false,
-}: {
+  velocidades = VELOCIDADES_POR_DEFECTO,
+  teclaAjena = NINGUNA_AJENA,
+}: Readonly<{
   /** Si escucha el teclado: la vista abierta, el control tomado y ningún diálogo encima. */
   activo: boolean;
   /**
@@ -182,8 +230,22 @@ export function useTecladoDeVuelo({
    * `TECLAS_CTRL`). Por defecto no, que es el lado seguro.
    */
   ctrlBaja?: boolean;
-}) {
+  /** Las velocidades de la persona; sin ellas, las de siempre (la mitad, y a fondo con Shift). */
+  velocidades?: VelocidadesDeTeclado;
+  /**
+   * Si la tecla se escribió en un control que la usa él mismo (los ajustes del
+   * control: un deslizador se mueve con las flechas y un interruptor se aprieta
+   * con Espacio). Esa no vuela ni se ataja: es del control.
+   */
+  teclaAjena?: (ev: KeyboardEvent) => boolean;
+}>) {
   const [teclas, setTeclas] = useState<TeclasSostenidas>(NINGUNA_TECLA);
+  // Lo sostenido, leído desde los manejadores nativos: el keyup de una tecla
+  // ajena tiene que saber si esa tecla se venía sosteniendo para volar.
+  const teclasRef = useRef(teclas);
+  teclasRef.current = teclas;
+  const teclaAjenaRef = useRef(teclaAjena);
+  teclaAjenaRef.current = teclaAjena;
   // Lo mismo que en el mando virtual: `onMando` devuelve false con el canal con
   // el Comando Central cerrado, y el operador tiene que saber que el dron sigue
   // con la última velocidad que le llegó.
@@ -198,6 +260,10 @@ export function useTecladoDeVuelo({
     if (!activo) return;
     const alApretar = (ev: KeyboardEvent) => {
       if (!esTeclaDeVuelo(ev.code, ctrlBajaRef.current)) return;
+      // Con el foco en los ajustes, Espacio prende el interruptor y Shift+Tab
+      // vuelve al deslizador de arriba: nada de eso puede subir al dron ni
+      // ponerlo a fondo.
+      if (teclaAjenaRef.current(ev)) return;
       // Sin esto Espacio desplaza la página o aprieta el botón enfocado, y
       // Ctrl+D abre el diálogo de favoritos en pleno vuelo.
       ev.preventDefault();
@@ -212,6 +278,11 @@ export function useTecladoDeVuelo({
     };
     const alSoltar = (ev: KeyboardEvent) => {
       if (!esTeclaDeVuelo(ev.code, ctrlBajaRef.current)) return;
+      // La tecla que se soltó adentro de los ajustes es de ellos, salvo que se
+      // viniera sosteniendo para volar desde antes de que el foco entrara ahí
+      // (W apretada mientras se hace clic en un deslizador): ésa se suelta
+      // igual, o el eje quedaría clavado.
+      if (teclaAjenaRef.current(ev) && !estaSostenida(teclasRef.current, ev.code)) return;
       // Un botón se activa con Espacio al SOLTAR la tecla: si sólo se atajara
       // el keydown, cada subida terminaría apretando el botón con el foco.
       ev.preventDefault();
@@ -268,7 +339,7 @@ export function useTecladoDeVuelo({
     // Sin escuchar tampoco se comanda: el giro del mouse llega por `giroExtra`
     // y no puede seguir saliendo con un diálogo abierto encima del video.
     if (inerte || !activo) return EJES_EN_CERO;
-    const delTeclado = ejesDeTeclas(teclas);
+    const delTeclado = ejesDeTeclas(teclas, velocidades);
     // Sumados y no "manda el último", como entre teclas: el stick es un eje
     // continuo, y W sostenida mientras se arrastra el stick de altura es pedir
     // las dos cosas a la vez (avanzar subiendo), no elegir una.
@@ -278,7 +349,7 @@ export function useTecladoDeVuelo({
       yaw: acotarEje(delTeclado.yaw + sticks.yaw + giroExtra),
       throttle: acotarEje(delTeclado.throttle + sticks.throttle),
     };
-  }, [teclas, inerte, activo, giroExtra, sticks]);
+  }, [teclas, inerte, activo, giroExtra, sticks, velocidades]);
 
   // Los ejes y el callback se leen de refs dentro del temporizador: si fueran
   // dependencias del efecto, cada cambio lo reiniciaría y se emitiría al ritmo

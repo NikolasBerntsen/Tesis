@@ -3,9 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EJES_EN_CERO, type Ejes } from './MandoVirtual';
 import {
   NINGUNA_TECLA,
+  VELOCIDADES_POR_DEFECTO,
   apretarTecla,
   ejesDeTeclas,
   esRapido,
+  estaSostenida,
   esTeclaDeVuelo,
   soltarTecla,
   useTecladoDeVuelo,
@@ -113,6 +115,46 @@ describe('teclas de vuelo — manda la última', () => {
     expect(soltarTecla(estado, 'KeyZ')).toBe(estado);
     expect(soltarTecla(estado, 'KeyS')).toBe(estado);
     expect(soltarTecla(estado, 'ShiftLeft')).toBe(estado);
+  });
+});
+
+describe('teclas de vuelo — las velocidades de la persona', () => {
+  const propias = { avance: 0.3, subida: 0.4, giro: 0.7, rapido: 2 };
+
+  it('cada grupo de teclas va a su velocidad: W A S D, Espacio y C, Q y E', () => {
+    expect(ejesDeTeclas(secuencia('+KeyW', '+KeyA', '+Space', '+KeyE'), propias)).toEqual({
+      pitch: 0.3,
+      roll: -0.3,
+      yaw: 0.7,
+      throttle: 0.4,
+    });
+    expect(ejesDeTeclas(secuencia('+KeyS', '+KeyC', '+KeyQ'), propias)).toEqual({ pitch: -0.3, roll: 0, yaw: -0.7, throttle: -0.4 });
+  });
+
+  it('Shift multiplica las tres, con tope en el fondo de la palanca', () => {
+    const conShift = ejesDeTeclas(secuencia('+ShiftLeft', '+KeyD', '+Space', '+KeyQ'), propias);
+    expect(conShift.roll).toBeCloseTo(0.6, 10);
+    expect(conShift.throttle).toBeCloseTo(0.8, 10);
+    // 0,7 × 2 pasaría de 1: la palanca no da más que el fondo.
+    expect(conShift.yaw).toBe(-1);
+  });
+
+  it('un multiplicador de 1 deja a Shift sin efecto', () => {
+    expect(ejesDeTeclas(secuencia('+ShiftRight', '+KeyW'), { ...propias, rapido: 1 }).pitch).toBe(0.3);
+  });
+
+  it('sin velocidades propias son las de siempre: la mitad, y a fondo con Shift', () => {
+    expect(VELOCIDADES_POR_DEFECTO).toEqual({ avance: 0.5, subida: 0.5, giro: 0.5, rapido: 2 });
+    expect(ejesDeTeclas(secuencia('+ShiftLeft', '+Space'))).toEqual({ ...EJES_EN_CERO, throttle: 1 });
+  });
+
+  it('estaSostenida distingue lo que vuela de lo que no', () => {
+    const estado = secuencia('+KeyW', '+ShiftLeft');
+    expect(estaSostenida(estado, 'KeyW')).toBe(true);
+    expect(estaSostenida(estado, 'ShiftLeft')).toBe(true);
+    expect(estaSostenida(estado, 'ShiftRight')).toBe(false);
+    expect(estaSostenida(estado, 'KeyS')).toBe(false);
+    expect(estaSostenida(estado, 'ArrowRight')).toBe(false);
   });
 });
 
@@ -388,5 +430,60 @@ describe('useTecladoDeVuelo', () => {
     rerender({ ...inicial, ctrlBaja: true });
     fireEvent.keyDown(window, { code: 'ControlLeft', repeat: true });
     expect(result.current.ejes).toEqual({ ...EJES_EN_CERO, pitch: 0.5 });
+  });
+
+  it('vuela con las velocidades que recibe, y un cambio vale desde el tick siguiente', () => {
+    const { onMando, rerender, inicial } = montar({ velocidades: { avance: 0.3, subida: 0.5, giro: 0.5, rapido: 2 } });
+    apretar('KeyW');
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, pitch: 0.3 });
+    // Un deslizador movido en pleno vuelo: sin soltar W, el mensaje siguiente ya va con la nueva.
+    rerender({ ...inicial, velocidades: { avance: 0.8, subida: 0.5, giro: 0.5, rapido: 2 } });
+    act(() => vi.advanceTimersByTime(100));
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, pitch: 0.8 });
+  });
+
+  describe('una tecla escrita en otro control (los ajustes)', () => {
+    const control = document.createElement('input');
+    const enElControl = (ev: KeyboardEvent) => ev.target === control;
+    beforeEach(() => {
+      document.body.appendChild(control);
+    });
+    afterEach(() => {
+      control.remove();
+    });
+
+    it('no vuela ni se ataja: Espacio sigue siendo del interruptor', () => {
+      const { onMando, result } = montar({ teclaAjena: enElControl });
+      const abajo = new KeyboardEvent('keydown', { code: 'Space', bubbles: true, cancelable: true });
+      const arriba = new KeyboardEvent('keyup', { code: 'Space', bubbles: true, cancelable: true });
+      act(() => {
+        control.dispatchEvent(abajo);
+        control.dispatchEvent(arriba);
+      });
+      expect(abajo.defaultPrevented).toBe(false);
+      expect(arriba.defaultPrevented).toBe(false);
+      expect(onMando).not.toHaveBeenCalled();
+      // Shift+Tab para volver al deslizador de arriba tampoco pone el dron a fondo.
+      fireEvent.keyDown(control, { code: 'ShiftLeft' });
+      expect(result.current.rapido).toBe(false);
+    });
+
+    it('la que se venía sosteniendo para volar se suelta igual, aunque el foco ya esté en el control', () => {
+      const { onMando } = montar({ teclaAjena: enElControl });
+      apretar('KeyW');
+      expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, pitch: 0.5 });
+      const arriba = new KeyboardEvent('keyup', { code: 'KeyW', bubbles: true, cancelable: true });
+      act(() => {
+        control.dispatchEvent(arriba);
+      });
+      expect(arriba.defaultPrevented).toBe(true);
+      expect(onMando).toHaveBeenLastCalledWith(EJES_EN_CERO);
+    });
+
+    it('fuera del control, las teclas vuelan como siempre', () => {
+      const { onMando } = montar({ teclaAjena: enElControl });
+      apretar('KeyE');
+      expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, yaw: 0.5 });
+    });
   });
 });

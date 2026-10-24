@@ -369,6 +369,21 @@ for (const imagen of ['#FFFFFF', '#000000']) {
   }
 }
 
+// --- Ajustes del control: el globo del engranaje (pilotaje.css) ---------------------
+// Cuelga sobre el video, así que es piedra firme medida sobre un cuadro blanco
+// y uno negro, como los diálogos. El título en Cinzel y los rótulos van en la
+// tinta; el valor de cada deslizador también; la nota, las pistas y los grupos
+// («Mouse», «Teclado») en la media. El engranaje del título es un ícono en oro:
+// alcanza con 3:1. Del deslizador se tienen que ver la pista (el filo de los
+// campos), el cursor y lo recorrido (el oro de lo encendido), las dos cosas
+// sobre el panel y lo recorrido también sobre el hueco de la pista.
+sobreSuperficies('ajustes: título, rótulos y valores', '--tinta', [], TEXTO, FIRMES);
+sobreSuperficies('ajustes: nota, pistas y grupos', '--tinta-media', [], TEXTO, FIRMES);
+sobreSuperficies('ajustes: engranaje del título', '--oro-texto', [], CONTROL, FIRMES);
+sobreSuperficies('deslizador: filo de la pista', '--filo-campo', [], CONTROL, FIRMES);
+sobreSuperficies('deslizador: el cursor', '--filo-activo', [], CONTROL, FIRMES);
+pares.push({ donde: 'deslizador: lo recorrido sobre el hueco de la pista', texto: '--filo-activo', base: '--marmol-2', minimo: CONTROL });
+
 const casos = TEMAS.flatMap((tema) => pares.map((p) => ({ tema, ...p })));
 
 describe('la fórmula de WCAG que usa este test', () => {
@@ -527,6 +542,32 @@ describe('los pares medidos son los que pintan las hojas', () => {
     ['esquina "EMERGENCIA" del mosaico', relevos, '.esquina-roja', 'color', 'var(--peligro)'],
     // Las miniaturas de la galería: visores, negros en los dos temas.
     ['miniatura de la galería', relevos, '.galeria-miniatura-cuadro', 'background-color', 'var(--recuadro-video)'],
+    // Los ajustes del control: piedra firme, con lo que se mide arriba encima.
+    ['ajustes del control', pilotaje, '.pilotaje-ajustes', 'background-color', 'var(--panel-firme)'],
+    ['cara de los ajustes', pilotaje, '.pilotaje-ajustes', 'background-image', 'var(--piedra-cara)'],
+    ['título de los ajustes', pilotaje, '.pilotaje-ajustes h2', 'color', 'var(--tinta)'],
+    ['engranaje del título de los ajustes', pilotaje, '.pilotaje-ajustes h2 > svg', 'color', 'var(--oro-texto)'],
+    ['nota de los ajustes', pilotaje, '.pilotaje-ajustes-nota', 'color', 'var(--tinta-media)'],
+    ['grupo de los ajustes', pilotaje, '.ajustes-grupo legend', 'color', 'var(--tinta-media)'],
+    ['rótulo de un ajuste', pilotaje, '.ajuste-rotulo label', 'color', 'var(--tinta)'],
+    ['valor de un ajuste', pilotaje, '.ajuste-valor', 'color', 'var(--tinta)'],
+    ['pista de un ajuste', pilotaje, '.ajuste-pista', 'color', 'var(--tinta-media)'],
+    ['interruptor de los ajustes', pilotaje, '.pilotaje-ajustes .switch', 'color', 'var(--tinta)'],
+    // El deslizador, en los dos motores.
+    ['pista del deslizador (Chromium)', primitivos, "input[type='range']::-webkit-slider-runnable-track", 'border', '1px solid var(--filo-campo)'],
+    ['pista del deslizador (Firefox)', primitivos, "input[type='range']::-moz-range-track", 'border', '1px solid var(--filo-campo)'],
+    ['hueco de la pista (Firefox)', primitivos, "input[type='range']::-moz-range-track", 'background', 'var(--marmol-2)'],
+    ['lo recorrido (Firefox)', primitivos, "input[type='range']::-moz-range-progress", 'background', 'var(--filo-activo)'],
+    [
+      'lo recorrido y el hueco (Chromium)',
+      primitivos,
+      "input[type='range']::-webkit-slider-runnable-track",
+      'background',
+      'linear-gradient(90deg, var(--filo-activo) 0 var(--relleno, 0%), var(--marmol-2) var(--relleno, 0%) 100%)',
+    ],
+    ['cursor del deslizador (Chromium)', primitivos, "input[type='range']::-webkit-slider-thumb", 'background', 'var(--filo-activo)'],
+    ['cursor del deslizador (Firefox)', primitivos, "input[type='range']::-moz-range-thumb", 'background', 'var(--filo-activo)'],
+    ['anillo de foco del deslizador', primitivos, "input[type='range']:focus-visible", 'outline', 'var(--filo) solid var(--anillo-foco)'],
   ])('%s', (_donde, hoja, selector, propiedad, esperado) => {
     expect(valorDe(hoja, selector, propiedad)).toBe(esperado);
   });

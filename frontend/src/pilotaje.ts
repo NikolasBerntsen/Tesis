@@ -23,16 +23,22 @@ export const INCLINACION_MAXIMA = 30;
  */
 export const INCLINACION_POR_DEFECTO = -30;
 
-/** Cuánto inclina la cámara cada muesca de la rueda del mouse. */
+/**
+ * Cuánto inclina la cámara cada muesca de la rueda del mouse, por defecto: cada
+ * persona lo cambia en los ajustes del control (`pasoDeRueda`).
+ */
 export const GRADOS_POR_MUESCA = 5;
 
 /**
- * Cuánto inclina la cámara cada píxel de movimiento vertical en el modo mouse.
- * Con 0,15 °/px, cruzar media pantalla (unos 500 px) mueve la cámara 75°: se
- * puede ir del horizonte al suelo en un gesto, sin que un temblor de la mano
- * mueva la imagen.
+ * Cuánto inclina la cámara cada píxel de movimiento vertical en el modo mouse,
+ * con la sensibilidad en 1×. Eran 0,15 °/px, y volando era demasiado: media
+ * pantalla (unos 500 px) la llevaba 75°, del horizonte al suelo, y el pulso de
+ * la mano mientras se giraba ya sacudía la imagen. Con 0,06 °/px esos 500 px son
+ * 30°: mirar al suelo pide un gesto largo y deliberado, que es como se apunta
+ * una cámara, y girar de costado casi no la toca. Quien la quiera viva la sube
+ * en los ajustes (2,5× es la de antes).
  */
-export const GRADOS_POR_PIXEL = 0.15;
+export const GRADOS_POR_PIXEL = 0.06;
 
 /** El zoom digital del botón derecho: arranca en 2× y la rueda lo lleva de 1× a 8×. */
 export const ZOOM_SIN_AUMENTO = 1;
@@ -42,11 +48,15 @@ export const ZOOM_POR_MUESCA = 0.5;
 
 /**
  * Píxeles de movimiento horizontal, en un solo evento, que equivalen a girar a
- * fondo. Chromium entrega `mousemove` a ~60 Hz, así que 25 px por evento son
- * unos 1500 px/s: un gesto rápido pero cómodo. Más bajo, el dron giraría a
- * fondo con cualquier roce del mouse.
+ * fondo con la sensibilidad en 1×. Chromium entrega `mousemove` a ~60 Hz. Eran
+ * 25 px por evento (unos 1500 px/s) y el giro se quedaba corto: un gesto cómodo
+ * (500 a 800 px/s) pedía apenas un tercio, y para dar media vuelta había que
+ * barrer el escritorio varias veces. Con 12 px (unos 720 px/s) ese mismo gesto
+ * ya gira casi a fondo; un temblor de un píxel da 0,08 y se apaga solo en
+ * 150 ms. Quien lo quiera más tranquilo lo baja en los ajustes (0,5× es el de
+ * antes).
  */
-export const PIXELES_PARA_GIRO_A_FONDO = 25;
+export const PIXELES_PARA_GIRO_A_FONDO = 12;
 
 /**
  * Zona muerta de los ejes: la MISMA que la del mando virtual y la de la app del
@@ -71,10 +81,10 @@ export function acotarEje(valor: number): number {
 
 /**
  * La inclinación dentro del rango del contrato, SIN redondear: es la cuenta
- * que lleva el modo mouse, que suma 0,15° por píxel. Redondear cada paso a
- * 0,1° hacía que un píxel para arriba sumara 0,2° y uno para abajo restara
- * 0,1° (`Math.round` lleva el ,5 siempre hacia arriba), y la cámara se iba
- * subiendo sola con el pulso de la mano.
+ * que lleva el modo mouse, que suma una fracción de grado por píxel. Con
+ * 0,15° por píxel, redondear cada paso a 0,1° hacía que un píxel para arriba
+ * sumara 0,2° y uno para abajo restara 0,1° (`Math.round` lleva el ,5 siempre
+ * hacia arriba), y la cámara se iba subiendo sola con el pulso de la mano.
  */
 export function recortarInclinacion(grados: number): number {
   return recortar(grados, INCLINACION_MINIMA, INCLINACION_MAXIMA);
@@ -129,9 +139,22 @@ export function pasosDeRueda(resto: number, muescas: number): { pasos: number; r
   return { pasos, resto: total - pasos };
 }
 
-/** El giro que pide el mouse en el modo mouse: proporcional a su velocidad. */
-export function giroDelMouse(movimientoX: number): number {
-  return acotarEje(movimientoX / PIXELES_PARA_GIRO_A_FONDO);
+/**
+ * El giro que pide el mouse en el modo mouse: proporcional a su velocidad y a la
+ * sensibilidad horizontal de la persona (1× por defecto).
+ */
+export function giroDelMouse(movimientoX: number, sensibilidad = 1): number {
+  return acotarEje((movimientoX * sensibilidad) / PIXELES_PARA_GIRO_A_FONDO);
+}
+
+/**
+ * Cuántos grados inclina la cámara un movimiento vertical del mouse en el modo
+ * mouse. Mouse hacia arriba (`movementY` negativo) es mirar más alto, como en un
+ * juego; con el eje invertido es al revés, como la palanca de un avión.
+ */
+export function inclinacionDelMouse(movimientoY: number, sensibilidad = 1, invertido = false): number {
+  const sentido = invertido ? 1 : -1;
+  return sentido * movimientoY * GRADOS_POR_PIXEL * sensibilidad;
 }
 
 /** "-30°": la inclinación de la cámara como se lee en el HUD. */

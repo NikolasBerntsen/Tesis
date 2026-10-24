@@ -5,6 +5,7 @@ import cors from 'cors';
 import express from 'express';
 import { authRouter } from './routes/auth.routes';
 import { apiRouter } from './routes/api.routes';
+import { preferenciasRouter } from './routes/preferencias.routes';
 import { setupWebSocket } from './ws';
 import { config } from './config';
 
@@ -20,6 +21,7 @@ export function createServer() {
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
   app.use('/api/auth', authRouter);
+  app.use('/api/me/preferencias', preferenciasRouter);
   app.use('/api', apiRouter);
 
   // En producción el contenedor copia el build del frontend a ./public y el

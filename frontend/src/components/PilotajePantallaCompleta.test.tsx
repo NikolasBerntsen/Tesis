@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('leaflet', async () => (await import('../test/dobleLeaflet')).dobleLeaflet());
 import { limpiarEstadoMapa } from '../test/dobleLeaflet';
 import { makeAlert, makeStatus } from '../test/fixtures';
+import { CONTROLES_POR_DEFECTO } from '../preferenciasDeControl';
 import { EJES_EN_CERO, type Ejes } from './MandoVirtual';
 import PilotajePantallaCompleta from './PilotajePantallaCompleta';
 
@@ -648,7 +649,8 @@ describe('PilotajePantallaCompleta — modo mouse', () => {
     const { onMando } = montar();
     fireEvent.click(screen.getByRole('button', { name: 'Modo mouse' }));
 
-    moverMouse(12.5, 0);
+    // 6 px en un evento, con la sensibilidad por defecto, es medio giro.
+    moverMouse(6, 0);
     expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, yaw: 0.5 });
     expect(onMando).toHaveBeenCalledTimes(1);
     // Para el otro lado: el giro sigue al mouse y sale en el tick siguiente,
@@ -685,12 +687,12 @@ describe('PilotajePantallaCompleta — modo mouse', () => {
     const { onCamara, onMando } = montar();
     fireEvent.click(screen.getByRole('button', { name: 'Modo mouse' }));
 
-    moverMouse(0, -20);
-    // 20 px hacia arriba a 0,15 °/px: tres grados más alto.
+    moverMouse(0, -50);
+    // 50 px hacia arriba a 0,06 °/px: tres grados más alto.
     expect(onCamara).toHaveBeenLastCalledWith(-27);
     expect(hud('camara')).toBe('-27°');
     act(() => vi.advanceTimersByTime(200));
-    moverMouse(0, 1000);
+    moverMouse(0, 2000);
     expect(onCamara).toHaveBeenLastCalledWith(-90);
 
     fireEvent.keyDown(window, { code: 'KeyW' });
@@ -698,15 +700,15 @@ describe('PilotajePantallaCompleta — modo mouse', () => {
   });
 
   /**
-   * 0,15° por píxel, redondeado a la décima en cada paso, daba +0,2° por cada
-   * píxel para arriba y -0,1° por cada uno para abajo: la cámara subía sola con
-   * el pulso de la mano. La cuenta va exacta y se redondea sólo lo que se ve y
-   * lo que sale.
+   * Una fracción de grado por píxel, redondeada a la décima en cada paso, no
+   * vuelve a donde estaba: con 0,15 °/px daba +0,2° por cada píxel para arriba y
+   * -0,1° por cada uno para abajo, y la cámara subía sola con el pulso de la
+   * mano. La cuenta va exacta y se redondea sólo lo que se ve y lo que sale.
    */
   it.each([
-    { sentido: 'abajo', px: 1, ida: '-45°', idaPitch: -45 },
-    { sentido: 'arriba', px: -1, ida: '-15°', idaPitch: -15 },
-  ])('cien píxeles para $sentido son 15°, y volverlos deja la cámara donde estaba', ({ px, ida, idaPitch }) => {
+    { sentido: 'abajo', px: 1, ida: '-36°', idaPitch: -36 },
+    { sentido: 'arriba', px: -1, ida: '-24°', idaPitch: -24 },
+  ])('cien píxeles para $sentido son 6°, y volverlos deja la cámara donde estaba', ({ px, ida, idaPitch }) => {
     vi.useFakeTimers();
     const { onCamara } = montar();
     fireEvent.click(screen.getByRole('button', { name: 'Modo mouse' }));
@@ -726,13 +728,13 @@ describe('PilotajePantallaCompleta — modo mouse', () => {
   it('un temblor que no alcanza la décima no manda nada, pero cuenta para el siguiente', () => {
     const { onCamara } = montar();
     fireEvent.click(screen.getByRole('button', { name: 'Modo mouse' }));
-    // Con la pantalla escalada el navegador entrega fracciones de píxel: 0,2 px
+    // Con la pantalla escalada el navegador entrega fracciones de píxel: 0,5 px
     // son 0,03°, que no mueven la décima.
-    moverMouse(0, -0.2);
+    moverMouse(0, -0.5);
     expect(onCamara).not.toHaveBeenCalled();
     // El segundo suma 0,06°: ahora sí, y sale. Redondeando cada paso, los dos
     // se perdían.
-    moverMouse(0, -0.2);
+    moverMouse(0, -0.5);
     expect(onCamara).toHaveBeenLastCalledWith(-29.9);
   });
 
@@ -1108,5 +1110,398 @@ describe('PilotajePantallaCompleta — alertas nuevas', () => {
     const { volverARenderizar } = montar();
     volverARenderizar({ alertas: [makeAlert({ id: 9, drone_id: 'd1', status: 'DISMISSED' })] });
     expect(screen.queryByTestId('pilotaje-alerta-nueva')).not.toBeInTheDocument();
+  });
+});
+
+describe('PilotajePantallaCompleta — ajustes del control', () => {
+  /*
+   * El Comando Central se interviene en `fetch`: GET y PUT de
+   * /api/me/preferencias. Cada test elige qué contesta (o lo deja esperando).
+   */
+  type Pedido = { metodo: string; ruta: string; cuerpo: unknown };
+  let pedidos: Pedido[] = [];
+  let alPedirGet: () => Promise<Response>;
+  let alPedirPut: () => Promise<Response>;
+  const responder = (body: unknown, status = 200) =>
+    Promise.resolve({ ok: status < 400, status, json: async () => body } as Response);
+  const puts = () => pedidos.filter((p) => p.metodo === 'PUT');
+  /** Una respuesta que queda pendiente hasta que el test la cumple o la rechaza. */
+  function enEspera() {
+    const control = {} as { cumplir: (r: Response) => void; rechazar: (e: unknown) => void };
+    const promesa = new Promise<Response>((cumplir, rechazar) => Object.assign(control, { cumplir, rechazar }));
+    return { promesa, ...control };
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+    localStorage.setItem('cc_token', 'tok');
+    localStorage.setItem('cc_user', 'oper1');
+    pedidos = [];
+    alPedirGet = () => responder({ controles: {}, actualizadoEn: null });
+    alPedirPut = () => responder({ controles: {}, actualizadoEn: '2026-10-24T00:00:00.000Z' });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init: RequestInit = {}) => {
+        const metodo = init.method ?? 'GET';
+        pedidos.push({ metodo, ruta: url, cuerpo: typeof init.body === 'string' ? JSON.parse(init.body) : undefined });
+        return metodo === 'PUT' ? alPedirPut() : alPedirGet();
+      }),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    localStorage.clear();
+  });
+
+  /** Monta la vista y deja que conteste el GET de las preferencias. */
+  async function montarConAjustes(cambios: Partial<Props> = {}) {
+    const montada = montar(cambios);
+    await act(async () => {});
+    return montada;
+  }
+
+  const engranaje = () => screen.getByRole('button', { name: 'Ajustes del control' });
+  const panel = () => screen.queryByRole('dialog', { name: 'Ajustes del control' });
+  const deslizador = (nombre: string) => screen.getByRole('slider', { name: nombre });
+  const HORIZONTAL = 'Sensibilidad horizontal del mouse (giro)';
+  const VERTICAL = 'Sensibilidad vertical del mouse (cámara)';
+  const RUEDA = 'Paso de la rueda para la cámara';
+  const NORMAL = 'Velocidad normal (W A S D)';
+  const mover = (nombre: string, valor: number) => fireEvent.change(deslizador(nombre), { target: { value: String(valor) } });
+  const pasoGuardado = (pedido: Pedido | undefined) => (pedido?.cuerpo as { controles: { pasoDeRueda: number } }).controles.pasoDeRueda;
+  /** El valor que se lee al lado del rótulo de un deslizador. */
+  const valorVisible = (nombre: string) => deslizador(nombre).closest('.ajuste')?.querySelector('.ajuste-valor')?.textContent;
+
+  it('el engranaje, al lado del "?", abre los ajustes con el foco adentro; cerrarlos lo devuelve', async () => {
+    await montarConAjustes();
+    const boton = engranaje();
+    // Va justo antes del "?": la ayuda sigue siendo lo de la esquina.
+    expect(boton.nextElementSibling).toBe(screen.getByRole('button', { name: 'Ayuda de los controles' }));
+    expect(boton).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(boton);
+
+    const ajustes = panel()!;
+    expect(boton).toHaveAttribute('aria-expanded', 'true');
+    expect(boton).toHaveAttribute('aria-controls', ajustes.id);
+    expect(within(ajustes).getByRole('button', { name: 'Cerrar los ajustes' })).toHaveFocus();
+    for (const nombre of [
+      HORIZONTAL,
+      VERTICAL,
+      RUEDA,
+      NORMAL,
+      'Multiplicador con Shift',
+      'Velocidad de subida y bajada',
+      'Velocidad de giro con Q/E',
+    ]) {
+      expect(within(ajustes).getByRole('slider', { name: nombre })).toBeInTheDocument();
+    }
+    expect(within(ajustes).getByRole('switch', { name: 'Invertir eje vertical' })).not.toBeChecked();
+    // Cada deslizador dice su valor a la vista y al lector de pantalla.
+    expect(deslizador(HORIZONTAL)).toHaveAttribute('aria-valuetext', '1 vez');
+    expect(deslizador(NORMAL)).toHaveAttribute('aria-valuetext', '50 por ciento de la palanca');
+    expect(within(ajustes).getByText('5°')).toBeInTheDocument();
+
+    fireEvent.click(within(ajustes).getByRole('button', { name: 'Cerrar los ajustes' }));
+    expect(panel()).not.toBeInTheDocument();
+    expect(boton).toHaveFocus();
+    // El engranaje también lo cierra.
+    fireEvent.click(boton);
+    fireEvent.click(boton);
+    expect(panel()).not.toBeInTheDocument();
+  });
+
+  it('un globo a la vez: abrir los ajustes cierra la ayuda, y al revés', async () => {
+    await montarConAjustes();
+    fireEvent.click(screen.getByRole('button', { name: 'Ayuda de los controles' }));
+    fireEvent.click(engranaje());
+    expect(screen.queryByRole('dialog', { name: 'Controles del dron' })).not.toBeInTheDocument();
+    expect(panel()).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Ayuda de los controles' }));
+    expect(panel()).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Controles del dron' })).toBeInTheDocument();
+  });
+
+  it('la sensibilidad horizontal escala el giro que pide el mouse, en pleno vuelo', async () => {
+    vi.useFakeTimers();
+    const { onMando } = await montarConAjustes();
+    fireEvent.click(screen.getByRole('button', { name: 'Modo mouse' }));
+    moverMouse(3, 0);
+    // 3 px a 1× son un cuarto de giro.
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, yaw: 0.25 });
+    act(() => vi.advanceTimersByTime(300));
+
+    fireEvent.click(engranaje());
+    mover(HORIZONTAL, 2);
+    expect(valorVisible(HORIZONTAL)).toBe('2×');
+    expect(deslizador(HORIZONTAL)).toHaveAttribute('aria-valuetext', '2 veces');
+    // Abrir los ajustes soltó la captura (hace falta el cursor): se vuelve a entrar.
+    fireEvent.click(screen.getByRole('button', { name: 'Modo mouse' }));
+    moverMouse(3, 0);
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, yaw: 0.5 });
+  });
+
+  it('la sensibilidad vertical escala la inclinación, y el interruptor invierte el eje', async () => {
+    vi.useFakeTimers();
+    const { onCamara } = await montarConAjustes();
+    fireEvent.click(engranaje());
+    mover(VERTICAL, 0.5);
+    fireEvent.click(screen.getByRole('button', { name: 'Modo mouse' }));
+
+    // 100 px hacia arriba a 0,06 °/px por 0,5: tres grados más alto.
+    moverMouse(0, -100);
+    expect(onCamara).toHaveBeenLastCalledWith(-27);
+    act(() => vi.advanceTimersByTime(200));
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Invertir eje vertical' }));
+    expect(screen.getByRole('switch', { name: 'Invertir eje vertical' })).toBeChecked();
+    // Invertido, el mismo gesto hacia arriba baja la cámara.
+    moverMouse(0, -100);
+    expect(onCamara).toHaveBeenLastCalledWith(-30);
+  });
+
+  it('el paso de la rueda cambia cuánto inclina cada muesca, y la ayuda lo dice', async () => {
+    const { onCamara, video } = await montarConAjustes();
+    fireEvent.click(engranaje());
+    mover(RUEDA, 2);
+    rueda(video, -1);
+    expect(onCamara).toHaveBeenLastCalledWith(-28);
+    fireEvent.click(screen.getByRole('button', { name: 'Ayuda de los controles' }));
+    expect(screen.getByText('Inclina la cámara 2° por muesca: hacia arriba mira más alto')).toBeInTheDocument();
+  });
+
+  it('las velocidades del teclado y el multiplicador de Shift salen por el mismo mando', async () => {
+    vi.useFakeTimers();
+    const { onMando, vista } = await montarConAjustes();
+    fireEvent.click(engranaje());
+    mover(NORMAL, 0.3);
+    mover('Velocidad de subida y bajada', 0.4);
+    mover('Velocidad de giro con Q/E', 0.7);
+    mover('Multiplicador con Shift', 3);
+    expect(valorVisible(NORMAL)).toBe('30 %');
+    expect(valorVisible('Multiplicador con Shift')).toBe('3×');
+    // Tocar la imagen devuelve el foco a la vista: el teclado vuelve a volar.
+    act(() => vista.focus());
+
+    fireEvent.keyDown(vista, { code: 'KeyW' });
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, pitch: 0.3 });
+    fireEvent.keyDown(vista, { code: 'Space' });
+    fireEvent.keyDown(vista, { code: 'KeyE' });
+    act(() => vi.advanceTimersByTime(100));
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, pitch: 0.3, yaw: 0.7, throttle: 0.4 });
+    fireEvent.keyDown(vista, { code: 'ShiftLeft' });
+    act(() => vi.advanceTimersByTime(100));
+    // Con Shift, por tres y con tope en el fondo de la palanca.
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, pitch: 0.9, yaw: 1, throttle: 1 });
+    expect(screen.getByTestId('hud-velocidad')).toHaveTextContent('Rápido');
+  });
+
+  it('"Restablecer valores por defecto" vuelve todo a fábrica, y el mouse con ellos', async () => {
+    vi.useFakeTimers();
+    const { onMando } = await montarConAjustes();
+    fireEvent.click(engranaje());
+    mover(HORIZONTAL, 3);
+    fireEvent.click(screen.getByRole('switch', { name: 'Invertir eje vertical' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Restablecer valores por defecto' }));
+
+    expect(deslizador(HORIZONTAL)).toHaveValue('1');
+    expect(screen.getByRole('switch', { name: 'Invertir eje vertical' })).not.toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: 'Modo mouse' }));
+    moverMouse(3, 0);
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, yaw: 0.25 });
+    // Y lo que se guarda es el juego de fábrica entero.
+    await act(async () => {
+      vi.advanceTimersByTime(700);
+    });
+    expect(puts().at(-1)?.cuerpo).toEqual({ controles: CONTROLES_POR_DEFECTO });
+  });
+
+  it('carga los del Comando Central al abrirse: son los que valen en cualquier computadora', async () => {
+    alPedirGet = () => responder({ controles: { ...CONTROLES_POR_DEFECTO, sensibilidadVertical: 0.4 }, actualizadoEn: 'ayer' });
+    await montarConAjustes();
+    expect(pedidos[0]).toMatchObject({ metodo: 'GET', ruta: '/api/me/preferencias' });
+    fireEvent.click(engranaje());
+    expect(deslizador(VERTICAL)).toHaveValue('0.4');
+    // Y quedan en la copia local de ESTE usuario.
+    expect(JSON.parse(localStorage.getItem('cc_controles:oper1')!).sensibilidadVertical).toBe(0.4);
+  });
+
+  it('arranca con la copia local del usuario mientras el Comando Central no contesta, sin pasar por los de fábrica', () => {
+    localStorage.setItem('cc_controles:oper1', JSON.stringify({ ...CONTROLES_POR_DEFECTO, sensibilidadHorizontal: 2.5 }));
+    localStorage.setItem('cc_controles:otra', JSON.stringify({ ...CONTROLES_POR_DEFECTO, sensibilidadHorizontal: 0.2 }));
+    alPedirGet = () => new Promise<Response>(() => {});
+    montar();
+    fireEvent.click(engranaje());
+    expect(deslizador(HORIZONTAL)).toHaveValue('2.5');
+  });
+
+  it('sin red se vuela con la copia local, y no se avisa nada: no hay nada que guardar', async () => {
+    localStorage.setItem('cc_controles:oper1', JSON.stringify({ ...CONTROLES_POR_DEFECTO, pasoDeRueda: 8 }));
+    alPedirGet = () => Promise.reject(new TypeError('Failed to fetch'));
+    const { onCamara, video } = await montarConAjustes();
+    rueda(video, -1);
+    expect(onCamara).toHaveBeenLastCalledWith(-22);
+    expect(screen.queryByTestId('pilotaje-aviso-ajustes')).not.toBeInTheDocument();
+  });
+
+  it('si la persona ya movió algo, lo que conteste tarde el Comando Central no lo pisa', async () => {
+    const get = enEspera();
+    alPedirGet = () => get.promesa;
+    montar();
+    fireEvent.click(engranaje());
+    mover(VERTICAL, 2);
+    const tarde = { controles: { sensibilidadVertical: 0.4 }, actualizadoEn: 'ayer' };
+    await act(async () => {
+      get.cumplir({ ok: true, status: 200, json: async () => tarde } as Response);
+    });
+    expect(deslizador(VERTICAL)).toHaveValue('2');
+  });
+
+  it('guarda cuando la mano se queda quieta: un PUT con el juego entero, y la copia local en el acto', async () => {
+    vi.useFakeTimers();
+    await montarConAjustes();
+    fireEvent.click(engranaje());
+    mover(HORIZONTAL, 1.5);
+    mover(HORIZONTAL, 1.8);
+    expect(JSON.parse(localStorage.getItem('cc_controles:oper1')!).sensibilidadHorizontal).toBe(1.8);
+    act(() => vi.advanceTimersByTime(600));
+    expect(puts()).toHaveLength(0);
+    await act(async () => {
+      vi.advanceTimersByTime(100);
+    });
+    expect(puts()).toHaveLength(1);
+    expect(puts()[0]).toMatchObject({ ruta: '/api/me/preferencias' });
+    expect(puts()[0].cuerpo).toEqual({ controles: { ...CONTROLES_POR_DEFECTO, sensibilidadHorizontal: 1.8 } });
+  });
+
+  it('cerrar los ajustes, o la vista, guarda en el acto lo que esperaba su turno', async () => {
+    const { unmount } = await montarConAjustes();
+    fireEvent.click(engranaje());
+    mover(RUEDA, 3);
+    fireEvent.click(screen.getByRole('button', { name: 'Cerrar los ajustes' }));
+    expect(puts()).toHaveLength(1);
+    expect(pasoGuardado(puts()[0])).toBe(3);
+    // Cerrar sin haber cambiado nada no manda nada.
+    fireEvent.click(engranaje());
+    fireEvent.click(screen.getByRole('button', { name: 'Cerrar los ajustes' }));
+    expect(puts()).toHaveLength(1);
+
+    fireEvent.click(engranaje());
+    mover(RUEDA, 4);
+    unmount();
+    expect(puts()).toHaveLength(2);
+    expect(pasoGuardado(puts()[1])).toBe(4);
+  });
+
+  it('si no se pudo guardar, el ajuste sigue valiendo y lo avisa sin trabar nada; "Reintentar" lo vuelve a mandar', async () => {
+    alPedirPut = () => responder({ error: 'Error interno' }, 500);
+    const { onCamara, video } = await montarConAjustes();
+    fireEvent.click(engranaje());
+    mover(RUEDA, 2);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Cerrar los ajustes' }));
+    });
+    const aviso = screen.getByTestId('pilotaje-aviso-ajustes');
+    expect(aviso).toHaveAttribute('role', 'status');
+    expect(aviso).toHaveTextContent('No se pudieron guardar tus ajustes del control en el Comando Central');
+    rueda(video, -1);
+    expect(onCamara).toHaveBeenLastCalledWith(-28);
+
+    alPedirPut = () => responder({ controles: {}, actualizadoEn: 'hoy' });
+    await act(async () => {
+      fireEvent.click(within(aviso).getByRole('button', { name: 'Reintentar' }));
+    });
+    expect(puts().at(-1)?.cuerpo).toEqual({ controles: { ...CONTROLES_POR_DEFECTO, pasoDeRueda: 2 } });
+    expect(screen.queryByTestId('pilotaje-aviso-ajustes')).not.toBeInTheDocument();
+  });
+
+  it('un fallo viejo que llega tarde no tapa el guardado que sí salió', async () => {
+    const primero = enEspera();
+    alPedirPut = () => primero.promesa;
+    await montarConAjustes();
+    fireEvent.click(engranaje());
+    mover(RUEDA, 2);
+    fireEvent.click(screen.getByRole('button', { name: 'Cerrar los ajustes' }));
+    alPedirPut = () => responder({ controles: {}, actualizadoEn: 'hoy' });
+    fireEvent.click(engranaje());
+    mover(RUEDA, 3);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Cerrar los ajustes' }));
+    });
+    await act(async () => primero.rechazar(new TypeError('sin red')));
+    expect(puts()).toHaveLength(2);
+    expect(screen.queryByTestId('pilotaje-aviso-ajustes')).not.toBeInTheDocument();
+  });
+
+  it('lo que se teclea en los ajustes no mueve el dron: las flechas son del deslizador, Espacio del interruptor', async () => {
+    const { onMando } = await montarConAjustes();
+    fireEvent.click(engranaje());
+    const horizontal = deslizador(HORIZONTAL);
+    act(() => horizontal.focus());
+    for (const code of ['ArrowRight', 'ArrowUp', 'KeyW', 'KeyQ', 'ShiftLeft', 'KeyC']) {
+      fireEvent.keyDown(horizontal, { code });
+      fireEvent.keyUp(horizontal, { code });
+    }
+    const interruptor = screen.getByRole('switch', { name: 'Invertir eje vertical' });
+    act(() => interruptor.focus());
+    // Espacio no se ataja: el navegador lo usa para prender el interruptor.
+    expect(fireEvent.keyDown(interruptor, { code: 'Space' })).toBe(true);
+    expect(fireEvent.keyUp(interruptor, { code: 'Space' })).toBe(true);
+    expect(onMando).not.toHaveBeenCalled();
+    expect(screen.getByTestId('hud-velocidad')).toHaveTextContent('Normal');
+  });
+
+  it('la tecla que se venía sosteniendo para volar se suelta aunque el foco ya esté en los ajustes', async () => {
+    const { onMando, vista } = await montarConAjustes();
+    fireEvent.keyDown(vista, { code: 'KeyW' });
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, pitch: 0.5 });
+    fireEvent.click(engranaje());
+    fireEvent.keyUp(deslizador(HORIZONTAL), { code: 'KeyW' });
+    expect(onMando).toHaveBeenLastCalledWith(EJES_EN_CERO);
+  });
+
+  it('con los ajustes abiertos, el teclado vuela desde la imagen y la rueda sobre ellos no mueve la cámara', async () => {
+    const { onMando, onCamara, vista } = await montarConAjustes();
+    fireEvent.click(engranaje());
+    fireEvent.keyDown(vista, { code: 'KeyE' });
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, yaw: 0.5 });
+    rueda(panel()!, -1);
+    expect(onCamara).not.toHaveBeenCalled();
+  });
+
+  it('abrir los ajustes suelta la captura del puntero: se tocan con el cursor', async () => {
+    await montarConAjustes();
+    fireEvent.click(screen.getByRole('button', { name: 'Modo mouse' }));
+    expect(document.pointerLockElement).not.toBeNull();
+    fireEvent.click(engranaje());
+    expect(soltarCaptura).toHaveBeenCalled();
+    expect(document.pointerLockElement).toBeNull();
+  });
+
+  it('Esc suelta primero el modo mouse y después cierra los ajustes, devolviendo el foco al engranaje', async () => {
+    await montarConAjustes();
+    fireEvent.click(engranaje());
+    // Con los ajustes abiertos se puede entrar al modo mouse para probar.
+    fireEvent.click(screen.getByRole('button', { name: 'Modo mouse' }));
+    expect(document.pointerLockElement).not.toBeNull();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(document.pointerLockElement).toBeNull();
+    expect(panel()).toBeInTheDocument();
+
+    fireEvent.keyDown(deslizador(VERTICAL), { key: 'Escape' });
+    expect(panel()).not.toBeInTheDocument();
+    expect(engranaje()).toHaveFocus();
+    // Un Esc más no hace nada: no queda nada abierto.
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.getByRole('dialog', { name: 'Pilotaje de Alfa' })).toBeInTheDocument();
+  });
+
+  it('con el diálogo de salida encima, Esc es del diálogo y los ajustes quedan como estaban', async () => {
+    await montarConAjustes();
+    fireEvent.click(engranaje());
+    fireEvent.click(screen.getByRole('button', { name: 'Salir del control manual' }));
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(panel()).toBeInTheDocument();
   });
 });

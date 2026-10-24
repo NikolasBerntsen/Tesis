@@ -1388,7 +1388,65 @@ Lo que cambió respecto de la versión anterior está marcado con **negrita**.
 | POST | `/api/auth/login` | — | `{username, password}` → **`{token, expiresIn, user}`**. `expiresIn` en segundos: lo usa la app para la cuenta regresiva de la sesión efímera |
 | **POST** | **`/api/auth/logout`** | JWT | `{motivo?}`. No invalida nada del lado del servidor (el JWT vive en el cliente): existe para **dejar registrado** el cierre de la sesión efímera del operador de campo |
 | GET | `/api/me` | JWT | Ficha del usuario autenticado. Para un dron incluye `displayName` y `base` |
+| **GET** | **`/api/me/preferencias`** | **JWT de una persona (campo, operador+)** | **`{controles, actualizadoEn}`: los ajustes del control manual de quien inició sesión. Sin nada guardado, los valores por defecto y `actualizadoEn: null`. Ver "Preferencias de la persona"** |
+| **PUT** | **`/api/me/preferencias`** | **JWT de una persona (campo, operador+)** | **`{controles}` → `{controles, actualizadoEn}`. Reemplaza el juego entero: lo que no viene vuelve al valor por defecto. 400 si algo no valida, 413 si el cuerpo pasa de 2 KB** |
 | GET | `/api/health` | — | Ping |
+
+### Preferencias de la persona
+
+Los ajustes con que cada persona maneja el dron en la vista de pilotaje de la
+consola: cuánto gira y cuánto inclina la cámara el mouse, a qué velocidad vuela
+el teclado y cuánto mueve la cámara cada muesca de la rueda. Son de la
+**persona y no del dron** —el operador vuela drones distintos en cada guardia— y
+viven en el Comando Central para que la sigan de una computadora a otra.
+
+- **Sólo las propias.** No hay ruta con un username: de quién son lo dice el
+  token, y no existe forma de leer ni de escribir las de otra persona, tampoco
+  siendo admin. Un campo de más en el cuerpo (un `username`, por ejemplo) es un
+  400, no se ignora. El token de un dron no tiene preferencias (403).
+- **Validación estricta** (`backend/src/preferencias.ts`): sólo las claves de la
+  tabla de abajo, arriba (`controles`) y adentro; cada número tiene que ser un
+  **número** dentro de su rango (un `"1.5"` en texto o un `null` son un 400:
+  nada se convierte, como en §1.b) y el interruptor, `true` o `false`. El 400
+  dice qué falló (`"controles.velocidadNormal tiene que ser un número entre 0,1
+  y 1"`). El cuerpo entero no puede pasar de **2048 bytes** (413).
+- **El PUT reemplaza**: `{"controles": {}}` es "restablecer", y un juego guardado
+  antes de que existiera un ajuste nuevo sigue siendo válido (ese ajuste vale
+  su valor por defecto). Lo guardado se vuelve a leer clave por clave: un valor
+  que ya no está en su rango cae al de fábrica en vez de romper la consola.
+- **No deja registro**: la consola guarda mientras alguien prueba un deslizador,
+  y un evento por cada guardado taparía en el Registro lo que sí es operación.
+
+| Clave | Rango | Paso en la consola | Por defecto | Qué mueve |
+|---|---|---|---|---|
+| `sensibilidadHorizontal` | 0,2 a 3 | 0,1 | 1 | Multiplica el giro (yaw) que pide el movimiento horizontal del mouse en el modo mouse. En 1×, 12 px en un evento son giro a fondo |
+| `sensibilidadVertical` | 0,2 a 3 | 0,1 | 1 | Multiplica la inclinación de la cámara que pide el movimiento vertical. En 1×, 0,06° por píxel |
+| `invertirVertical` | `true`/`false` | — | `false` | Mouse hacia arriba mira más abajo, como la palanca de un avión |
+| `velocidadNormal` | 0,1 a 1 | 0,05 | 0,5 | W, A, S y D sin Shift, en fracción del recorrido de la palanca |
+| `multiplicadorShift` | 1 a 4 | 0,25 | 2 | Lo que multiplica Shift sostenida las tres velocidades, con tope en 1 |
+| `velocidadSubida` | 0,1 a 1 | 0,05 | 0,5 | Espacio y C (o Ctrl) sin Shift |
+| `velocidadGiro` | 0,1 a 1 | 0,05 | 0,5 | Q y E sin Shift |
+| `pasoDeRueda` | 1 a 15 | 1 | 5 | Grados que inclina la cámara cada muesca de la rueda |
+
+Los mismos números están en `docs/contrato/preferencias.json`, con ejemplos de
+cuerpos válidos e inválidos: las pruebas del backend y las de la consola los
+comparan con su código, así que un rango no puede cambiar en una punta sola.
+
+```json
+{ "controles": { "sensibilidadHorizontal": 1.8, "sensibilidadVertical": 0.6, "invertirVertical": true,
+  "velocidadNormal": 0.35, "multiplicadorShift": 2.5, "velocidadSubida": 0.4, "velocidadGiro": 0.6,
+  "pasoDeRueda": 3 },
+  "actualizadoEn": "2026-10-24T14:02:11.000Z" }
+```
+
+En la consola (el engranaje al lado del "?" de la vista de pilotaje), cada
+cambio vale en el acto, también en pleno vuelo, y se guarda con un PUT cuando la
+mano se queda quieta (700 ms), al cerrar el panel o al cerrar la vista. La
+consola guarda además una copia por usuario en el navegador
+(`cc_controles:<usuario>`): arranca con ella mientras contesta el GET y vuela con
+ella si el Comando Central no responde. Un guardado que falla —también por un
+401: no recarga la página en medio de un vuelo— deja un aviso discreto con
+"Reintentar"; el ajuste sigue valiendo.
 
 ### Drones como activos
 

@@ -7,7 +7,10 @@ import {
   acotarEje,
   acotarInclinacion,
   acotarZoom,
+  GRADOS_POR_PIXEL,
+  PIXELES_PARA_GIRO_A_FONDO,
   giroDelMouse,
+  inclinacionDelMouse,
   muescasDeRueda,
   pasosDeRueda,
   recortarInclinacion,
@@ -97,11 +100,48 @@ describe('pasosDeRueda', () => {
 
 describe('giroDelMouse', () => {
   it('es proporcional al movimiento y satura a fondo', () => {
-    expect(giroDelMouse(12.5)).toBe(0.5);
-    expect(giroDelMouse(-25)).toBe(-1);
+    expect(giroDelMouse(6)).toBe(0.5);
+    expect(giroDelMouse(-12)).toBe(-1);
     expect(giroDelMouse(300)).toBe(1);
-    // Un temblor de un píxel no gira el dron: cae en la zona muerta.
-    expect(giroDelMouse(1)).toBe(0);
+    // Un temblor de un píxel apenas gira (y el decaimiento lo apaga en 150 ms);
+    // medio píxel de una pantalla escalada ya cae en la zona muerta.
+    expect(giroDelMouse(1)).toBe(0.08);
+    expect(giroDelMouse(0.5)).toBe(0);
+  });
+
+  it('gira más que antes con la sensibilidad por defecto: el gesto cómodo ya no se queda corto', () => {
+    // Eran 25 px por evento para girar a fondo; un gesto cómodo de 10 px por
+    // evento (600 px/s) pedía 0,4 y ahora pide 0,83.
+    expect(PIXELES_PARA_GIRO_A_FONDO).toBeLessThan(25);
+    expect(giroDelMouse(10)).toBe(0.83);
+  });
+
+  it('la sensibilidad multiplica el giro, con el mismo tope', () => {
+    expect(giroDelMouse(3, 2)).toBe(0.5);
+    expect(giroDelMouse(6, 0.5)).toBe(0.25);
+    expect(giroDelMouse(-12, 3)).toBe(-1);
+    // Con la sensibilidad más baja, el temblor de un píxel no gira nada.
+    expect(giroDelMouse(1, 0.2)).toBe(0);
+  });
+});
+
+describe('inclinacionDelMouse', () => {
+  it('mouse hacia arriba (movementY negativo) mira más alto, proporcional a la sensibilidad', () => {
+    expect(inclinacionDelMouse(-10)).toBeCloseTo(10 * GRADOS_POR_PIXEL, 10);
+    expect(inclinacionDelMouse(10)).toBeCloseTo(-10 * GRADOS_POR_PIXEL, 10);
+    expect(inclinacionDelMouse(-10, 2)).toBeCloseTo(20 * GRADOS_POR_PIXEL, 10);
+    expect(inclinacionDelMouse(-10, 0.5)).toBeCloseTo(5 * GRADOS_POR_PIXEL, 10);
+  });
+
+  it('con el eje invertido, hacia arriba mira más abajo', () => {
+    expect(inclinacionDelMouse(-10, 1, true)).toBeCloseTo(-10 * GRADOS_POR_PIXEL, 10);
+    expect(inclinacionDelMouse(10, 1.5, true)).toBeCloseTo(15 * GRADOS_POR_PIXEL, 10);
+  });
+
+  it('se mueve menos que antes con la sensibilidad por defecto: media pantalla ya no es del horizonte al suelo', () => {
+    // Eran 0,15 °/px: 500 px eran 75°. Ahora son 30°.
+    expect(GRADOS_POR_PIXEL).toBeLessThan(0.15);
+    expect(inclinacionDelMouse(500)).toBeCloseTo(-30, 10);
   });
 });
 

@@ -526,3 +526,21 @@ db.exec(`
     PRIMARY KEY (emergencia_id, seq)
   );
 `);
+
+// --- Preferencias de cada persona (preferencias.ts, PROTOCOLS §5) ---
+
+// Una fila por persona, con los ajustes del control manual como JSON ya
+// validado. Va en una tabla propia y no en una columna de `users`: es un dato
+// de la interfaz y no de la cuenta, y así ni la reconstrucción de `users` de
+// arriba ni ninguna vista de usuarios lo arrastran. Se crea al final, después de
+// esa reconstrucción, por el mismo motivo que el borrado lógico: un RENAME de
+// `users` con esta tabla ya creada le reapuntaría la clave foránea a
+// `users_old`. La baja de una cuenta es lógica, así que sus preferencias quedan
+// y vuelven con ella si se la restaura.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS preferencias_de_usuario (
+    username       TEXT PRIMARY KEY REFERENCES users(username),
+    controles      TEXT NOT NULL, -- JSON: los ajustes de la vista de pilotaje
+    actualizado_en TEXT NOT NULL
+  );
+`);
