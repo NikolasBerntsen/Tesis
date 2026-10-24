@@ -231,6 +231,51 @@ describe('AvisosDelControl — el pedido al que tiene el control', () => {
     }
   });
 
+  it('una tecla apretada adentro y soltada afuera no le come después la soltada al teclado de vuelo', () => {
+    const onMando = vi.fn<(ejes: Ejes) => boolean>(() => true);
+    const { result } = renderHook(() => useTecladoDeVuelo({ activo: true, inerte: false, onMando, giroExtra: 0 }));
+    montar();
+    const mantener = screen.getByRole('button', { name: 'Mantener el control' });
+    const afuera = screen.getByRole('button', { name: 'Algo de la página' });
+    // Shift+Tab desde el primer botón del aviso: la Shift baja adentro y se
+    // suelta con el foco ya afuera, donde la caja del aviso no la oye.
+    mantener.focus();
+    fireEvent.keyDown(mantener, { code: 'ShiftLeft', key: 'Shift' });
+    afuera.focus();
+    fireEvent.keyUp(afuera, { code: 'ShiftLeft', key: 'Shift' });
+    // Después vuela con Shift+W desde afuera, entra al aviso y suelta la Shift ahí.
+    fireEvent.keyDown(afuera, { code: 'ShiftLeft', key: 'Shift' });
+    fireEvent.keyDown(afuera, { code: 'KeyW' });
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, pitch: 1 });
+    mantener.focus();
+    fireEvent.keyUp(mantener, { code: 'ShiftLeft', key: 'Shift' });
+    // El teclado de vuelo la soltó: la W que sigue sostenida vuela normal.
+    expect(result.current.rapido).toBe(false);
+    pasar(100);
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, pitch: 0.5 });
+    fireEvent.keyUp(mantener, { code: 'KeyW' });
+    expect(onMando).toHaveBeenLastCalledWith(EJES_EN_CERO);
+  });
+
+  it('una tecla apretada adentro y soltada en otra aplicación tampoco queda anotada', () => {
+    const onMando = vi.fn<(ejes: Ejes) => boolean>(() => true);
+    renderHook(() => useTecladoDeVuelo({ activo: true, inerte: false, onMando, giroExtra: 0 }));
+    montar();
+    const mantener = screen.getByRole('button', { name: 'Mantener el control' });
+    const afuera = screen.getByRole('button', { name: 'Algo de la página' });
+    mantener.focus();
+    fireEvent.keyDown(mantener, { code: 'Space', key: ' ' });
+    // La ventana pierde el foco con el Espacio abajo: su soltada no llega nunca.
+    fireEvent.blur(window);
+    afuera.focus();
+    fireEvent.keyDown(afuera, { code: 'Space', key: ' ' });
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, throttle: 0.5 });
+    mantener.focus();
+    fireEvent.keyUp(mantener, { code: 'Space', key: ' ' });
+    // y el dron deja de subir
+    expect(onMando).toHaveBeenLastCalledWith(EJES_EN_CERO);
+  });
+
   it('a quien no tiene el control ni lo pidió no le muestra nada', () => {
     montar({ yo: 'supervisor' });
     expect(screen.queryByTestId('pedido-al-titular')).not.toBeInTheDocument();

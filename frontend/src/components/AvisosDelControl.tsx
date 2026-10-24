@@ -68,11 +68,26 @@ function useTecladoDelAviso(onEscape?: () => void) {
       if (!adentro.delete(ev.code)) return;
       ev.stopPropagation();
     };
+    // Una tecla apretada adentro se puede soltar con el foco ya afuera (Shift+Tab
+    // desde «Mantener el control», un clic en la imagen) o en otra aplicación.
+    // Si quedara anotada, la próxima soltada de esa tecla adentro —apretada
+    // AFUERA, para volar— se la comía el aviso, y el teclado de vuelo la seguía
+    // sosteniendo: una Shift clavada multiplicaba cada W, una W clavada seguía
+    // avanzando. Por eso la soltada se oye en toda la ventana y antes que nadie
+    // (en la captura), y perder la ventana olvida todo.
+    const alSoltarAfuera = (ev: KeyboardEvent) => {
+      if (!(ev.target instanceof Node && elemento.contains(ev.target))) adentro.delete(ev.code);
+    };
+    const olvidarTodas = () => adentro.clear();
     elemento.addEventListener('keydown', alApretar);
     elemento.addEventListener('keyup', alSoltar);
+    window.addEventListener('keyup', alSoltarAfuera, true);
+    window.addEventListener('blur', olvidarTodas);
     return () => {
       elemento.removeEventListener('keydown', alApretar);
       elemento.removeEventListener('keyup', alSoltar);
+      window.removeEventListener('keyup', alSoltarAfuera, true);
+      window.removeEventListener('blur', olvidarTodas);
     };
   }, []);
   return caja;
