@@ -126,7 +126,13 @@ describe('etiquetaDeEvento', () => {
   it('rotula los eventos de relevos, desvíos y emergencias', () => {
     expect(etiquetaDeEvento('RELAY_HANDOVER')).toBe('Traspaso del objetivo');
     expect(etiquetaDeEvento('EMERGENCY_RECOVERED')).toBe('Dron recuperado');
-    expect(Object.keys(ETIQUETAS_DE_EVENTO)).toHaveLength(13);
+    expect(Object.keys(ETIQUETAS_DE_EVENTO)).toHaveLength(16);
+  });
+
+  it('rotula los del control manual entre personas', () => {
+    expect(etiquetaDeEvento('CONTROL_REQUESTED')).toBe('Pidió el control');
+    expect(etiquetaDeEvento('CONTROL_TRANSFERRED')).toBe('El control cambió de manos');
+    expect(etiquetaDeEvento('CONTROL_REQUEST_ENDED')).toBe('Pedido de control terminado');
   });
 
   it('un tipo que no conoce no lleva rótulo', () => {

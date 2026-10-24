@@ -313,6 +313,42 @@ pares.push({ donde: 'esquina "EMERGENCIA" del mosaico', texto: '--peligro', base
 // de una emergencia es el visor de siempre (su pie, arriba) y sus miniaturas
 // son botones: la elegida es un botón presionado, también medido arriba.
 
+// --- Avisos del control manual (control.css) ------------------------------------------
+// Flotan encima de todo, también del video de la vista de pilotaje: son el
+// panel firme, medido sobre blanco y sobre negro, con el velo de su tono. El
+// pedido al titular lleva además el filo de lo encendido y sus dos botones,
+// y cada aviso de cómo terminó, su cruz.
+const VELO_DEL_PEDIDO = ['--alerta-velo'];
+sobreSuperficies('pedido de control: texto', '--tinta', VELO_DEL_PEDIDO, TEXTO, FIRMES);
+sobreSuperficies('pedido de control: título y cuenta regresiva', '--alerta-texto', VELO_DEL_PEDIDO, TEXTO, FIRMES);
+sobreSuperficies('pedido de control: filo', '--filo-activo', VELO_DEL_PEDIDO, CONTROL, FIRMES);
+sobreSuperficies('pedido de control: anillo de foco', '--anillo-foco', VELO_DEL_PEDIDO, CONTROL, FIRMES);
+sobreSuperficies(
+  'pedido de control: «Mantener el control»',
+  '--tinta',
+  ['--cara-boton', '--boton-fondo', ...VELO_DEL_PEDIDO],
+  TEXTO,
+  FIRMES,
+);
+sobreSuperficies(
+  'pedido de control: «Ceder el control»',
+  '--oro-texto',
+  ['--cara-activa', '--boton-fondo', ...VELO_DEL_PEDIDO],
+  TEXTO,
+  FIRMES,
+);
+sobreSuperficies(
+  'pedido de control: «Ceder el control» :hover',
+  '--oro-texto',
+  ['--oro-velo', '--cara-activa', '--boton-fondo', ...VELO_DEL_PEDIDO],
+  TEXTO,
+  FIRMES,
+);
+for (const velo of ['--ok-velo', '--peligro-velo']) {
+  sobreSuperficies(`aviso del control (${velo}): texto`, '--tinta', [velo], TEXTO, FIRMES);
+  sobreSuperficies(`aviso del control (${velo}): la cruz`, '--tinta-media', ['--cara-boton', '--boton-fondo', velo], CONTROL, FIRMES);
+}
+
 // --- Bordes de los controles y foco ----------------------------------------------
 for (const s of SUPERFICIES) {
   pares.push({ donde: `anillo de foco sobre ${s.nombre}`, texto: '--anillo-foco', sobre: s.sobre, base: s.base, minimo: CONTROL });
@@ -429,6 +465,7 @@ describe('los pares medidos son los que pintan las hojas', () => {
   const pulido = leer('./pulido.css');
   const pilotaje = leer('./pilotaje.css');
   const relevos = leer('./relevos.css');
+  const control = leer('./control.css');
 
   it.each([
     ['fila elegida', primitivos, '.tabla tbody tr.seleccionada', 'background', 'var(--oro-velo)'],
@@ -527,6 +564,34 @@ describe('los pares medidos son los que pintan las hojas', () => {
     ['esquina "EMERGENCIA" del mosaico', relevos, '.esquina-roja', 'color', 'var(--peligro)'],
     // Las miniaturas de la galería: visores, negros en los dos temas.
     ['miniatura de la galería', relevos, '.galeria-miniatura-cuadro', 'background-color', 'var(--recuadro-video)'],
+    // Los avisos del control manual: el panel firme con el velo de su tono.
+    ['aviso del control: panel', control, '.aviso-control', 'background-color', 'var(--panel-firme)'],
+    ['aviso del control: cara', control, '.aviso-control', 'background-image', 'var(--piedra-cara)'],
+    ['aviso del control: texto', control, '.aviso-control', 'color', 'var(--tinta)'],
+    [
+      'pedido de control: velo',
+      control,
+      '.aviso-control-pedido',
+      'background-image',
+      'linear-gradient(var(--alerta-velo), var(--alerta-velo)), var(--piedra-cara)',
+    ],
+    ['pedido de control: filo', control, '.aviso-control-pedido', 'border', 'var(--filo) solid var(--filo-activo)'],
+    ['pedido de control: título', control, '.aviso-control-titulo', 'color', 'var(--alerta-texto)'],
+    ['pedido de control: cuenta regresiva', control, '.aviso-control-cuenta', 'color', 'var(--alerta-texto)'],
+    [
+      'aviso del control bueno: velo',
+      control,
+      '.aviso-control-fin.bueno',
+      'background-image',
+      'linear-gradient(var(--ok-velo), var(--ok-velo)), var(--piedra-cara)',
+    ],
+    [
+      'aviso del control malo: velo',
+      control,
+      '.aviso-control-fin.malo',
+      'background-image',
+      'linear-gradient(var(--peligro-velo), var(--peligro-velo)), var(--piedra-cara)',
+    ],
   ])('%s', (_donde, hoja, selector, propiedad, esperado) => {
     expect(valorDe(hoja, selector, propiedad)).toBe(esperado);
   });

@@ -1,3 +1,5 @@
+import type { PedidoDelHub } from './control';
+
 /** Coordenada con nombre. La usan la ficha del dron y los mapas. */
 export interface Base {
   name: string;
@@ -212,6 +214,11 @@ export interface Drone {
   online: boolean;
   lastStatus: DroneStatus | null;
   controlledBy: string | null;
+  /**
+   * El pedido de control que espera la respuesta del titular (PROTOCOLS §6).
+   * Falta en la ficha de un hub viejo, y ahí es lo mismo que null.
+   */
+  pedidoDeControl?: PedidoDelHub | null;
 }
 
 /**

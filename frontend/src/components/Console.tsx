@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ErrorDeApi,
   api,
+  cancelarPedidoDeControl,
+  contestarPedidoDeControl,
   getRole,
   getUsername,
   marcarEmergenciaRecuperada,
@@ -20,6 +22,16 @@ import {
   sinFotos,
   sumarFotoEnVivo,
 } from '../emergencias';
+import {
+  avisoDeLaLiberacion,
+  avisoDelFin,
+  esFinDelPedido,
+  esPedidoDelHub,
+  pedidoLocal,
+  type AvisoDelControl,
+  type FinDelPedido,
+  type PedidoDeControl,
+} from '../control';
 import { sumarAlRastro, type RastroObjetivo } from '../rastro';
 import { crearRecarga } from '../recarga';
 import { aplicarRelevo, duenioDeLaAlerta, esRelevo, reemplazarActivos } from '../relevos';
@@ -36,11 +48,14 @@ import type {
   Relevo,
   RolConsola,
 } from '../types';
+import { useLatidoDelControl } from '../useLatidoDelControl';
 import { useWebSocket } from '../useWebSocket';
 import AvisoDeEmergencias from './AvisoDeEmergencias';
+import AvisosDelControl from './AvisosDelControl';
 import { ProveedorDeAvisos } from './AvisosFlotantes';
 import BasesView from './BasesView';
 import BotonTema from './BotonTema';
+import { ProveedorDeCapaDePilotaje } from './CapaDePilotaje';
 import CampanaDeAlertas from './CampanaDeAlertas';
 import { ICONO_DE_SECCION, IconoPersona, IconoSalir } from './Iconos';
 import RutasView from './RutasView';
@@ -54,6 +69,17 @@ import UsersView from './UsersView';
 
 const MAX_EVENTS = 300;
 const TICK_MS = 1000;
+/** Los avisos del control que se juntan como mucho: el más viejo deja lugar al nuevo. */
+const MAX_AVISOS_DEL_CONTROL = 4;
+
+/** Los pedidos de control que traen las fichas, con el vencimiento pasado a este reloj. */
+function pedidosDeLasFichas(lista: readonly Drone[], ahora: number): Record<string, PedidoDeControl> {
+  const pedidos: Record<string, PedidoDeControl> = {};
+  for (const d of lista) {
+    if (esPedidoDelHub(d.pedidoDeControl)) pedidos[d.droneId] = pedidoLocal(d.droneId, d.pedidoDeControl, ahora);
+  }
+  return pedidos;
+}
 
 type Seccion = 'operacion' | 'drones' | 'bases' | 'rutas' | 'usuarios' | 'registro';
 
@@ -119,6 +145,11 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
   // que el hub la armó, ni pisarla la de un pedido anterior (ver recarga.ts).
   const [recargaDeRelevos] = useState(crearRecarga);
   const [recargaDeEmergencias] = useState(crearRecarga);
+  // Los pedidos de control pendientes, por dron, y los avisos de cómo
+  // terminaron o de un control que se soltó solo (AvisosDelControl).
+  const [pedidosDeControl, setPedidosDeControl] = useState<Record<string, PedidoDeControl>>({});
+  const [avisosDelControl, setAvisosDelControl] = useState<AvisoDelControl[]>([]);
+  const idDelAviso = useRef(0);
 
   // El rol de la sesión sirve para pintar la barra sin esperar a /me; el que
   // manda es el que informa el backend, y si difieren la sección se corrige sola.
@@ -136,7 +167,11 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
     return () => clearInterval(id);
   }, [deCampo]);
 
+  const yo = me?.username ?? getUsername();
+
   const { conectado, enviar } = useWebSocket((msg) => {
+    // Cualquier mensaje del hub es una ocasión de latir: ver useLatidoDelControl.
+    latido.alRecibirDelHub();
     switch (msg.type) {
       case 'status':
         statusBuffer.current[msg.droneId] = msg;
@@ -191,9 +226,13 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
         setRoutes((prev) => prev.map((r) => (r.id === msg.route.id ? msg.route : r)));
         break;
       case 'control_changed':
-        setDrones((prev) =>
-          prev.map((d) => (d.droneId === msg.droneId ? { ...d, controlledBy: msg.controlledBy } : d)),
-        );
+        alCambiarElControl(msg);
+        break;
+      case 'control_request':
+        alPedirseElControl(msg);
+        break;
+      case 'control_request_result':
+        if (esFinDelPedido(msg)) alTerminarElPedido(msg);
         break;
       case 'drone_renamed':
         setDrones((prev) =>
@@ -223,6 +262,57 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
     }
   });
 
+  // La señal de vida por cada dron cuyo control tiene esta cuenta: la vista
+  // del dron o la de pilotaje pueden no estar abiertas, y el control sigue
+  // siendo de la persona (useLatidoDelControl).
+  const mios = useMemo(() => drones.filter((d) => d.controlledBy === yo).map((d) => d.droneId), [drones, yo]);
+  const latido = useLatidoDelControl({ enviar, conectado, drones: mios });
+
+  function nombreDe(droneId: string): string {
+    return drones.find((d) => d.droneId === droneId)?.displayName ?? droneId;
+  }
+
+  function sumarAvisoDelControl(aviso: Omit<AvisoDelControl, 'id'> | null) {
+    if (!aviso) return;
+    idDelAviso.current += 1;
+    const nuevo = { ...aviso, id: idDelAviso.current };
+    setAvisosDelControl((prev) => [...prev, nuevo].slice(-MAX_AVISOS_DEL_CONTROL));
+  }
+
+  /** El lock cambió de manos. Si el hub lo soltó solo (`motivo`), se avisa: el dron quedó sin nadie al mando. */
+  function alCambiarElControl(msg: { droneId: string; controlledBy: string | null; teniaElControl?: unknown; motivo?: unknown }) {
+    setDrones((prev) => prev.map((d) => (d.droneId === msg.droneId ? { ...d, controlledBy: msg.controlledBy } : d)));
+    if (msg.controlledBy !== null || typeof msg.teniaElControl !== 'string') return;
+    sumarAvisoDelControl(avisoDeLaLiberacion(msg.motivo, msg.teniaElControl, yo, msg.droneId, nombreDe(msg.droneId)));
+  }
+
+  /** Alguien le pidió el control a quien lo tiene: el vencimiento se pasa a este reloj. */
+  function alPedirseElControl(msg: { droneId?: unknown }) {
+    const droneId = msg.droneId;
+    if (typeof droneId !== 'string' || !esPedidoDelHub(msg)) return;
+    const pedido = pedidoLocal(droneId, msg, Date.now());
+    setPedidosDeControl((prev) => ({ ...prev, [droneId]: pedido }));
+  }
+
+  function alTerminarElPedido(fin: FinDelPedido) {
+    setPedidosDeControl((prev) => {
+      const resto = { ...prev };
+      delete resto[fin.droneId];
+      return resto;
+    });
+    sumarAvisoDelControl(avisoDelFin(fin, yo, nombreDe(fin.droneId)));
+  }
+
+  const contestarPedido = useCallback(async (droneId: string, respuesta: 'ceder' | 'mantener') => {
+    await contestarPedidoDeControl(droneId, respuesta);
+  }, []);
+  const cancelarPedido = useCallback(async (droneId: string) => {
+    await cancelarPedidoDeControl(droneId);
+  }, []);
+  const descartarAvisoDelControl = useCallback((id: number) => {
+    setAvisosDelControl((prev) => prev.filter((a) => a.id !== id));
+  }, []);
+
   useEffect(() => {
     api<Me>('/me').then(setMe).catch(console.error);
   }, []);
@@ -236,6 +326,9 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
     api<Drone[]>('/drones')
       .then((list) => {
         setDrones(list);
+        // Un pedido que se hizo con este canal caído, o antes de abrir la
+        // consola, llega en la ficha: el titular tiene que verlo igual.
+        setPedidosDeControl(pedidosDeLasFichas(list, Date.now()));
         const buffer: Record<string, DroneStatus> = {};
         for (const d of list) if (d.lastStatus) buffer[d.droneId] = d.lastStatus;
         statusBuffer.current = buffer;
@@ -371,144 +464,159 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
 
   return (
     // Los avisos de "guardado" viven acá, una sola región para toda la consola:
-    // cambiar de sección no los corta ni los duplica.
+    // cambiar de sección no los corta ni los duplica. Los del control manual,
+    // también, y encima de la vista de pilotaje si está abierta.
     <ProveedorDeAvisos>
-      {/* Lo que el pop-up de una alerta lee en vivo, abierto desde donde sea.
-          El operador de campo no recibe alertas ni puede decidirlas. */}
-      <ProveedorDeAlertas
-        alertas={alerts}
-        drones={drones}
-        statuses={statuses}
-        decidir={deCampo ? null : decidirAlerta}
-        verDron={deCampo ? null : verDron}
-      >
-        {/* Las emergencias sí son del operador de campo: es quien sale a
-            buscar el dron, y quien lo marca recuperado. */}
-        <ProveedorDeEmergencias
-          relevos={relevos}
-          emergencias={emergencias}
-          fotos={fotosDeEmergencias}
-          marcarRecuperada={marcarRecuperada}
+      <ProveedorDeCapaDePilotaje>
+        {/* Lo que el pop-up de una alerta lee en vivo, abierto desde donde sea.
+            El operador de campo no recibe alertas ni puede decidirlas. */}
+        <ProveedorDeAlertas
+          alertas={alerts}
+          drones={drones}
+          statuses={statuses}
+          decidir={deCampo ? null : decidirAlerta}
+          verDron={deCampo ? null : verDron}
         >
-          <div className="dashboard">
-            <header className="topbar">
-              <div className="marca">
-                {/* El escudo es decorativo: el nombre del proyecto ya lo dice el texto. */}
-                <img className="marca-escudo" src={escudo} alt="" />
-                <div className="marca-textos">
-                  {/* Escrito como se dice, que es lo que anuncia el lector de
-                      pantalla: las mayúsculas y los colores los pone la hoja. */}
-                  <h1 className="marca-nombre">
-                    Alta <span className="marca-en">en el</span> <span className="marca-cielo">Cielo</span>
-                  </h1>
-                  <p className="marca-lema">Comando de drones</p>
+          {/* Las emergencias sí son del operador de campo: es quien sale a
+              buscar el dron, y quien lo marca recuperado. */}
+          <ProveedorDeEmergencias
+            relevos={relevos}
+            emergencias={emergencias}
+            fotos={fotosDeEmergencias}
+            marcarRecuperada={marcarRecuperada}
+          >
+            <div className="dashboard">
+              <header className="topbar">
+                <div className="marca">
+                  {/* El escudo es decorativo: el nombre del proyecto ya lo dice el texto. */}
+                  <img className="marca-escudo" src={escudo} alt="" />
+                  <div className="marca-textos">
+                    {/* Escrito como se dice, que es lo que anuncia el lector de
+                        pantalla: las mayúsculas y los colores los pone la hoja. */}
+                    <h1 className="marca-nombre">
+                      Alta <span className="marca-en">en el</span> <span className="marca-cielo">Cielo</span>
+                    </h1>
+                    <p className="marca-lema">Comando de drones</p>
+                  </div>
                 </div>
-              </div>
-              <nav className="topnav" aria-label="Secciones de la consola">
-                {secciones.map((s) => {
-                  const Icono = ICONO_DE_SECCION[s];
-                  return (
-                    <button
-                      key={s}
-                      type="button"
-                      className={abierta === s ? 'active' : ''}
-                      aria-current={abierta === s ? 'page' : undefined}
-                      onClick={() => setSeccion(s)}
-                    >
-                      <Icono />
-                      <span>{ETIQUETA[s]}</span>
-                    </button>
-                  );
-                })}
-              </nav>
-              <div className="topbar-right">
-                {/* El operador de campo entra a una consola recortada: conviene que lo
-                    lea, y no que lo deduzca de que no hay más botones. */}
-                {deCampo && <span className="badge oro">Sesión de campo</span>}
-                {/* El operador de campo no recibe alertas: el backend no se las manda. */}
-                {!deCampo && (
-                  <CampanaDeAlertas
-                    alerts={alerts}
-                    drones={drones}
-                    onDecidir={decidirAlerta}
-                    onVerDron={verDron}
-                  />
-                )}
-                {/* El punto lo dibuja .estado con currentColor: en la interfaz no hay
-                    caracteres decorativos, y así el punto toma el verde o el rojo. */}
-                <span className={`conn estado versalita ${conectado ? 'ok' : 'bad'}`} aria-live="polite">
-                  {conectado ? 'conectado' : 'sin conexión'}
-                </span>
-                <BotonTema />
-                {/* En una tableta el nombre se recorta con puntos suspensivos: el
-                    title lo deja leer entero. La sesión no lleva menú: una silueta
-                    y no un engranaje, que se lee como "configuración" y el
-                    operador lo tocaría esperando algo. */}
-                <span className="sesion-usuario">
-                  <IconoPersona tamano={20} />
-                  <span className="username" title={usuario}>
-                    {usuario}
+                <nav className="topnav" aria-label="Secciones de la consola">
+                  {secciones.map((s) => {
+                    const Icono = ICONO_DE_SECCION[s];
+                    return (
+                      <button
+                        key={s}
+                        type="button"
+                        className={abierta === s ? 'active' : ''}
+                        aria-current={abierta === s ? 'page' : undefined}
+                        onClick={() => setSeccion(s)}
+                      >
+                        <Icono />
+                        <span>{ETIQUETA[s]}</span>
+                      </button>
+                    );
+                  })}
+                </nav>
+                <div className="topbar-right">
+                  {/* El operador de campo entra a una consola recortada: conviene que lo
+                      lea, y no que lo deduzca de que no hay más botones. */}
+                  {deCampo && <span className="badge oro">Sesión de campo</span>}
+                  {/* El operador de campo no recibe alertas: el backend no se las manda. */}
+                  {!deCampo && (
+                    <CampanaDeAlertas
+                      alerts={alerts}
+                      drones={drones}
+                      onDecidir={decidirAlerta}
+                      onVerDron={verDron}
+                    />
+                  )}
+                  {/* El punto lo dibuja .estado con currentColor: en la interfaz no hay
+                      caracteres decorativos, y así el punto toma el verde o el rojo. */}
+                  <span className={`conn estado versalita ${conectado ? 'ok' : 'bad'}`} aria-live="polite">
+                    {conectado ? 'conectado' : 'sin conexión'}
                   </span>
-                </span>
-                <button type="button" className="ghost salir" onClick={onLogout}>
-                  <IconoSalir tamano={20} />
-                  Salir
-                </button>
-              </div>
-            </header>
-            <AvisoDeEmergencias />
-            {!me ? (
-              <main className="page-main">
-                <p className="vacio" role="status">
-                  Cargando la consola…
-                </p>
-              </main>
-            ) : abierta === 'drones' ? (
-              <DronesView me={me} novedad={novedadDron} />
-            ) : abierta === 'bases' ? (
-              <BasesView me={me} />
-            ) : abierta === 'rutas' ? (
-              <RutasView me={me} />
-            ) : abierta === 'usuarios' ? (
-              <UsersView me={me} />
-            ) : abierta === 'registro' ? (
-              <LogsView />
-            ) : selected ? (
-              <DroneDetail
-                me={me}
-                drone={selected}
-                status={statuses[selected.droneId] ?? null}
-                frame={frames[selected.droneId] ?? null}
-                conectado={conectado}
-                liveEvents={liveEvents}
-                routes={routes}
-                alertas={alerts}
-                relevos={relevos}
-                rastro={rastros[selected.droneId] ?? null}
-                onDecidir={decidirAlerta}
-                onBack={() => setSelectedId(null)}
-                onRename={(name) => rename(selected.droneId, name)}
-                onWaypointLabel={setWaypointLabel}
-                onMando={(ejes) => enviar({ type: 'manual_stick', droneId: selected.droneId, ...ejes })}
-                onCamara={(pitch) => enviar({ type: 'manual_gimbal', droneId: selected.droneId, pitch })}
-              />
-            ) : (
-              <Dashboard
-                drones={drones}
-                statuses={statuses}
-                frames={frames}
-                alerts={alerts}
-                pendingAlerts={pendingAlerts}
-                relevos={relevos}
-                rastros={rastros}
-                onDecidir={decidirAlerta}
-                onOpenDrone={setSelectedId}
-                onRename={rename}
-              />
-            )}
-          </div>
-        </ProveedorDeEmergencias>
-      </ProveedorDeAlertas>
+                  <BotonTema />
+                  {/* En una tableta el nombre se recorta con puntos suspensivos: el
+                      title lo deja leer entero. La sesión no lleva menú: una silueta
+                      y no un engranaje, que se lee como "configuración" y el
+                      operador lo tocaría esperando algo. */}
+                  <span className="sesion-usuario">
+                    <IconoPersona tamano={20} />
+                    <span className="username" title={usuario}>
+                      {usuario}
+                    </span>
+                  </span>
+                  <button type="button" className="ghost salir" onClick={onLogout}>
+                    <IconoSalir tamano={20} />
+                    Salir
+                  </button>
+                </div>
+              </header>
+              <AvisoDeEmergencias />
+              {!me ? (
+                <main className="page-main">
+                  <p className="vacio" role="status">
+                    Cargando la consola…
+                  </p>
+                </main>
+              ) : abierta === 'drones' ? (
+                <DronesView me={me} novedad={novedadDron} />
+              ) : abierta === 'bases' ? (
+                <BasesView me={me} />
+              ) : abierta === 'rutas' ? (
+                <RutasView me={me} />
+              ) : abierta === 'usuarios' ? (
+                <UsersView me={me} />
+              ) : abierta === 'registro' ? (
+                <LogsView />
+              ) : selected ? (
+                <DroneDetail
+                  me={me}
+                  drone={selected}
+                  status={statuses[selected.droneId] ?? null}
+                  frame={frames[selected.droneId] ?? null}
+                  conectado={conectado}
+                  liveEvents={liveEvents}
+                  routes={routes}
+                  alertas={alerts}
+                  relevos={relevos}
+                  rastro={rastros[selected.droneId] ?? null}
+                  pedidoDeControl={pedidosDeControl[selected.droneId] ?? null}
+                  onDecidir={decidirAlerta}
+                  onBack={() => setSelectedId(null)}
+                  onRename={(name) => rename(selected.droneId, name)}
+                  onWaypointLabel={setWaypointLabel}
+                  onMando={(ejes) => enviar({ type: 'manual_stick', droneId: selected.droneId, ...ejes })}
+                  onCamara={(pitch) => enviar({ type: 'manual_gimbal', droneId: selected.droneId, pitch })}
+                />
+              ) : (
+                <Dashboard
+                  drones={drones}
+                  statuses={statuses}
+                  frames={frames}
+                  alerts={alerts}
+                  pendingAlerts={pendingAlerts}
+                  relevos={relevos}
+                  rastros={rastros}
+                  onDecidir={decidirAlerta}
+                  onOpenDrone={setSelectedId}
+                  onRename={rename}
+                />
+              )}
+              {!deCampo && (
+                <AvisosDelControl
+                  yo={yo}
+                  pedidos={Object.values(pedidosDeControl)}
+                  nombreDe={nombreDe}
+                  avisos={avisosDelControl}
+                  onContestar={contestarPedido}
+                  onCancelar={cancelarPedido}
+                  onDescartar={descartarAvisoDelControl}
+                />
+              )}
+            </div>
+          </ProveedorDeEmergencias>
+        </ProveedorDeAlertas>
+      </ProveedorDeCapaDePilotaje>
     </ProveedorDeAvisos>
   );
 }

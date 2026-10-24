@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { api, rutasDeBase } from '../api';
+import { api, pedirControl, rutasDeBase } from '../api';
+import { PLAZO_DE_RESPUESTA_MS, type PedidoDeControl } from '../control';
 import { posicionDelDron, stateLabel } from '../format';
 import type { RastroObjetivo } from '../rastro';
 import { avisoDeOrdenesEnRelevo, avisoDeReanudarEnRelevo, duenioDeLaAlerta, participaDeUnRelevo } from '../relevos';
@@ -180,6 +181,7 @@ export default function DroneDetail({
   alertas,
   relevos = SIN_RELEVOS,
   rastro = null,
+  pedidoDeControl = null,
   onDecidir,
   onBack,
   onRename,
@@ -201,6 +203,8 @@ export default function DroneDetail({
   relevos?: readonly Relevo[];
   /** Rastro del objetivo que el dron está siguiendo, si hay uno (rastro.ts). */
   rastro?: RastroObjetivo | null;
+  /** El pedido de control de este dron que espera la respuesta del titular, si hay uno. */
+  pedidoDeControl?: PedidoDeControl | null;
   onDecidir: DecidirAlerta;
   onBack: () => void;
   onRename: (displayName: string) => void;
@@ -222,6 +226,15 @@ export default function DroneDetail({
   const [viendoHistorial, setViendoHistorial] = useState(false);
   /** El supervisor pidió quitarle el control a otro y falta confirmarlo. */
   const [quitando, setQuitando] = useState(false);
+  /** Este operador quiere pedirle el control a quien lo tiene y falta confirmarlo. */
+  const [pidiendo, setPidiendo] = useState(false);
+  /**
+   * Este operador pidió el control y el titular todavía no contestó. Es una
+   * ref y no un estado porque no se pinta: lo que se ve de la espera lo
+   * muestran los avisos del control. Sirve para abrir la vista de pilotaje
+   * cuando el control llega, que es para lo que se pidió.
+   */
+  const pidioElControl = useRef(false);
   const avisar = useAvisar();
   const [error, setError] = useState('');
   const [rutaElegida, setRutaElegida] = useState<number | ''>('');
@@ -251,8 +264,9 @@ export default function DroneDetail({
   /**
    * La ficha del dron que había cuando se cortó el canal con el Comando Central
    * en pleno pilotaje, o `null` si no se cortó. El backend suelta el control
-   * cuando se cierra la última consola de la cuenta, pero la consola se entera
-   * recién al reconectar, con la lista de drones que vuelve a pedir: para
+   * si pasan 30 s sin señales de vida de ninguna consola de la cuenta (un corte
+   * largo), pero la consola se entera recién al reconectar, con la lista de
+   * drones que vuelve a pedir: para
    * entonces el canal ya está arriba otra vez, y sin recordar el corte la vista
    * se cerraba diciendo que el control se soltó "desde otra sesión".
    */
@@ -402,7 +416,23 @@ export default function DroneDetail({
   // pendiente y reaparecer con el próximo que lo tome.
   useEffect(() => {
     setQuitando(false);
+    setPidiendo(false);
   }, [controlador]);
+
+  // El control que se pidió llegó (el titular lo cedió o no contestó a
+  // tiempo): se abre la vista de pilotaje, como al tomarlo. Sin el gesto del
+  // operador el navegador no la pone en pantalla completa, y la vista ofrece su
+  // botón. Si el pedido terminó sin dárselo, no hay nada más que esperar.
+  useEffect(() => {
+    if (!pidioElControl.current) return;
+    if (soyControlador) {
+      pidioElControl.current = false;
+      setAvisoDePilotaje('');
+      setPilotando(true);
+    } else if (!pedidoDeControl) {
+      pidioElControl.current = false;
+    }
+  }, [soyControlador, pedidoDeControl]);
 
   /**
    * El estado que el dron reportó DESPUÉS de que se tomó el control, o `null`
@@ -513,6 +543,19 @@ export default function DroneDetail({
     if (await llamar(`/drones/${drone.droneId}/control`, { method: 'POST' })) setPilotando(true);
   }
   /**
+   * Pedir el control que tiene otro, ya confirmado en el diálogo. Si en el
+   * medio quedó libre, el hub lo da en el acto y se abre la vista como al
+   * tomarlo; si no, queda el pedido y la vista se abre cuando llegue (ver el
+   * efecto de `pidioElControl`). Un rechazo (otro ya lo pidió) sube al
+   * diálogo, que lo muestra adentro.
+   */
+  async function pedirElControl() {
+    setAvisoDePilotaje('');
+    const r = await pedirControl(drone.droneId);
+    if (r.resultado === 'otorgado') setPilotando(true);
+    else pidioElControl.current = true;
+  }
+  /**
    * Soltar el control. Con un objetivo cargado, `'none'` hace que el dron
    * vuelva a él (§2 `control_released`); `'last'` además lo manda a patrullar,
    * que es dejar el objetivo. Antes se mandaba siempre `'last'`, y soltar el
@@ -585,9 +628,9 @@ export default function DroneDetail({
   }
 
   // El control se puede perder sin que este operador haga nada: un supervisor
-  // que se lo saca, la misma cuenta que lo suelta desde otra pestaña, el dron
-  // que se desconecta (el backend suelta su lock) o el canal de esta consola
-  // que se corta (lo suelta si era la última consola de la cuenta). Seguir
+  // que se lo saca, la misma cuenta que lo suelta desde otra pestaña, quien lo
+  // pidió y se lo cedieron (o no contestó a tiempo), o el canal de esta consola
+  // que se corta (el hub lo suelta a los 30 s sin señales). Seguir
   // mostrando la vista sería dejarlo apretando teclas que el backend ya no
   // acepta; se cierra y se dice por qué, con el motivo más probable.
   useEffect(() => {
@@ -952,14 +995,33 @@ export default function DroneDetail({
               </div>
             )}
             {controlador && !soyControlador && (
-              <p className="muted">
-                Controlado por <strong>{controlador}</strong>.{' '}
-                {esSupervisor && (
-                  <button type="button" className="chico dismiss" onClick={() => setQuitando(true)}>
-                    Quitar control
-                  </button>
+              <>
+                <p className="muted">
+                  Controlado por <strong>{controlador}</strong>.{' '}
+                  {esSupervisor && (
+                    <button type="button" className="chico dismiss" onClick={() => setQuitando(true)}>
+                      Quitar control
+                    </button>
+                  )}
+                </p>
+                {/* Un pedido por dron: con uno en curso el botón espera. */}
+                <button
+                  type="button"
+                  className="primario"
+                  onClick={() => setPidiendo(true)}
+                  disabled={pedidoDeControl !== null}
+                >
+                  <IconoMando tamano={18} />
+                  Pedir el control
+                </button>
+                {pedidoDeControl && (
+                  <p className="muted" role="status" data-testid="pedido-de-control">
+                    {pedidoDeControl.solicitante === me?.username
+                      ? `Le pediste el control a ${pedidoDeControl.titular}: esperando su respuesta.`
+                      : `${pedidoDeControl.solicitante} ya le pidió el control a ${pedidoDeControl.titular}: esperá a que le conteste.`}
+                  </p>
                 )}
-              </p>
+              </>
             )}
           </div>
         )}
@@ -1020,6 +1082,23 @@ export default function DroneDetail({
             },
           }}
           onCerrar={() => setAConfirmar(null)}
+        />
+      )}
+
+      {pidiendo && controlador && (
+        <DialogoConfirmacion
+          pedido={{
+            titulo: `Pedir el control de ${drone.displayName}`,
+            consecuencia: `${controlador} está piloteando este dron. ¿Querés pedirle el control?`,
+            detalle:
+              `${controlador} tiene ${PLAZO_DE_RESPUESTA_MS / 1000} segundos para cedértelo o mantenerlo. Si no ` +
+              'contesta, el control pasa a vos y el dron queda quieto donde está, a la espera de tus órdenes.',
+            confirmar: 'Pedir el control',
+            enCurso: 'Pidiendo…',
+            tono: 'primario',
+            accion: pedirElControl,
+          }}
+          onCerrar={() => setPidiendo(false)}
         />
       )}
 

@@ -22,6 +22,7 @@ import {
 import { duenioDeLaAlerta } from '../relevos';
 import type { Alert, DroneStatus } from '../types';
 import AyudaDeControles from './AyudaDeControles';
+import { useAnotarCapaDePilotaje } from './CapaDePilotaje';
 import MandoVirtual, { EJES_EN_CERO, type Ejes } from './MandoVirtual';
 import Minimapa from './Minimapa';
 import Modal from './Modal';
@@ -264,6 +265,10 @@ export default function PilotajePantallaCompleta({
   });
   const onCamaraRef = useRef(onCamara);
   onCamaraRef.current = onCamara;
+  // Lo que tiene que verse encima del vuelo (un pedido de control) se cuelga
+  // adentro de la vista mientras está abierta: afuera queda inerte, y en
+  // pantalla completa ni se pinta (ver CapaDePilotaje).
+  useAnotarCapaDePilotaje(raiz);
 
   const hayDialogo = suspendido || confirmandoSalida;
   const { rapido, ultimoSalio } = useTecladoDeVuelo({

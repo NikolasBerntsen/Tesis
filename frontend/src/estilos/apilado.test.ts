@@ -28,11 +28,15 @@ function zIndexDe(css: string, selector: string): number {
 
 const nuevos = leer('./nuevos.css');
 const vistas = leer('./vistas.css');
+const pilotaje = leer('./pilotaje.css');
+const control = leer('./control.css');
 const leaflet = leer('../../node_modules/leaflet/dist/leaflet.css');
 
 const topeLeaflet = Math.max(...[...leaflet.matchAll(/z-index:\s*(\d+)/g)].map((m) => Number(m[1])));
 const velo = zIndexDe(nuevos, '.modal,\n.modal-fondo {');
 const fondos = zIndexDe(vistas, '.mapa-fondos {');
+const vistaDePilotaje = zIndexDe(pilotaje, '.pilotaje {');
+const avisosDelControl = zIndexDe(control, '.avisos-del-control {');
 
 describe('orden de apilado', () => {
   it('Leaflet declara capas altas: la referencia no es cero', () => {
@@ -46,6 +50,13 @@ describe('orden de apilado', () => {
   it('el conmutador de fondo flota sobre el mapa pero se queda abajo del diálogo', () => {
     expect(fondos).toBeGreaterThan(800);
     expect(fondos).toBeLessThan(velo);
+  });
+
+  it('el pedido de control se ve encima de la vista de pilotaje y de un diálogo abierto', () => {
+    // El que recibe un pedido con diez segundos de plazo puede estar volando,
+    // o con la confirmación de aterrizar abierta: no puede quedar tapado.
+    expect(avisosDelControl).toBeGreaterThan(vistaDePilotaje);
+    expect(avisosDelControl).toBeGreaterThan(velo);
   });
 });
 

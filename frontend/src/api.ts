@@ -1,3 +1,4 @@
+import type { PedidoDelHub, ResultadoDelPedido } from './control';
 import type {
   BaseAsset,
   PatrolRoute,
@@ -139,6 +140,30 @@ export function motivoDelRechazoDeDecision(e: unknown): string {
   }
   const detalle = e instanceof Error ? e.message : String(e);
   return `No se pudo registrar la decisión: ${detalle}`;
+}
+
+// ---- Pedido de control (PROTOCOLS §5) ----
+
+/** Libre o ya tuyo, el control se da en el acto; si lo tiene otro, queda el pedido esperando su respuesta. */
+export type RespuestaAlPedirControl =
+  | { resultado: 'otorgado'; drone: Drone }
+  | { resultado: 'pendiente'; pedido: PedidoDelHub };
+
+export function pedirControl(droneId: string): Promise<RespuestaAlPedirControl> {
+  return api<RespuestaAlPedirControl>(`/drones/${droneId}/control/request`, { method: 'POST' });
+}
+
+/** La respuesta del titular; solo él la puede dar. */
+export function contestarPedidoDeControl(
+  droneId: string,
+  respuesta: 'ceder' | 'mantener',
+): Promise<{ resultado: ResultadoDelPedido }> {
+  return api(`/drones/${droneId}/control/request/answer`, { method: 'POST', body: JSON.stringify({ respuesta }) });
+}
+
+/** El que pidió el control se arrepiente antes de que le contesten. */
+export function cancelarPedidoDeControl(droneId: string): Promise<{ resultado: ResultadoDelPedido }> {
+  return api(`/drones/${droneId}/control/request`, { method: 'DELETE' });
 }
 
 // ---- Query strings ----
