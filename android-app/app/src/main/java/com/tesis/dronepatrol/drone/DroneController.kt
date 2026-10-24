@@ -132,6 +132,29 @@ interface DroneController {
      */
     fun hold()
 
+    /**
+     * Deja de comandar al dron y le devuelve el mando a las palancas físicas
+     * del control. Es lo que hace la app cuando suelta el control manual sin
+     * que nadie lo haya elegido: el titular de la consola dejó de dar señales
+     * de vida durante 30 s, o la app se quedó 30 s sin el Comando Central
+     * (docs/PROTOCOLS.md §2, `control_released` con `motivo: "inactividad"`).
+     * El dron queda estacionario donde está por su cuenta, y el que esté al
+     * lado con el control lo puede volar sin pelearle nada a la app; desde la
+     * consola lo pueden volver a tomar o mandar a patrullar, que vuelven a
+     * comandarlo como siempre.
+     *
+     * Con un aterrizaje en curso no hace nada: sigue bajando (ver [land]). En
+     * el suelo es [hold]: un despegue que todavía no dejó el suelo no sale. Con
+     * el vuelo tomado por el propio DJI no hay nada que soltar.
+     *
+     * Real: corta el lazo, espera que termine de verdad y deshabilita el
+     * Virtual Stick esperando la respuesta del SDK; sin él, el DJI en P-GPS
+     * frena solo y obedece al control. Simulado: estacionario a la altura que
+     * tiene (no tiene palancas físicas). Por defecto es [hold], el lado seguro
+     * de un controlador que no sabe soltar el mando: el dron queda quieto.
+     */
+    fun devolverElMandoAlControl() = hold()
+
     /** Vuela hasta el punto dado y queda en vuelo estacionario al llegar (emite [FlightEvent.GotoArrived]). */
     fun gotoPoint(lat: Double, lon: Double)
 

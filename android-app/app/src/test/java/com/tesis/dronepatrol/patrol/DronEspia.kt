@@ -30,6 +30,9 @@ internal class DronEspia(
         /** Cómo queda anotado [cancelarInclinacionManual]. */
         const val CANCELAR_CAMARA = "cancelarInclinacionManual"
 
+        /** Cómo queda anotado [devolverElMandoAlControl] (con [conRelevos]; sin él, es el `hold` por defecto). */
+        const val DEVOLVER_EL_MANDO = "devolverElMandoAlControl"
+
         /** Un JPEG mínimo (empieza con FF D8): lo que devuelve [capturarFoto] por defecto. */
         val FOTO = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte(), 0xE0.toByte(), 0x00, 0x10, 0x4A, 0x46)
     }
@@ -53,10 +56,12 @@ internal class DronEspia(
     val ultimaOrden: String get() = synchronized(recibidas) { recibidas.lastOrNull() ?: "ninguna" }
 
     /**
-     * Órdenes que dejan al dron quieto donde está: el vuelo estacionario y el
-     * mando con los cuatro ejes en cero.
+     * Órdenes que dejan al dron quieto donde está: el vuelo estacionario, el
+     * mando con los cuatro ejes en cero y el mando devuelto al control físico
+     * (sin Virtual Stick el DJI frena solo).
      */
-    fun laUltimaOrdenLoDejaQuieto(): Boolean = ultimaOrden == "hold" || ultimaOrden == "stick(0.0, 0.0, 0.0, 0.0)"
+    fun laUltimaOrdenLoDejaQuieto(): Boolean =
+        ultimaOrden == "hold" || ultimaOrden == "stick(0.0, 0.0, 0.0, 0.0)" || ultimaOrden == DEVOLVER_EL_MANDO
 
     /**
      * [ts] es la hora del dron en esa lectura. Por defecto, ahora; las pruebas de
@@ -162,6 +167,8 @@ internal class DronEspia(
         anotar("startOrbit")
     }
     override fun hold() = anotar("hold")
+    override fun devolverElMandoAlControl() =
+        if (conRelevos) anotar(DEVOLVER_EL_MANDO) else super.devolverElMandoAlControl()
     override fun gotoPoint(lat: Double, lon: Double) = anotar("gotoPoint")
     override fun manualStick(pitch: Double, roll: Double, yaw: Double, throttle: Double) =
         anotar("stick($pitch, $roll, $yaw, $throttle)")

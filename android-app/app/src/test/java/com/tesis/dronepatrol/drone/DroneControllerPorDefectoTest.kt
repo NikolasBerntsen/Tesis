@@ -34,6 +34,17 @@ class DroneControllerPorDefectoTest {
         assertEquals(listOf("gotoPoint"), dron.ordenes)
     }
 
+    /**
+     * Un controlador que no sabe soltar el mando al control físico lo deja
+     * quieto: el control manual sin nadie al mando no puede quedar con la
+     * última velocidad que le llegó.
+     */
+    @Test
+    fun devolverElMandoAlControlEsQuedarseQuieto() {
+        dron.devolverElMandoAlControl()
+        assertEquals(listOf("hold"), dron.ordenes)
+    }
+
     @Test
     fun apuntarLaCamaraEsInclinarla() {
         dron.apuntarCamara(-90.0)

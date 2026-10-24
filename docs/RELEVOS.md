@@ -361,6 +361,13 @@ cada cambio y cada 5 s mientras esté `EN_CAMINO`.
   modo `AUTO_LANDING` y `KeyIsInLandingMode` durante la bajada, un
   `KeyIsLandingConfirmationNeeded` que ya estaba en pie al llegar la orden, y
   si un `KeyConfirmLanding` repetido mientras lo sigue pidiendo lo baja.
+  Y el mando devuelto al control físico del control manual sin nadie al mando
+  (PROTOCOLS, "Control manual"): con el dron estacionario bajo el control de la
+  consola, cortarle la red a la consola 30 s (y, aparte, al teléfono): el
+  logcat muestra «Mando devuelto al control físico» y el Virtual Stick
+  deshabilitado, el dron queda quieto, las palancas del RC-N3 lo mueven en el
+  acto, y tomarlo de nuevo desde la consola le vuelve a habilitar el Virtual
+  Stick.
 - Primeros vuelos reales: dos aparatos, campo abierto, un operador por dron,
   con los umbrales de batería y de relevo subidos 30 puntos para ejercitar la
   lógica lejos de la batería crítica.

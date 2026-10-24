@@ -140,6 +140,15 @@ class PatrolManager(
         const val REVISION_MANDO_MS = 250L
 
         /**
+         * Con el control tomado y sin el Comando Central durante esto, la app
+         * lo suelta sola (ver vigilarElEnlaceDelControl()). Es el mismo plazo
+         * con el que el hub suelta a un titular sin señales de vida
+         * (PLAZOS_DEL_CONTROL en backend/src/control.ts): los dos lados
+         * terminan de acuerdo sin tener que hablarse.
+         */
+        const val CONTROL_SIN_COMANDO_CENTRAL_MS = 30_000L
+
+        /**
          * Rango de la inclinación de la cámara que acepta `manual_gimbal`
          * (docs/PROTOCOLS.md §3.b): del nadir a un poco por arriba del horizonte.
          * El hub ya la recorta; se vuelve a recortar acá porque es la app la que
@@ -625,6 +634,20 @@ class PatrolManager(
     private var controlTomado = false
 
     /**
+     * Desde cuándo la app está sin el Comando Central, con [reloj]; null con el
+     * enlace arriba. Con el control tomado, a los [CONTROL_SIN_COMANDO_CENTRAL_MS]
+     * la app lo suelta sola (ver [vigilarElEnlaceDelControl]).
+     */
+    private var sinComandoCentralDesdeMs: Long? = null
+
+    /**
+     * Por qué la app soltó el control sola la última vez, para decírselo al hub
+     * cuando le pregunte (`control_dropped`, ver [onControlResync]); null si
+     * desde entonces volvieron a tomarlo.
+     */
+    private var porQueLoSoltoLaApp: String? = null
+
+    /**
      * true mientras corre un desplazamiento puntual pedido con `manual_move`.
      * Se apaga sola al llegar (FlightEvent.GotoArrived) y la usa onManualStick()
      * para no dejar que el mensaje de cierre de la palanca aborte el salto.
@@ -896,6 +919,9 @@ class PatrolManager(
         // podría pisar a la nueva.
         commandCenter.onManualGimbal = { pitch, _ -> onManualGimbal(pitch) }
         commandCenter.onControlReleased = { by -> scope.launch { onControlReleased(by) } }
+        commandCenter.onControlSoltadoPorInactividad = { by -> scope.launch { onControlSoltadoPorInactividad(by) } }
+        commandCenter.onControlResync = { by -> scope.launch { onControlResync(by) } }
+        commandCenter.onControlTransferred = { by, de -> scope.launch { onControlTransferred(by, de) } }
         // Los relevos, desvíos y emergencias (§2.b) llegan ya validados y con
         // tipo; uno inválido solo queda en el registro local.
         commandCenter.onMensajeDelHub = { mensaje -> scope.launch { alMensajeDelHub(mensaje) } }
@@ -1196,6 +1222,7 @@ class PatrolManager(
         ultimoMandoEstacionario = true
         saltoManualEnCurso = false
         controlTomado = true
+        porQueLoSoltoLaApp = null
         pasarA(PatrolState.MANUAL)
         // Solo log local: el Comando Central ya registra su propio CONTROL_TAKEN.
         // Lo de las alertas va acá y no en cada detección, que llegan dos por segundo.
@@ -1471,7 +1498,100 @@ class PatrolManager(
 
     private fun onControlReleased(by: String) = enSerie { soltarElControl(by) }
 
-    private fun soltarElControl(by: String) {
+    /**
+     * El hub soltó el control porque el titular estuvo 30 s sin dar señales de
+     * vida desde la consola (`control_released` con `motivo: "inactividad"`,
+     * docs/PROTOCOLS.md §2): se le colgó la consola, se cortó su red o cerró la
+     * pestaña. Se suelta como siempre, salvo el final: el dron que esperaba
+     * quieto en MANUAL no queda con el Virtual Stick tomado, le devuelve el
+     * mando al control físico (ver [soltarElControl]).
+     */
+    private fun onControlSoltadoPorInactividad(by: String) = enSerie {
+        if (!controlTomado) return@enSerie
+        log("El titular del control manual estuvo 30 s sin dar señales desde la consola: $by lo soltó")
+        soltarElControl(by, alControlFisico = true)
+    }
+
+    /**
+     * Al reconectarse, el hub dice quién tiene el control (`control_taken` con
+     * `resync: true`, docs/PROTOCOLS.md §2). No es una toma nueva. Si la app ya
+     * lo tenía tomado no cambia nada: ni frena, ni le saca la ruta que el
+     * titular le mandó sin soltarlo. Si no lo tenía —lo soltó sola sin el
+     * Comando Central, o se reinició— no lo vuelve a tomar: se lo dice al hub
+     * (`control_dropped`) y el hub lo suelta. Tomarlo acá le sacaría el mando a
+     * quien esté volando el dron con el control físico.
+     */
+    private fun onControlResync(by: String) = enSerie {
+        if (controlTomado) {
+            log("El Comando Central confirma que $by sigue con el control manual")
+            return@enSerie
+        }
+        avisarQueNoTieneElControl(by, "al reconectarse")
+    }
+
+    /**
+     * El control pasó de [de] a [by] sin soltarse (`control_transferred`,
+     * docs/PROTOCOLS.md §2): el que lo tenía lo cedió o no contestó el pedido a
+     * tiempo. El dron no sale de MANUAL: queda estacionario donde está, a la
+     * espera del titular nuevo. El freno es a propósito: el anterior pudo haber
+     * dejado una palanca sostenida —el cero de soltarla ya no pasa por el hub,
+     * que no es suyo— o un salto de 25 m a mitad de camino que el nuevo no
+     * pidió. Fuera de MANUAL (una ruta que el titular mandó sin soltarlo, la
+     * señal perdida, el regreso por batería) o aterrizando, sigue lo que estaba
+     * haciendo: cambió la persona, no la orden.
+     */
+    private fun onControlTransferred(by: String, de: String) = enSerie {
+        if (!controlTomado) {
+            avisarQueNoTieneElControl(by, "cuando $de se lo pasó")
+            return@enSerie
+        }
+        log("$de le pasó el control manual a $by")
+        if (_state.value != PatrolState.MANUAL || aterrizajeEnCurso != null || !controller.estado.value.enVuelo) {
+            return@enSerie
+        }
+        synchronized(cerrojoDelMando) {
+            ultimoMandoMs = 0L
+            ultimoMandoEstacionario = true
+            saltoManualEnCurso = false
+        }
+        controller.hold()
+        log("El dron queda en vuelo estacionario a la espera de las órdenes de $by")
+    }
+
+    /** El hub cree que [by] tiene el control y la app no lo tiene tomado: que lo suelte (`control_dropped`). */
+    private fun avisarQueNoTieneElControl(by: String, cuando: String) {
+        val motivo = porQueLoSoltoLaApp ?: "la app no tenía el control tomado $cuando"
+        porQueLoSoltoLaApp = null
+        commandCenter.avisarControlSoltado(by, motivo)
+        log("El Comando Central cree que $by tiene el control manual, pero la app no lo tiene tomado: se le avisa ($motivo)")
+    }
+
+    /**
+     * Espejo del barrido del hub: con el control tomado y la app sin el Comando
+     * Central hace [CONTROL_SIN_COMANDO_CENTRAL_MS], lo suelta sola, como si el
+     * hub la hubiera soltado por inactividad. Sin enlace ninguna consola le
+     * puede mandar nada, y esperar es dejar al dron clavado en MANUAL a la
+     * espera de alguien que no puede llegar. Al volver el enlace el hub le dice
+     * quién cree que lo tiene y la app le contesta que lo soltó, y por qué (ver
+     * [onControlResync]).
+     */
+    private fun vigilarElEnlaceDelControl(ahora: Long) {
+        val desde = sinComandoCentralDesdeMs ?: return
+        if (!controlTomado || ahora - desde < CONTROL_SIN_COMANDO_CENTRAL_MS) return
+        val segundos = CONTROL_SIN_COMANDO_CENTRAL_MS / 1_000
+        porQueLoSoltoLaApp = "la app soltó el control sola: estuvo $segundos s sin enlace con el Comando Central"
+        log("Hace $segundos s que no hay enlace con el Comando Central y el control manual sigue tomado: la app lo suelta")
+        soltarElControl("La app", alControlFisico = true)
+    }
+
+    /**
+     * [alControlFisico]: el control se soltó sin que nadie lo eligiera (el
+     * titular sin señales, la app sin el Comando Central). Cambia solo el
+     * final: el dron que esperaba quieto en MANUAL, sin objetivo ni relevo al
+     * que volver, le devuelve el mando al control físico en vez de quedar
+     * sostenido por el Virtual Stick (ver [devolverAlControlFisico]).
+     */
+    private fun soltarElControl(by: String, alControlFisico: Boolean = false) {
         // El guard es el control y ya no el estado: se puede haber salido de
         // MANUAL por pérdida de señal o batería baja con el control todavía
         // tomado, y soltarlo ahí igual tiene que dejar al dron quieto y desarmar
@@ -1535,7 +1655,21 @@ class PatrolManager(
             return
         }
         // Si a continuación llega un resume_patrol, ese handler lo pone a patrullar.
-        pasarA(PatrolState.PAUSED, frenar = true)
+        if (alControlFisico) devolverAlControlFisico() else pasarA(PatrolState.PAUSED, frenar = true)
+    }
+
+    /**
+     * Estacionario en PAUSED, con el mando en las palancas del control físico
+     * (DroneController.devolverElMandoAlControl): el que esté al lado del dron
+     * lo puede volar sin pelearle a la app, y desde la consola lo pueden volver
+     * a tomar o mandar a patrullar. Es el failsafe del control manual que se
+     * quedó sin nadie al mando: no espera para siempre a una consola que no
+     * está, ni sale a patrullar solo.
+     */
+    private fun devolverAlControlFisico() {
+        pasarA(PatrolState.PAUSED)
+        controller.devolverElMandoAlControl()
+        log("El dron queda en vuelo estacionario y el mando vuelve al control físico: lo puede tomar quien esté al lado, o la consola")
     }
 
     /**
@@ -2747,7 +2881,11 @@ class PatrolManager(
 
     private fun alCambiarLaConexion(ok: Boolean) = enSerie {
         if (ok && !conectadoAntes) reconectado()
-        if (!ok && conectadoAntes) apagarEspera("se perdió el enlace con el Comando Central")
+        if (!ok && conectadoAntes) {
+            apagarEspera("se perdió el enlace con el Comando Central")
+            sinComandoCentralDesdeMs = reloj()
+        }
+        if (ok) sinComandoCentralDesdeMs = null
         conectadoAntes = ok
     }
 
@@ -4242,7 +4380,12 @@ class PatrolManager(
     private suspend fun relevosTicker() {
         while (true) {
             delay(INTERVALO_RELEVOS_MS)
-            enSerie { avanzarLosRelevos(reloj()) }
+            enSerie {
+                val ahora = reloj()
+                avanzarLosRelevos(ahora)
+                // El control manual sin el Comando Central vence con el mismo reloj.
+                vigilarElEnlaceDelControl(ahora)
+            }
         }
     }
 

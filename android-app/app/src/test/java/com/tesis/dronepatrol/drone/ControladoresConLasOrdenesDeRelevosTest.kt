@@ -37,6 +37,9 @@ class ControladoresConLasOrdenesDeRelevosTest {
         // El corte del aterrizaje que se sostiene hasta el suelo: sin él, la
         // orden de una persona que sigue (ir a un nodo, detenerse) se rechaza.
         "cancelarAterrizaje",
+        // El control manual que se quedó sin nadie al mando: sin él, el real
+        // sostiene el Virtual Stick y el control físico no puede tomar el dron.
+        "devolverElMandoAlControl",
     )
 
     private fun fuente(ruta: String): String {

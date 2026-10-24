@@ -622,6 +622,25 @@ class SimulatedDroneController(
         }
     }
 
+    /**
+     * El simulado no tiene palancas físicas a las que devolverles el mando:
+     * queda estacionario donde está, a la altura que tiene y no a la de
+     * crucero como [hold], que es lo que hace el DJI sin el Virtual Stick.
+     * Aterrizando sigue bajando; en el suelo, como [hold], un despegue que
+     * todavía no dejó el suelo no sale; con el vuelo tomado por el propio dron
+     * no hay nada que soltar (ver DroneController).
+     */
+    override fun devolverElMandoAlControl() {
+        synchronized(cerrojo) {
+            if (enElSuelo || cancelarDespegueEnElSuelo(FlightEvent.Aterrizado)) return
+            if (aterrizandoPorLaApp || tomaDelDron != null) return
+            alturaObjetivo = altM
+            alturaPedida = null
+            rumboPedido = null
+            mode = Mode.HOLD
+        }
+    }
+
     /** Sale del aterrizaje de la app: estacionario a la altura que tiene, a la espera de la orden que sigue. */
     override fun cancelarAterrizaje() {
         synchronized(cerrojo) {

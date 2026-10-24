@@ -174,6 +174,12 @@ class DjiDroneController : DroneController {
 
         /** Un despegue cancelado cuando la orden ya le había llegado al dron: aterriza apenas sube. */
         ATERRIZAJE_DEL_DESPEGUE,
+
+        /**
+         * El mando devuelto a las palancas del control ([devolverElMandoAlControl]):
+         * espera el fin del lazo anterior, apaga el Virtual Stick y termina.
+         */
+        SUELTO,
     }
 
     /**
@@ -979,6 +985,38 @@ class DjiDroneController : DroneController {
                 delay(INTERVALO_MANDO_MS)
             }
         }
+    }
+
+    /**
+     * Le devuelve el mando a las palancas del RC-N3 (ver
+     * DroneController.devolverElMandoAlControl). Va como un lazo más
+     * ([Lazo.SUELTO]) y no como un apagado suelto, por lo mismo que la
+     * secuencia del aterrizaje: el lazo que comandaba hay que esperarlo
+     * —cancelarlo no lo frena en el acto, y una vuelta que ya estaba adentro de
+     * `enviarVelocidad*` volvía a habilitar el Virtual Stick DESPUÉS de
+     * apagarlo—, y si mientras tanto llega otra orden (alguien vuelve a tomar
+     * el control desde la consola), esa orden releva a este lazo y el apagado
+     * ya no sale.
+     */
+    override fun devolverElMandoAlControl() {
+        // En el suelo es quedarse donde está: un despegue pendiente no sale.
+        if (!enVuelo) return hold()
+        // El propio DJI tiene el vuelo (su regreso, su aterrizaje): el Virtual
+        // Stick ya está apagado y no hay nada que soltar.
+        if (tomaDelDron != null) return
+        synchronized(relevoDeLazo) {
+            // Aterrizando, el Virtual Stick ya está apagado y el dron sigue bajando.
+            if (descartarAterrizando("devolver el mando al control")) return
+            val anterior = navigationJob
+            Log.i(TAG, "Mando devuelto al control físico: corta el lazo $lazoActual")
+            relevarLazo(Lazo.SUELTO) { soltarElMando(anterior) }
+        }
+    }
+
+    /** El cuerpo de [Lazo.SUELTO]: sin velocidades, el DJI frena solo y obedece al control. */
+    private suspend fun soltarElMando(anterior: Job?) {
+        esperarElFinDe(anterior, "Mando devuelto al control")
+        apagarVirtualStickYEsperar("devolver el mando al control", siNoSePudo = "el control físico puede no responder")
     }
 
     override fun gotoPoint(lat: Double, lon: Double) {
@@ -2113,12 +2151,15 @@ class DjiDroneController : DroneController {
         terminarLaSecuencia(accion, supervisor, desde)
     }
 
-    /** El paso 1 de [sostenerElAterrizaje], con tope: el lazo anterior ya está cancelado. */
-    private suspend fun esperarElFinDe(anterior: Job?) {
+    /**
+     * El paso 1 de [sostenerElAterrizaje] (y de [soltarElMando]), con tope: el
+     * lazo anterior ya está cancelado. [quien] encabeza la línea del logcat.
+     */
+    private suspend fun esperarElFinDe(anterior: Job?, quien: String = "Aterrizaje") {
         if (anterior == null) return
         val desde = System.currentTimeMillis()
         val termino = withTimeoutOrNull(ESPERA_FIN_DEL_LAZO_MS) { anterior.join() } != null
-        Log.i(TAG, "Aterrizaje: el lazo anterior ${if (termino) "terminó" else "NO terminó"} en ${System.currentTimeMillis() - desde} ms")
+        Log.i(TAG, "$quien: el lazo anterior ${if (termino) "terminó" else "NO terminó"} en ${System.currentTimeMillis() - desde} ms")
     }
 
     /** `KeyStartAutoLanding` con tope; lo que contesta lo decide [SupervisorDelAterrizaje.alContestar]. */
@@ -2904,7 +2945,7 @@ class DjiDroneController : DroneController {
      * tardó queda en el logcat; si no se pudo, se avisa (la secuencia sigue: el
      * supervisor ve si el dron baja).
      */
-    private suspend fun apagarVirtualStickYEsperar(paraQue: String) {
+    private suspend fun apagarVirtualStickYEsperar(paraQue: String, siNoSePudo: String = "el dron puede no aterrizar") {
         if (!virtualStickListo.getAndSet(false)) {
             Log.i(TAG, "Virtual Stick: ya estaba deshabilitado para $paraQue")
             return
@@ -2932,7 +2973,7 @@ class DjiDroneController : DroneController {
         }
         val como = resultado(apagado, motivo)
         Log.i(TAG, "Virtual Stick para $paraQue: deshabilitación $como en ${System.currentTimeMillis() - desde} ms")
-        if (apagado != true) avisar("no se pudo devolver el mando al control para $paraQue ($como): el dron puede no aterrizar")
+        if (apagado != true) avisar("no se pudo devolver el mando al control para $paraQue ($como): $siNoSePudo")
     }
 
     /**
