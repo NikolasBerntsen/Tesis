@@ -32,7 +32,7 @@ export function useLatidoDelControl({
 }>): { alRecibirDelHub: () => void } {
   // Una clave y no el arreglo: la lista se arma de nuevo en cada render, y el
   // temporizador no se puede reiniciar por eso (latiría de más, o nunca).
-  const clave = [...drones].sort().join(',');
+  const clave = [...drones].sort((a, b) => a.localeCompare(b)).join(',');
   const enviarRef = useRef(enviar);
   enviarRef.current = enviar;
   const latir = useRef<() => void>(() => {});
