@@ -29,10 +29,20 @@ import kotlin.math.sin
  * pedido sigue en pie, cada lectura nueva de la batería se vuelve a mirar
  * ([alActualizar]): es así como llega el momento de confirmar.
  *
+ * Con un aterrizaje de la app en curso el pedido no se espera: la secuencia del
+ * aterrizaje lo LEE cada medio segundo ([alLeer]). Así se contesta también el
+ * que ya estaba en pie cuando llegó la orden —un aterrizaje anterior cortado a
+ * medio metro, el operador que lo bajó con las palancas—, que el oyente del SDK
+ * no vuelve a contar porque no cambió; y una confirmación que el dron no tomó
+ * (sigue pidiendo) se repite cada [REPETIR_CONFIRMACION_MS]. Las dos cosas
+ * dejaban al Mini suspendido a medio metro para siempre.
+ *
  * Vive en `main` y no en el controlador real, que solo compila con el MSDK y no
  * se puede probar sin dron.
+ *
+ * @param reloj la hora con la que se cuenta el reintento de la confirmación.
  */
-class ConfirmacionDelAterrizaje {
+class ConfirmacionDelAterrizaje(private val reloj: () -> Long = System::currentTimeMillis) {
 
     /** Qué hacer con el pedido de confirmación. */
     enum class Accion {
@@ -67,12 +77,19 @@ class ConfirmacionDelAterrizaje {
     private var corriendose = false
     private var corrimientos = 0
 
+    /** Cuándo se decidió confirmar este pedido por última vez; con él se repite la confirmación. */
+    private var confirmadoMs = 0L
+
+    /** Ya se dijo que este pedido espera al crítico: [alLeer], que pregunta dos veces por segundo, no lo repite. */
+    private var esperaAvisada = false
+
     /** El dron pide (true) o deja de pedir (false) que se confirme el aterrizaje. */
     @Synchronized
     fun alPedir(pide: Boolean, situacion: Situacion): Accion {
         if (!pide) {
             pendiente = false
             resuelto = false
+            esperaAvisada = false
             return Accion.NADA
         }
         pendiente = true
@@ -82,6 +99,27 @@ class ConfirmacionDelAterrizaje {
     /** Otra lectura (la batería que baja) con el pedido en pie: puede ser el momento de confirmar. */
     @Synchronized
     fun alActualizar(situacion: Situacion): Accion = if (pendiente) decidir(situacion) else Accion.NADA
+
+    /**
+     * Lo que se LEYÓ del dron en la secuencia de un aterrizaje (ver la clase):
+     * sin pedido es [alPedir] con false; con pedido se decide como siempre, haya
+     * cambiado o no. Una confirmación que el dron no tomó —sigue pidiendo
+     * pasados [REPETIR_CONFIRMACION_MS]— vuelve a salir; un corrimiento no se
+     * repite (lo cierra [alTerminarDeCorrerse]) y la espera del crítico se dice
+     * una sola vez por pedido.
+     */
+    @Synchronized
+    fun alLeer(pide: Boolean, situacion: Situacion): Accion {
+        if (!pide) return alPedir(false, situacion)
+        pendiente = true
+        // Solo una confirmación resuelve un pedido: si sigue en pie, no llegó.
+        if (resuelto && reloj() - confirmadoMs >= REPETIR_CONFIRMACION_MS) resuelto = false
+        val accion = decidir(situacion)
+        if (accion != Accion.ESPERAR) return accion
+        if (esperaAvisada) return Accion.NADA
+        esperaAvisada = true
+        return accion
+    }
 
     /** Terminó de correrse (o se cortó el corrimiento): lo que el dron pida desde acá es otro intento. */
     @Synchronized
@@ -96,6 +134,7 @@ class ConfirmacionDelAterrizaje {
         resuelto = false
         corriendose = false
         corrimientos = 0
+        esperaAvisada = false
     }
 
     private fun decidir(s: Situacion): Accion {
@@ -110,7 +149,10 @@ class ConfirmacionDelAterrizaje {
             else -> Accion.NADA
         }
         when (accion) {
-            Accion.CONFIRMAR -> resuelto = true
+            Accion.CONFIRMAR -> {
+                resuelto = true
+                confirmadoMs = reloj()
+            }
             Accion.CORRERSE -> {
                 corriendose = true
                 corrimientos++
@@ -139,6 +181,13 @@ class ConfirmacionDelAterrizaje {
 
         /** El umbral crítico de fábrica del Mini 4 Pro, para cuando el DJI no informa el suyo. */
         const val UMBRAL_CRITICO_DE_FABRICA_PCT = 10.0
+
+        /**
+         * Cada cuánto se repite una confirmación que el dron no tomó ([alLeer]):
+         * el doble de lo que tarda en contestar y volver a informar, para no
+         * mandarle la segunda encima de la primera.
+         */
+        const val REPETIR_CONFIRMACION_MS = 2_000L
 
         /**
          * A dónde correrse: [metros] hacia donde apunta la nariz. Adelante es

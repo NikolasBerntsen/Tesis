@@ -106,6 +106,8 @@ class PatrolManagerOrdenesDelCampoTest {
         patrulla.aterrizar()
         assertEquals(PatrolState.PAUSED, patrulla.state.value)
         assertEquals("land", dron.ultimaOrden)
+        // El LANDING sale cuando el dron acepta, no al mandarle la orden.
+        esperarA("el LANDING del aterrizaje aceptado") { comandoCentral.eventos("LANDING").isNotEmpty() }
         assertTrue(comandoCentral.eventos("LANDING").single().getString("message").contains("operador de campo"))
 
         patrulla.reanudarPatrullaje()

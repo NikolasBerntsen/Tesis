@@ -130,11 +130,12 @@ export function seed() {
 
 /** Vacía todas las tablas para volver a sembrar desde cero dentro de un archivo. */
 export function limpiarBase() {
-  // El orden importa: base_routes referencia a bases y a patrol_routes, y los
-  // drones referencian a bases. Borrar al revés dispara la clave foránea.
+  // El orden importa: base_routes referencia a bases y a patrol_routes, los
+  // drones referencian a bases y las preferencias a users. Borrar al revés
+  // dispara la clave foránea.
   db.exec(
     'DELETE FROM relevo_refs; DELETE FROM relevos; DELETE FROM emergencia_fotos; DELETE FROM emergencia_refs; ' +
-      'DELETE FROM emergencias; ' +
+      'DELETE FROM emergencias; DELETE FROM preferencias_de_usuario; ' +
       'DELETE FROM base_routes; DELETE FROM events; DELETE FROM alerts; DELETE FROM patrol_routes; ' +
       'DELETE FROM drones; DELETE FROM bases; DELETE FROM users; DELETE FROM sqlite_sequence;',
   );

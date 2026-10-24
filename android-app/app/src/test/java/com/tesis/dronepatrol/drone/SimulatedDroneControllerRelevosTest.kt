@@ -591,7 +591,7 @@ class SimulatedDroneControllerRelevosTest {
         volar(10_000)
 
         assertTrue(b.tomas().isEmpty())
-        assertEquals(listOf<FlightEvent>(FlightEvent.Aterrizado), b.eventos)
+        assertEquals(listOf(FlightEvent.AterrizajeAceptado, FlightEvent.Aterrizado), b.eventos)
     }
 
     // ---- Failsafe de señal ----
@@ -947,7 +947,8 @@ class SimulatedDroneControllerRelevosTest {
         b.dron.land()
         volar(10_000)
 
-        assertEquals(listOf(FlightEvent.Despegando, FlightEvent.Aterrizado), b.eventos)
+        // Ya en el aire es un aterrizaje como cualquiera: se acepta, y nunca sale EnElAire.
+        assertEquals(listOf(FlightEvent.Despegando, FlightEvent.AterrizajeAceptado, FlightEvent.Aterrizado), b.eventos)
         assertEquals(0.0, b.ultima.altM, 0.0)
         assertFalse(b.dron.estado.value.enVuelo)
     }

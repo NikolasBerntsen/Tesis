@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { GRACIA_DEL_PEDIDO_MS } from '../control';
 import Console from './Console';
 import type { MapItem, WaypointsLayer } from './DronesMap';
 import { makeDrone, makeEvent, makeMe, makeRoute, makeStatus } from '../test/fixtures';
@@ -30,16 +31,20 @@ vi.mock('./Minimapa', () => ({ default: () => <div data-testid="minimapa-mock" /
 
 // Captura el handler de mensajes que Console le pasa a useWebSocket y anota todo
 // lo que la consola manda por el canal, para poder empujar mensajes desde los
-// tests y leer los que salen. Devuelve siempre "conectado".
+// tests y leer los que salen. Devuelve siempre "conectado". Las señales de vida
+// del control (`control_heartbeat`) van aparte: salen solas mientras se tiene el
+// control, y mezcladas con el mando no se podría contar lo que mandó una tecla.
 let wsHandler: (msg: unknown) => void = () => {};
 let enviados: unknown[] = [];
+let latidos: unknown[] = [];
 vi.mock('../useWebSocket', () => ({
   useWebSocket: (cb: (msg: unknown) => void) => {
     wsHandler = cb;
     return {
       conectado: true,
       enviar: (mensaje: unknown) => {
-        enviados.push(mensaje);
+        if ((mensaje as { type?: string }).type === 'control_heartbeat') latidos.push(mensaje);
+        else enviados.push(mensaje);
         return true;
       },
     };
@@ -86,6 +91,7 @@ beforeEach(() => {
   localStorage.setItem('cc_user', 'oper1');
   pedidos = [];
   enviados = [];
+  latidos = [];
   rechazados = new Set();
   codigos = {};
   mapa.items = [];
@@ -716,5 +722,234 @@ describe('Console', () => {
     await screen.findByText('Alfa');
     await userEvent.click(screen.getByRole('button', { name: 'Salir' }));
     expect(onLogout).toHaveBeenCalled();
+  });
+});
+
+describe('Console — el control manual entre personas', () => {
+  const PEDIDO = { solicitante: 'relevo', titular: 'oper1', venceEn: '2026-10-24T12:00:10.000Z', restanteMs: 10_000 };
+
+  it('con el control tomado late solo, mande o no mande, desde el tablero mismo', async () => {
+    dronesFix = [makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true, controlledBy: 'oper1' })];
+    render(<Console onLogout={() => {}} />);
+    await screen.findByText('Alfa');
+    await waitFor(() => expect(latidos).toContainEqual({ type: 'control_heartbeat', droneId: 'd1' }));
+    // Y al soltarlo se calla: el que suelta no tiene nada que mantener vivo.
+    const antes = latidos.length;
+    fire({ type: 'control_changed', droneId: 'd1', controlledBy: null, teniaElControl: 'oper1' });
+    fire({ type: 'status', ...makeStatus({ droneId: 'd1' }) });
+    expect(latidos).toHaveLength(antes);
+  });
+
+  it('sin el control de ningún dron no late', async () => {
+    render(<Console onLogout={() => {}} />);
+    await screen.findByText('Alfa');
+    fire({ type: 'status', ...makeStatus({ droneId: 'd1' }) });
+    expect(latidos).toEqual([]);
+  });
+
+  it('al titular le llega el pedido, aunque esté en otra sección; ceder lo contesta por REST', async () => {
+    dronesFix = [makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true, controlledBy: 'oper1' })];
+    render(<Console onLogout={() => {}} />);
+    await screen.findByText('Alfa');
+    await userEvent.click(screen.getByRole('button', { name: 'Rutas' }));
+
+    fire({ type: 'control_request', droneId: 'd1', ...PEDIDO });
+    const aviso = await screen.findByTestId('pedido-al-titular');
+    expect(aviso).toHaveTextContent('relevo quiere tomar el control');
+    expect(aviso).toHaveTextContent('Alfa');
+
+    await userEvent.click(within(aviso).getByRole('button', { name: 'Ceder el control' }));
+    await waitFor(() => expect(rutas()).toContain('POST /drones/d1/control/request/answer'));
+    expect(pedidos.find((p) => p.ruta === '/drones/d1/control/request/answer')?.cuerpo).toBe(
+      JSON.stringify({ respuesta: 'ceder' }),
+    );
+
+    // Cómo terminó: el pedido se va y queda el aviso, hasta que se lo cierra.
+    fire({
+      type: 'control_request_result',
+      droneId: 'd1',
+      solicitante: 'relevo',
+      titular: 'oper1',
+      resultado: 'cedido',
+      motivo: '',
+    });
+    expect(screen.queryByTestId('pedido-al-titular')).not.toBeInTheDocument();
+    expect(screen.getByTestId('aviso-del-control')).toHaveTextContent('Le cediste el control de Alfa a relevo.');
+    await userEvent.click(screen.getByRole('button', { name: 'Cerrar el aviso de Alfa' }));
+    expect(screen.queryByTestId('aviso-del-control')).not.toBeInTheDocument();
+  });
+
+  it('un pedido hecho mientras la consola estaba cerrada llega en la ficha', async () => {
+    dronesFix = [
+      makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true, controlledBy: 'oper1', pedidoDeControl: PEDIDO }),
+    ];
+    render(<Console onLogout={() => {}} />);
+    expect(await screen.findByTestId('pedido-al-titular')).toHaveTextContent('relevo quiere tomar el control');
+  });
+
+  it('un dron que la consola no conoce se nombra por su id', async () => {
+    render(<Console onLogout={() => {}} />);
+    await screen.findByText('Alfa');
+    fire({ type: 'control_request', droneId: 'd9', ...PEDIDO });
+    expect(await screen.findByTestId('pedido-al-titular')).toHaveTextContent('el control de d9');
+  });
+
+  it('el que pidió ve la espera y la puede cancelar', async () => {
+    dronesFix = [makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true, controlledBy: 'piloto' })];
+    render(<Console onLogout={() => {}} />);
+    await screen.findByText('Alfa');
+    fire({ type: 'control_request', droneId: 'd1', ...PEDIDO, solicitante: 'oper1', titular: 'piloto' });
+    const espera = await screen.findByTestId('pedido-en-espera');
+    await userEvent.click(within(espera).getByRole('button', { name: 'Cancelar el pedido' }));
+    await waitFor(() => expect(rutas()).toContain('DELETE /drones/d1/control/request'));
+  });
+
+  it('un pedido entre otros dos no se le muestra a un tercero, ni cómo terminó', async () => {
+    render(<Console onLogout={() => {}} />);
+    await screen.findByText('Alfa');
+    fire({ type: 'control_request', droneId: 'd1', ...PEDIDO, solicitante: 'a', titular: 'b' });
+    fire({ type: 'control_request_result', droneId: 'd1', solicitante: 'a', titular: 'b', resultado: 'mantenido', motivo: '' });
+    // un mensaje roto tampoco tumba nada
+    fire({ type: 'control_request', droneId: 'd1', solicitante: 'a' });
+    fire({ type: 'control_request_result', droneId: 'd1', resultado: 'otra cosa' });
+    expect(screen.queryByTestId('pedido-al-titular')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pedido-en-espera')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('aviso-del-control')).not.toBeInTheDocument();
+  });
+
+  it('un pedido que en esta consola nunca terminó se va solo poco después de vencer', async () => {
+    dronesFix = [makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true, controlledBy: 'piloto' })];
+    render(<Console onLogout={() => {}} />);
+    await screen.findByText('Alfa');
+    vi.useFakeTimers();
+    try {
+      // El final le llegó antes que la recarga de /drones que lo traía vivo: no
+      // queda nada que lo saque, y sin esto se quedaba para siempre.
+      fire({ type: 'control_request', droneId: 'd1', ...PEDIDO, solicitante: 'oper1', titular: 'piloto' });
+      expect(screen.getByTestId('pedido-en-espera')).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(PEDIDO.restanteMs + GRACIA_DEL_PEDIDO_MS - 1);
+      });
+      expect(screen.getByTestId('pedido-en-espera')).toHaveTextContent('el control está pasando a vos');
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(screen.queryByTestId('pedido-en-espera')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('un control que el hub soltó por inactividad se avisa; uno soltado a mano, no', async () => {
+    dronesFix = [makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true, controlledBy: 'piloto' })];
+    render(<Console onLogout={() => {}} />);
+    await screen.findByText('Alfa');
+    fire({ type: 'control_changed', droneId: 'd1', controlledBy: null, teniaElControl: 'piloto' });
+    expect(screen.queryByTestId('aviso-del-control')).not.toBeInTheDocument();
+
+    fire({ type: 'control_changed', droneId: 'd1', controlledBy: null, teniaElControl: 'piloto', motivo: 'inactividad' });
+    expect(screen.getByTestId('aviso-del-control')).toHaveTextContent(
+      'Se soltó el control de Alfa: la consola de piloto estuvo 30 s sin dar señales al Comando Central.',
+    );
+  });
+
+  it('como mucho cuatro avisos: el más viejo deja lugar', async () => {
+    render(<Console onLogout={() => {}} />);
+    await screen.findByText('Alfa');
+    for (const quien of ['a', 'b', 'c', 'd', 'e']) {
+      fire({ type: 'control_changed', droneId: 'd1', controlledBy: null, teniaElControl: quien, motivo: 'app' });
+    }
+    const avisos = screen.getAllByTestId('aviso-del-control');
+    expect(avisos).toHaveLength(4);
+    expect(avisos[0]).toHaveTextContent('que tenía b');
+  });
+
+  it('el pedido se ve adentro de la vista de pilotaje, encima del vuelo', async () => {
+    dronesFix = [
+      makeDrone({
+        droneId: 'd1',
+        displayName: 'Alfa',
+        online: true,
+        controlledBy: 'oper1',
+        lastStatus: makeStatus({ droneId: 'd1', state: 'MANUAL', controlledBy: 'oper1' }),
+      }),
+    ];
+    render(<Console onLogout={() => {}} />);
+    await abrirDetalleDelPrimerDron();
+    await userEvent.click(await screen.findByRole('button', { name: 'Volver a la vista de pilotaje' }));
+    const vista = await screen.findByRole('dialog', { name: 'Pilotaje de Alfa' });
+
+    fire({ type: 'control_request', droneId: 'd1', ...PEDIDO });
+    expect(within(vista).getByTestId('pedido-al-titular')).toBeInTheDocument();
+    // y el teclado sigue volando: el aviso no se llevó el foco
+    fireEvent.keyDown(window, { code: 'KeyW' });
+    expect(enviados.at(-1)).toEqual({ type: 'manual_stick', droneId: 'd1', pitch: 0.5, roll: 0, yaw: 0, throttle: 0 });
+    fireEvent.keyUp(window, { code: 'KeyW' });
+  });
+
+  it('con los ajustes del control abiertos, el pedido cuelga aparte y cada uno se queda con su teclado y su Esc', async () => {
+    dronesFix = [
+      makeDrone({
+        droneId: 'd1',
+        displayName: 'Alfa',
+        online: true,
+        controlledBy: 'oper1',
+        lastStatus: makeStatus({ droneId: 'd1', state: 'MANUAL', controlledBy: 'oper1' }),
+      }),
+    ];
+    render(<Console onLogout={() => {}} />);
+    await abrirDetalleDelPrimerDron();
+    await userEvent.click(await screen.findByRole('button', { name: 'Volver a la vista de pilotaje' }));
+    const vista = await screen.findByRole('dialog', { name: 'Pilotaje de Alfa' });
+    await userEvent.click(within(vista).getByRole('button', { name: 'Ajustes del control' }));
+    const ajustes = within(vista).getByRole('dialog', { name: 'Ajustes del control' });
+    const cerrarAjustes = within(ajustes).getByRole('button', { name: 'Cerrar los ajustes' });
+    expect(cerrarAjustes).toHaveFocus();
+    const mandos = () => enviados.filter((m) => (m as { type?: string }).type === 'manual_stick');
+
+    fire({ type: 'control_request', droneId: 'd1', ...PEDIDO });
+    const aviso = within(vista).getByTestId('pedido-al-titular');
+    // Adentro de la vista pero no del panel, y sin sacarle el foco: el que
+    // estaba probando un deslizador sigue donde estaba.
+    expect(ajustes).not.toContainElement(aviso);
+    expect(cerrarAjustes).toHaveFocus();
+
+    // Lo que se teclea en los ajustes tampoco vuela con el pedido a la vista.
+    const interruptor = within(ajustes).getByRole('switch', { name: 'Invertir eje vertical' });
+    act(() => interruptor.focus());
+    fireEvent.keyDown(interruptor, { code: 'Space', key: ' ' });
+    fireEvent.keyUp(interruptor, { code: 'Space', key: ' ' });
+    expect(mandos()).toEqual([]);
+
+    // W sostenida desde la imagen y el piloto que entra al pedido con la W
+    // abajo: la repetición adentro no se la come, y la soltada frena al dron.
+    fireEvent.keyDown(vista, { code: 'KeyW' });
+    expect(mandos().at(-1)).toEqual({ type: 'manual_stick', droneId: 'd1', pitch: 0.5, roll: 0, yaw: 0, throttle: 0 });
+    const ceder = within(aviso).getByRole('button', { name: 'Ceder el control' });
+    act(() => ceder.focus());
+    fireEvent.keyDown(ceder, { code: 'KeyW', repeat: true });
+    fireEvent.keyUp(ceder, { code: 'KeyW' });
+    expect(mandos().at(-1)).toEqual({ type: 'manual_stick', droneId: 'd1', pitch: 0, roll: 0, yaw: 0, throttle: 0 });
+    // Y lo que se aprieta en el pedido es de sus botones: no sale ningún mando.
+    const antes = mandos().length;
+    for (const code of ['KeyW', 'Space', 'ShiftLeft', 'KeyQ']) {
+      fireEvent.keyDown(ceder, { code });
+      fireEvent.keyUp(ceder, { code });
+    }
+    expect(mandos()).toHaveLength(antes);
+
+    // Esc con el foco en el pedido lo mantiene, y los ajustes siguen abiertos.
+    await act(async () => {
+      fireEvent.keyDown(ceder, { key: 'Escape', code: 'Escape' });
+    });
+    const respuestas = () => pedidos.filter((p) => p.ruta === '/drones/d1/control/request/answer');
+    await waitFor(() => expect(respuestas().map((p) => p.cuerpo)).toEqual([JSON.stringify({ respuesta: 'mantener' })]));
+    expect(within(vista).getByRole('dialog', { name: 'Ajustes del control' })).toBeInTheDocument();
+
+    // Esc con el foco en los ajustes los cierra, sin contestar nada más.
+    fireEvent.keyDown(within(ajustes).getByRole('slider', { name: 'Velocidad normal (W A S D)' }), { key: 'Escape' });
+    expect(within(vista).queryByRole('dialog', { name: 'Ajustes del control' })).not.toBeInTheDocument();
+    expect(within(vista).getByRole('button', { name: 'Ajustes del control' })).toHaveFocus();
+    expect(respuestas()).toHaveLength(1);
   });
 });

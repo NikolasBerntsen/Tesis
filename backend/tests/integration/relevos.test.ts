@@ -1,8 +1,9 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { db } from '../../src/db';
+import { PLAZOS_DEL_CONTROL } from '../../src/control';
 import { PLAZOS } from '../../src/relevos';
 import { relojDelHub } from '../../src/reloj';
-import { relevos } from '../../src/ws';
+import { control, relevos } from '../../src/ws';
 import { cumpleContrato } from '../contrato';
 import {
   CREDS, DRON, api, connectWs, crearUsuario, login, mkStatus, seed, startServer, tokenDeDron, wait,
@@ -389,17 +390,28 @@ describe('integración — relevos entre drones', () => {
     const piloto = (await login(srv.base, 'piloto-relevo', p.password))!;
     const a = await dron(A);
     const b = await dron(B);
+    // Al conectarse sin titular, el hub ya les suelta el control (PROTOCOLS,
+    // "Control manual — bloqueo exclusivo"): las cuentas de abajo parten de ese.
+    const liberados = (c: WsClient) => c.got.filter((m) => m.type === 'control_released').length;
+    await a.waitFor(() => liberados(a) === 1);
+    await b.waitFor(() => liberados(b) === 1);
     bEnEspera(b);
     await wait(80);
     manda(a, { type: 'landing_at_base', ref: 'ctl', relayId: null, baseId: 1, ...NORTE, routeId: 1, fromIndex: 0 });
     const { relayId: id } = await b.waitFor((m) => m.type === 'relay_start');
 
     // tomar el control de B no cancela nada, y si al piloto se le cae la consola
-    // se suelta con 'none' aunque B no tenga objetivo
+    // (30 s sin señales de vida) se suelta con 'none' aunque B no tenga objetivo
     const consolaPiloto = await conn(piloto);
     expect((await api(srv.base, `/api/drones/${B}/control`, piloto, { method: 'POST' })).status).toBe(200);
     await consolaPiloto.close();
-    await b.waitFor((m) => m.type === 'control_released');
+    // Los 30 s los ve solo el barrido del control: el reloj vuelve en el mismo
+    // paso, sin que el barrido de relevos alcance a correr, y los 10 s que B
+    // tiene para contestar siguen donde estaban.
+    t += PLAZOS_DEL_CONTROL.sinSenalesMs;
+    control.barrer();
+    t -= PLAZOS_DEL_CONTROL.sinSenalesMs;
+    await b.waitFor(() => liberados(b) === 2);
     await wait(100);
     expect(b.got.some((m) => m.type === 'resume_patrol')).toBe(false);
     expect((await relevoPorApi(id)).estado).toBe('ORDENADO');
@@ -407,19 +419,18 @@ describe('integración — relevos entre drones', () => {
     // soltarlo a mano tampoco es una orden: la consola pide 'last' (B no tiene
     // objetivo) y el hub lo suelta igual sin resume_patrol (RELEVOS §3.9)
     const consola2 = await conn(piloto);
-    const liberados = (c: WsClient) => c.got.filter((m) => m.type === 'control_released').length;
     await api(srv.base, `/api/drones/${B}/control`, piloto, { method: 'POST' });
     const soltar = await api(srv.base, `/api/drones/${B}/control`, piloto, {
       method: 'DELETE', body: JSON.stringify({ resume: 'last' }),
     });
     expect(soltar.status).toBe(200);
     expect(soltar.body.controlledBy).toBeNull();
-    await b.waitFor(() => liberados(b) === 2);
+    await b.waitFor(() => liberados(b) === 3);
     // A, que vuelve por batería con el pedido en curso, tampoco recibe una
     // reanudación, ni aunque la consola pida un nodo
     await api(srv.base, `/api/drones/${A}/control`, piloto, { method: 'POST' });
     await api(srv.base, `/api/drones/${A}/control`, piloto, { method: 'DELETE', body: JSON.stringify({ resume: 1 }) });
-    await a.waitFor(() => liberados(a) === 1);
+    await a.waitFor(() => liberados(a) === 2);
     await wait(100);
     expect(b.got.some((m) => m.type === 'resume_patrol')).toBe(false);
     expect(a.got.some((m) => m.type === 'resume_patrol')).toBe(false);
@@ -467,8 +478,11 @@ describe('integración — relevos entre drones', () => {
       manda(a, { type: 'event', eventType: 'EMERGENCY_RECOVERED', message: 'falso' });
       manda(a, { type: 'event', eventType: 'RTH_DIVERTED', message: 'falso' });
       await wait(200);
-      // lo único que recibe es lo de toda conexión: sus bases y las decisiones recientes
-      expect(a.got.filter((m) => m.type !== 'bases' && m.type !== 'alert_decision')).toEqual([]);
+      // lo único que recibe es lo de toda conexión: sus bases, las decisiones
+      // recientes y, sin nadie al mando, el control suelto
+      expect(a.got.filter((m) => m.type !== 'bases' && m.type !== 'alert_decision')).toEqual([
+        { type: 'control_released', by: 'Comando Central', resync: true },
+      ]);
       expect((await api(srv.base, '/api/events?limit=1000', op)).body.length).toBe(antes);
       expect(avisos).toHaveBeenCalledTimes(7);
       expect(a.ws.readyState).toBe(a.ws.OPEN);

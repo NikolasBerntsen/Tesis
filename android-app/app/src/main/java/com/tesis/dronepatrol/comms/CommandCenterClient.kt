@@ -78,6 +78,13 @@ open class CommandCenterClient(
     var onLand: ((by: String) -> Unit)? = null
     /** Reanudar el patrullaje; [fromIndex] nulo = desde el último nodo alcanzado. */
     var onResumePatrol: ((fromIndex: Int?) -> Unit)? = null
+
+    /**
+     * El `resume_patrol` que acompaña a un soltar (`alSoltar: true`, §2): nadie
+     * lo eligió como orden de vuelo, y la app no corta con él un aterrizaje en
+     * curso. Va aparte para que no se confunda con la orden de reanudar.
+     */
+    var onReanudacionAlSoltar: ((fromIndex: Int?) -> Unit)? = null
     var onStartRoute: ((routeId: Int, fromIndex: Int, orderedBy: String) -> Unit)? = null
     var onStopPatrol: ((orderedBy: String) -> Unit)? = null
     var onForceGoto: ((routeId: Int, index: Int, orderedBy: String) -> Unit)? = null
@@ -97,6 +104,29 @@ open class CommandCenterClient(
      */
     var onManualGimbal: ((pitch: Double, by: String) -> Unit)? = null
     var onControlReleased: ((by: String) -> Unit)? = null
+
+    /**
+     * El hub soltó el control porque el titular estuvo 30 s sin dar señales de
+     * vida (`control_released` con `motivo: "inactividad"`, §2): no es el
+     * soltar de siempre, la app le devuelve el mando al control físico.
+     */
+    var onControlSoltadoPorInactividad: ((by: String) -> Unit)? = null
+
+    /**
+     * Al reconectarse, el hub dice que nadie tiene el control (`control_released`
+     * con `resync: true`, §2): un soltar que pasó con la app afuera y que
+     * tampoco eligió nadie, así que termina como el de la inactividad.
+     */
+    var onControlSoltadoAlReconectar: ((by: String) -> Unit)? = null
+
+    /**
+     * Al reconectarse, el hub dice quién tiene el control (`control_taken` con
+     * `resync: true`, §2). No es una toma nueva: ver PatrolManager.
+     */
+    var onControlResync: ((by: String) -> Unit)? = null
+
+    /** El control pasó de [de] a [by] sin soltarse (`control_transferred`, §2). */
+    var onControlTransferred: ((by: String, de: String) -> Unit)? = null
     /** El Comando Central renombró al dron. */
     var onRenamed: ((displayName: String) -> Unit)? = null
 
@@ -362,6 +392,7 @@ open class CommandCenterClient(
             }
             return
         }
+        if (manejarElControl(tipo, msg)) return
         when (tipo) {
             "alert_decision" -> onAlertDecision?.invoke(
                 if (msg.has("alertId") && !msg.isNull("alertId")) msg.optLong("alertId") else null,
@@ -378,9 +409,7 @@ open class CommandCenterClient(
             }
             "takeoff" -> onTakeoff?.invoke(msg.optString("by"))
             "land" -> onLand?.invoke(msg.optString("by"))
-            "resume_patrol" -> onResumePatrol?.invoke(
-                if (msg.isNull("fromIndex")) null else msg.optInt("fromIndex"),
-            )
+            "resume_patrol" -> reanudar(msg)
             "start_route" -> onStartRoute?.invoke(
                 msg.optInt("routeId"),
                 msg.optInt("fromIndex"),
@@ -392,7 +421,6 @@ open class CommandCenterClient(
                 msg.optInt("index"),
                 msg.optString("orderedBy"),
             )
-            "control_taken" -> onControlTaken?.invoke(msg.optString("by"))
             "manual_move" -> onManualMove?.invoke(
                 msg.optDouble("bearing"),
                 msg.optDouble("distanceM"),
@@ -411,9 +439,44 @@ open class CommandCenterClient(
             "manual_gimbal" -> inclinacionPedida(msg.opt("pitch"))?.let { pitch ->
                 onManualGimbal?.invoke(pitch, msg.optString("by"))
             }
-            "control_released" -> onControlReleased?.invoke(msg.optString("by"))
             "renamed" -> onRenamed?.invoke(msg.optString("displayName"))
         }
+    }
+
+    /**
+     * Los mensajes que dicen quién tiene el control manual (§2). Van aparte
+     * porque dos se reparten según un campo, y confundirlos es lo que más
+     * cuesta: un `control_taken` de reconexión tomado como una toma nueva frena
+     * al dron y le saca la ruta que el titular le mandó sin soltarlo, y un
+     * soltar por inactividad tomado como uno común le deja el Virtual Stick
+     * tomado al que está al lado con el control. Devuelve si el tipo era suyo.
+     */
+    private fun manejarElControl(tipo: String, msg: JSONObject): Boolean {
+        val by = msg.optString("by")
+        when (tipo) {
+            "control_taken" -> if (msg.optBoolean("resync", false)) onControlResync?.invoke(by) else onControlTaken?.invoke(by)
+            "control_transferred" -> onControlTransferred?.invoke(by, msg.optString("de"))
+            "control_released" -> soltado(by, msg)
+            else -> return false
+        }
+        return true
+    }
+
+    /**
+     * Un `control_released`: el del barrido por inactividad, el de la
+     * reconexión (`resync`) o el de siempre. Los dos primeros no los eligió
+     * nadie, y la app le devuelve el mando al control físico.
+     */
+    private fun soltado(by: String, msg: JSONObject) = when {
+        msg.optString("motivo") == MOTIVO_INACTIVIDAD -> onControlSoltadoPorInactividad?.invoke(by)
+        msg.optBoolean("resync", false) -> onControlSoltadoAlReconectar?.invoke(by)
+        else -> onControlReleased?.invoke(by)
+    }
+
+    /** `resume_patrol`: la orden de reanudar, o el que acompaña a un soltar (`alSoltar`, §2). */
+    private fun reanudar(msg: JSONObject) {
+        val desde = if (msg.isNull("fromIndex")) null else msg.optInt("fromIndex")
+        if (msg.optBoolean("alSoltar", false)) onReanudacionAlSoltar?.invoke(desde) else onResumePatrol?.invoke(desde)
     }
 
     /**
@@ -431,6 +494,11 @@ open class CommandCenterClient(
      * NaN ni un infinito al parsear: el control de "finito" no depende de ese
      * detalle de la librería, y así se puede probar.
      */
+    internal companion object {
+        /** El `motivo` de un `control_released` que el hub mandó porque el titular dejó de dar señales (§2). */
+        const val MOTIVO_INACTIVIDAD = "inactividad"
+    }
+
     internal fun inclinacionPedida(valor: Any?): Double? {
         val grados = (valor as? Number)?.toDouble() ?: return null
         return grados.takeIf { it.isFinite() }
@@ -560,6 +628,15 @@ open class CommandCenterClient(
 
     fun sendSetName(displayName: String) =
         send(JSONObject().put("type", "set_name").put("displayName", displayName))
+
+    /**
+     * La app no tiene el control que el hub cree que le dio a [by]
+     * (`control_dropped`, §1): lo soltó sola sin el Comando Central, o se
+     * reinició. El hub suelta el lock de ESE titular, y de ninguno que lo haya
+     * tomado después. [motivo] queda en el registro.
+     */
+    fun avisarControlSoltado(by: String, motivo: String) =
+        send(JSONObject().put("type", "control_dropped").put("by", by).put("motivo", motivo))
 
     /**
      * Un evento para el registro. Los de seguimiento llevan el [alertId] de su

@@ -186,6 +186,15 @@ class CommandCenterClientTest {
         """{"type":"manual_stick","pitch":0.5,"roll":0,"yaw":0,"throttle":0,"by":"ana"}""" to "manual_stick",
         """{"type":"manual_gimbal","pitch":-30,"by":"ana"}""" to "manual_gimbal",
         """{"type":"control_released","by":"ana"}""" to "control_released",
+        // Los del control que se reparten según un campo (§2): no son los de siempre.
+        """{"type":"control_released","by":"Comando Central","motivo":"inactividad"}""" to "control_inactividad",
+        """{"type":"control_released","by":"Comando Central","motivo":"app"}""" to "control_released",
+        """{"type":"control_released","by":"Comando Central","resync":true}""" to "control_al_reconectar",
+        """{"type":"resume_patrol","orderedBy":"ana","alSoltar":true}""" to "resume_al_soltar",
+        """{"type":"resume_patrol","orderedBy":"ana","alSoltar":false}""" to "resume_patrol",
+        """{"type":"control_taken","by":"ana","resync":true}""" to "control_resync",
+        """{"type":"control_taken","by":"ana","resync":false}""" to "control_taken",
+        """{"type":"control_transferred","by":"beto","de":"ana"}""" to "control_transferred",
         """{"type":"renamed","displayName":"Beta"}""" to "renamed",
     )
 
@@ -197,6 +206,7 @@ class CommandCenterClientTest {
         cliente.onTakeoff = { oidas += "takeoff" }
         cliente.onLand = { oidas += "land" }
         cliente.onResumePatrol = { oidas += "resume_patrol" }
+        cliente.onReanudacionAlSoltar = { oidas += "resume_al_soltar" }
         cliente.onStartRoute = { _, _, _ -> oidas += "start_route" }
         cliente.onStopPatrol = { oidas += "stop_patrol" }
         cliente.onForceGoto = { _, _, _ -> oidas += "force_goto" }
@@ -205,6 +215,10 @@ class CommandCenterClientTest {
         cliente.onManualStick = { _, _, _, _, _ -> oidas += "manual_stick" }
         cliente.onManualGimbal = { _, _ -> oidas += "manual_gimbal" }
         cliente.onControlReleased = { oidas += "control_released" }
+        cliente.onControlSoltadoPorInactividad = { oidas += "control_inactividad" }
+        cliente.onControlSoltadoAlReconectar = { oidas += "control_al_reconectar" }
+        cliente.onControlResync = { oidas += "control_resync" }
+        cliente.onControlTransferred = { _, _ -> oidas += "control_transferred" }
         cliente.onRenamed = { oidas += "renamed" }
         return oidas
     }
@@ -272,6 +286,18 @@ class CommandCenterClientTest {
         assertEquals(listOf(2, null, null, 0), desde)
     }
 
+    /** El que acompaña a un soltar (`alSoltar`) lee el nodo igual que la orden de reanudar. */
+    @Test
+    fun laReanudacionDeUnSoltarLlegaConSuNodo() {
+        val desde = mutableListOf<Int?>()
+        cliente.onReanudacionAlSoltar = { desde += it }
+
+        cliente.manejarMensaje("""{"type":"resume_patrol","orderedBy":"ana","alSoltar":true,"fromIndex":1}""")
+        cliente.manejarMensaje("""{"type":"resume_patrol","orderedBy":"ana","alSoltar":true}""")
+
+        assertEquals(listOf(1, null), desde)
+    }
+
     /**
      * `start_route` lee `fromIndex` y `force_goto` lee `index`: los dos llevan
      * ruta y nodo, y cruzar los nombres manda el dron a otro lado.
@@ -305,6 +331,26 @@ class CommandCenterClientTest {
         cliente.manejarMensaje("""{"type":"renamed","displayName":"Alfa 2"}""")
 
         assertEquals(listOf("stop:ana", "taken:beto", "released:carla", "renamed:Alfa 2"), oidas)
+    }
+
+    /** Los del control dicen quién lo tiene y, el traspaso, de quién venía (§2). */
+    @Test
+    fun losDelControlLleganConQuienLoTieneYDeQuienVenia() {
+        val oidas = mutableListOf<String>()
+        cliente.onControlSoltadoPorInactividad = { oidas += "inactividad:$it" }
+        cliente.onControlSoltadoAlReconectar = { oidas += "al_reconectar:$it" }
+        cliente.onControlResync = { oidas += "resync:$it" }
+        cliente.onControlTransferred = { by, de -> oidas += "traspaso:$de->$by" }
+
+        cliente.manejarMensaje("""{"type":"control_released","by":"Comando Central","motivo":"inactividad"}""")
+        cliente.manejarMensaje("""{"type":"control_released","by":"Comando Central","resync":true}""")
+        cliente.manejarMensaje("""{"type":"control_taken","by":"ana","resync":true}""")
+        cliente.manejarMensaje("""{"type":"control_transferred","by":"beto","de":"ana"}""")
+
+        assertEquals(
+            listOf("inactividad:Comando Central", "al_reconectar:Comando Central", "resync:ana", "traspaso:ana->beto"),
+            oidas,
+        )
     }
 
     /** `manual_move`: el rumbo absoluto y la distancia en metros, cada uno en su lugar (§2). */

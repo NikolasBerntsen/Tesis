@@ -1,0 +1,123 @@
+/* ============================================================================
+   CONTROL MANUAL ENTRE PERSONAS (AvisosDelControl.tsx)
+   <div class="avisos-del-control" aria-live="assertive">
+     <section class="aviso-control aviso-control-pedido">   el pedido al titular
+       <h2 class="aviso-control-titulo"><svg/>Y quiere tomar el control</h2>
+       <p>…</p> <p class="aviso-control-cuenta"><svg/>8 s</p>
+       <div class="aviso-control-acciones"><button/><button class="primario"/></div>
+     </section>
+     <section class="aviso-control">…</section>             el que espera
+     <p class="aviso-control aviso-control-fin malo">…<button/></p>
+   </div>
+   Arriba al centro, encima de todo: también de la vista de pilotaje (que es
+   donde está el que recibe un pedido mientras vuela) y del velo de un diálogo
+   abierto, porque un pedido con diez segundos de plazo no puede quedar tapado.
+   Con la vista abierta, la columna y los diálogos van adentro de ella (ver
+   CapaDePilotaje), así que el z-index compite con el velo en la misma capa.
+   Con más avisos que pantalla (un teléfono acostado) la columna se desplaza,
+   en vez de dejar los últimos afuera sin forma de cerrarlos.
+   La columna deja pasar el mouse; cada aviso, no. Es el panel firme de los
+   diálogos —atrás puede haber video— con el velo de ámbar de lo que hay que
+   mirar ahora, y el filo de oro de lo encendido en el pedido al titular.
+   ========================================================================= */
+.avisos-del-control {
+  position: fixed;
+  top: var(--e-5);
+  left: 50%;
+  z-index: 2050;
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-3);
+  width: min(560px, calc(100vw - var(--e-4) * 2));
+  max-height: calc(100vh - var(--e-5) * 2);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.aviso-control {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-2);
+  margin: 0;
+  padding: var(--e-4) var(--e-5);
+  border: 1px solid var(--veta-fuerte);
+  border-radius: var(--radio);
+  background-color: var(--panel-firme);
+  background-image: var(--piedra-cara);
+  box-shadow: var(--sombra-flotante);
+  color: var(--tinta);
+  font-size: var(--txt-base);
+  line-height: 1.45;
+  pointer-events: auto;
+  animation: aviso-control-entra var(--duracion-entrada) var(--curva-entrada);
+}
+.aviso-control p { margin: 0; }
+.aviso-control-pedido {
+  border: var(--filo) solid var(--filo-activo);
+  background-image: linear-gradient(var(--alerta-velo), var(--alerta-velo)), var(--piedra-cara);
+}
+.aviso-control-titulo {
+  display: flex;
+  align-items: center;
+  gap: var(--e-2);
+  margin: 0;
+  font-family: var(--fuente-marca);
+  font-size: var(--txt-sm);
+  font-weight: 600;
+  line-height: var(--interlinea-titulo);
+  letter-spacing: var(--versalita);
+  text-transform: uppercase;
+  color: var(--alerta-texto);
+}
+.aviso-control-titulo > svg { flex: none; }
+/* La cuenta regresiva se lee de un vistazo, en las cifras de la serif. */
+.aviso-control-cuenta {
+  display: flex;
+  align-items: center;
+  gap: var(--e-2);
+  font-family: var(--fuente-serif);
+  font-size: var(--txt-xl);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--alerta-texto);
+}
+.aviso-control-acciones {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--e-2);
+}
+/* Cómo terminó un pedido, o un control que se soltó solo: una línea con su cruz. */
+.aviso-control-fin {
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--e-3);
+}
+.aviso-control-fin.bueno { background-image: linear-gradient(var(--ok-velo), var(--ok-velo)), var(--piedra-cara); }
+.aviso-control-fin.malo { background-image: linear-gradient(var(--peligro-velo), var(--peligro-velo)), var(--piedra-cara); }
+.aviso-control-fin > button { flex: none; }
+/* El plazo, una vez, para el lector de pantalla (la cuenta va oculta). */
+.aviso-control-solo-lector {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+@keyframes aviso-control-entra {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .aviso-control { animation: none; }
+}
+@media (max-width: 640px) {
+  .avisos-del-control { top: var(--e-4); max-height: calc(100vh - var(--e-4) * 2); }
+  .aviso-control { padding: var(--e-3) var(--e-4); }
+}

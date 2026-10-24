@@ -313,6 +313,42 @@ pares.push({ donde: 'esquina "EMERGENCIA" del mosaico', texto: '--peligro', base
 // de una emergencia es el visor de siempre (su pie, arriba) y sus miniaturas
 // son botones: la elegida es un botón presionado, también medido arriba.
 
+// --- Avisos del control manual (control.css) ------------------------------------------
+// Flotan encima de todo, también del video de la vista de pilotaje: son el
+// panel firme, medido sobre blanco y sobre negro, con el velo de su tono. El
+// pedido al titular lleva además el filo de lo encendido y sus dos botones,
+// y cada aviso de cómo terminó, su cruz.
+const VELO_DEL_PEDIDO = ['--alerta-velo'];
+sobreSuperficies('pedido de control: texto', '--tinta', VELO_DEL_PEDIDO, TEXTO, FIRMES);
+sobreSuperficies('pedido de control: título y cuenta regresiva', '--alerta-texto', VELO_DEL_PEDIDO, TEXTO, FIRMES);
+sobreSuperficies('pedido de control: filo', '--filo-activo', VELO_DEL_PEDIDO, CONTROL, FIRMES);
+sobreSuperficies('pedido de control: anillo de foco', '--anillo-foco', VELO_DEL_PEDIDO, CONTROL, FIRMES);
+sobreSuperficies(
+  'pedido de control: «Mantener el control»',
+  '--tinta',
+  ['--cara-boton', '--boton-fondo', ...VELO_DEL_PEDIDO],
+  TEXTO,
+  FIRMES,
+);
+sobreSuperficies(
+  'pedido de control: «Ceder el control»',
+  '--oro-texto',
+  ['--cara-activa', '--boton-fondo', ...VELO_DEL_PEDIDO],
+  TEXTO,
+  FIRMES,
+);
+sobreSuperficies(
+  'pedido de control: «Ceder el control» :hover',
+  '--oro-texto',
+  ['--oro-velo', '--cara-activa', '--boton-fondo', ...VELO_DEL_PEDIDO],
+  TEXTO,
+  FIRMES,
+);
+for (const velo of ['--ok-velo', '--peligro-velo']) {
+  sobreSuperficies(`aviso del control (${velo}): texto`, '--tinta', [velo], TEXTO, FIRMES);
+  sobreSuperficies(`aviso del control (${velo}): la cruz`, '--tinta-media', ['--cara-boton', '--boton-fondo', velo], CONTROL, FIRMES);
+}
+
 // --- Bordes de los controles y foco ----------------------------------------------
 for (const s of SUPERFICIES) {
   pares.push({ donde: `anillo de foco sobre ${s.nombre}`, texto: '--anillo-foco', sobre: s.sobre, base: s.base, minimo: CONTROL });
@@ -368,6 +404,21 @@ for (const imagen of ['#FFFFFF', '#000000']) {
     });
   }
 }
+
+// --- Ajustes del control: el globo del engranaje (pilotaje.css) ---------------------
+// Cuelga sobre el video, así que es piedra firme medida sobre un cuadro blanco
+// y uno negro, como los diálogos (y la ayuda, que es el mismo globo). El título
+// en Cinzel y los rótulos van en la tinta; el valor de cada deslizador y el
+// guardado que falló también; la nota, las pistas y los grupos («Mouse»,
+// «Teclado») en la media. El ícono del título va en oro: alcanza con 3:1. Del deslizador se tienen que ver la pista (el filo de los
+// campos), el cursor y lo recorrido (el oro de lo encendido), las dos cosas
+// sobre el panel y lo recorrido también sobre el hueco de la pista.
+sobreSuperficies('ajustes: título, rótulos y valores', '--tinta', [], TEXTO, FIRMES);
+sobreSuperficies('ajustes: nota, pistas y grupos', '--tinta-media', [], TEXTO, FIRMES);
+sobreSuperficies('ajustes: engranaje del título', '--oro-texto', [], CONTROL, FIRMES);
+sobreSuperficies('deslizador: filo de la pista', '--filo-campo', [], CONTROL, FIRMES);
+sobreSuperficies('deslizador: el cursor', '--filo-activo', [], CONTROL, FIRMES);
+pares.push({ donde: 'deslizador: lo recorrido sobre el hueco de la pista', texto: '--filo-activo', base: '--marmol-2', minimo: CONTROL });
 
 const casos = TEMAS.flatMap((tema) => pares.map((p) => ({ tema, ...p })));
 
@@ -429,6 +480,7 @@ describe('los pares medidos son los que pintan las hojas', () => {
   const pulido = leer('./pulido.css');
   const pilotaje = leer('./pilotaje.css');
   const relevos = leer('./relevos.css');
+  const control = leer('./control.css');
 
   it.each([
     ['fila elegida', primitivos, '.tabla tbody tr.seleccionada', 'background', 'var(--oro-velo)'],
@@ -527,6 +579,64 @@ describe('los pares medidos son los que pintan las hojas', () => {
     ['esquina "EMERGENCIA" del mosaico', relevos, '.esquina-roja', 'color', 'var(--peligro)'],
     // Las miniaturas de la galería: visores, negros en los dos temas.
     ['miniatura de la galería', relevos, '.galeria-miniatura-cuadro', 'background-color', 'var(--recuadro-video)'],
+    // Los avisos del control manual: el panel firme con el velo de su tono.
+    ['aviso del control: panel', control, '.aviso-control', 'background-color', 'var(--panel-firme)'],
+    ['aviso del control: cara', control, '.aviso-control', 'background-image', 'var(--piedra-cara)'],
+    ['aviso del control: texto', control, '.aviso-control', 'color', 'var(--tinta)'],
+    [
+      'pedido de control: velo',
+      control,
+      '.aviso-control-pedido',
+      'background-image',
+      'linear-gradient(var(--alerta-velo), var(--alerta-velo)), var(--piedra-cara)',
+    ],
+    ['pedido de control: filo', control, '.aviso-control-pedido', 'border', 'var(--filo) solid var(--filo-activo)'],
+    ['pedido de control: título', control, '.aviso-control-titulo', 'color', 'var(--alerta-texto)'],
+    ['pedido de control: cuenta regresiva', control, '.aviso-control-cuenta', 'color', 'var(--alerta-texto)'],
+    [
+      'aviso del control bueno: velo',
+      control,
+      '.aviso-control-fin.bueno',
+      'background-image',
+      'linear-gradient(var(--ok-velo), var(--ok-velo)), var(--piedra-cara)',
+    ],
+    [
+      'aviso del control malo: velo',
+      control,
+      '.aviso-control-fin.malo',
+      'background-image',
+      'linear-gradient(var(--peligro-velo), var(--peligro-velo)), var(--piedra-cara)',
+    ],
+    // Los globos de la ayuda y de los ajustes del control: piedra firme, con lo
+    // que se mide arriba encima.
+    ['globos del HUD', pilotaje, '.pilotaje-globo', 'background-color', 'var(--panel-firme)'],
+    ['cara de los globos', pilotaje, '.pilotaje-globo', 'background-image', 'var(--piedra-cara)'],
+    ['título de los globos', pilotaje, '.pilotaje-globo h2', 'color', 'var(--tinta)'],
+    ['ícono del título de los globos', pilotaje, '.pilotaje-globo h2 > svg', 'color', 'var(--oro-texto)'],
+    ['nota de los ajustes', pilotaje, '.pilotaje-ajustes-nota', 'color', 'var(--tinta-media)'],
+    ['guardado que falló, en los ajustes', pilotaje, '.pilotaje-ajustes-aviso', 'color', 'var(--tinta)'],
+    // El pie pegado al fondo tapa lo que se desplaza con la misma piedra firme.
+    ['pie de los ajustes', pilotaje, '.pilotaje-ajustes-pie', 'background-color', 'var(--panel-firme)'],
+    ['grupo de los ajustes', pilotaje, '.ajustes-grupo legend', 'color', 'var(--tinta-media)'],
+    ['rótulo de un ajuste', pilotaje, '.ajuste-rotulo label', 'color', 'var(--tinta)'],
+    ['valor de un ajuste', pilotaje, '.ajuste-valor', 'color', 'var(--tinta)'],
+    ['pista de un ajuste', pilotaje, '.ajuste-pista', 'color', 'var(--tinta-media)'],
+    ['interruptor de los ajustes', pilotaje, '.pilotaje-ajustes .switch', 'color', 'var(--tinta)'],
+    // El deslizador, en los dos motores.
+    ['pista del deslizador (Chromium)', primitivos, "input[type='range']::-webkit-slider-runnable-track", 'border', '1px solid var(--filo-campo)'],
+    ['pista del deslizador (Firefox)', primitivos, "input[type='range']::-moz-range-track", 'border', '1px solid var(--filo-campo)'],
+    ['hueco de la pista (Firefox)', primitivos, "input[type='range']::-moz-range-track", 'background', 'var(--marmol-2)'],
+    ['lo recorrido (Firefox)', primitivos, "input[type='range']::-moz-range-progress", 'background', 'var(--filo-activo)'],
+    [
+      'lo recorrido y el hueco (Chromium)',
+      primitivos,
+      "input[type='range']::-webkit-slider-runnable-track",
+      'background',
+      'linear-gradient(90deg, var(--filo-activo) 0 var(--relleno, 0%), var(--marmol-2) var(--relleno, 0%) 100%)',
+    ],
+    ['cursor del deslizador (Chromium)', primitivos, "input[type='range']::-webkit-slider-thumb", 'background', 'var(--filo-activo)'],
+    ['cursor del deslizador (Firefox)', primitivos, "input[type='range']::-moz-range-thumb", 'background', 'var(--filo-activo)'],
+    ['anillo de foco del deslizador', primitivos, "input[type='range']:focus-visible", 'outline', 'var(--filo) solid var(--anillo-foco)'],
   ])('%s', (_donde, hoja, selector, propiedad, esperado) => {
     expect(valorDe(hoja, selector, propiedad)).toBe(esperado);
   });

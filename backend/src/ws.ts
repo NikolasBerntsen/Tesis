@@ -2,6 +2,7 @@ import type { Server } from 'node:http';
 import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import { ROLE_RANK, SESION_DE_OTRO_ROL, esDeOtroRol, verifyToken } from './auth';
 import { posicionValida, validarAutonomia, validarRelevoInformado } from './contrato';
+import { CoordinadorDelControl, PLAZOS_DEL_CONTROL, type PedidoDeControlView } from './control';
 import { Emergencias } from './emergencias';
 import { metaAlerta, metaDron } from './meta';
 import { CoordinadorDeRelevos } from './relevos';
@@ -190,6 +191,8 @@ export interface DroneCard {
   online: boolean;
   lastStatus: Record<string, unknown> | null;
   controlledBy: string | null;
+  /** El pedido de control que espera la respuesta del titular, o null (PROTOCOLS §6). */
+  pedidoDeControl: PedidoDeControlView | null;
 }
 
 function cardDesdeActivo(d: DroneAssetView): DroneCard {
@@ -206,6 +209,7 @@ function cardDesdeActivo(d: DroneAssetView): DroneCard {
     online: isOnline(d.hash),
     lastStatus: getLastStatus(d.hash),
     controlledBy: getController(d.hash),
+    pedidoDeControl: control.pedidoDe(d.hash),
   };
 }
 
@@ -246,6 +250,25 @@ export const relevos = new CoordinadorDeRelevos({
   difundir: broadcastOperators,
   ahora: () => relojDelHub.ahora(),
   conectado: isOnline,
+});
+
+/**
+ * Quién sigue vivo al mando y el traspaso del control entre personas
+ * (control.ts). El lock es este de acá (`controlledBy`): el coordinador decide
+ * cuándo soltarlo o pasarlo, con el mismo reloj que los relevos.
+ */
+export const control = new CoordinadorDelControl({
+  ahora: () => relojDelHub.ahora(),
+  locks: () => controlledBy.entries(),
+  titular: getController,
+  tomar: (droneId, username) => {
+    takeControl(droneId, username);
+  },
+  traspasar: transferirControl,
+  soltarPorInactividad,
+  puedeControlar: cuentaQuePuedePilotear,
+  tieneConsola: (username) => [...operators.values()].some((s) => s.username === username),
+  difundir: broadcastOperators,
 });
 
 /** Protocolo de última ubicación del lado del hub (emergencias.ts). */
@@ -338,6 +361,7 @@ export function takeControl(droneId: string, username: string): { ok: true } | {
   const holder = controlledBy.get(droneId);
   if (holder && holder !== username) return { ok: false, heldBy: holder };
   controlledBy.set(droneId, username);
+  control.alTomar(droneId);
   sendToDrone(droneId, { type: 'control_taken', by: username });
   broadcastOperators({ type: 'control_changed', droneId, controlledBy: username });
   const ev = createLog('drone', 'CONTROL_TAKEN', username, `${username} tomó el control manual del dron ${droneId}`, {
@@ -348,17 +372,43 @@ export function takeControl(droneId: string, username: string): { ok: true } | {
   return { ok: true };
 }
 
+/**
+ * Por qué el hub soltó el control SOLO, sin que nadie lo pidiera. Viaja en
+ * `control_released` a la app y en `control_changed` a las consolas (PROTOCOLS
+ * §2 y §3): `inactividad` es el titular sin señales de vida 30 s, y la app la
+ * atiende distinto (le devuelve el mando al control físico); `app` es la app
+ * que avisó que no tenía el control tomado (`control_dropped`).
+ */
+export type MotivoDeSoltar = 'inactividad' | 'app';
+
 export interface ReleaseOptions {
   resume: 'last' | 'none' | number;
   forced?: boolean;
   reason?: string;
+  motivo?: MotivoDeSoltar;
+  /**
+   * El `resume_patrol` de este soltar es una orden de reanudar que una persona
+   * eligió (`POST /resume`). Sin esto sale con `alSoltar: true`: es el que
+   * acompaña a un soltar (la salida de la vista de pilotaje, «Quitar control»,
+   * una baja, el cierre de sesión), y la app no le corta con él un aterrizaje
+   * en curso (PROTOCOLS §2).
+   */
+  ordenDeReanudar?: boolean;
+}
+
+/** Lo que se le dice a quien pidió el control si el lock se suelta mientras espera. */
+function porQueSeSolto(byUser: string, holder: string, opts: ReleaseOptions): string {
+  if (opts.reason) return opts.reason;
+  return opts.forced ? `${byUser} le quitó el control a ${holder}` : `${holder} soltó el control`;
 }
 
 export function releaseControl(droneId: string, byUser: string, opts: ReleaseOptions): boolean {
   const holder = controlledBy.get(droneId);
   if (!holder) return false;
   controlledBy.delete(droneId);
-  sendToDrone(droneId, { type: 'control_released', by: byUser });
+  control.alSoltar(droneId, porQueSeSolto(byUser, holder, opts));
+  const causa = opts.motivo ? { motivo: opts.motivo } : {};
+  sendToDrone(droneId, { type: 'control_released', by: byUser, ...causa });
 
   const detalle = opts.forced ? ` (forzado por ${byUser}, lo tenía ${holder})` : '';
   const motivo = opts.reason ? ` — ${opts.reason}` : '';
@@ -376,20 +426,88 @@ export function releaseControl(droneId: string, byUser: string, opts: ReleaseOpt
     },
   );
   broadcastOperators({ type: 'event', event: ev });
-  broadcastOperators({ type: 'control_changed', droneId, controlledBy: null });
+  broadcastOperators({ type: 'control_changed', droneId, controlledBy: null, teniaElControl: holder, ...causa });
 
   if (opts.resume !== 'none') {
     const msg: Record<string, unknown> = { type: 'resume_patrol', orderedBy: byUser };
     if (typeof opts.resume === 'number') msg.fromIndex = opts.resume;
+    if (!opts.ordenDeReanudar) msg.alSoltar = true;
     sendToDrone(droneId, msg);
   }
   return true;
 }
 
 /**
+ * El control pasa de `de` a `a` sin soltarse: un pedido que el titular cedió o
+ * no contestó a tiempo (control.ts). El dron recibe `control_transferred` y no
+ * `control_released` + `control_taken`: con esos dos la app frenaba, volvía al
+ * objetivo o esperaba una reanudación en el medio, y un dron que alguien está
+ * piloteando no puede hacer nada de eso porque cambió la persona. La app lo
+ * deja estacionario donde está, en MANUAL, a la espera del nuevo titular.
+ */
+function transferirControl(droneId: string, de: string, a: string, motivo: 'cedido' | 'vencido') {
+  controlledBy.set(droneId, a);
+  sendToDrone(droneId, { type: 'control_transferred', by: a, de });
+  broadcastOperators({ type: 'control_changed', droneId, controlledBy: a, teniaElControl: de });
+  const mensaje =
+    motivo === 'cedido'
+      ? `${de} le cedió a ${a} el control manual del dron ${droneId}`
+      : `El control manual del dron ${droneId} pasó de ${de} a ${a}: ${de} no contestó el pedido a tiempo`;
+  const ev = createLog('drone', 'CONTROL_TRANSFERRED', motivo === 'cedido' ? de : 'backend', mensaje, {
+    droneId,
+    meta: { drone: metaDron(droneId), detalle: { de, a, motivo } },
+  });
+  broadcastOperators({ type: 'event', event: ev });
+}
+
+/**
+ * El titular lleva 30 s sin dar señales de vida (control.ts): la consola se
+ * colgó, se cortó la red o se cerró la pestaña. El control se suelta SIN
+ * reanudar nada, pase lo que pase con el objetivo o con un relevo: el dron no
+ * se pone a patrullar solo porque a alguien se le cayó internet. Con
+ * `motivo: 'inactividad'` la app sale de MANUAL, queda estacionaria y le
+ * devuelve el mando a las palancas del control físico, para que el que está al
+ * lado del dron lo pueda tomar; desde la consola se lo puede volver a tomar o
+ * mandar a patrullar.
+ */
+function soltarPorInactividad(droneId: string, titular: string) {
+  releaseControl(droneId, 'Comando Central', {
+    resume: 'none',
+    forced: true,
+    motivo: 'inactividad',
+    reason: `${titular} estuvo ${PLAZOS_DEL_CONTROL.sinSenalesMs / 1000} s sin dar señales desde la consola`,
+  });
+}
+
+/** Tope del `motivo` de un `control_dropped`: es para el registro, no un párrafo. */
+const TOPE_MOTIVO_DE_LA_APP = 200;
+
+/**
+ * La app avisa que NO tiene el control tomado que el hub cree que le dio
+ * (`control_dropped`, PROTOCOLS §1): lo soltó sola tras 30 s sin enlace con el
+ * Comando Central, o se reinició. El hub le cree y suelta el lock, sin
+ * reanudar: la app es la que está al lado del dron, y volver a tomarlo desde
+ * acá le podría sacar el mando a quien lo esté volando con el control físico.
+ *
+ * Solo el lock del titular que el aviso nombra (`by`): si en el medio el
+ * control pasó a otro, ese lo tomó después y el aviso no es suyo.
+ */
+function alSoltarseEnLaApp(droneId: string, msg: MensajeDron) {
+  const titular = controlledBy.get(droneId);
+  if (!titular || msg.by !== titular) return;
+  const motivo = typeof msg.motivo === 'string' ? msg.motivo.trim().slice(0, TOPE_MOTIVO_DE_LA_APP) : '';
+  releaseControl(droneId, 'Comando Central', {
+    resume: 'none',
+    forced: true,
+    motivo: 'app',
+    reason: motivo || 'la app del dron no tenía el control tomado',
+  });
+}
+
+/**
  * Con qué reanuda un dron cuando el hub le suelta el control POR SU CUENTA, sin
- * que nadie haya elegido: se le cayó la consola al titular, lo suspendieron o
- * lo borraron.
+ * que nadie haya elegido: suspendieron o borraron al titular. (Al que se le
+ * cae la consola ya no se lo suelta en el acto: ver `soltarPorInactividad`.)
  *
  * Si el último status trae un `target`, el dron está sobre un objetivo
  * (orbitándolo o siguiéndolo) y se suelta con 'none': al recibir
@@ -410,8 +528,12 @@ function reanudacionAlSoltar(droneId: string): 'none' | 'last' {
   return typeof target === 'object' && target !== null && !Array.isArray(target) ? 'none' : 'last';
 }
 
-/** Libera todos los drones controlados por un usuario (suspensión, borrado o desconexión). */
+/**
+ * Libera todos los drones controlados por un usuario (suspensión o borrado), y
+ * cancela los pedidos de control que tuviera esperando: ya no puede pilotear.
+ */
 export function releaseAllControlledBy(username: string, byUser: string, reason: string) {
+  control.cancelarPedidosDe(username, reason);
   for (const [droneId, holder] of controlledBy) {
     if (holder === username) {
       releaseControl(droneId, byUser, { resume: reanudacionAlSoltar(droneId), forced: byUser !== username, reason });
@@ -719,6 +841,9 @@ function handleDroneMessage(droneId: string, raw: string) {
       }
       break;
     }
+    case 'control_dropped':
+      alSoltarseEnLaApp(droneId, msg);
+      break;
     // Relevos, desvíos y emergencias (§1.b): cada coordinador dice si el tipo
     // es suyo. Cualquier otro tipo se ignora, como siempre.
     default:
@@ -880,8 +1005,14 @@ function handleOperatorMessage(ws: WebSocket, sesion: SesionConsola, datos: RawD
   if (bytesDelFrame(datos) > TOPE_MENSAJE_CONSOLA) return;
   const msg = parsearMensaje(textoDelFrame(datos)) as MensajeOperador | null;
   if (!msg) return;
-  // El mando es lo único que la consola manda para arriba; cualquier otro tipo
-  // se ignora en vez de tratarse como error.
+  // La señal de vida del titular (§3.b): sin cupo ni consulta a la base,
+  // porque no mueve nada y no le llega al dron. De cualquier otro, se ignora.
+  if (msg.type === 'control_heartbeat') {
+    if (sesionVigente(ws, sesion)) control.latido(String(msg.droneId), sesion.username);
+    return;
+  }
+  // Además de eso, el mando es lo único que la consola manda para arriba;
+  // cualquier otro tipo se ignora en vez de tratarse como error.
   const cupo = cupoDelMando(sesion, msg.type);
   if (!cupo) return;
 
@@ -889,6 +1020,8 @@ function handleOperatorMessage(ws: WebSocket, sesion: SesionConsola, datos: RawD
   // el mensaje muere en puedeMandar, que es lo que corresponde.
   const droneId = String(msg.droneId);
   if (!puedeMandar(ws, sesion, droneId, cupo)) return;
+  // Un mando que pasó es también una señal de vida del titular.
+  control.latido(droneId, sesion.username);
 
   // A propósito SIN createLog, ninguno de los dos: a 10 Hz un registro por
   // mensaje inundaría el log y taparía todo lo demás. Lo que queda registrado es
@@ -940,7 +1073,17 @@ function puedeMandar(ws: WebSocket, sesion: SesionConsola, droneId: string, cupo
   // canControl, le bajaron el rol o le dieron de baja la cuenta no le sirve
   // tener el socket abierto de antes. Es también la última línea de defensa si
   // alguna vez un camino liberara el permiso sin liberar el lock.
-  const cuenta = getActiveUser(sesion.username);
+  return cuentaQuePuedePilotear(sesion.username);
+}
+
+/**
+ * Si la cuenta puede pilotear AHORA, leída de la base: activa, no eliminada,
+ * con `canControl` y con rol de operador o más. La usan el mando en cada
+ * mensaje y el traspaso de un pedido de control (control.ts), que no le pasa
+ * el dron a quien perdió el permiso en los 10 s de la espera.
+ */
+function cuentaQuePuedePilotear(username: string): boolean {
+  const cuenta = getActiveUser(username);
   if (!cuenta || !cuenta.can_control) return false;
   // El tipo `Role` de la fila es una promesa del esquema, no una garantía: la
   // columna `role` no tiene CHECK (db.ts: "validado en código") y las
@@ -1018,10 +1161,13 @@ export function setupWebSocket(server: Server) {
   // corresponda. `unref` para que el barrido no tenga vivo al proceso por sí
   // solo, y se corta con el servidor.
   relevos.iniciar();
-  const barrido = setInterval(
-    () => sinTumbarElHub('el barrido de relevos', () => relevos.barrer()),
-    INTERVALO_BARRIDO_MS,
-  );
+  // El mismo barrido vence los pedidos de control y suelta a los titulares sin
+  // señales de vida (control.ts): cada uno con su red, para que un error en
+  // uno no le saque la vuelta al otro.
+  const barrido = setInterval(() => {
+    sinTumbarElHub('el barrido de relevos', () => relevos.barrer());
+    sinTumbarElHub('el barrido del control manual', () => control.barrer());
+  }, INTERVALO_BARRIDO_MS);
   barrido.unref();
   server.on('close', () => clearInterval(barrido));
 
@@ -1070,6 +1216,28 @@ export function setupWebSocket(server: Server) {
       });
       broadcastOperators({ type: 'event', event: ev });
       broadcastOperators({ type: 'drone_online', drone: droneCard(droneId) });
+      // El estado del control va antes que todo lo demás, y SIEMPRE: mientras
+      // el dron estuvo desconectado el lock pudo cambiar (lo soltaron, pasó a
+      // otro, el hub se reinició y los olvidó todos) sin que nadie pudiera
+      // avisarle. Sin titular, `control_released` con `resync: true`: la app
+      // que seguía en MANUAL con nadie al mando —que es justo donde no alerta
+      // (PROTOCOLS §4)— lo suelta como si lo hubiera soltado el barrido, con el
+      // mando de vuelta en el control físico, porque ese soltar tampoco lo
+      // eligió nadie (el `motivo: 'inactividad'` que se perdió con el dron
+      // desconectado, un reinicio del hub); a una sin el control tomado no le
+      // hace nada. Con titular,
+      // `control_taken` con `resync: true`, que la app NO toma como una toma
+      // nueva: si ya lo tenía no frena ni le saca la ruta que el titular le
+      // mandó sin soltarlo, y si no lo tenía contesta `control_dropped` y el hub
+      // lo suelta (ver alSoltarseEnLaApp), en vez de que la app le saque el
+      // mando a quien lo esté volando con el control físico.
+      const titular = controlledBy.get(droneId);
+      sendToDrone(
+        droneId,
+        titular
+          ? { type: 'control_taken', by: titular, resync: true }
+          : { type: 'control_released', by: 'Comando Central', resync: true },
+      );
       reenviarDecisionesRecientes(droneId);
       // Las bases donde puede bajar (desvío, RELEVOS §4), y el primer status
       // que llegue decide qué relevo se le reenvía (PROTOCOLS §1.b, "Reconexión").
@@ -1081,7 +1249,10 @@ export function setupWebSocket(server: Server) {
         if (drones.get(droneId) === ws) {
           drones.delete(droneId);
           lastStatus.delete(droneId);
-          controlledBy.delete(droneId);
+          // El lock NO se borra: sigue siendo de quien lo tenía, que sigue en la
+          // consola dando señales de vida, y al volver el dron se le dice a la
+          // app quién lo tiene (ver la conexión). Borrarlo acá, sin poder
+          // avisarle a nadie, dejaba a la consola y a la app en desacuerdo.
           relevos.alDesconectar(droneId);
           const evc = createLog('drone', 'DRONE_DISCONNECTED', 'backend', `${name} desconectado del Comando Central`, {
             droneId,
@@ -1128,10 +1299,15 @@ export function setupWebSocket(server: Server) {
     );
     ws.on('close', () => {
       operators.delete(ws);
-      // Si era la última conexión de ese usuario, no puede seguir controlando
+      // El control NO se suelta acá: una pestaña que recarga o un corte de red
+      // de dos segundos le sacaban el dron al que lo estaba volando. Lo suelta
+      // el barrido si en 30 s no llega ninguna señal de vida de ninguna de sus
+      // consolas (control.ts). Lo que sí se cancela en el acto, si era la última
+      // consola de la cuenta, es lo que esperaba: no se le traspasa un dron a
+      // quien ya no está mirando.
       const sigueConectado = [...operators.values()].some((s) => s.username === sesion.username);
       if (!sigueConectado) {
-        releaseAllControlledBy(sesion.username, sesion.username, 'el usuario se desconectó del Comando Central');
+        control.cancelarPedidosDe(sesion.username, `${sesion.username} se desconectó del Comando Central`);
       }
     });
   });

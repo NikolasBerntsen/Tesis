@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { PLAZOS_DEL_CONTROL } from '../../src/control';
 import { db } from '../../src/db';
+import { relojDelHub } from '../../src/reloj';
 import { createAlert } from '../../src/store';
+import { control } from '../../src/ws';
 import {
   crearUsuario, seed, startServer, login, api, connectWs, mkStatus, wait, tokenDeDron,
   CREDS, DRON, type TestServer, type WsClient,
@@ -338,8 +341,30 @@ describe('integración — objetivo en seguimiento y trazabilidad de la detecci�
   });
 
   describe('el hub suelta el control solo: el objetivo no se abandona', () => {
+    const relojReal = relojDelHub.ahora;
+    afterEach(() => {
+      relojDelHub.ahora = relojReal;
+    });
+
+    /**
+     * Al piloto se le cae la consola y pasan los 30 s sin señales de vida: el
+     * barrido le suelta el control (control.ts). Cerrar la consola sola ya no
+     * lo suelta: una pestaña que recarga no le saca el dron a nadie.
+     */
+    async function seCaeLaConsola(pilotoWs: WsClient, d1: WsClient) {
+      const t = Date.now();
+      relojDelHub.ahora = () => t;
+      await pilotoWs.close();
+      await wait(100);
+      expect(d1.got.some((m) => m.type === 'control_released')).toBe(false);
+      relojDelHub.ahora = () => t + PLAZOS_DEL_CONTROL.sinSenalesMs;
+      control.barrer();
+    }
+
     /** Piloto con el control de Alfa, y Alfa reportando el status pedido. */
     async function pilotoConControl(status: Record<string, unknown>) {
+      // Con el reloj de verdad: la toma anota la señal de vida con el reloj del hub.
+      relojDelHub.ahora = relojReal;
       const pilotoWs = await conn(piloto);
       const d1 = await conn(tokenDeDron(DRON.alfa));
       expect((await api(srv.base, `/api/drones/${DRON.alfa}/control`, piloto, { method: 'POST' })).status).toBe(200);
@@ -352,20 +377,22 @@ describe('integración — objetivo en seguimiento y trazabilidad de la detecci�
 
     it('si al titular se le cae la consola con un objetivo en seguimiento, se suelta sin resume_patrol', async () => {
       const { pilotoWs, d1 } = await pilotoConControl({ target: OBJETIVO });
-      await pilotoWs.close();
-      await d1.waitFor((m) => m.type === 'control_released');
+      await seCaeLaConsola(pilotoWs, d1);
+      expect(await d1.waitFor((m) => m.type === 'control_released')).toEqual({
+        type: 'control_released', by: 'Comando Central', motivo: 'inactividad',
+      });
       await wait(150);
       // con resume_patrol la app TERMINARÍA el seguimiento (§2)
       expect(d1.got.some((m) => m.type === 'resume_patrol')).toBe(false);
     });
 
-    it('sin objetivo (target null o ausente), se suelta con last: el dron vuelve a la ruta', async () => {
+    it('sin objetivo (target null o ausente) tampoco se reanuda: el dron no sale a patrullar porque se cayó una consola', async () => {
       for (const status of [{ target: null }, {}, { target: [] }]) {
         const { pilotoWs, d1 } = await pilotoConControl(status);
-        await pilotoWs.close();
-        await d1.waitFor((m) => m.type === 'control_released');
-        const reanuda = await d1.waitFor((m) => m.type === 'resume_patrol');
-        expect(reanuda.fromIndex, JSON.stringify(status)).toBeUndefined();
+        await seCaeLaConsola(pilotoWs, d1);
+        await d1.waitFor((m) => m.type === 'control_released' && m.motivo === 'inactividad');
+        await wait(100);
+        expect(d1.got.some((m) => m.type === 'resume_patrol'), JSON.stringify(status)).toBe(false);
         await d1.close();
         await wait(50);
       }

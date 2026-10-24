@@ -46,6 +46,12 @@ const CAMPO: Record<string, string> = {
   motivo: 'Motivo',
   teniaElControl: 'Tenía el control',
   forzado: 'Forzado',
+  // El pedido de control y su traspaso.
+  solicitante: 'Pidió el control',
+  titular: 'Tenía el control',
+  resultado: 'Cómo terminó',
+  de: 'Lo tenía',
+  a: 'Lo recibió',
   // Relevos, desvíos y emergencias (§7 del contrato).
   relevoId: 'Relevo',
   motivoFin: 'Cómo terminó',
@@ -72,7 +78,7 @@ const UNIDAD: Record<string, string> = { alt: 'm', bateria: '%' };
  * de verdad guardan una enumeración: un `decidedBy` puede valer "admin" y ahí
  * "admin" es el nombre de una persona, no el rol.
  */
-const CLAVES_ENUMERADAS = new Set(['role', 'rol', 'estado', 'status', 'decision', 'motivo', 'motivoFin', 'motivoDeB']);
+const CLAVES_ENUMERADAS = new Set(['role', 'rol', 'estado', 'status', 'decision', 'motivo', 'motivoFin', 'motivoDeB', 'resultado']);
 const VALOR_ENUMERADO: Record<string, string> = {
   field_operator: 'Operador de campo',
   operator: 'Operador',
@@ -82,6 +88,12 @@ const VALOR_ENUMERADO: Record<string, string> = {
   PENDING: 'Pendiente',
   VALIDATED: 'Validada',
   DISMISSED: 'Descartada',
+  // Cómo terminó un pedido de control, y por qué cambió de manos.
+  cedido: 'Lo cedió',
+  vencido: 'No contestó a tiempo',
+  mantenido: 'Lo mantuvo',
+  cancelado: 'Se canceló',
+  liberado: 'El control quedó libre',
   // Un `motivo` libre (el de soltar el control, el de cerrar la sesión de
   // campo) no está en esta lista y pasa tal cual.
   ...ESTADO_DEL_RELEVO,

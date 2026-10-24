@@ -780,6 +780,39 @@ class PatrolManagerRelevadorTest {
         assertTrue(banco.comando.alertas.isEmpty())
     }
 
+    /**
+     * Con el control de B tomado en camino, lo que ve su cámara no es de nadie:
+     * ni una alerta propia ni un seguimiento propio —antes MANUAL arrancaba uno,
+     * con su alert_request, encima del relevo—, y tampoco adelanta la toma, que
+     * movería a un dron que maneja una persona. Al soltarlo vuelve al relevo y
+     * la misma detección sí adelanta la toma, sin alertas.
+     */
+    @Test
+    fun conElControlTomadoEnCaminoLoQueVeNoAlertaNiAdelantaLaToma() = runBlocking {
+        enCamino()
+        banco.telemetria(norteM = 400.0, bateria = 90.0, alt = 60.0, gimbal = -30.0)
+        val (pLat, pLon) = punto(400.0)
+        val visto = Georreferencia.proyectar(pLat, pLon, 60.0, 0.0, -30.0, 0.5, 0.5)!!
+        val cerca = objetivo(12, (visto.lat - BancoDeRelevos.BASE_LAT) * Geo.METROS_POR_GRADO_LAT + 20.0)
+        banco.hub(relayTarget(7, 12, cerca, ts = 3_000, aNorteM = 600.0))
+        tomarElControl()
+
+        banco.deteccion.onDetection?.invoke(persona)
+        delay(80)
+        banco.deteccion.onDetection?.invoke(persona)
+        delay(300)
+        assertTrue("sin alertas propias: ${banco.comando.alertas}", banco.comando.alertas.isEmpty())
+        assertNull("ni un seguimiento propio", patrulla.objetivo)
+        assertTrue("ni la toma adelantada", banco.mensajes("relay_ready").isEmpty())
+        assertEquals(PatrolState.MANUAL, patrulla.state.value)
+
+        soltarElControl()
+        esperarA("de vuelta al relevo") { patrulla.state.value == PatrolState.RELEVANDO }
+        banco.deteccion.onDetection?.invoke(persona)
+        esperarA("la toma adelantada, ya suelto") { banco.mensajes("relay_ready").isNotEmpty() }
+        assertTrue(banco.comando.alertas.isEmpty())
+    }
+
     /** En el traspaso las detecciones de B siguen alimentando su rastreador: no se tiran. */
     @Test
     fun enElTraspasoSusDeteccionesSiguenActualizandoAlObjetivo() = runBlocking {

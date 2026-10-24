@@ -285,6 +285,10 @@ export const ETIQUETAS_DE_EVENTO: Record<string, string> = {
   EMERGENCY_LANDING: 'Aterrizaje de emergencia',
   EMERGENCY_LANDED: 'Aterrizó fuera de base',
   EMERGENCY_RECOVERED: 'Dron recuperado',
+  // El control manual entre personas (PROTOCOLS, "Control manual").
+  CONTROL_REQUESTED: 'Pidió el control',
+  CONTROL_TRANSFERRED: 'El control cambió de manos',
+  CONTROL_REQUEST_ENDED: 'Pedido de control terminado',
 };
 
 /** El rótulo de un tipo de evento, o `null` si la consola no le conoce uno. */

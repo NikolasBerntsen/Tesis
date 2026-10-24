@@ -11,8 +11,9 @@ se pueden exportar como imagen sin herramientas aparte.
 
 ## 1. Diagrama entidad-relación
 
-El almacenamiento es una única base SQLite (`backend/src/db.ts`). Siete tablas y
-una estructura embebida.
+El almacenamiento es una única base SQLite (`backend/src/db.ts`). Ocho tablas y
+una estructura embebida (las de relevos y emergencias se describen en
+docs/RELEVOS.md).
 
 Dos cosas para leer el diagrama:
 
@@ -117,7 +118,14 @@ erDiagram
         TEXT meta "JSON libre; en los cambios lleva el antes y el después"
     }
 
+    preferencias_de_usuario {
+        TEXT username PK, FK "una fila por persona"
+        TEXT controles "JSON validado: los ajustes de la vista de pilotaje"
+        TEXT actualizado_en
+    }
+
     bases       |o--o{ drones      : "aloja"
+    users       ||--o| preferencias_de_usuario : "ajusta"
     bases       ||--o{ base_routes : "habilita"
     patrol_routes ||--o{ base_routes : "se asigna a"
     patrol_routes ||--|{ waypoint   : "contiene"
@@ -166,6 +174,15 @@ de baja y el registro tiene que seguir diciendo quién fue.
   completos, con la ruta, y nunca se consultan por separado. Una tabla aparte
   agregaría un join a cada lectura sin habilitar ninguna consulta que el sistema
   necesite.
+- **Las preferencias son de la persona, en una tabla propia.** Los ajustes del
+  control manual (sensibilidad del mouse, velocidades del teclado) siguen a la
+  persona de una computadora a otra y valen para cualquier dron, así que cuelgan
+  de `users` por `username` y no de `drones`. No son una columna de `users`
+  porque son un dato de la interfaz y no de la cuenta: ninguna vista de usuarios
+  ni la reconstrucción de esa tabla tiene por qué arrastrarlos. El JSON se
+  guarda ya validado y se vuelve a leer clave por clave (PROTOCOLS §5,
+  "Preferencias de la persona"). La baja de una cuenta es lógica: sus
+  preferencias quedan y vuelven si se la restaura.
 
 ---
 

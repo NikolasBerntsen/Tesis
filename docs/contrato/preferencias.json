@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "contrato": "docs/PROTOCOLS.md §5, «Preferencias de la persona» (GET y PUT /api/me/preferencias).",
+  "uso": "Los ajustes del control manual que guarda cada persona, con sus rangos y sus valores por defecto. Lo leen las pruebas del backend (fs, relativo a la raíz del repo) y las de la consola: el backend valida con estos números y la consola arma sus deslizadores con ellos, así que si cambia un rango cambian juntos el documento, este archivo y las dos puntas. Forma: controles.<clave>.{tipo, minimo, maximo, paso, porDefecto}; ejemplos.validos[].{caso, cuerpo} e invalidos[].{caso, porque, cuerpo}, cuerpos del PUT.",
+  "limites": {
+    "cuerpoMaxBytes": 2048
+  },
+  "controles": {
+    "sensibilidadHorizontal": { "tipo": "numero", "minimo": 0.2, "maximo": 3, "paso": 0.1, "porDefecto": 1 },
+    "sensibilidadVertical": { "tipo": "numero", "minimo": 0.2, "maximo": 3, "paso": 0.1, "porDefecto": 1 },
+    "invertirVertical": { "tipo": "booleano", "porDefecto": false },
+    "velocidadNormal": { "tipo": "numero", "minimo": 0.1, "maximo": 1, "paso": 0.05, "porDefecto": 0.5 },
+    "multiplicadorShift": { "tipo": "numero", "minimo": 1, "maximo": 4, "paso": 0.25, "porDefecto": 2 },
+    "velocidadSubida": { "tipo": "numero", "minimo": 0.1, "maximo": 1, "paso": 0.05, "porDefecto": 0.5 },
+    "velocidadGiro": { "tipo": "numero", "minimo": 0.1, "maximo": 1, "paso": 0.05, "porDefecto": 0.5 },
+    "pasoDeRueda": { "tipo": "numero", "minimo": 1, "maximo": 15, "paso": 1, "porDefecto": 5 }
+  },
+  "ejemplos": {
+    "validos": [
+      {
+        "caso": "todos los ajustes, como los manda la consola",
+        "cuerpo": {
+          "controles": {
+            "sensibilidadHorizontal": 1.8,
+            "sensibilidadVertical": 0.6,
+            "invertirVertical": true,
+            "velocidadNormal": 0.35,
+            "multiplicadorShift": 2.5,
+            "velocidadSubida": 0.4,
+            "velocidadGiro": 0.6,
+            "pasoDeRueda": 3
+          }
+        }
+      },
+      {
+        "caso": "en los topes de cada rango",
+        "cuerpo": {
+          "controles": {
+            "sensibilidadHorizontal": 3,
+            "sensibilidadVertical": 0.2,
+            "velocidadNormal": 1,
+            "multiplicadorShift": 1,
+            "velocidadSubida": 0.1,
+            "velocidadGiro": 1,
+            "pasoDeRueda": 15
+          }
+        }
+      },
+      { "caso": "vacío: todo vuelve a los valores por defecto", "cuerpo": { "controles": {} } }
+    ],
+    "invalidos": [
+      { "caso": "sin controles", "porque": "el cuerpo tiene que traer el objeto controles", "cuerpo": {} },
+      { "caso": "controles no es un objeto", "porque": "una lista no es un juego de ajustes", "cuerpo": { "controles": [1, 2] } },
+      { "caso": "un ajuste desconocido", "porque": "sólo se guardan las claves de este archivo", "cuerpo": { "controles": { "volumen": 3 } } },
+      {
+        "caso": "otro campo además de controles",
+        "porque": "las preferencias son de quien inició sesión: nombrar a otra persona no cambia de quién son",
+        "cuerpo": { "controles": {}, "username": "admin" }
+      },
+      { "caso": "un número escrito como texto", "porque": "nada se convierte (§1.b)", "cuerpo": { "controles": { "sensibilidadHorizontal": "1.5" } } },
+      { "caso": "debajo del mínimo", "porque": "rango [0,1; 1]", "cuerpo": { "controles": { "velocidadNormal": 0.05 } } },
+      { "caso": "arriba del máximo", "porque": "rango [1; 4]", "cuerpo": { "controles": { "multiplicadorShift": 5 } } },
+      { "caso": "null en un número", "porque": "null no es «el valor por defecto»: para eso se omite la clave", "cuerpo": { "controles": { "pasoDeRueda": null } } },
+      { "caso": "el interruptor como número", "porque": "invertirVertical es true o false", "cuerpo": { "controles": { "invertirVertical": 1 } } }
+    ]
+  }
+}

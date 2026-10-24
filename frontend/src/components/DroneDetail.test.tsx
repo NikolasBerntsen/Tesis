@@ -5,7 +5,7 @@ import { ProveedorDeAvisos } from './AvisosFlotantes';
 import DroneDetail from './DroneDetail';
 import ProveedorDeAlertas from './ProveedorDeAlertas';
 import type { MapItem, WaypointsLayer } from './DronesMap';
-import { api, rutasDeBase } from '../api';
+import { ErrorDeApi, api, pedirControl, rutasDeBase } from '../api';
 import { makeAlert, makeDrone, makeEvent, makeMe, makeRelevo, makeRoute, makeStatus } from '../test/fixtures';
 import type { Alert, ObjetivoEnSeguimiento } from '../types';
 
@@ -28,11 +28,13 @@ vi.mock('../api', async (importarOriginal) => ({
   ...(await importarOriginal<typeof import('../api')>()),
   api: vi.fn(),
   rutasDeBase: vi.fn(),
+  pedirControl: vi.fn(),
 }));
 // El minimapa de la vista de pilotaje sí usa Leaflet: va el doble compartido.
 vi.mock('leaflet', async () => (await import('../test/dobleLeaflet')).dobleLeaflet());
 const apiMock = vi.mocked(api);
 const rutasDeBaseMock = vi.mocked(rutasDeBase);
+const pedirControlMock = vi.mocked(pedirControl);
 
 /** La vista de pilotaje abierta, o `null`. */
 const vistaDePilotaje = () => screen.queryByRole('dialog', { name: 'Pilotaje de Alfa' });
@@ -99,6 +101,7 @@ beforeEach(() => {
     if (path.startsWith('/events')) return Promise.resolve([]);
     return Promise.resolve({});
   });
+  pedirControlMock.mockReset();
   // Por defecto la base del dron tiene habilitada la ruta que traen los tests.
   rutasDeBaseMock.mockReset();
   rutasDeBaseMock.mockResolvedValue([makeRoute({ id: 1, name: 'Ruta Perimetral' })]);
@@ -185,7 +188,7 @@ describe('DroneDetail', () => {
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', {
         method: 'DELETE',
-        body: JSON.stringify({ resume: 'last' }),
+        body: JSON.stringify({ resume: 'last', titular: 'admin1' }),
       }),
     );
   });
@@ -200,11 +203,20 @@ describe('DroneDetail', () => {
 
     // Le corta el vuelo a otra persona: primero pregunta, con la consecuencia dicha.
     const dialogo = await screen.findByRole('dialog', { name: 'Quitarle el control a oper9' });
-    expect(dialogo).toHaveTextContent('oper9 deja de pilotear Alfa en el acto y el dron vuelve a patrullar su ruta.');
+    expect(dialogo).toHaveTextContent(
+      'oper9 deja de pilotear Alfa en el acto y el dron vuelve a patrullar su ruta, o sigue bajando hasta el suelo si ' +
+        'está aterrizando.',
+    );
     expect(apiMock).not.toHaveBeenCalledWith('/drones/d1/control', expect.anything());
 
     await userEvent.click(within(dialogo).getByRole('button', { name: 'Quitar control' }));
-    await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', expect.objectContaining({ method: 'DELETE' })));
+    // Fuerza: el supervisor eligió sacárselo a quien lo tenga, aunque haya cambiado de manos.
+    await waitFor(() =>
+      expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', {
+        method: 'DELETE',
+        body: JSON.stringify({ resume: 'last', titular: 'oper9', forzar: true }),
+      }),
+    );
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
@@ -587,7 +599,7 @@ describe('DroneDetail — salir de la vista de pilotaje', () => {
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', {
         method: 'DELETE',
-        body: JSON.stringify({ resume: 'last' }),
+        body: JSON.stringify({ resume: 'last', titular: 'admin1' }),
       }),
     );
     // Lo cerró el operador: no hay nada que explicarle.
@@ -600,7 +612,7 @@ describe('DroneDetail — salir de la vista de pilotaje', () => {
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', {
         method: 'DELETE',
-        body: JSON.stringify({ resume: 'none' }),
+        body: JSON.stringify({ resume: 'none', titular: 'admin1' }),
       }),
     );
   });
@@ -1344,7 +1356,7 @@ describe('DroneDetail — objetivo', () => {
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', {
         method: 'DELETE',
-        body: JSON.stringify({ resume: 'none' }),
+        body: JSON.stringify({ resume: 'none', titular: 'admin1' }),
       }),
     );
 
@@ -1352,7 +1364,7 @@ describe('DroneDetail — objetivo', () => {
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', {
         method: 'DELETE',
-        body: JSON.stringify({ resume: 'last' }),
+        body: JSON.stringify({ resume: 'last', titular: 'admin1' }),
       }),
     );
   });
@@ -1370,7 +1382,7 @@ describe('DroneDetail — objetivo', () => {
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', {
         method: 'DELETE',
-        body: JSON.stringify({ resume: 'none' }),
+        body: JSON.stringify({ resume: 'none', titular: 'oper9', forzar: true }),
       }),
     );
   });
@@ -1597,9 +1609,13 @@ describe('DroneDetail — soltar el control de un dron en un relevo (RELEVOS §3
     status: makeStatus({ state: 'MANUAL', controlledBy: 'admin1', flying: true, routeId: null, target: null, ...status }),
   });
 
-  const soltoCon = (resume: 'none' | 'last') =>
+  /** Soltó con `resume`, diciendo qué titular suelta (y, el «Quitar control» de un supervisor, forzando). */
+  const soltoCon = (resume: 'none' | 'last', quien: Record<string, unknown> = { titular: 'admin1' }) =>
     waitFor(() =>
-      expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', { method: 'DELETE', body: JSON.stringify({ resume }) }),
+      expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', {
+        method: 'DELETE',
+        body: JSON.stringify({ resume, ...quien }),
+      }),
     );
 
   async function salirDelPilotaje(): Promise<HTMLElement> {
@@ -1621,7 +1637,10 @@ describe('DroneDetail — soltar el control de un dron en un relevo (RELEVOS §3
       }),
     );
     await soltoCon('none');
-    expect(apiMock).not.toHaveBeenCalledWith('/drones/d1/control', { method: 'DELETE', body: JSON.stringify({ resume: 'last' }) });
+    expect(apiMock).not.toHaveBeenCalledWith('/drones/d1/control', {
+      method: 'DELETE',
+      body: JSON.stringify({ resume: 'last', titular: 'admin1' }),
+    });
   });
 
   it('el supervisor que le quita el control al que va a relevar tampoco cancela el relevo', async () => {
@@ -1635,7 +1654,7 @@ describe('DroneDetail — soltar el control de un dron en un relevo (RELEVOS §3
     const dialogo = await screen.findByRole('dialog', { name: 'Quitarle el control a oper9' });
     expect(dialogo).toHaveTextContent('oper9 deja de pilotear Alfa en el acto y el dron sigue con el relevo.');
     await userEvent.click(within(dialogo).getByRole('button', { name: 'Quitar control' }));
-    await soltoCon('none');
+    await soltoCon('none', { titular: 'oper9', forzar: true });
   });
 
   it('en la tarjeta, soltar sin orden va primero; reanudar queda aparte y dice qué le hace al relevo', async () => {
@@ -1721,5 +1740,104 @@ describe('DroneDetail — soltar el control de un dron en un relevo (RELEVOS §3
     expect(screen.queryByTestId('aviso-reanudar-en-relevo')).not.toBeInTheDocument();
     await salirDelPilotaje();
     await soltoCon('last');
+  });
+});
+
+describe('DroneDetail — pedirle el control a quien lo tiene', () => {
+  const OPERADOR = makeMe({ username: 'oper1', role: 'operator', canControl: true });
+  /** Otro tiene el control: es el caso en el que se pide en vez de tomarlo. */
+  const conOtroAlMando = { me: OPERADOR, drone: makeDrone({ droneId: 'd1', displayName: 'Alfa', controlledBy: 'piloto' }) };
+  const pendiente = { resultado: 'pendiente' as const, pedido: { solicitante: 'oper1', titular: 'piloto', venceEn: '', restanteMs: 10_000 } };
+  const pedidoPropio = { droneId: 'd1', solicitante: 'oper1', titular: 'piloto', venceEnMs: Date.now() + 10_000 };
+
+  /** Abre la pregunta y devuelve el diálogo. */
+  async function preguntar() {
+    await esperarCarga();
+    fireEvent.click(screen.getByRole('button', { name: 'Pedir el control' }));
+    return screen.getByRole('dialog', { name: 'Pedir el control de Alfa' });
+  }
+
+  it('primero avisa que alguien lo está volando; confirmado, queda el pedido y la vista espera', async () => {
+    pedirControlMock.mockResolvedValue(pendiente);
+    renderDetail(conOtroAlMando);
+    const dialogo = await preguntar();
+    expect(dialogo).toHaveTextContent('piloto está piloteando este dron. ¿Querés pedirle el control?');
+    expect(dialogo).toHaveTextContent('piloto tiene 10 segundos para cedértelo o mantenerlo.');
+    // No promete que queda quieto: eso pasa solo si lo estaban volando a mano.
+    expect(dialogo).toHaveTextContent(
+      'si lo estaba volando a mano, el dron queda quieto donde está, a la espera de tus órdenes; si no, sigue con lo ' +
+        'que estaba haciendo.',
+    );
+    // Sin confirmar no se pide nada.
+    expect(pedirControlMock).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialogo).getByRole('button', { name: 'Pedir el control' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Pedir el control de Alfa' })).not.toBeInTheDocument());
+    expect(pedirControlMock).toHaveBeenCalledWith('d1');
+    expect(vistaDePilotaje()).not.toBeInTheDocument();
+  });
+
+  it('cuando el control llega (cedido o sin respuesta), se abre la vista de pilotaje', async () => {
+    pedirControlMock.mockResolvedValue(pendiente);
+    const usados = renderDetail(conOtroAlMando);
+    fireEvent.click(within(await preguntar()).getByRole('button', { name: 'Pedir el control' }));
+    await waitFor(() => expect(pedirControlMock).toHaveBeenCalled());
+
+    usados.volverARenderizar({ pedidoDeControl: pedidoPropio });
+    expect(screen.getByTestId('pedido-de-control')).toHaveTextContent('Le pediste el control a piloto: esperando su respuesta.');
+    expect(screen.getByRole('button', { name: 'Pedir el control' })).toBeDisabled();
+
+    usados.volverARenderizar({ drone: makeDrone({ droneId: 'd1', displayName: 'Alfa', controlledBy: 'oper1' }), pedidoDeControl: null });
+    expect(vistaDePilotaje()).toBeInTheDocument();
+  });
+
+  it('si el titular lo mantiene, no se abre nada; un control que llega después, sin pedirlo, tampoco abre la vista', async () => {
+    pedirControlMock.mockResolvedValue(pendiente);
+    const usados = renderDetail(conOtroAlMando);
+    fireEvent.click(within(await preguntar()).getByRole('button', { name: 'Pedir el control' }));
+    await waitFor(() => expect(pedirControlMock).toHaveBeenCalled());
+    usados.volverARenderizar({ pedidoDeControl: pedidoPropio });
+    usados.volverARenderizar({ pedidoDeControl: null });
+    expect(vistaDePilotaje()).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pedir el control' })).toBeEnabled();
+
+    usados.volverARenderizar({ drone: makeDrone({ droneId: 'd1', displayName: 'Alfa', controlledBy: 'oper1' }), pedidoDeControl: null });
+    expect(vistaDePilotaje()).not.toBeInTheDocument();
+  });
+
+  it('si en el medio quedó libre, el control se da en el acto y se abre la vista', async () => {
+    pedirControlMock.mockResolvedValue({ resultado: 'otorgado', drone: makeDrone({ controlledBy: 'oper1' }) });
+    renderDetail(conOtroAlMando);
+    fireEvent.click(within(await preguntar()).getByRole('button', { name: 'Pedir el control' }));
+    expect(await screen.findByRole('dialog', { name: 'Pilotaje de Alfa' })).toBeInTheDocument();
+  });
+
+  it('si otro ya lo pidió, el motivo se lee adentro del diálogo', async () => {
+    pedirControlMock.mockRejectedValue(new ErrorDeApi('relevo ya pidió el control de este dron: esperá a que le contesten', 409));
+    renderDetail(conOtroAlMando);
+    const dialogo = await preguntar();
+    fireEvent.click(within(dialogo).getByRole('button', { name: 'Pedir el control' }));
+    expect(await within(dialogo).findByRole('alert')).toHaveTextContent('relevo ya pidió el control de este dron');
+  });
+
+  it('con el dron desconectado no se pide, como no se toma: no se puede volar', async () => {
+    renderDetail({ ...conOtroAlMando, drone: { ...conOtroAlMando.drone, online: false } });
+    await esperarCarga();
+    expect(screen.getByText(/Controlado por/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pedir el control' })).toBeDisabled();
+  });
+
+  it('con el pedido de otro en curso, el botón espera y dice de quién es', async () => {
+    renderDetail({ ...conOtroAlMando, pedidoDeControl: { ...pedidoPropio, solicitante: 'tercero' } });
+    await esperarCarga();
+    expect(screen.getByRole('button', { name: 'Pedir el control' })).toBeDisabled();
+    expect(screen.getByTestId('pedido-de-control')).toHaveTextContent('tercero ya le pidió el control a piloto: esperá a que le conteste.');
+  });
+
+  it('si el control cambia de manos mientras se lee la pregunta, la pregunta se va', async () => {
+    const usados = renderDetail(conOtroAlMando);
+    await preguntar();
+    usados.volverARenderizar({ drone: makeDrone({ droneId: 'd1', displayName: 'Alfa', controlledBy: 'otro' }) });
+    expect(screen.queryByRole('dialog', { name: 'Pedir el control de Alfa' })).not.toBeInTheDocument();
   });
 });

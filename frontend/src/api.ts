@@ -1,3 +1,4 @@
+import type { PedidoDelHub, ResultadoDelPedido } from './control';
 import type {
   BaseAsset,
   PatrolRoute,
@@ -17,6 +18,7 @@ import type {
   TamanioPagina,
   UserView,
 } from './types';
+import type { ControlesDeVuelo } from './preferenciasDeControl';
 
 const TOKEN_KEY = 'cc_token';
 const USER_KEY = 'cc_user';
@@ -121,6 +123,40 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   return body as T;
 }
 
+// ---- Preferencias de la persona ----
+
+/** Lo que devuelven GET y PUT /api/me/preferencias (PROTOCOLS §5). */
+export interface PreferenciasGuardadas {
+  /** Sin validar: quien la usa la pasa por `normalizarControles`. */
+  controles: unknown;
+  actualizadoEn: string | null;
+}
+
+/**
+ * Como `api`, pero un 401 no recarga la página. Las preferencias se guardan de
+ * fondo mientras se vuela: que la sesión venza no puede sacar al operador de la
+ * vista de pilotaje en medio de un vuelo por un ajuste del mouse. El vencimiento
+ * lo avisa el resto de la consola; acá es un guardado que no salió.
+ */
+async function pedidoDeFondo<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const res = await fetch(`/api${path}`, {
+    ...options,
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ErrorDeApi(body.error ?? `Error ${res.status}`, res.status);
+  return body as T;
+}
+
+export function traerPreferencias(): Promise<PreferenciasGuardadas> {
+  return pedidoDeFondo<PreferenciasGuardadas>('/me/preferencias');
+}
+
+/** Reemplaza los ajustes del control de la persona por estos (el PUT no mezcla). */
+export function guardarPreferencias(controles: ControlesDeVuelo): Promise<PreferenciasGuardadas> {
+  return pedidoDeFondo<PreferenciasGuardadas>('/me/preferencias', { method: 'PUT', body: JSON.stringify({ controles }) });
+}
+
 /**
  * Por qué no se pudo decidir una alerta, dicho para el operador. Antes estos
  * rechazos iban a `console.error` y el operador apretaba "Validar" sin que
@@ -139,6 +175,30 @@ export function motivoDelRechazoDeDecision(e: unknown): string {
   }
   const detalle = e instanceof Error ? e.message : String(e);
   return `No se pudo registrar la decisión: ${detalle}`;
+}
+
+// ---- Pedido de control (PROTOCOLS §5) ----
+
+/** Libre o ya tuyo, el control se da en el acto; si lo tiene otro, queda el pedido esperando su respuesta. */
+export type RespuestaAlPedirControl =
+  | { resultado: 'otorgado'; drone: Drone }
+  | { resultado: 'pendiente'; pedido: PedidoDelHub };
+
+export function pedirControl(droneId: string): Promise<RespuestaAlPedirControl> {
+  return api<RespuestaAlPedirControl>(`/drones/${droneId}/control/request`, { method: 'POST' });
+}
+
+/** La respuesta del titular; solo él la puede dar. */
+export function contestarPedidoDeControl(
+  droneId: string,
+  respuesta: 'ceder' | 'mantener',
+): Promise<{ resultado: ResultadoDelPedido }> {
+  return api(`/drones/${droneId}/control/request/answer`, { method: 'POST', body: JSON.stringify({ respuesta }) });
+}
+
+/** El que pidió el control se arrepiente antes de que le contesten. */
+export function cancelarPedidoDeControl(droneId: string): Promise<{ resultado: ResultadoDelPedido }> {
+  return api(`/drones/${droneId}/control/request`, { method: 'DELETE' });
 }
 
 // ---- Query strings ----

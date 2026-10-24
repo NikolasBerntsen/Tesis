@@ -1,5 +1,9 @@
 <resources>
-    <string name="app_name">Alta en el Cielo</string>
+    <!-- No se llama app_name a propósito: el MSDK de DJI trae su propio app_name
+         traducido a 13 idiomas («DJI Pilot 2» en español), y una traducción de una
+         librería le gana al valor por defecto de la app. Con un teléfono en español
+         el lanzador decía «DJI Pilot 2». -->
+    <string name="nombre_app">Alta en el Cielo</string>
     <string name="cancelar">Cancelar</string>
     <string name="guardar">Guardar</string>
     <string name="continuar">Continuar</string>

@@ -354,7 +354,20 @@ cada cambio y cada 5 s mientras esté `EN_CAMINO`.
 - Antes del primer vuelo real, en banco con el simulador del MSDK y sin hélices:
   `KeyStopGoHome` con Virtual Stick, `KeyFailsafeAction = LANDING`, la respuesta
   a `KeyHomeLocation` en otra base, `KeyLowBatteryRTHConfirm(false)` y los
-  motivos de `FlightControlAuthorityChangeReason`.
+  motivos de `FlightControlAuthorityChangeReason`. Y la secuencia de un
+  aterrizaje de la app, con `adb logcat -s DjiDroneController PatrolManager`:
+  el Virtual Stick deshabilitado antes de `KeyStartAutoLanding` (y que nada lo
+  vuelva a habilitar mientras baja: el mando, tomar o soltar el control), el
+  modo `AUTO_LANDING` y `KeyIsInLandingMode` durante la bajada, un
+  `KeyIsLandingConfirmationNeeded` que ya estaba en pie al llegar la orden, y
+  si un `KeyConfirmLanding` repetido mientras lo sigue pidiendo lo baja.
+  Y el mando devuelto al control físico del control manual sin nadie al mando
+  (PROTOCOLS, "Control manual"): con el dron estacionario bajo el control de la
+  consola, cortarle la red a la consola 30 s (y, aparte, al teléfono): el
+  logcat muestra «Mando devuelto al control físico» y el Virtual Stick
+  deshabilitado, el dron queda quieto, las palancas del RC-N3 lo mueven en el
+  acto, y tomarlo de nuevo desde la consola le vuelve a habilitar el Virtual
+  Stick.
 - Primeros vuelos reales: dos aparatos, campo abierto, un operador por dron,
   con los umbrales de batería y de relevo subidos 30 puntos para ejercitar la
   lógica lejos de la batería crítica.

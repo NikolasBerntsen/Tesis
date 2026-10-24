@@ -294,6 +294,20 @@ export function IconoMando(props: PropsDeIcono) {
   );
 }
 
+/**
+ * Un engranaje de ocho dientes: los ajustes del control en la vista de
+ * pilotaje. Es el único lugar de la consola que lo lleva: arriba, junto a la
+ * sesión, se leería como "configuración" sin que haya nada que configurar.
+ */
+export function IconoEngranaje(props: PropsDeIcono) {
+  return (
+    <Trazo {...props}>
+      <path d="M10.16 5.14 10.5 2.52h3l.34 2.62A7.1 7.1 0 0 1 15.55 5.85l2.09-1.62 2.13 2.13-1.62 2.09A7.1 7.1 0 0 1 18.86 10.16l2.62.34v3l-2.62.34A7.1 7.1 0 0 1 18.15 15.55l1.62 2.09-2.13 2.13-2.09-1.62A7.1 7.1 0 0 1 13.84 18.86l-.34 2.62h-3l-.34-2.62A7.1 7.1 0 0 1 8.45 18.15l-2.09 1.62-2.13-2.13 1.62-2.09A7.1 7.1 0 0 1 5.14 13.84l-2.62-.34v-3l2.62-.34A7.1 7.1 0 0 1 5.85 8.45L4.23 6.36l2.13-2.13 2.09 1.62A7.1 7.1 0 0 1 10.16 5.14Z" />
+      <circle cx="12" cy="12" r="3" />
+    </Trazo>
+  );
+}
+
 /** La casa: volver a la base. */
 export function IconoCasa(props: PropsDeIcono) {
   return (

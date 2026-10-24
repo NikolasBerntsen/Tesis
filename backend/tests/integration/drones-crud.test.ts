@@ -296,6 +296,7 @@ describe('integración — listado de drones', () => {
       online: false,
       lastStatus: null,
       controlledBy: null,
+      pedidoDeControl: null,
     });
   });
 });
