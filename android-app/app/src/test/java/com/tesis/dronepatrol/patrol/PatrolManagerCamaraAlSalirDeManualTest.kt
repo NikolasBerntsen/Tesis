@@ -177,16 +177,21 @@ class PatrolManagerCamaraAlSalirDeManualTest {
      * Con un objetivo en seguimiento, soltar vuelve a orbitarlo: la órbita apunta
      * la cámara y solo la vuelve a apuntar si lo que quiere se corre más de 3°,
      * así que una inclinación vieja que le llegara después le quedaría puesta.
+     * El objetivo se detecta patrullando y después se toma el control: en
+     * MANUAL una detección ya no arranca ningún seguimiento.
      */
     @Test
     fun alVolverAlObjetivoTiraLaInclinacionAntesDeLaOrbita() = runBlocking {
         telemetria()
-        tomarElControl()
+        patrulla.startPatrol(ruta)
+        esperarEstado(PatrolState.PATROLLING)
         val persona = Deteccion(listOf("PERSON"), 0.9, listOf(Caja("PERSON", 0.9, 0.5, 0.5, 0.02, 0.05)), null, 1L)
         deteccion.onDetection?.invoke(persona)
         delay(60)
         deteccion.onDetection?.invoke(persona)
         esperarA("el objetivo en seguimiento") { patrulla.objetivo != null }
+        esperarEstado(PatrolState.ORBITING)
+        tomarElControl()
         val desde = dron.ordenes.size
         moverLaRueda()
 

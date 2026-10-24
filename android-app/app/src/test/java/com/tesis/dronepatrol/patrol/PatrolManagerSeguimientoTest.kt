@@ -368,25 +368,37 @@ class PatrolManagerSeguimientoTest {
         assertNotNull(patrulla.objetivo)
     }
 
-    /** En control manual, una detección arranca el seguimiento sin sacarle el dron al operador. */
+    /**
+     * La alerta que ya estaba pendiente al tomar el control sigue viva: el
+     * objetivo se sigue estimando, la decisión que llega mientras el operador
+     * maneja se le aplica, lo que el detector ve en MANUAL (el mismo objetivo u
+     * otra cosa) no suma alertas, y al soltar el dron vuelve a él con su alerta.
+     */
     @Test
-    fun enManualUnaDeteccionAlertaYAlSoltarElDronVaAlObjetivo() = runBlocking {
-        patrulla.start()
-        telemetria()
+    fun conUnObjetivoYaSeguidoEnManualNoSeSumanAlertasYAlSoltarVuelveAEl() = runBlocking {
+        orbitandoUnaPersona()
         mensaje("""{"type":"control_taken","by":"op"}""")
         withTimeout(5_000) { patrulla.state.first { it == PatrolState.MANUAL } }
 
+        reloj.adelantar(500)
         detectar()
         detectar()
-        esperarA("la alerta") { comandoCentral.alertas.size == 1 }
-        esperarA("TARGET_DETECTED") { comandoCentral.eventos("TARGET_DETECTED").isNotEmpty() }
+        val vehiculo = Deteccion(listOf("VEHICLE"), 0.9, listOf(Caja("VEHICLE", 0.9, 0.2, 0.2, 0.1, 0.1)), null, 2L)
+        detectar(vehiculo)
+        detectar(vehiculo)
+        mensaje("""{"type":"alert_decision","alertId":$ALERTA,"decision":"VALIDATED","decidedBy":"op"}""")
+        esperarA("la validación aplicada en MANUAL") { patrulla.objetivo?.decision == "VALIDATED" }
+        delay(200)
+        assertEquals("ninguna alerta nueva mientras maneja", 1, comandoCentral.alertas.size)
+        assertEquals(ALERTA, patrulla.objetivo?.alertId)
         assertEquals(PatrolState.MANUAL, patrulla.state.value)
-        assertNull("el dron sigue siendo del operador", dron.ultimaOrbita)
-        assertNotNull(patrulla.objetivo)
 
         mensaje("""{"type":"control_released","by":"op"}""")
         withTimeout(5_000) { patrulla.state.first { it == PatrolState.ORBITING } }
-        esperarA("la órbita sobre el objetivo") { dron.ultimaOrbita != null }
+        esperarA("TRACKING_RESUMED") { comandoCentral.eventos("TRACKING_RESUMED").isNotEmpty() }
+        assertEquals(ALERTA, comandoCentral.eventos("TRACKING_RESUMED").single().getLong("alertId"))
+        delay(200)
+        assertEquals("tampoco al soltar", 1, comandoCentral.alertas.size)
     }
 
     // ---- Despegue en el lugar desde la propia app ----

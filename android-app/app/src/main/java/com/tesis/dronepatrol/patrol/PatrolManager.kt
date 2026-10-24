@@ -192,17 +192,34 @@ class PatrolManager(
 
         /**
          * Estados desde los que una detección arranca el seguimiento del
-         * objetivo (con el dron en el aire, a la altura de trabajo y con GPS). En
-         * MANUAL el seguimiento arranca pero el dron no se mueve solo: sigue
-         * siendo del operador, y al soltarlo va al objetivo.
+         * objetivo (con el dron en el aire, a la altura de trabajo y con GPS).
+         * MANUAL ya no está: ahí no se alerta (ver [ESTADOS_SIN_ALERTAS]) y el
+         * seguimiento nace con su alerta, porque su `ref` es el que reconoce el
+         * alert_ack y la decisión del operador.
          */
-        val ESTADOS_QUE_SIGUEN = setOf(PatrolState.PATROLLING, PatrolState.PAUSED, PatrolState.FORCED, PatrolState.MANUAL)
+        val ESTADOS_QUE_SIGUEN = setOf(PatrolState.PATROLLING, PatrolState.PAUSED, PatrolState.FORCED)
 
         /**
          * Volviendo a base (por batería, señal u orden) no se alerta: el dron no
          * puede quedarse, y la alerta pediría algo que no va a hacer. Tampoco
          * relevando (B solo puede tomar el objetivo que vino a relevar) ni en el
          * aterrizaje de emergencia.
+         *
+         * Ni en control manual, en el aire o en el suelo: el dron lo maneja una
+         * persona que mira ese mismo video con las cajas dibujadas encima, y la
+         * alerta —la tarjeta que sale en cada consola— le tapaba la pantalla para
+         * avisarle lo que ya estaba viendo. Las cajas siguen llegando igual (ver
+         * [detectar]), y un objetivo que ya se seguía al tomar el control se
+         * sigue estimando: no es una alerta nueva.
+         *
+         * La puerta es el ESTADO y no [controlTomado]. El control puede quedar
+         * tomado con el dron volando solo —una ruta, un desvío o un "Detener"
+         * pedidos sin soltarlo, o "Comenzar" desde el teléfono— y ahí ya nadie lo
+         * maneja (el mando se descarta fuera de MANUAL), así que una persona en
+         * el cuadro tiene que alertar como siempre. Y en los regresos por batería
+         * o por señal con el control tomado ya no se alertaba. Lo que se ve en
+         * MANUAL no se guarda para después: al salir, la próxima detección
+         * confirmada alerta como cualquier otra, sin una ráfaga de lo de antes.
          */
         val ESTADOS_SIN_ALERTAS = setOf(
             PatrolState.RETURNING_HOME,
@@ -210,6 +227,7 @@ class PatrolManager(
             PatrolState.RETURNING_HOME_SIGNAL,
             PatrolState.RELEVANDO,
             PatrolState.ATERRIZAJE_EMERGENCIA,
+            PatrolState.MANUAL,
         )
 
         /** Si la estimación del objetivo quieto se corre más que esto, la órbita la acompaña. */
@@ -1131,8 +1149,9 @@ class PatrolManager(
         saltoManualEnCurso = false
         controlTomado = true
         pasarA(PatrolState.MANUAL)
-        // Solo log local: el Comando Central ya registra su propio CONTROL_TAKEN
-        log("$by tomó el control manual del dron")
+        // Solo log local: el Comando Central ya registra su propio CONTROL_TAKEN.
+        // Lo de las alertas va acá y no en cada detección, que llegan dos por segundo.
+        log("$by tomó el control manual del dron: mientras lo tenga, lo que vea el detector se marca en el video pero no alerta")
     }
 
     /**
@@ -1953,15 +1972,21 @@ class PatrolManager(
      * Una detección (docs/PROTOCOLS.md §4, "Qué hace la app con una
      * detección"). Las cajas se guardan para dibujarlas sobre el video venga en
      * el estado que venga —el operador quiere ver marcado lo que el detector ve
-     * también mientras orbita—. Después:
-     *  - con un objetivo en seguimiento, la detección lo actualiza (si es él);
-     *  - si no, una detección CONFIRMADA (dos seguidas) siempre avisa al
-     *    Comando Central, salvo despegando o volviendo a base:
+     * también mientras orbita, y sobre todo mientras maneja él—. Después:
+     *  - con un objetivo en seguimiento, la detección lo actualiza (si es él),
+     *    también en MANUAL: el objetivo de antes de tomar el control no se pierde;
+     *  - si no, una detección CONFIRMADA (dos seguidas) avisa al Comando
+     *    Central, salvo despegando, volviendo a base o en control manual (ver
+     *    [ESTADOS_SIN_ALERTAS]):
      *    - en el aire, a la altura de trabajo y con GPS, arranca el seguimiento
-     *      del objetivo (órbita; en MANUAL solo la estimación);
+     *      del objetivo (órbita);
      *    - en el suelo, a baja altura, sin GPS o sin poder ubicar al objetivo
      *      en el terreno (la cámara al horizonte), alerta sin seguimiento, con
      *      un techo de una por minuto.
+     *
+     * En MANUAL la detección sale antes de la confirmación a propósito: ni
+     * alerta ni deja una candidata, así que nada de lo que se vio mientras la
+     * persona manejaba queda esperando para alertar cuando suelte.
      */
     private fun onDetection(d: Deteccion) = enSerie { detectar(d) }
 
@@ -2119,23 +2144,14 @@ class PatrolManager(
         ventanaUsada = false
         val distancia = Geo.distanciaM(pose.lat, pose.lon, p.lat, p.lon)
         val detectado = "Detección de ${p.clase} (confianza ${"%.2f".format(p.confianza)}) a ${distancia.toInt()} m"
-        if (_state.value == PatrolState.MANUAL) {
-            // El dron es del operador: no se le saca. La app sigue estimando
-            // dónde está el objetivo y, al soltar el control, el dron va a él.
-            report(
-                "TARGET_DETECTED",
-                "$detectado durante el control manual: se sigue su posición y al soltar el control el dron va al objetivo",
-                lat = p.lat,
-                lon = p.lon,
-            )
-        } else {
-            if (_state.value == PatrolState.PATROLLING) resumeWaypoint = proximoWaypoint
-            // El estado antes que la orden, como en el resto de las transiciones
-            // (ver pasarA()): desde PAUSED o FORCED también se llega acá.
-            pasarA(PatrolState.ORBITING)
-            controller.startOrbit(p.lat, p.lon, ORBIT_RADIUS_M)
-            report("ORBIT_STARTED", "$detectado: el dron pasa a modo órbita sobre el objetivo", lat = p.lat, lon = p.lon)
-        }
+        // En MANUAL no se llega acá (ver ESTADOS_SIN_ALERTAS): el dron está
+        // patrullando, en pausa o en un desvío, que son de la app, y pasa a orbitar.
+        if (_state.value == PatrolState.PATROLLING) resumeWaypoint = proximoWaypoint
+        // El estado antes que la orden, como en el resto de las transiciones
+        // (ver pasarA()): desde PAUSED o FORCED también se llega acá.
+        pasarA(PatrolState.ORBITING)
+        controller.startOrbit(p.lat, p.lon, ORBIT_RADIUS_M)
+        report("ORBIT_STARTED", "$detectado: el dron pasa a modo órbita sobre el objetivo", lat = p.lat, lon = p.lon)
         // La captura es el cuadro anotado que disparó la detección; si el
         // detector no lo manda (el mock), el último cuadro que vio la consola.
         val snapshot = d.snapshotBase64 ?: lastFrame?.let { Base64.encodeToString(it, Base64.NO_WRAP) }

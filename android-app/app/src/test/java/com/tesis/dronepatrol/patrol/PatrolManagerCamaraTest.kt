@@ -227,18 +227,26 @@ class PatrolManagerCamaraTest {
     }
 
     /**
-     * El operador sube la cámara al horizonte para mirar un balcón y el detector
-     * confirma una persona en el centro del cuadro. Ese rayo no corta el suelo:
-     * el objetivo no se puede ubicar, y tampoco se lo pone donde está el dron,
-     * que es justo donde no está. Se alerta sin posición y sin seguimiento, y al
-     * soltar el control el dron no sale a buscar un objetivo "a 0 m".
+     * El operador sube la cámara al horizonte para mirar un balcón y suelta el
+     * control: el dron queda en pausa con la cámara donde la dejó, y el
+     * detector confirma una persona en el centro del cuadro. Ese rayo no corta
+     * el suelo: el objetivo no se puede ubicar, y tampoco se lo pone donde está
+     * el dron, que es justo donde no está. Se alerta sin posición y sin
+     * seguimiento, y el dron no sale a buscar un objetivo "a 0 m". Mientras
+     * tenía el control, lo mismo no alertaba (ver PatrolManagerDeteccionEnManualTest).
      */
     @Test
     fun conLaCamaraAlHorizonteElObjetivoNoQuedaEnLaPosicionDelDron() = runBlocking {
         tomarElControl()
         dron.emitirTelemetria(LAT, LON, alt = ALT, rumbo = 90.0, gimbal = 0.0)
         delay(100)
+        detectarDosVeces(personaEnElCentro())
+        delay(200)
+        assertTrue("con el control tomado no alerta: ${comandoCentral.alertas}", comandoCentral.alertas.isEmpty())
 
+        comandoCentral.onControlReleased?.invoke("operador1")
+        withTimeout(5_000) { patrulla.state.first { it == PatrolState.PAUSED } }
+        val alSoltar = dron.ordenes.size
         detectarDosVeces(personaEnElCentro())
         esperarA("la alerta") { comandoCentral.alertas.size == 1 }
 
@@ -250,21 +258,21 @@ class PatrolManagerCamaraTest {
         esperarA("el registro de la detección") { comandoCentral.eventos("DETECTION").isNotEmpty() }
         assertTrue(comandoCentral.eventos("DETECTION").single().getString("message").contains("horizonte"))
         assertNull("no tendría que haber objetivo en seguimiento", patrulla.objetivo)
-        assertTrue(comandoCentral.eventos("TARGET_DETECTED").isEmpty())
-
-        comandoCentral.onControlReleased?.invoke("operador1")
-        withTimeout(5_000) { patrulla.state.first { it == PatrolState.PAUSED } }
         delay(200)
         assertFalse(
-            "al soltar no tendría que ir a ningún objetivo: ${dron.ordenes}",
-            dron.ordenes.any { it == "gotoPoint" || it == "startOrbit" || it == "seguirObjetivo" },
+            "no tendría que ir a ningún objetivo: ${dron.ordenes}",
+            dron.ordenes.drop(alSoltar).any { it == "gotoPoint" || it == "startOrbit" || it == "seguirObjetivo" },
         )
+        assertEquals(PatrolState.PAUSED, patrulla.state.value)
     }
 
-    /** Sin cajas tampoco: con la cámara por arriba del horizonte, la posición del dron no dice nada del objetivo. */
+    /**
+     * Sin cajas tampoco: con la cámara por arriba del horizonte, la posición del
+     * dron no dice nada del objetivo. En el aire sin patrullar, que es donde
+     * queda un dron despegado en el lugar.
+     */
     @Test
     fun sinCajasYConLaCamaraParaArribaLaDeteccionQuedaSinPosicion() = runBlocking {
-        tomarElControl()
         dron.emitirTelemetria(LAT, LON, alt = ALT, rumbo = 90.0, gimbal = 20.0)
         delay(100)
 
@@ -273,6 +281,7 @@ class PatrolManagerCamaraTest {
 
         assertTrue(comandoCentral.alertas.single().isNull("lat"))
         assertNull(patrulla.objetivo)
-        assertTrue(comandoCentral.eventos("TARGET_DETECTED").isEmpty())
+        esperarA("el registro de la detección") { comandoCentral.eventos("DETECTION").isNotEmpty() }
+        assertTrue(comandoCentral.eventos("DETECTION").single().getString("message").contains("horizonte"))
     }
 }

@@ -334,8 +334,8 @@ la estimación vigente:
 `ORBIT_STARTED`, `GOTO_ARRIVED`, `FORCED_GOTO`, `CONTROL_RESUMED`, `LANDED`,
 `BATTERY_RECHARGED`, `DRONE_PROBLEM` (el dron o su SDK rechazó una orden: el
 motivo va en `message`, con un techo de repetición para no inundar el registro).
-`DETECTION` (detección confirmada que se avisa sin seguimiento: dron en el suelo, a baja altura, sin GPS o con el objetivo imposible de ubicar en el terreno —la cámara al horizonte o más arriba—; con `lat`/`lon` si se pudo ubicar),
-`TARGET_DETECTED` (detección durante el control manual: arranca el seguimiento sin mover al dron).
+`DETECTION` (detección confirmada que se avisa sin seguimiento: dron en el suelo, a baja altura, sin GPS o con el objetivo imposible de ubicar en el terreno —la cámara al horizonte o más arriba—; con `lat`/`lon` si se pudo ubicar).
+**`TARGET_DETECTED` (la detección durante el control manual) ya no sale: en `MANUAL` no se alerta (§4). El hub lo sigue aceptando como cualquier otro `eventType`, por las apps viejas.**
 **Seguimiento** (todos con `alertId` si se conoce y con `lat`/`lon` del objetivo):
 `TARGET_MOVING` (el objetivo se mueve: el dron deja la órbita y lo sigue),
 `TARGET_STOPPED` (se detuvo: el dron vuelve a orbitarlo donde quedó),
@@ -688,13 +688,13 @@ Los mensajes se dirigen **solo al dron correspondiente**, salvo que se indique.
 | `start_route` | `routeId, fromIndex, orderedBy` | Comienza a patrullar esa ruta. **Con el dron en el suelo es despegar solo: pide GPS, punto de retorno y la misma batería que `takeoff`; si no, `DRONE_PROBLEM` con el motivo** |
 | `stop_patrol` | `orderedBy` | Interrumpe el patrullaje: el dron queda en vuelo estacionario (`PAUSED`) |
 | `force_goto` | `routeId, index, orderedBy` | Vuela forzado hacia ese nodo y queda estacionario sobre él (`FORCED`) |
-| `control_taken` | `by` | Entra en control manual (`MANUAL`): vuelo estacionario a la espera de movimientos. **Con un objetivo en seguimiento, la app lo sigue estimando con las detecciones mientras el operador vuela** |
+| `control_taken` | `by` | Entra en control manual (`MANUAL`): vuelo estacionario a la espera de movimientos. **Con un objetivo en seguimiento, la app lo sigue estimando con las detecciones mientras el operador vuela. Mientras dure `MANUAL` (en el aire o en el suelo), las detecciones se dibujan en el video pero no generan alertas (§4)** |
 | **`takeoff`** | **`by`** | **Despegue automático en el lugar (~1,2 m, el del SDK) y queda suspendido a la espera del mando. Solo con el control manual tomado y el dron en el suelo. No exige GPS (la aeronave se sostiene con sus sensores de visión); sí exige enlace con la aeronave y batería: ni al 25 % o menos, ni por cambiar (aterrizó con la batería baja y todavía no se la cambió, aunque después se haya tomado el control o la lectura haya rebotado; la batería nueva se reconoce por una lectura de 50 % o más en el suelo). Si no despega, la app avisa el motivo con un `DRONE_PROBLEM`** |
 | **`land`** | **`by`** | **Aterriza donde está. Solo con el control manual tomado y el dron en el aire. Al tocar el suelo el control sigue tomado (`MANUAL` en el suelo)** |
 | `manual_move` | `bearing, distanceM, by` | **Desplazamiento puntual** de esa distancia en ese rumbo (solo en `MANUAL`, en el aire y con GPS) |
 | `manual_stick` | `pitch, roll, yaw, throttle, by` | **Vuelo continuo con palancas** (solo en `MANUAL` y **en el aire**: en el suelo se descarta en silencio, la consola muestra "despegá primero"): cada eje es un número en `[-1, 1]` y el dron lo sostiene hasta el mensaje siguiente. Ver §3.b |
 | **`manual_gimbal`** | **`pitch, by`** | **Inclina la cámara a `pitch` grados, en ángulo ABSOLUTO** (`0` horizonte, negativo hacia abajo; llega ya recortado a `[-90, 30]`). **Solo con el control manual tomado (`MANUAL`), en el suelo o en el aire**: inclinar la cámara no mueve al dron. En cualquier otro estado se descarta en silencio (patrullando, orbitando o siguiendo, la cámara la maneja la app). No cambia el estado ni toca el vuelo; la inclinación nueva se ve en `status.gimbalPitch`. **Al salir de `MANUAL` la app tira la inclinación que todavía no le pasó al gimbal: después de salir, al gimbal solo puede llegarle la que ya estaba cumpliendo, y la cámara que apunta el estado siguiente (la de patrulla al retomar la ruta, la de la órbita o el seguimiento al volver al objetivo) sale después de esa, nunca antes.** Ver §3.b |
-| `control_released` | `by` | Sale del control manual. **Con un objetivo en seguimiento, el dron vuelve a él (`ORBITING` o `FOLLOWING`, evento `TRACKING_RESUMED`)**; sin objetivo, si no llega un `resume_patrol` a continuación queda `PAUSED` |
+| `control_released` | `by` | Sale del control manual. **Con un objetivo en seguimiento, el dron vuelve a él (`ORBITING` o `FOLLOWING`, evento `TRACKING_RESUMED`)**; sin objetivo, si no llega un `resume_patrol` a continuación queda `PAUSED`. **Desde ahí las detecciones vuelven a alertar como siempre: la próxima confirmada, sin ráfaga de lo que se vio durante el control** |
 | `renamed` | `displayName` | El operador renombró al dron: la app actualiza el nombre que muestra |
 | **`bases`, `relay_*`, `emergency_ack`, `emergency_photo_ack`** | **Ver §2.b** | **Relevos entre drones, desvío a otra base y protocolo de última ubicación** |
 
@@ -1322,7 +1322,8 @@ cuadro viejo y nunca acumula retraso.
 
 1. **Guarda las cajas** y las dibuja sobre el video que sube al Comando Central
    durante 1,5 s (`PatrolManager.VIGENCIA_CAJAS_MS`), en cualquier estado: el
-   operador ve marcado lo que el detector ve, también mientras orbita.
+   operador ve marcado lo que el detector ve, también mientras orbita **y
+   mientras maneja él (`MANUAL`), que es cuando las cajas son el único aviso**.
 2. **Ubica cada caja en el terreno** con la pose del dron en el instante del
    cuadro (`frameTs`): altura, rumbo de la cámara e inclinación del gimbal
    (`Georreferencia`). Sin GPS o por debajo de 2 m de altura no hay proyección
@@ -1336,7 +1337,8 @@ cuadro viejo y nunca acumula retraso.
 3. **Toda detección confirmada avisa al Comando Central**: dos detecciones de
    la misma clase en menos de 2,5 s y a menos de 25 m una de otra (un solo
    cuadro no alerta). No se alerta despegando (el detector ve al equipo de
-   tierra) ni volviendo a base. Las detecciones que caen en una **zona
+   tierra), volviendo a base **ni en control manual** (punto 4). Las
+   detecciones que caen en una **zona
    descartada** (40 m alrededor de un falso positivo descartado en los últimos
    5 minutos) no alertan, y en los 10 s siguientes a retomar la ruta por un
    descarte tampoco.
@@ -1344,18 +1346,29 @@ cuadro viejo y nunca acumula retraso.
    - **En el aire, a 8 m o más y con GPS, patrullando, en pausa o en un
      desvío**: **orbita el objetivo** a 30 m con la cámara apuntada al centro
      y arranca el seguimiento (`ORBIT_STARTED`).
-   - **En control manual** (en el aire, con GPS): arranca el seguimiento SIN
-     mover al dron (`TARGET_DETECTED`); al soltar el control, el dron va al
-     objetivo.
    - **En el suelo, a baja altura, sin GPS o con el objetivo sin posición**
      (o en el aire sin patrullar): alerta sin seguimiento (`DETECTION`), como
      mucho una por minuto.
-   En todos los casos manda `alert_request` (tipo, **captura anotada**,
+   En los dos casos manda `alert_request` (tipo, **captura anotada**,
    posición del objetivo si se pudo ubicar, confianza, pose del dron y un
    `ref`) y, con seguimiento, queda a la espera del `alert_ack`.
-5. **Seguimiento.** Mientras haya objetivo (órbita, seguimiento o control
-   manual del operador), cada detección de la misma clase que cae cerca de
-   donde se lo espera se asocia a él y alimenta un filtro de velocidad
+
+   **En control manual (`MANUAL`, en el aire o en el suelo) no alerta**: ni
+   `alert_request`, ni seguimiento nuevo, ni evento. El dron lo maneja una
+   persona que mira ese mismo video con las cajas encima (punto 1), y una
+   alerta le taparía la pantalla para avisarle lo que ya está viendo. La
+   detección ni siquiera cuenta como primera de una confirmación: nada de lo
+   visto durante el control se guarda, y al salir de `MANUAL` (soltar el
+   control, o una orden que lo saca sin soltarlo) la próxima detección
+   confirmada alerta como siempre, sin ráfaga. La regla es el **estado**, no
+   el lock: con el control tomado y el dron volando solo (una ruta, un desvío
+   o un "Detener" pedidos sin soltarlo, que dejan el mando sin efecto) se
+   alerta como siempre. Un objetivo que ya se seguía al tomar el control no
+   es una alerta nueva: se lo sigue estimando (punto 5) y su alerta sigue
+   esperando la decisión.
+5. **Seguimiento.** Mientras haya objetivo (órbita, seguimiento, o control
+   manual con un objetivo que ya se seguía al tomarlo), cada detección de la
+   misma clase que cae cerca de donde se lo espera se asocia a él y alimenta un filtro de velocidad
    constante (`RastreadorDeObjetivo`): posición suavizada y velocidad.
    - Si **se mueve** (más de 1,2 m/s sostenido en 3 detecciones, o más de 15 m
      desde donde se lo vio quieto): deja la órbita y **lo sigue** a 25 m, del
