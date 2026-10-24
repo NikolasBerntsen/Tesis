@@ -18,9 +18,10 @@ const CLASE: Record<TonoDeInsignia, string> = {
 
 /**
  * Qué papel tiene un dron en los relevos, en pastillas: «En espera para
- * relevos», «Relevo en camino: Bravo» en el que lo pidió y «Relevando a Alfa»
- * en el que va. Van en la cámara del tablero y en la cabecera de la vista del
- * dron, al lado de su estado. Sin nada que decir, no ocupa lugar.
+ * relevos» (o «En espera: no puede salir»), «Relevo en camino: Bravo» en el
+ * que lo pidió y «Relevando a Alfa» en el que va. Van en la cámara del tablero
+ * y en la cabecera de la vista del dron, al lado de su estado. Sin nada que
+ * decir, no ocupa lugar.
  */
 export default function InsigniasDeRelevo({
   droneId,
@@ -37,6 +38,10 @@ export default function InsigniasDeRelevo({
         <Fragment key={i.clave}>
           <span className={CLASE[i.tono]} title={i.titulo}>
             {i.texto}
+            {/* El `title` sólo lo ve el mouse, y en la cámara ni eso (lo tapa
+                el botón que abre el dron): el detalle va también como texto,
+                fuera de la vista, para el lector de pantalla. */}
+            {i.titulo !== undefined && <span className="insignia-solo-lector">{`. ${i.titulo}`}</span>}
           </span>{' '}
         </Fragment>
       ))}
