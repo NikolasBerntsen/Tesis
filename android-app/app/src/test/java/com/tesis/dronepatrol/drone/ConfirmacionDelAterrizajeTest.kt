@@ -22,6 +22,9 @@ class ConfirmacionDelAterrizajeTest {
 
     private val confirmacion = ConfirmacionDelAterrizaje()
 
+    /** El reloj de las pruebas que repiten la confirmación. */
+    private var ahora = 50_000L
+
     private fun situacion(
         ordenado: Boolean = true,
         fueraDeBase: Boolean = false,
@@ -172,6 +175,61 @@ class ConfirmacionDelAterrizajeTest {
     fun elAterrizajeForzadoNoSeCorre() {
         assertEquals(Accion.ESPERAR, confirmacion.alPedir(true, situacion(ordenado = true, forzado = true, bateria = 14.0)))
         assertEquals(Accion.CONFIRMAR, confirmacion.alActualizar(situacion(ordenado = true, forzado = true, bateria = 11.0)))
+    }
+
+    // ---- Leído en la secuencia de un aterrizaje de la app ----
+
+    /**
+     * El defecto del campo: el pedido ya estaba en pie cuando llegó la orden de
+     * aterrizar (un aterrizaje anterior cortado a medio metro, el operador que
+     * lo bajó con las palancas). El oyente lo contó cuando no era de la app y no
+     * vuelve a contarlo; la lectura de la secuencia sí lo contesta.
+     */
+    @Test
+    fun unPedidoQueYaEstabaEnPieSeContestaAlLeerlo() {
+        val conReloj = ConfirmacionDelAterrizaje { ahora }
+        assertEquals(Accion.NADA, conReloj.alPedir(true, situacion(ordenado = false)))
+        assertEquals(Accion.CONFIRMAR, conReloj.alLeer(true, situacion()))
+    }
+
+    /** Una confirmación que el dron no tomó (sigue pidiendo) se repite cada dos segundos, no antes. */
+    @Test
+    fun mientrasSigaPidiendoLaConfirmacionSeRepite() {
+        val conReloj = ConfirmacionDelAterrizaje { ahora }
+        assertEquals(Accion.CONFIRMAR, conReloj.alLeer(true, situacion()))
+        ahora += ConfirmacionDelAterrizaje.REPETIR_CONFIRMACION_MS - 1
+        assertEquals(Accion.NADA, conReloj.alLeer(true, situacion()))
+        ahora += 1
+        assertEquals(Accion.CONFIRMAR, conReloj.alLeer(true, situacion()))
+        assertEquals("y el oyente tampoco la duplica", Accion.NADA, conReloj.alPedir(true, situacion()))
+
+        // Dejó de pedir: confirmó. Lo que pida después es otro pedido.
+        assertEquals(Accion.NADA, conReloj.alLeer(false, situacion()))
+        assertEquals(Accion.CONFIRMAR, conReloj.alLeer(true, situacion()))
+    }
+
+    /** La espera del crítico se dice una vez por pedido (se lee dos veces por segundo), y la batería la cambia. */
+    @Test
+    fun alLeerLaEsperaDelCriticoSeDiceUnaVez() {
+        val conReloj = ConfirmacionDelAterrizaje { ahora }
+        repeat(ConfirmacionDelAterrizaje.MAXIMO_CORRIMIENTOS) {
+            assertEquals(Accion.CORRERSE, conReloj.alLeer(true, situacion(fueraDeBase = true)))
+            assertEquals("un corrimiento no se repite", Accion.NADA, conReloj.alLeer(true, situacion(fueraDeBase = true)))
+            conReloj.alTerminarDeCorrerse()
+            conReloj.alLeer(false, situacion(fueraDeBase = true))
+        }
+        assertEquals(Accion.ESPERAR, conReloj.alLeer(true, situacion(fueraDeBase = true)))
+        assertEquals(Accion.NADA, conReloj.alLeer(true, situacion(fueraDeBase = true, bateria = 20.0)))
+        assertEquals(Accion.CONFIRMAR, conReloj.alLeer(true, situacion(fueraDeBase = true, bateria = 11.0)))
+
+        conReloj.reiniciar()
+        conReloj.alPedir(true, situacion(fueraDeBase = true))
+        conReloj.alTerminarDeCorrerse()
+        conReloj.alPedir(false, situacion(fueraDeBase = true))
+        conReloj.alPedir(true, situacion(fueraDeBase = true))
+        conReloj.alTerminarDeCorrerse()
+        conReloj.alPedir(false, situacion(fueraDeBase = true))
+        assertEquals("reiniciado, la espera vuelve a decirse", Accion.ESPERAR, conReloj.alLeer(true, situacion(fueraDeBase = true)))
     }
 
     // ---- De cero ----

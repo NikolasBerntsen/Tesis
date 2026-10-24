@@ -41,6 +41,16 @@ interface DroneController {
          * cualquiera, por eso es una constante y no una frase suelta.
          */
         const val NO_SE_CORTO_EL_REGRESO = "no se pudo cortar el regreso a base"
+
+        /**
+         * Con qué empieza el [FlightEvent.Problema] de un [land] que no se pudo
+         * cumplir, en los dos controladores: el dron no aceptó la orden después
+         * de sus reintentos, la aceptó pero no baja, o alguien lo subió con las
+         * palancas del control. Es la respuesta DEFINITIVA a una orden de una
+         * persona, así que PatrolManager la avisa siempre, sin el filtro de
+         * repetidos ni el techo por minuto que frenan a los rechazos de 10 Hz.
+         */
+        const val NO_SE_PUDO_ATERRIZAR = "no se pudo aterrizar"
     }
     /**
      * Enlace, modelo, GPS, punto de retorno y si está en el aire. Es un
@@ -117,6 +127,8 @@ interface DroneController {
      * [startRoute] desde el suelo), quedarse donde está es NO despegar: el
      * despegue se cancela y avisa [FlightEvent.Aterrizado]; si la orden de
      * despegar ya le había llegado al dron, aterriza apenas está en el aire.
+     * Con un aterrizaje en curso no hace nada: quedarse quieto no es otra orden
+     * de vuelo (ver [land]; para cortarlo, [cancelarAterrizaje] antes).
      */
     fun hold()
 
@@ -137,7 +149,8 @@ interface DroneController {
      * grados/s la hace [MandoVirtual], igual para el simulador y para el DJI.
      * Manda siempre el último valor recibido y el dron lo sostiene hasta que
      * llegue otro: por eso la consola repite el mando a 10 Hz y por eso
-     * PatrolManager tiene un watchdog que manda ceros si se corta.
+     * PatrolManager tiene un watchdog que manda ceros si se corta. Con un
+     * aterrizaje en curso no hace nada (ver [land]).
      */
     fun manualStick(pitch: Double, roll: Double, yaw: Double, throttle: Double)
 
@@ -186,12 +199,45 @@ interface DroneController {
     fun returnHome()
 
     /**
-     * Aterriza donde está; al tocar el suelo emite [FlightEvent.Aterrizado]. Es
-     * también la forma de abortar un despegue (un relevo cancelado mientras B
+     * Aterriza donde está y SOSTIENE el aterrizaje hasta el suelo; al tocarlo
+     * emite [FlightEvent.Aterrizado]. Cuando el dron acepta la orden emite
+     * [FlightEvent.AterrizajeAceptado], una vez: recién ahí está bajando. Si no
+     * la acepta, la acepta y no baja, o alguien lo sube con las palancas del
+     * control, avisa un [FlightEvent.Problema] que empieza con
+     * [NO_SE_PUDO_ATERRIZAR] y queda suspendido donde está.
+     *
+     * Mientras baja no lo corta nada que no sea una orden de vuelo de una
+     * persona. [hold] y [manualStick] no hacen nada: son el cero que manda la
+     * consola al soltar la palanca, el del watchdog del mando, y el vuelo
+     * estacionario de tomar o soltar el control o de la señal perdida, y en el
+     * DJI cualquiera de ellos volvía a habilitar el Virtual Stick y le cancelaba
+     * el aterrizaje automático (pasó en el campo). Las órdenes de navegación
+     * ([gotoPoint], [startOrbit], [seguirObjetivo], [cambiarAltura],
+     * [volarHacia], [girarEnElLugar]) se rechazan con [FlightEvent.Problema].
+     * Lo cortan [returnHome], [startRoute] y [cancelarAterrizaje] (que quien
+     * llama da antes de la orden que sigue). Un [land] repetido vuelve a
+     * empezar la secuencia.
+     *
+     * Es también la forma de abortar un despegue (un relevo cancelado mientras B
      * todavía está en la plataforma, RELEVOS §2 y §3): si no dejó el suelo, no
      * despega; si ya subía, baja. Nunca emite [FlightEvent.EnElAire] después.
      */
     fun land()
+
+    /**
+     * Corta el aterrizaje en curso ([land]) porque una persona dio otra orden
+     * de vuelo, que quien llama da enseguida (ir a un nodo, quedar
+     * estacionario, retomar la ruta). Hasta esa orden el dron queda suspendido
+     * donde está. Sin un aterrizaje en curso no hace nada.
+     *
+     * Real: `KeyStopAutoLanding` y fin de la secuencia del aterrizaje.
+     * Simulado: sale del aterrizaje, estacionario a la altura que tiene. Por
+     * defecto no hace nada: un controlador que no sostiene el aterrizaje deja
+     * que la orden siguiente lo corte sola.
+     */
+    fun cancelarAterrizaje() {
+        // Sin implementación el aterrizaje lo corta la orden que sigue.
+    }
 
     /**
      * Despegue automático EN EL LUGAR, para el control manual: el dron sube a la

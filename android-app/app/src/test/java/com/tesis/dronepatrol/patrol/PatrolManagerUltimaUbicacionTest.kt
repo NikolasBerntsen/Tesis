@@ -213,6 +213,30 @@ class PatrolManagerUltimaUbicacionTest {
         assertTrue("aterriza al tope duro de 20 s (duró $duro ms)", duro in 19_000L..SecuenciaDeUltimaUbicacion.TOPE_MS + 200)
     }
 
+    /**
+     * El aterrizaje del final de la secuencia lo ordena la secuencia, no una
+     * persona: aceptado, se sostiene igual hasta el suelo. Tomar el control ahí
+     * no lo frena con un estacionario, y el mando no le llega.
+     */
+    @Test
+    fun elAterrizajeDelFinalDeLaSecuenciaSeSostieneAunqueTomenElControl() = runBlocking {
+        enEmergencia(bateria = 10.2)
+        esperarA("el aterrizaje") { "land" in dron.ordenes }
+        esperarA("el aterrizaje aceptado") {
+            patrulla.localLog.replayCache.any { it.contains("aceptó el aterrizaje de emergencia") }
+        }
+        val desde = dron.ordenes.size
+
+        banco.comando.recibir(JSONObject().put("type", "control_taken").put("by", "op"))
+        esperarA("el control manual") { patrulla.state.value == PatrolState.MANUAL }
+        banco.comando.recibir(
+            JSONObject().put("type", "manual_stick").put("pitch", 1.0).put("roll", 0.0).put("yaw", 0.0).put("throttle", 0.0).put("by", "op"),
+        )
+        delay(300)
+
+        assertTrue("le frenaron el aterrizaje: ${dron.ordenes.drop(desde)}", dron.ordenes.drop(desde).none { it == "hold" || it.startsWith("stick(") })
+    }
+
     @Test
     fun unaPersonaQueTomaElControlCortaLaSecuencia() = runBlocking {
         enEmergencia(confirma = false)

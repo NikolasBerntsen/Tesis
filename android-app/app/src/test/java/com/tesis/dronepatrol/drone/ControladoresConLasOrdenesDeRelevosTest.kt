@@ -34,6 +34,9 @@ class ControladoresConLasOrdenesDeRelevosTest {
         "permitirRthPropioPorBateria",
         "fijarFailsafeAterrizar",
         "capturarFoto",
+        // El corte del aterrizaje que se sostiene hasta el suelo: sin él, la
+        // orden de una persona que sigue (ir a un nodo, detenerse) se rechaza.
+        "cancelarAterrizaje",
     )
 
     private fun fuente(ruta: String): String {

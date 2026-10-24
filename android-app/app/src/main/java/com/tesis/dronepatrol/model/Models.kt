@@ -313,6 +313,17 @@ sealed class FlightEvent {
     object Aterrizado : FlightEvent()
 
     /**
+     * El dron ACEPTÓ el aterrizaje que se le ordenó con `land()` y está bajando
+     * donde está (real: el SDK contestó que sí a `KeyStartAutoLanding`, o el dron
+     * ya estaba en modo aterrizaje; simulado: en el acto). Sale una vez por
+     * orden. Existe porque mandar la orden no es que el dron la cumpla: en el
+     * campo la consola mostraba "aterrizando" con el dron suspendido a medio
+     * metro. Lo que no se pudo cumplir llega como un [Problema] que empieza con
+     * [com.tesis.dronepatrol.drone.DroneController.NO_SE_PUDO_ATERRIZAR].
+     */
+    object AterrizajeAceptado : FlightEvent()
+
+    /**
      * El dron —o su SDK— rechazó una orden. Existe porque un rechazo mudo es lo
      * peor que puede pasar en vuelo: el operador mueve la palanca, el dron no se
      * mueve y no hay una sola pista de por qué. PatrolManager lo reporta al

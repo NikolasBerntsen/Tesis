@@ -169,7 +169,23 @@ internal class DronEspia(
     /** Va en la lista con las demás: lo que se mira es que salga ANTES de la orden del estado siguiente. */
     override fun cancelarInclinacionManual() = anotar(CANCELAR_CAMARA)
     override fun returnHome() = anotar("returnHome")
-    override fun land() = anotar("land")
+
+    /**
+     * Lo que el dron contesta a [land], como lo haría el de verdad: por defecto
+     * lo acepta en el acto ([FlightEvent.AterrizajeAceptado]). Con null no
+     * contesta nada y la prueba empuja la respuesta a mano (la aceptación tarde,
+     * el [FlightEvent.Problema] de un aterrizaje que no se pudo).
+     */
+    @Volatile
+    var respuestaAlAterrizar: FlightEvent? = FlightEvent.AterrizajeAceptado
+
+    override fun land() {
+        anotar("land")
+        respuestaAlAterrizar?.let { flightEvents.tryEmit(it) }
+    }
+
+    override fun cancelarAterrizaje() =
+        if (conRelevos) anotar("cancelarAterrizaje") else super.cancelarAterrizaje()
     override fun seguirObjetivo(lat: Double, lon: Double, vNorteMs: Double, vEsteMs: Double) {
         ultimoSeguimiento = lat to lon
         anotar("seguirObjetivo")

@@ -16,6 +16,7 @@ import com.tesis.dronepatrol.drone.Navegacion
 import com.tesis.dronepatrol.drone.OrdenVirtualStick
 import com.tesis.dronepatrol.drone.RecuerdoDelFailsafe
 import com.tesis.dronepatrol.drone.SeguidorDelRegreso
+import com.tesis.dronepatrol.drone.SupervisorDelAterrizaje
 import com.tesis.dronepatrol.drone.TomaDelDron
 import com.tesis.dronepatrol.drone.UltimoPedido
 import com.tesis.dronepatrol.drone.UmbralesDelDji
@@ -60,6 +61,8 @@ import dji.v5.manager.aircraft.virtualstick.VirtualStickState
 import dji.v5.manager.aircraft.virtualstick.VirtualStickStateListener
 import dji.v5.manager.datacenter.MediaDataCenter
 import dji.v5.manager.interfaces.ICameraStreamManager
+import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
@@ -162,8 +165,12 @@ class DjiDroneController : DroneController {
         /** Sube o baja en vertical ([cambiarAltura]). */
         ALTURA,
 
-        /** Se corre 10 m porque el dron pidió confirmar un aterrizaje que no se confirma solo. */
-        CORRIMIENTO,
+        /**
+         * La secuencia de un aterrizaje de la app ([sostenerElAterrizaje]): la
+         * orden, la confirmación y, si el dron pide confirmar un aterrizaje que
+         * no se confirma solo, el corrimiento de 10 m.
+         */
+        ATERRIZAJE,
 
         /** Un despegue cancelado cuando la orden ya le había llegado al dron: aterriza apenas sube. */
         ATERRIZAJE_DEL_DESPEGUE,
@@ -356,6 +363,35 @@ class DjiDroneController : DroneController {
 
     @Volatile
     private var aterrizajeEsperado = Aterrizaje.NINGUNO
+
+    /**
+     * Hay un aterrizaje de la app en curso ([land], un despegue cancelado que
+     * ya subía, el corrimiento de un aterrizaje sin revisar), desde la orden
+     * hasta el suelo. Es el arreglo de la prueba de campo: después de land()
+     * nada marcaba que el dron estaba aterrizando, y el próximo mando —el cero
+     * que la consola manda al soltar la palanca, que viaja por otra conexión que
+     * el /land y puede llegar después—, el watchdog del mando, el vuelo
+     * estacionario de tomar o soltar el control o el de la señal perdida
+     * volvían a habilitar el Virtual Stick y a mandar velocidades a 10 Hz, que
+     * le cancelan al DJI su aterrizaje automático.
+     *
+     * Mientras está prendida [asegurarVirtualStick] no habilita nada (salvo el
+     * corrimiento), [hold] y [manualStick] no hacen nada, las órdenes de
+     * navegación se rechazan y [relevarLazo] no releva a la secuencia. La
+     * apagan tocar el suelo, [connect], otra orden de vuelo de una persona
+     * ([returnHome], [startRoute], [cancelarAterrizaje], un despegue), una toma
+     * del propio DJI ([bloquearPorLaToma]) y el fracaso definitivo de la
+     * secuencia. Se escribe con [relevoDeLazo] tomado, junto con el lazo.
+     */
+    @Volatile
+    private var aterrizando = false
+
+    /** El corrimiento de un aterrizaje está en curso: es lo único que habilita el Virtual Stick aterrizando. */
+    @Volatile
+    private var corriendoseParaAterrizar = false
+
+    /** Lo que ya se anotó como descartado en este aterrizaje: el mando llega a 10 Hz y el logcat no es para eso. */
+    private val descartadasAterrizando: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     // ---- Lo que decide el propio DJI (docs/RELEVOS.md §0, §4 y §5) ----
 
@@ -589,6 +625,10 @@ class DjiDroneController : DroneController {
         escuchando = true
         desconectado = false
         aterrizajeEsperado = Aterrizaje.NINGUNO
+        // Un aterrizaje de antes no es de este enlace: si el dron sigue bajando,
+        // lo termina solo, y la app vuelve a tener el mando.
+        aterrizando = false
+        corriendoseParaAterrizar = false
         // Lo del vuelo anterior no vale para este enlace: los oyentes de abajo
         // traen el estado actual apenas se registran.
         seguidorDelRegreso.alAterrizar()
@@ -635,6 +675,8 @@ class DjiDroneController : DroneController {
             publicarEstado()
         }
         escuchar(FlightControllerKey.KeyFlightModeString) { modo ->
+            // Para el banco: es lo que dice si el aterrizaje automático arrancó o se cortó.
+            if (modo != modoDeVuelo) Log.i(TAG, "Modo de vuelo: $modo (aterrizaje de la app en curso: $aterrizando)")
             modoDeVuelo = modo
             publicarEstado()
         }
@@ -642,10 +684,12 @@ class DjiDroneController : DroneController {
         // las rutas (sus alturas son relativas a la base).
         escuchar(FlightControllerKey.KeyAltitude) { alt -> lastAlt = alt }
         // Con un pedido de confirmar el aterrizaje en pie, cada punto de batería
-        // que baja puede ser el momento de confirmarlo (RELEVOS §4).
+        // que baja puede ser el momento de confirmarlo (RELEVOS §4). Con un
+        // aterrizaje de la app en curso lo mira su secuencia, que lee la batería
+        // en cada vuelta: dos que deciden a la vez se pisarían el corrimiento.
         escuchar(BatteryKey.KeyChargeRemainingInPercent) { pct ->
             lastBattery = pct.toDouble()
-            atenderElAterrizaje(confirmacionDelAterrizaje.alActualizar(situacionDelAterrizaje()))
+            if (!aterrizando) atenderElAterrizaje(confirmacionDelAterrizaje.alActualizar(situacionDelAterrizaje()))
         }
         // Rumbo real de la brújula. El MSDK lo da en -180..180 y el resto del
         // sistema lo usa en 0..360 (norte = 0, este = 90).
@@ -743,9 +787,13 @@ class DjiDroneController : DroneController {
         // El Mini pide confirmar el aterrizaje cerca del suelo (por si abajo hay
         // agua o algo que no es suelo). Si la app lo ordenó en su base, la app lo
         // confirma; en un desvío o una emergencia, o forzado por batería crítica,
-        // decide ConfirmacionDelAterrizaje (RELEVOS §4).
+        // decide ConfirmacionDelAterrizaje (RELEVOS §4). Este oyente avisa por
+        // CAMBIO: un pedido que ya estaba en pie cuando llegó la orden no vuelve
+        // a contarse, y por eso con un aterrizaje de la app en curso lo contesta
+        // su secuencia, que lo lee del dron cada medio segundo.
         escuchar(FlightControllerKey.KeyIsLandingConfirmationNeeded) { pide ->
-            atenderElAterrizaje(confirmacionDelAterrizaje.alPedir(pide, situacionDelAterrizaje()))
+            Log.i(TAG, "KeyIsLandingConfirmationNeeded=$pide (aterrizaje de la app en curso: $aterrizando)")
+            if (!aterrizando) atenderElAterrizaje(confirmacionDelAterrizaje.alPedir(pide, situacionDelAterrizaje()))
         }
         // Autonomía y regreso inteligente por batería (RELEVOS §0 y §4). Llega
         // más o menos una vez por segundo; mientras el DJI cuenta para volver
@@ -849,11 +897,15 @@ class DjiDroneController : DroneController {
 
     override fun startRoute(route: PatrolRoute, fromWaypoint: Int) {
         if (rechazarSiElDronTieneElControl("seguir una ruta")) return
-        synchronized(relevoDeLazo) {
+        // Una ruta es otra orden de vuelo: corta un aterrizaje en curso.
+        val cortoUnAterrizaje = synchronized(relevoDeLazo) {
+            val corto = soltarElAterrizaje("se ordenó una ruta")
             lanzarRuta(route, fromWaypoint)
             // Desde el suelo, hasta dejarlo se puede abortar (ver cancelarDespegueEnElSuelo).
             if (!enVuelo) despegue = Despegue.PREPARANDO
+            corto
         }
+        if (cortoUnAterrizaje) detenerElAterrizajeAutomatico()
     }
 
     private fun lanzarRuta(route: PatrolRoute, fromWaypoint: Int) {
@@ -914,6 +966,8 @@ class DjiDroneController : DroneController {
             cancelarDespegueEnElSuelo(Aterrizaje.AQUI)
             return
         }
+        // Aterrizando, quedarse quieto no es otra orden de vuelo (ver DroneController.land).
+        if (descartarAterrizando("quedar estacionario")) return
         if (rechazarSiElDronTieneElControl("quedar estacionario")) return
         relevarLazo(Lazo.ESTACIONARIO) {
             asegurarVirtualStick()
@@ -929,6 +983,7 @@ class DjiDroneController : DroneController {
 
     override fun gotoPoint(lat: Double, lon: Double) {
         if (rechazarEnElSuelo("ir a un punto")) return
+        if (rechazarAterrizando("ir a un punto")) return
         if (rechazarSiElDronTieneElControl("ir a un punto")) return
         relevarLazo(Lazo.GOTO) {
             asegurarVirtualStick()
@@ -957,6 +1012,7 @@ class DjiDroneController : DroneController {
 
     override fun startOrbit(centerLat: Double, centerLon: Double, radiusM: Double) {
         if (rechazarEnElSuelo("orbitar")) return
+        if (rechazarAterrizando("orbitar")) return
         if (rechazarSiElDronTieneElControl("orbitar")) return
         // El lazo relee el centro en cada vuelta: si ya está orbitando, correr
         // el centro es solo esto, sin cortar el giro (el objetivo estimado se
@@ -991,6 +1047,7 @@ class DjiDroneController : DroneController {
 
     override fun seguirObjetivo(lat: Double, lon: Double, vNorteMs: Double, vEsteMs: Double) {
         if (rechazarEnElSuelo("seguir al objetivo")) return
+        if (rechazarAterrizando("seguir al objetivo")) return
         if (rechazarSiElDronTieneElControl("seguir al objetivo")) return
         // Igual que la órbita: el lazo relee la estimación en cada vuelta, así
         // que actualizarla no corta el seguimiento.
@@ -1048,6 +1105,9 @@ class DjiDroneController : DroneController {
     }
 
     override fun manualStick(pitch: Double, roll: Double, yaw: Double, throttle: Double) {
+        // Aterrizando, el mando no le habla al dron: el cero que la consola manda
+        // al soltar la palanca le cancelaba el aterrizaje (ver DroneController.land).
+        if (descartarAterrizando("el mando manual")) return
         if (rechazarEnElSuelo("el mando manual")) return
         if (rechazarSiElDronTieneElControl("usar el mando manual")) return
         // El lazo lee estos ejes en cada vuelta: un mensaje nuevo solo los pisa.
@@ -1104,6 +1164,10 @@ class DjiDroneController : DroneController {
         }
         // Ya vuelve porque la app lo pidió: pedirlo otra vez no es otro regreso.
         if (aterrizajeEsperado == Aterrizaje.EN_BASE && seguidorDelRegreso.volviendo) return
+        // Volver a la base es otra orden de vuelo: corta un aterrizaje en curso,
+        // y al DJI se le dice que deje de aterrizar ANTES de pedirle el regreso
+        // (sale por el SDK antes que el KeyStartGoHome de abajo).
+        if (synchronized(relevoDeLazo) { soltarElAterrizaje("se ordenó volver a la base") }) detenerElAterrizajeAutomatico()
         // Sin lazo nuevo: el regreso a base lo maneja el propio dron. Se le
         // devuelve antes la autoridad de vuelo, que es lo que el RTH necesita.
         cortarLazo()
@@ -1130,17 +1194,31 @@ class DjiDroneController : DroneController {
             cancelarDespegueEnElSuelo(Aterrizaje.AQUI)
             return
         }
-        cortarLazo()
-        apagarVirtualStick()
-        aterrizajeEsperado = Aterrizaje.AQUI
-        scope.launch {
-            if (!accion(FlightControllerKey.KeyStartAutoLanding, "aterrizar")) aterrizajeEsperado = Aterrizaje.NINGUNO
+        iniciarElAterrizaje(Aterrizaje.AQUI)
+    }
+
+    /**
+     * Corta el aterrizaje en curso porque una persona dio otra orden de vuelo
+     * (ver DroneController.cancelarAterrizaje): la secuencia termina y el DJI
+     * deja de aterrizar. Sin el Virtual Stick, queda suspendido donde está
+     * hasta la orden que sigue.
+     */
+    override fun cancelarAterrizaje() {
+        val cortado = synchronized(relevoDeLazo) {
+            if (!aterrizando) return
+            val enElAire = soltarElAterrizaje("una persona dio otra orden de vuelo")
+            cortarLazo()
+            aterrizajeEsperado = Aterrizaje.NINGUNO
+            enElAire
         }
+        if (cortado) detenerElAterrizajeAutomatico()
     }
 
     override fun despegarEnElLugar() {
         if (enVuelo) return
         synchronized(relevoDeLazo) {
+            // Un despegue es otra orden: el aterrizaje de un despegue cancelado no sigue.
+            soltarElAterrizaje("se ordenó despegar")
             relevarLazo(Lazo.DESPEGUE) {
                 val arriba = try {
                     // Sin GPS se puede (en interior el Mini se sostiene con los
@@ -1180,6 +1258,7 @@ class DjiDroneController : DroneController {
 
     /** Tocó el suelo: el evento depende de qué se había ordenado. */
     private fun alAterrizar() {
+        Log.i(TAG, "Tocó el suelo (aterrizaje esperado: $aterrizajeEsperado, de la app en curso: $aterrizando)")
         when (aterrizajeEsperado) {
             Aterrizaje.EN_BASE -> flightEvents.tryEmit(FlightEvent.ArrivedHome)
             Aterrizaje.AQUI -> flightEvents.tryEmit(FlightEvent.Aterrizado)
@@ -1425,6 +1504,7 @@ class DjiDroneController : DroneController {
         if (enVuelo || !alturaM.isFinite()) return
         val altura = alturaDeVuelo(alturaM)
         synchronized(relevoDeLazo) {
+            soltarElAterrizaje("se ordenó despegar para un relevo")
             alturaPedida = altura
             relevarLazo(Lazo.DESPEGUE_A_ALTURA) {
                 val arriba = try {
@@ -1495,7 +1575,7 @@ class DjiDroneController : DroneController {
         }
         if (aceptado == null) {
             avisar("el dron no contestó la habilitación del mando virtual en ${ESPERA_MANDO_VIRTUAL_MS / 1000} s: no despega")
-            mandarApagado()
+            mandarApagado("una habilitación en el suelo que no contestó")
         }
         if (aceptado != true) return false
         reintentoDelMandoVirtual.exito()
@@ -1503,7 +1583,7 @@ class DjiDroneController : DroneController {
         // La app se cerró mientras el dron contestaba: se deshace (ver disconnect()).
         if (desconectado) {
             virtualStickListo.set(false)
-            mandarApagado()
+            mandarApagado("la despedida")
             return false
         }
         return true
@@ -1563,25 +1643,30 @@ class DjiDroneController : DroneController {
         Log.i(TAG, "Despegue cancelado con el dron en el suelo ($fase)")
         apagarVirtualStick()
         if (fase == Despegue.ORDENADO) {
-            relevarLazo(Lazo.ATERRIZAJE_DEL_DESPEGUE) { aterrizarApenasDespegue(comoTermina) }
+            // Ya es un aterrizaje de la app: lo que llegue mientras sube no lo corta.
+            synchronized(relevoDeLazo) {
+                marcarElAterrizaje(comoTermina)
+                relevarLazo(Lazo.ATERRIZAJE_DEL_DESPEGUE) { aterrizarApenasDespegue(comoTermina) }
+            }
         } else {
             avisarQueEstaEnElSuelo(comoTermina)
         }
     }
 
-    /** El despegue cancelado ya había salido: si el dron sube, baja ahí mismo. */
+    /**
+     * El despegue cancelado ya había salido: si el dron sube, baja ahí mismo,
+     * con la misma secuencia que cualquier aterrizaje de la app.
+     */
     private suspend fun aterrizarApenasDespegue(comoTermina: Aterrizaje) {
         val subio = withTimeoutOrNull(ESPERA_DESPEGUE_MS) {
             while (!enVuelo) delay(INTERVALO_DESPEGUE_MS)
         } != null
         if (!subio) {
+            soltarEsteAterrizaje()
             avisarQueEstaEnElSuelo(comoTermina)
             return
         }
-        aterrizajeEsperado = comoTermina
-        if (!accion(FlightControllerKey.KeyStartAutoLanding, "aterrizar después de cancelar el despegue")) {
-            aterrizajeEsperado = Aterrizaje.NINGUNO
-        }
+        sostenerElAterrizaje(anterior = null, conCorrimiento = false)
     }
 
     /** Un despegue cancelado que no dejó el suelo termina como la orden que lo canceló. */
@@ -1599,6 +1684,7 @@ class DjiDroneController : DroneController {
     override fun cambiarAltura(alturaM: Double) {
         if (!alturaM.isFinite()) return
         if (rechazarEnElSuelo("cambiar de altura")) return
+        if (rechazarAterrizando("cambiar de altura")) return
         if (rechazarSiElDronTieneElControl("cambiar de altura")) return
         synchronized(relevoDeLazo) {
             alturaPedida = alturaDeVuelo(alturaM)
@@ -1642,6 +1728,7 @@ class DjiDroneController : DroneController {
      */
     override fun volarHacia(lat: Double, lon: Double) {
         if (rechazarEnElSuelo("volar hacia un punto")) return
+        if (rechazarAterrizando("volar hacia un punto")) return
         if (despegue != Despegue.NINGUNO) {
             avisar("el dron todavía está despegando: sube por su columna y recién arriba puede volar hacia un punto")
             return
@@ -1694,6 +1781,7 @@ class DjiDroneController : DroneController {
     override fun girarEnElLugar(rumboGrados: Double) {
         if (!rumboGrados.isFinite()) return
         if (rechazarEnElSuelo("girar en el lugar")) return
+        if (rechazarAterrizando("girar en el lugar")) return
         if (rechazarSiElDronTieneElControl("girar en el lugar")) return
         synchronized(relevoDeLazo) {
             val altura = alturaPedida ?: lastAlt
@@ -1938,45 +2026,361 @@ class DjiDroneController : DroneController {
         umbralCriticoPct = umbralCriticoPct,
     )
 
-    /** Lo que decidió [confirmacionDelAterrizaje], hecho. */
+    /**
+     * Lo que decidió [confirmacionDelAterrizaje] con el oyente del SDK, hecho.
+     * Es el camino SIN un aterrizaje de la app en curso (el regreso a base que
+     * baja en la base, el forzado por batería crítica); con uno, contesta su
+     * secuencia ([contestarLaConfirmacion]).
+     */
     private fun atenderElAterrizaje(que: ConfirmacionDelAterrizaje.Accion) {
         when (que) {
             ConfirmacionDelAterrizaje.Accion.NADA -> Unit
-            ConfirmacionDelAterrizaje.Accion.CONFIRMAR ->
-                scope.launch { accion(FlightControllerKey.KeyConfirmLanding, "confirmar el aterrizaje") }
-            ConfirmacionDelAterrizaje.Accion.CORRERSE -> correrseYReintentar()
-            ConfirmacionDelAterrizaje.Accion.ESPERAR -> avisar(
-                "el dron pide confirmar un aterrizaje fuera de base: no se confirma hasta la batería crítica " +
-                    "(revisá el lugar en el video)",
-            )
+            ConfirmacionDelAterrizaje.Accion.CONFIRMAR -> scope.launch {
+                if (!mandarLaConfirmacion()) avisar("el dron no aceptó la confirmación del aterrizaje")
+            }
+            // Correrse y volver a aterrizar es la secuencia de siempre, con el corrimiento primero.
+            ConfirmacionDelAterrizaje.Accion.CORRERSE -> iniciarElAterrizaje(aterrizajeEsperado, conCorrimiento = true)
+            ConfirmacionDelAterrizaje.Accion.ESPERAR -> avisar(ESPERA_DEL_CRITICO)
         }
+    }
+
+    // ---- El aterrizaje de la app: se sostiene hasta el suelo ----
+
+    /**
+     * Arranca la secuencia de un aterrizaje de la app ([sostenerElAterrizaje])
+     * como el lazo vigente. Marcar el aterrizaje y relevar el lazo son un solo
+     * paso con [relevoDeLazo]: desde acá ningún otro lazo puede arrancar (ver
+     * [relevarLazo]) y la secuencia espera a que el anterior termine de verdad
+     * antes de deshabilitar el Virtual Stick.
+     */
+    private fun iniciarElAterrizaje(comoTermina: Aterrizaje, conCorrimiento: Boolean = false) {
+        synchronized(relevoDeLazo) {
+            val anterior = navigationJob
+            Log.i(
+                TAG,
+                "Aterrizaje pedido ($comoTermina${if (conCorrimiento) ", corriéndose primero" else ""}): " +
+                    "corta el lazo $lazoActual con el Virtual Stick ${if (virtualStickListo.get()) "habilitado" else "deshabilitado"}",
+            )
+            marcarElAterrizaje(comoTermina)
+            relevarLazo(Lazo.ATERRIZAJE) { sostenerElAterrizaje(anterior, conCorrimiento) }
+        }
+    }
+
+    /** Con [relevoDeLazo] tomado: desde acá el aterrizaje es de la app (ver [aterrizando]). */
+    private fun marcarElAterrizaje(comoTermina: Aterrizaje) {
+        aterrizando = true
+        descartadasAterrizando.clear()
+        aterrizajeEsperado = comoTermina
+    }
+
+    /**
+     * La secuencia del aterrizaje, en este orden:
+     *  1. que el lazo anterior termine de verdad: cancelarlo no lo frena en
+     *     el acto, y una vuelta que ya estaba adentro de `enviarVelocidad*`
+     *     volvía a habilitar el Virtual Stick DESPUÉS de deshabilitarlo;
+     *  2. el Virtual Stick deshabilitado, esperando la respuesta del SDK: con
+     *     él tomado, el DJI no aterriza solo;
+     *  3. si correspondía, el corrimiento (RELEVOS §4), y el pedido de confirmar
+     *     que ya estaba en pie se contesta antes de ordenar nada;
+     *  4. `KeyStartAutoLanding` con tope, y la vigilancia cada medio segundo
+     *     hasta el suelo, con las reglas de [SupervisorDelAterrizaje]: el
+     *     pedido de confirmar se lee y se contesta (y se repite mientras siga),
+     *     y si el dron no entra en modo aterrizaje o no baja, la orden se
+     *     vuelve a mandar.
+     *
+     * Termina en el suelo (el aviso lo da [alAterrizar]) o, si no se pudo,
+     * soltando el aterrizaje con un aviso que sale siempre. Todo queda en el
+     * logcat para el banco (`adb logcat -s DjiDroneController PatrolManager`).
+     */
+    private suspend fun sostenerElAterrizaje(anterior: Job?, conCorrimiento: Boolean) {
+        val desde = System.currentTimeMillis()
+        esperarElFinDe(anterior)
+        apagarVirtualStickYEsperar("el aterrizaje")
+        val supervisor = SupervisorDelAterrizaje()
+        if (conCorrimiento) correrseParaAterrizar()
+        var accion = if (contestarLaConfirmacion(leerElAterrizaje(), supervisor)) {
+            correrseYEmpezar(supervisor)
+        } else {
+            supervisor.empezar()
+        }
+        while (accion == SupervisorDelAterrizaje.Accion.ORDENAR || accion == SupervisorDelAterrizaje.Accion.SEGUIR) {
+            accion = if (accion == SupervisorDelAterrizaje.Accion.ORDENAR) {
+                ordenarElAterrizaje(supervisor)
+            } else {
+                vigilarElAterrizaje(supervisor)
+            }
+        }
+        terminarLaSecuencia(accion, supervisor, desde)
+    }
+
+    /** El paso 1 de [sostenerElAterrizaje], con tope: el lazo anterior ya está cancelado. */
+    private suspend fun esperarElFinDe(anterior: Job?) {
+        if (anterior == null) return
+        val desde = System.currentTimeMillis()
+        val termino = withTimeoutOrNull(ESPERA_FIN_DEL_LAZO_MS) { anterior.join() } != null
+        Log.i(TAG, "Aterrizaje: el lazo anterior ${if (termino) "terminó" else "NO terminó"} en ${System.currentTimeMillis() - desde} ms")
+    }
+
+    /** `KeyStartAutoLanding` con tope; lo que contesta lo decide [SupervisorDelAterrizaje.alContestar]. */
+    private suspend fun ordenarElAterrizaje(supervisor: SupervisorDelAterrizaje): SupervisorDelAterrizaje.Accion {
+        if (supervisor.ordenes > 0) delay(SupervisorDelAterrizaje.ENTRE_ORDENES_MS)
+        Log.i(TAG, "Aterrizaje: KeyStartAutoLanding, orden ${supervisor.ordenes + 1} de ${SupervisorDelAterrizaje.MAXIMO_DE_ORDENES}")
+        val desde = System.currentTimeMillis()
+        var motivo: String? = null
+        val aceptada = withTimeoutOrNull(SupervisorDelAterrizaje.ESPERA_DE_LA_ORDEN_MS) {
+            accionCon(FlightControllerKey.KeyStartAutoLanding, EmptyMsg(), alFallar = { motivo = it })
+        }
+        Log.i(TAG, "Aterrizaje: KeyStartAutoLanding ${resultado(aceptada, motivo)} en ${System.currentTimeMillis() - desde} ms")
+        val yaAceptado = supervisor.aceptado
+        val accion = supervisor.alContestar(aceptada, leerElAterrizaje(), motivo)
+        if (!yaAceptado && supervisor.aceptado) avisarQueAceptoElAterrizaje()
+        return accion
+    }
+
+    /** Una vuelta de la vigilancia: la confirmación primero, después si de verdad baja. */
+    private suspend fun vigilarElAterrizaje(supervisor: SupervisorDelAterrizaje): SupervisorDelAterrizaje.Accion {
+        delay(SupervisorDelAterrizaje.INTERVALO_MS)
+        // Una habilitación que llegó tarde (de antes de la orden) no puede
+        // quedar prendida: con ella el DJI deja de aterrizar.
+        if (virtualStickListo.get()) apagarVirtualStickYEsperar("el aterrizaje (seguía habilitado)")
+        val lectura = leerElAterrizaje()
+        if (contestarLaConfirmacion(lectura, supervisor)) return correrseYEmpezar(supervisor)
+        val accion = supervisor.alLeer(lectura)
+        if (accion != SupervisorDelAterrizaje.Accion.SEGUIR) Log.i(TAG, "Aterrizaje: $accion")
+        return accion
+    }
+
+    /**
+     * El pedido de confirmar, LEÍDO (ver [ConfirmacionDelAterrizaje.alLeer]):
+     * true si hay que correrse antes de seguir. Una confirmación que el dron no
+     * toma se repite; a la quinta, la consola se entera.
+     */
+    private suspend fun contestarLaConfirmacion(
+        lectura: SupervisorDelAterrizaje.Lectura,
+        supervisor: SupervisorDelAterrizaje,
+    ): Boolean {
+        val que = confirmacionDelAterrizaje.alLeer(lectura.pideConfirmar, situacionDelAterrizaje())
+        if (que != ConfirmacionDelAterrizaje.Accion.NADA) {
+            Log.i(TAG, "Aterrizaje: KeyIsLandingConfirmationNeeded=${lectura.pideConfirmar}, se decide $que")
+        }
+        when (que) {
+            ConfirmacionDelAterrizaje.Accion.CONFIRMAR -> {
+                mandarLaConfirmacion()
+                if (supervisor.alConfirmar()) {
+                    avisar(
+                        "el dron sigue pidiendo confirmar el aterrizaje después de ${supervisor.confirmaciones} " +
+                            "confirmaciones: la app sigue confirmando (revisá el lugar en el video)",
+                    )
+                }
+            }
+            ConfirmacionDelAterrizaje.Accion.ESPERAR -> avisar(ESPERA_DEL_CRITICO)
+            ConfirmacionDelAterrizaje.Accion.CORRERSE -> return true
+            ConfirmacionDelAterrizaje.Accion.NADA -> Unit
+        }
+        return false
+    }
+
+    /** `KeyConfirmLanding` con tope, y su resultado en el logcat. */
+    private suspend fun mandarLaConfirmacion(): Boolean {
+        val desde = System.currentTimeMillis()
+        var motivo: String? = null
+        val aceptada = withTimeoutOrNull(SupervisorDelAterrizaje.ESPERA_DE_LA_ORDEN_MS) {
+            accionCon(FlightControllerKey.KeyConfirmLanding, EmptyMsg(), alFallar = { motivo = it })
+        }
+        Log.i(TAG, "Aterrizaje: KeyConfirmLanding ${resultado(aceptada, motivo)} en ${System.currentTimeMillis() - desde} ms")
+        return aceptada == true
+    }
+
+    private suspend fun correrseYEmpezar(supervisor: SupervisorDelAterrizaje): SupervisorDelAterrizaje.Accion {
+        correrseParaAterrizar()
+        return supervisor.empezar()
     }
 
     /**
      * El dron pidió confirmar un aterrizaje que no se confirma solo (RELEVOS
      * §4): deja de bajar, se corre [ConfirmacionDelAterrizaje.CORRIMIENTO_M]
-     * hacia adelante y vuelve a aterrizar. El aterrizaje sigue siendo el que se
-     * ordenó: al tocar el suelo sale el mismo evento. Una orden nueva lo corta
-     * como a cualquier lazo, y el corrimiento igual se da por terminado.
+     * hacia adelante y la secuencia lo vuelve a aterrizar, con sus órdenes de
+     * nuevo. Es lo único que habilita el Virtual Stick con un aterrizaje en
+     * curso. Una orden nueva lo corta como a cualquier lazo, y el corrimiento
+     * igual se da por terminado.
      */
-    private fun correrseYReintentar() {
-        val esperado = aterrizajeEsperado
-        relevarLazo(Lazo.CORRIMIENTO) {
-            aterrizajeEsperado = esperado
-            try {
-                accionCon(FlightControllerKey.KeyStopAutoLanding, EmptyMsg(), alFallar = { motivo ->
-                    Log.i(TAG, "KeyStopAutoLanding antes de correrse: $motivo")
-                })
-                asegurarVirtualStick()
-                correrse()
-            } finally {
-                confirmacionDelAterrizaje.alTerminarDeCorrerse()
-            }
-            apagarVirtualStick()
-            if (!accion(FlightControllerKey.KeyStartAutoLanding, "volver a aterrizar después de correrse")) {
-                aterrizajeEsperado = Aterrizaje.NINGUNO
+    private suspend fun correrseParaAterrizar() {
+        Log.i(TAG, "Aterrizaje: se corre ${ConfirmacionDelAterrizaje.CORRIMIENTO_M.toInt()} m antes de volver a intentarlo")
+        withTimeoutOrNull(SupervisorDelAterrizaje.ESPERA_DE_LA_ORDEN_MS) {
+            accionCon(FlightControllerKey.KeyStopAutoLanding, EmptyMsg(), alFallar = { motivo ->
+                Log.i(TAG, "KeyStopAutoLanding antes de correrse: $motivo")
+            })
+        }
+        corriendoseParaAterrizar = true
+        try {
+            asegurarVirtualStick()
+            correrse()
+        } finally {
+            corriendoseParaAterrizar = false
+            confirmacionDelAterrizaje.alTerminarDeCorrerse()
+        }
+        apagarVirtualStickYEsperar("volver a aterrizar después de correrse")
+    }
+
+    /**
+     * Lo que se lee del dron en cada vuelta: el pedido de confirmar
+     * preguntándoselo ([leerDelDron]), el modo de vuelo y la altura. Cada
+     * lectura queda en el logcat: es lo que el banco tiene que ver.
+     */
+    private suspend fun leerElAterrizaje(): SupervisorDelAterrizaje.Lectura {
+        val pide = leerDelDron(FlightControllerKey.KeyIsLandingConfirmationNeeded) == true
+        val km = KeyManager.getInstance()
+        val modo = runCatching { km.getValue(KeyTools.createKey(FlightControllerKey.KeyFlightMode)) }.getOrNull()
+        val enModo = runCatching { km.getValue(KeyTools.createKey(FlightControllerKey.KeyIsInLandingMode)) }.getOrNull()
+        val alt = lastAlt
+        Log.i(
+            TAG,
+            "Aterrizaje: modo=$modo ($modoDeVuelo) enModoDeAterrizaje=$enModo pideConfirmar=$pide " +
+                "alt=${String.format(Locale.ROOT, "%.1f", alt)} m enVuelo=$enVuelo enlace=$enlaceVivo",
+        )
+        return SupervisorDelAterrizaje.Lectura(
+            enVuelo = enVuelo,
+            conEnlace = enlaceVivo,
+            bajando = SupervisorDelAterrizaje.estaBajando(modo?.name, enModo),
+            pideConfirmar = pide,
+            alturaM = alt,
+        )
+    }
+
+    /**
+     * El valor de [llave] preguntándoselo al dron, con tope, y no el último que
+     * el SDK avisó por cambio; si no contesta, el que el SDK tiene guardado.
+     */
+    private suspend fun <T> leerDelDron(llave: DJIKeyInfo<T>): T? {
+        val km = KeyManager.getInstance()
+        val key = KeyTools.createKey(llave)
+        val leido = withTimeoutOrNull(ESPERA_LECTURA_MS) {
+            suspendCancellableCoroutine<T?> { continuacion ->
+                val respuesta = object : CommonCallbacks.CompletionCallbackWithParam<T> {
+                    override fun onSuccess(valor: T?) {
+                        if (continuacion.isActive) continuacion.resume(valor)
+                    }
+
+                    override fun onFailure(error: IDJIError) {
+                        if (continuacion.isActive) continuacion.resume(null)
+                    }
+                }
+                runCatching { km.getValue(key, respuesta) }.onFailure { if (continuacion.isActive) continuacion.resume(null) }
             }
         }
+        return leido ?: runCatching { km.getValue(key) }.getOrNull()
+    }
+
+    /**
+     * El dron aceptó el aterrizaje: [FlightEvent.AterrizajeAceptado], solo si
+     * esta secuencia sigue siendo la vigente. Mirar y avisar van con
+     * [relevoDeLazo]: un aterrizaje que una persona acaba de cortar no puede
+     * anunciarse como aceptado después del corte.
+     */
+    private suspend fun avisarQueAceptoElAterrizaje() {
+        val yo = currentCoroutineContext()[Job]
+        synchronized(relevoDeLazo) {
+            if (yo === navigationJob && aterrizando) flightEvents.tryEmit(FlightEvent.AterrizajeAceptado)
+        }
+    }
+
+    /** La secuencia terminó: en el suelo, o soltando el aterrizaje con su aviso. */
+    private suspend fun terminarLaSecuencia(
+        accion: SupervisorDelAterrizaje.Accion,
+        supervisor: SupervisorDelAterrizaje,
+        desde: Long,
+    ) {
+        val segundos = (System.currentTimeMillis() - desde) / 1_000
+        if (accion == SupervisorDelAterrizaje.Accion.EN_EL_SUELO) {
+            Log.i(TAG, "Aterrizaje: en el suelo a los $segundos s")
+            return
+        }
+        val motivo = if (accion == SupervisorDelAterrizaje.Accion.LO_SUBIERON) {
+            supervisor.motivoDeLaSubida()
+        } else {
+            supervisor.motivoDelFallo()
+        }
+        Log.w(TAG, "Aterrizaje: se suelta a los $segundos s ($accion): $motivo")
+        // Una respuesta definitiva a una orden de una persona: sale siempre.
+        if (soltarEsteAterrizaje()) avisarSiempre("${DroneController.NO_SE_PUDO_ATERRIZAR}: $motivo")
+    }
+
+    /**
+     * Suelta el aterrizaje de ESTA secuencia (o de este despegue cancelado), si
+     * todavía es la vigente; false si otra orden ya la había reemplazado.
+     */
+    private suspend fun soltarEsteAterrizaje(): Boolean {
+        val yo = currentCoroutineContext()[Job]
+        synchronized(relevoDeLazo) {
+            if (yo !== navigationJob) return false
+            aterrizando = false
+            aterrizajeEsperado = Aterrizaje.NINGUNO
+            lazoActual = Lazo.NINGUNO
+        }
+        return true
+    }
+
+    /**
+     * Con [relevoDeLazo] tomado: otra orden de vuelo de una persona corta el
+     * aterrizaje en curso. true si el dron estaba aterrizando en el aire, y
+     * entonces quien llama le dice al DJI que deje de aterrizar
+     * ([detenerElAterrizajeAutomatico]) fuera del lock, antes de su orden.
+     */
+    private fun soltarElAterrizaje(porQue: String): Boolean {
+        if (!aterrizando) return false
+        aterrizando = false
+        Log.i(TAG, "Aterrizaje cortado: $porQue")
+        return enVuelo
+    }
+
+    /**
+     * `KeyStopAutoLanding` en el acto, sin esperar la respuesta: así sale por el
+     * SDK antes que la orden que la sigue (el regreso, la ruta). El resultado
+     * queda en el logcat.
+     */
+    private fun detenerElAterrizajeAutomatico() {
+        val desde = System.currentTimeMillis()
+        runCatching {
+            KeyManager.getInstance().performAction(
+                KeyTools.createKey(FlightControllerKey.KeyStopAutoLanding),
+                EmptyMsg(),
+                object : CommonCallbacks.CompletionCallbackWithParam<EmptyMsg> {
+                    override fun onSuccess(resultado: EmptyMsg?) {
+                        Log.i(TAG, "KeyStopAutoLanding aceptada en ${System.currentTimeMillis() - desde} ms")
+                    }
+
+                    override fun onFailure(error: IDJIError) {
+                        Log.i(TAG, "KeyStopAutoLanding rechazada en ${System.currentTimeMillis() - desde} ms: ${describir(error)}")
+                    }
+                },
+            )
+        }.onFailure { falla -> Log.w(TAG, "KeyStopAutoLanding no salió", falla) }
+    }
+
+    /**
+     * Aterrizando, lo que solo deja quieto al dron no hace nada: el vuelo
+     * estacionario (tomar o soltar el control, la señal perdida) y el mando
+     * manual (el cero de soltar la palanca, el watchdog). Queda en el logcat una
+     * vez por orden y por aterrizaje.
+     */
+    private fun descartarAterrizando(que: String): Boolean {
+        if (!aterrizando) return false
+        if (descartadasAterrizando.add(que)) Log.i(TAG, "Aterrizando: se descarta $que (no corta el aterrizaje)")
+        return true
+    }
+
+    /** Aterrizando, una orden de navegación no sale: el aterrizaje lo corta una persona con otra orden de vuelo. */
+    private fun rechazarAterrizando(que: String): Boolean {
+        if (!aterrizando) return false
+        avisar("el dron está aterrizando: no se puede $que (lo corta solo otra orden de vuelo de una persona)")
+        return true
+    }
+
+    /** Lo que contestó una orden al SDK, para el logcat. */
+    private fun resultado(aceptada: Boolean?, motivo: String?): String = when (aceptada) {
+        true -> "aceptada"
+        false -> "rechazada (${motivo ?: "sin motivo del SDK"})"
+        null -> "sin respuesta"
     }
 
     /** Los metros del corrimiento, hacia la nariz, sin bajar de [ALTURA_MINIMA_CORRIMIENTO_M]; con tope de tiempo. */
@@ -2300,29 +2704,45 @@ class DjiDroneController : DroneController {
      * bajo [relevoDeLazo]. Todos los modos pasan por acá —ruta, goto, órbita,
      * estacionario y mando manual— porque el par cortar+asignar es justamente lo
      * que no puede entrelazarse entre hilos.
+     *
+     * Con un aterrizaje de la app en curso solo lo releva otro aterrizaje: es
+     * la red de seguridad de las órdenes que ya lo miran antes (ver
+     * [aterrizando]), y el lugar donde una que se coló entre el "no aterriza" y
+     * el relevo se encuentra con la puerta cerrada. false si no relevó.
      */
-    private fun relevarLazo(tipo: Lazo, cuerpo: suspend CoroutineScope.() -> Unit) =
+    private fun relevarLazo(tipo: Lazo, cuerpo: suspend CoroutineScope.() -> Unit): Boolean =
         synchronized(relevoDeLazo) {
+            if (aterrizando && tipo !in LAZOS_DEL_ATERRIZAJE) {
+                descartarAterrizando("el lazo $tipo")
+                return false
+            }
             navigationJob?.cancel()
             lazoActual = tipo
             // Una orden de vuelo nueva: la app ya no espera ningún aterrizaje. Si
             // quedara el de un regreso que esta orden reemplaza, un regreso que
             // después arranque el propio DJI parecería pedido por la app y nadie
-            // se enteraría de la toma.
-            aterrizajeEsperado = Aterrizaje.NINGUNO
+            // se enteraría de la toma. Un aterrizaje nuevo trae el suyo.
+            if (tipo !in LAZOS_DEL_ATERRIZAJE) aterrizajeEsperado = Aterrizaje.NINGUNO
             // El despegue que hubiera era del lazo anterior (quien despega lo
             // marca después de relevar), y la altura pedida solo la conservan
             // los lazos que la releen.
             despegue = Despegue.NINGUNO
             if (tipo !in LAZOS_CON_ALTURA_PEDIDA) alturaPedida = null
             navigationJob = scope.launch(block = cuerpo)
+            true
         }
 
+    /**
+     * Corta el lazo en curso. Todos los que lo llaman terminan también un
+     * aterrizaje de la app, si había: una orden de una persona (el regreso, el
+     * corte del aterrizaje), el suelo, una toma del propio DJI o la despedida.
+     */
     private fun cortarLazo() {
         synchronized(relevoDeLazo) {
             lazoActual = Lazo.NINGUNO
             despegue = Despegue.NINGUNO
             alturaPedida = null
+            aterrizando = false
             navigationJob?.cancel()
             navigationJob = null
         }
@@ -2390,12 +2810,19 @@ class DjiDroneController : DroneController {
         // El propio DJI se quedó con el vuelo: volver a habilitarlo sería
         // pelearle el regreso o el aterrizaje (RELEVOS §4). Hasta el suelo.
         if (tomaDelDron != null) return
+        // Aterrizando, tampoco: con el Virtual Stick tomado el DJI deja de
+        // aterrizar. Es lo que frena a la vuelta del lazo que ya estaba adentro
+        // de enviarVelocidad* cuando se lo cortó. Solo el corrimiento lo usa.
+        if (aterrizando && !corriendoseParaAterrizar) return
         if (!reintentoDelMandoVirtual.sePuedeIntentar(System.currentTimeMillis())) return
         if (!virtualStickListo.compareAndSet(false, true)) return
         val vs = VirtualStickManager.getInstance()
+        val lazo = lazoActual
+        Log.i(TAG, "Virtual Stick: se habilita (lazo $lazo)")
         vs.enableVirtualStick(
             object : CommonCallbacks.CompletionCallback {
                 override fun onSuccess() {
+                    Log.i(TAG, "Virtual Stick: habilitado (lo pidió el lazo $lazo)")
                     reintentoDelMandoVirtual.exito()
                     // El dron aceptó: si más adelante vuelve a rechazar, es un
                     // problema nuevo y tiene que volver a avisarse.
@@ -2410,14 +2837,16 @@ class DjiDroneController : DroneController {
                     vs.setVirtualStickAdvancedModeEnabled(true)
                     // Si la app se cerró mientras el dron todavía lo aceptaba,
                     // esta habilitación llegó tarde y hay que deshacerla (ver
-                    // mandarApagado()).
-                    if (desconectado) {
+                    // mandarApagado()). Lo mismo si en el medio arrancó un
+                    // aterrizaje: le cancelaría el aterrizaje automático.
+                    if (desconectado || (aterrizando && !corriendoseParaAterrizar)) {
                         virtualStickListo.set(false)
-                        mandarApagado()
+                        mandarApagado("una habilitación que llegó tarde")
                     }
                 }
 
                 override fun onFailure(error: IDJIError) {
+                    Log.i(TAG, "Virtual Stick: el dron no lo habilitó (lazo $lazo): ${describir(error)}")
                     // Quedó sin habilitar: se libera la marca para que se pueda
                     // reintentar, en vez de comandar al vacío para siempre. El
                     // cuándo lo pone la espera creciente.
@@ -2439,7 +2868,7 @@ class DjiDroneController : DroneController {
      */
     private fun apagarVirtualStick() {
         if (!virtualStickListo.compareAndSet(true, false)) return
-        mandarApagado()
+        mandarApagado("el lazo $lazoActual")
     }
 
     /**
@@ -2447,12 +2876,16 @@ class DjiDroneController : DroneController {
      * hay un camino donde la marca ya se consumió y el dron igual quedó con el
      * Virtual Stick habilitado: [disconnect] apaga mientras una habilitación
      * está en vuelo, y cuando la aeronave contesta ese `onSuccess` tardío el
-     * Virtual Stick está prendido pero la marca ya dice false.
+     * Virtual Stick está prendido pero la marca ya dice false. [paraQue] es
+     * quién lo pide, para el logcat.
      */
-    private fun mandarApagado() {
+    private fun mandarApagado(paraQue: String) {
+        Log.i(TAG, "Virtual Stick: se deshabilita por $paraQue")
         VirtualStickManager.getInstance().disableVirtualStick(
             object : CommonCallbacks.CompletionCallback {
-                override fun onSuccess() = Unit
+                override fun onSuccess() {
+                    Log.i(TAG, "Virtual Stick: deshabilitado (lo pidió $paraQue)")
+                }
 
                 override fun onFailure(error: IDJIError) {
                     avisar(
@@ -2462,6 +2895,44 @@ class DjiDroneController : DroneController {
                 }
             },
         )
+    }
+
+    /**
+     * Deshabilita el Virtual Stick ESPERANDO la respuesta del SDK, con tope: el
+     * paso 2 de la secuencia del aterrizaje, que no puede mandar
+     * `KeyStartAutoLanding` con el mando todavía tomado. Lo que pasó y cuánto
+     * tardó queda en el logcat; si no se pudo, se avisa (la secuencia sigue: el
+     * supervisor ve si el dron baja).
+     */
+    private suspend fun apagarVirtualStickYEsperar(paraQue: String) {
+        if (!virtualStickListo.getAndSet(false)) {
+            Log.i(TAG, "Virtual Stick: ya estaba deshabilitado para $paraQue")
+            return
+        }
+        Log.i(TAG, "Virtual Stick: se deshabilita para $paraQue (lazo $lazoActual)")
+        val desde = System.currentTimeMillis()
+        var motivo: String? = null
+        val apagado = withTimeoutOrNull(ESPERA_MANDO_VIRTUAL_MS) {
+            suspendCancellableCoroutine<Boolean> { continuacion ->
+                val respuesta = object : CommonCallbacks.CompletionCallback {
+                    override fun onSuccess() {
+                        if (continuacion.isActive) continuacion.resume(true)
+                    }
+
+                    override fun onFailure(error: IDJIError) {
+                        motivo = describir(error)
+                        if (continuacion.isActive) continuacion.resume(false)
+                    }
+                }
+                runCatching { VirtualStickManager.getInstance().disableVirtualStick(respuesta) }.onFailure { falla ->
+                    motivo = falla.message ?: falla.javaClass.simpleName
+                    if (continuacion.isActive) continuacion.resume(false)
+                }
+            }
+        }
+        val como = resultado(apagado, motivo)
+        Log.i(TAG, "Virtual Stick para $paraQue: deshabilitación $como en ${System.currentTimeMillis() - desde} ms")
+        if (apagado != true) avisar("no se pudo devolver el mando al control para $paraQue ($como): el dron puede no aterrizar")
     }
 
     /**
@@ -2603,6 +3074,21 @@ class DjiDroneController : DroneController {
         /** Tope del corrimiento antes de volver a aterrizar: 10 m se hacen en unos segundos. */
         const val ESPERA_CORRIMIENTO_MS = 10_000L
 
+        /**
+         * Tope para que termine el lazo que el aterrizaje cortó: una vuelta tarda
+         * lo que una llamada al SDK, así que esto sobra; si no termina, se sigue
+         * igual (la puerta de [asegurarVirtualStick] ya está cerrada).
+         */
+        const val ESPERA_FIN_DEL_LAZO_MS = 1_000L
+
+        /** Tope para que el dron conteste una lectura durante el aterrizaje (se lee dos veces por segundo). */
+        const val ESPERA_LECTURA_MS = 400L
+
+        /** Lo que se avisa cuando el dron pide confirmar un aterrizaje que espera la batería crítica (RELEVOS §4). */
+        const val ESPERA_DEL_CRITICO =
+            "el dron pide confirmar un aterrizaje fuera de base: no se confirma hasta la batería crítica " +
+                "(revisá el lugar en el video)"
+
         /** El corrimiento no va a ras del suelo: un cordón o un arbusto a medio metro se lo comen. */
         const val ALTURA_MINIMA_CORRIMIENTO_M = 2.0
 
@@ -2611,6 +3097,9 @@ class DjiDroneController : DroneController {
 
         /** Los lazos que releen [alturaPedida]: un [cambiarAltura] no los corta (ver DroneController.cambiarAltura). */
         val LAZOS_CON_ALTURA_PEDIDA = setOf(Lazo.DESPEGUE_A_ALTURA, Lazo.VUELO, Lazo.GIRO, Lazo.ALTURA)
+
+        /** Los lazos de un aterrizaje de la app: los únicos que relevan con [aterrizando] prendido. */
+        val LAZOS_DEL_ATERRIZAJE = setOf(Lazo.ATERRIZAJE, Lazo.ATERRIZAJE_DEL_DESPEGUE)
 
         /**
          * Un regreso propio que aparece hasta esto después de que volvió el

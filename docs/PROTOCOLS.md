@@ -342,10 +342,14 @@ la estimación vigente:
 `PATROL_STOPPED`, `SIGNAL_LOST`, `SIGNAL_RECOVERED`, `RTH_SIGNAL_LOSS`,
 `RTH_LOW_BATTERY`, `RTH_MANUAL` (regreso ordenado desde la app), `TAKEOFF`
 (despegue automático en curso, del patrullaje o pedido desde la consola),
-`LANDING` (aterrizaje ordenado desde la app o la consola),
+`LANDING` (**el dron ACEPTÓ el aterrizaje** ordenado desde la app o la consola, o el que la app ordena cuando falla la subida de un relevo: sale cuando el dron lo acepta y está bajando, no al mandarle la orden; si no se puede, en su lugar llega un `DRONE_PROBLEM` que empieza con «No se pudo aterrizar». En el protocolo de última ubicación, RELEVOS §5, sale además al empezar, con la posición del aterrizaje de emergencia),
 `ORBIT_STARTED`, `GOTO_ARRIVED`, `FORCED_GOTO`, `CONTROL_RESUMED`, `LANDED`,
 `BATTERY_RECHARGED`, `DRONE_PROBLEM` (el dron o su SDK rechazó una orden: el
-motivo va en `message`, con un techo de repetición para no inundar el registro).
+motivo va en `message`, con un techo de repetición para no inundar el registro.
+**«No se pudo aterrizar: …» sale SIEMPRE, sin ese techo: es la respuesta
+definitiva a un `land` —el dron no lo aceptó después de tres órdenes, lo aceptó
+y no baja, o lo subieron con las palancas del control— y el dron queda
+suspendido donde está, con el mando devuelto a quien lo tenía**).
 `DETECTION` (detección confirmada que se avisa sin seguimiento: dron en el suelo, a baja altura, sin GPS o con el objetivo imposible de ubicar en el terreno —la cámara al horizonte o más arriba—; con `lat`/`lon` si se pudo ubicar).
 **`TARGET_DETECTED` (la detección durante el control manual) ya no sale: en `MANUAL` no se alerta (§4). El hub lo sigue aceptando como cualquier otro `eventType`, por las apps viejas.**
 **Seguimiento** (todos con `alertId` si se conoce y con `lat`/`lon` del objetivo):
@@ -700,13 +704,13 @@ Los mensajes se dirigen **solo al dron correspondiente**, salvo que se indique.
 | `alert_decision` | `alertId, decision (VALIDATED\|DISMISSED), decidedBy`, **`resent?`** | **Se aplica solo si `alertId` es la alerta del objetivo en curso** (o si la app todavía no conoce el id de su alerta, salvo que sea un reenvío: `resent: true` solo vale para la alerta exacta); una decisión sobre una alerta vieja no toca el objetivo nuevo. `DISMISSED`: termina el seguimiento, marca la zona como descartada (§4) y reanuda el patrullaje **hacia el próximo waypoint** de la ruta. `VALIDATED`: el dron sigue sobre el objetivo (órbita o seguimiento) hasta un `resume_patrol`. **Al reconectarse un dron, el hub le reenvía las decisiones de sus alertas de los últimos 10 minutos** (con `resent: true`), por si se decidieron mientras estaba desconectado |
 | `resume_patrol` | `orderedBy, fromIndex?` | Reanuda el patrullaje; con `fromIndex` vuela hacia ese nodo, **sin él hacia el próximo nodo de la ruta (el que tenía por delante cuando se interrumpió)**. **Termina el seguimiento de un objetivo, si lo había** |
 | `start_route` | `routeId, fromIndex, orderedBy` | Comienza a patrullar esa ruta. **Con el dron en el suelo es despegar solo: pide GPS, punto de retorno y la misma batería que `takeoff`; si no, `DRONE_PROBLEM` con el motivo** |
-| `stop_patrol` | `orderedBy` | Interrumpe el patrullaje: el dron queda en vuelo estacionario (`PAUSED`) |
+| `stop_patrol` | `orderedBy` | Interrumpe el patrullaje: el dron queda en vuelo estacionario (`PAUSED`). **Con un aterrizaje en curso es otra orden de vuelo: lo corta** |
 | `force_goto` | `routeId, index, orderedBy` | Vuela forzado hacia ese nodo y queda estacionario sobre él (`FORCED`) |
-| `control_taken` | `by` | Entra en control manual (`MANUAL`): vuelo estacionario a la espera de movimientos. **Con un objetivo en seguimiento, la app lo sigue estimando con las detecciones mientras el operador vuela. Mientras dure `MANUAL` (en el aire o en el suelo), las detecciones se dibujan en el video pero no generan alertas (§4)** |
+| `control_taken` | `by` | Entra en control manual (`MANUAL`): vuelo estacionario a la espera de movimientos. **Con un objetivo en seguimiento, la app lo sigue estimando con las detecciones mientras el operador vuela. Mientras dure `MANUAL` (en el aire o en el suelo), las detecciones se dibujan en el video pero no generan alertas (§4). Con un aterrizaje en curso no lo frena: el control queda tomado y el dron sigue bajando hasta el suelo** |
 | **`takeoff`** | **`by`** | **Despegue automático en el lugar (~1,2 m, el del SDK) y queda suspendido a la espera del mando. Solo con el control manual tomado y el dron en el suelo. No exige GPS (la aeronave se sostiene con sus sensores de visión); sí exige enlace con la aeronave y batería: ni al 25 % o menos, ni por cambiar (aterrizó con la batería baja y todavía no se la cambió, aunque después se haya tomado el control o la lectura haya rebotado; la batería nueva se reconoce por una lectura de 50 % o más en el suelo). Si no despega, la app avisa el motivo con un `DRONE_PROBLEM`** |
-| **`land`** | **`by`** | **Aterriza donde está. Solo con el control manual tomado y el dron en el aire. Al tocar el suelo el control sigue tomado (`MANUAL` en el suelo)** |
-| `manual_move` | `bearing, distanceM, by` | **Desplazamiento puntual** de esa distancia en ese rumbo (solo en `MANUAL`, en el aire y con GPS) |
-| `manual_stick` | `pitch, roll, yaw, throttle, by` | **Vuelo continuo con palancas** (solo en `MANUAL` y **en el aire**: en el suelo se descarta en silencio, la consola muestra "despegá primero"): cada eje es un número en `[-1, 1]` y el dron lo sostiene hasta el mensaje siguiente. Ver §3.b |
+| **`land`** | **`by`** | **Aterriza donde está. Solo con el control manual tomado y el dron en el aire. Al tocar el suelo el control sigue tomado (`MANUAL` en el suelo). El aterrizaje se SOSTIENE hasta el suelo (también el que se ordena desde el teléfono): mientras baja, `manual_stick` —incluido el de los cuatro ejes en cero al soltar la palanca, que puede llegar después del `land`—, `manual_move`, el watchdog del mando, `control_taken`, `control_released` y la pérdida de señal no le dan ninguna orden al dron, el regreso por batería no lo pisa y una detección alerta sin seguimiento; `manual_gimbal` sí mueve la cámara. Lo corta otra orden de vuelo de una persona: `start_route`, `resume_patrol`, `force_goto`, `stop_patrol`, o volver a base desde el teléfono. `LANDING` sale cuando el dron lo acepta (el hub ya registró `LANDING_ORDERED` al recibir la orden); si no se puede, `DRONE_PROBLEM` «No se pudo aterrizar: …», que sale siempre** |
+| `manual_move` | `bearing, distanceM, by` | **Desplazamiento puntual** de esa distancia en ese rumbo (solo en `MANUAL`, en el aire y con GPS; **con el dron aterrizando se ignora**) |
+| `manual_stick` | `pitch, roll, yaw, throttle, by` | **Vuelo continuo con palancas** (solo en `MANUAL` y **en el aire**: en el suelo se descarta en silencio, la consola muestra "despegá primero"; **con el dron aterrizando también, ver `land`**): cada eje es un número en `[-1, 1]` y el dron lo sostiene hasta el mensaje siguiente. Ver §3.b |
 | **`manual_gimbal`** | **`pitch, by`** | **Inclina la cámara a `pitch` grados, en ángulo ABSOLUTO** (`0` horizonte, negativo hacia abajo; llega ya recortado a `[-90, 30]`). **Solo con el control manual tomado (`MANUAL`), en el suelo o en el aire**: inclinar la cámara no mueve al dron. En cualquier otro estado se descarta en silencio (patrullando, orbitando o siguiendo, la cámara la maneja la app). No cambia el estado ni toca el vuelo; la inclinación nueva se ve en `status.gimbalPitch`. **Al salir de `MANUAL` la app tira la inclinación que todavía no le pasó al gimbal: después de salir, al gimbal solo puede llegarle la que ya estaba cumpliendo, y la cámara que apunta el estado siguiente (la de patrulla al retomar la ruta, la de la órbita o el seguimiento al volver al objetivo) sale después de esa, nunca antes.** Ver §3.b |
 | `control_released` | `by` | Sale del control manual. **Con un objetivo en seguimiento, el dron vuelve a él (`ORBITING` o `FOLLOWING`, evento `TRACKING_RESUMED`)**; sin objetivo, si no llega un `resume_patrol` a continuación queda `PAUSED`. **Desde ahí las detecciones vuelven a alertar como siempre: la próxima confirmada, sin ráfaga de lo que se vio durante el control** |
 | `renamed` | `displayName` | El operador renombró al dron: la app actualiza el nombre que muestra |
@@ -731,7 +735,8 @@ click); las palancas mandan `manual_stick`.
 llegue ningún `manual_stick` y el último recibido no era todo ceros, la app pone
 los ejes en cero por su cuenta y lo anota en su log local. Es la red de seguridad
 ante un corte de internet del celular: sin eso, el dron seguiría volando con la
-última velocidad comandada.
+última velocidad comandada. **Con un aterrizaje en curso no actúa: el dron baja
+por su cuenta, y esos ceros le cancelaban el aterrizaje al DJI.**
 
 ## 2.b Comando Central → App de control: relevos, desvíos y emergencias
 

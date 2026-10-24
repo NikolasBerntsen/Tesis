@@ -313,6 +313,19 @@ class SimulatedDroneController(
     @Volatile
     private var mandoVirtualRechazado = false
 
+    /**
+     * El aterrizaje en curso lo ordenó la app ([land]) y se sostiene hasta el
+     * suelo, como en el real (ver DroneController.land): mientras dura, el
+     * estacionario y el mando no hacen nada y la navegación se rechaza. Lo
+     * apagan el suelo, otra orden de vuelo y una toma del propio dron.
+     */
+    @Volatile
+    private var aterrizajeDeLaApp = false
+
+    /** El dron simulado no acepta aterrizar (ver [rechazarElAterrizaje]). */
+    @Volatile
+    private var aterrizajeRechazado = false
+
     /** Fase del "objeto que deambula" del video: la comparten los cuadros y las fotos. */
     @Volatile
     private var faseDelVideo = 0.0
@@ -360,6 +373,16 @@ class SimulatedDroneController(
     }
 
     /**
+     * Gancho de prueba: el dron no acepta aterrizar, como el real cuando se le
+     * agotan los intentos de `KeyStartAutoLanding`. [land] lo avisa con el
+     * [FlightEvent.Problema] de [DroneController.NO_SE_PUDO_ATERRIZAR] y el dron
+     * queda estacionario donde está.
+     */
+    fun rechazarElAterrizaje(rechaza: Boolean) {
+        aterrizajeRechazado = rechaza
+    }
+
+    /**
      * Gancho de prueba: el propio DJI toma el control como lo haría el real,
      * aunque la app le haya negado el regreso por batería (es justamente el caso
      * que el desvío tiene que aguantar, RELEVOS §4). En el suelo no pasa nada.
@@ -393,6 +416,9 @@ class SimulatedDroneController(
     /** true con el dron en el suelo y los motores apagados. */
     private val enElSuelo: Boolean get() = mode == Mode.IDLE && altM <= 0.0
 
+    /** Bajando por un [land] de la app (ver [aterrizajeDeLaApp]). */
+    private val aterrizandoPorLaApp: Boolean get() = aterrizajeDeLaApp && mode == Mode.LANDING
+
     override fun connect() {
         synchronized(cerrojo) {
             if (loops != null) return
@@ -416,6 +442,8 @@ class SimulatedDroneController(
     override fun startRoute(route: PatrolRoute, fromWaypoint: Int) {
         synchronized(cerrojo) {
             if (rechazarSiElDronTieneElControl("seguir una ruta")) return
+            // Una ruta es otra orden de vuelo: corta el aterrizaje en curso.
+            aterrizajeDeLaApp = false
             despuesDelDespegue = DespuesDelDespegue.RUTA
             this.route = route
             targetWaypoint = fromWaypoint.coerceIn(0, route.waypoints.size - 1)
@@ -435,6 +463,7 @@ class SimulatedDroneController(
     override fun startOrbit(centerLat: Double, centerLon: Double, radiusM: Double) {
         synchronized(cerrojo) {
             if (rechazarEnElSuelo("orbitar")) return
+            if (rechazarAterrizando("orbitar")) return
             if (rechazarSiElDronTieneElControl("orbitar")) return
             orbitCenterLat = centerLat
             orbitCenterLon = centerLon
@@ -453,6 +482,7 @@ class SimulatedDroneController(
     override fun seguirObjetivo(lat: Double, lon: Double, vNorteMs: Double, vEsteMs: Double) {
         synchronized(cerrojo) {
             if (rechazarEnElSuelo("seguir al objetivo")) return
+            if (rechazarAterrizando("seguir al objetivo")) return
             if (rechazarSiElDronTieneElControl("seguir al objetivo")) return
             objetivoSeguido = ObjetivoSeguido(lat, lon, vNorteMs, vEsteMs, reloj())
             if (mode != Mode.FOLLOW) alturaObjetivo = ALTURA_CRUCERO_M
@@ -475,11 +505,13 @@ class SimulatedDroneController(
      * Estacionario. Con el despegue recién ordenado (todavía en el suelo) es no
      * despegar; a media subida se queda donde está, sin seguir subiendo, como el
      * real. Si no, va a la de crucero: así el operador no deja al dron a ras del
-     * suelo al soltar el mando.
+     * suelo al soltar el mando. Aterrizando por la app no hace nada (ver
+     * DroneController.land).
      */
     override fun hold() {
         synchronized(cerrojo) {
             if (enElSuelo || cancelarDespegueEnElSuelo(FlightEvent.Aterrizado)) return
+            if (aterrizandoPorLaApp) return
             if (rechazarSiElDronTieneElControl("quedar estacionario")) return
             alturaObjetivo = if (mode == Mode.TAKING_OFF) altM else ALTURA_CRUCERO_M
             alturaPedida = null
@@ -491,6 +523,7 @@ class SimulatedDroneController(
     override fun gotoPoint(lat: Double, lon: Double) {
         synchronized(cerrojo) {
             if (rechazarEnElSuelo("ir a un punto")) return
+            if (rechazarAterrizando("ir a un punto")) return
             if (rechazarSiElDronTieneElControl("ir a un punto")) return
             destino = Punto(lat, lon)
             volandoHacia = false
@@ -502,6 +535,8 @@ class SimulatedDroneController(
 
     override fun manualStick(pitch: Double, roll: Double, yaw: Double, throttle: Double) {
         synchronized(cerrojo) {
+            // Aterrizando por la app, el mando no le habla al dron (ver DroneController.land).
+            if (aterrizandoPorLaApp) return
             if (rechazarEnElSuelo("el mando manual")) return
             if (rechazarSiElDronTieneElControl("usar el mando manual")) return
             ejesMando = MandoVirtual.velocidades(pitch, roll, yaw, throttle)
@@ -554,19 +589,46 @@ class SimulatedDroneController(
             seguidor.alOrdenar(SeguidorDelRegreso.Orden.REGRESO)
             regresoDeLaApp = true
             alturaPedida = null
+            // Volver es otra orden de vuelo: corta el aterrizaje en curso.
+            aterrizajeDeLaApp = false
             if (mode == Mode.RTH) return
             alturaObjetivo = modelo.alturaDeRegresoM
             mode = Mode.RTH
         }
     }
 
-    /** Aterriza donde está. Con el despegue recién ordenado no despega; a media subida, baja. */
+    /**
+     * Aterriza donde está y lo sostiene hasta el suelo. Con el despegue recién
+     * ordenado no despega; a media subida, baja. Acepta en el acto
+     * ([FlightEvent.AterrizajeAceptado]), salvo que la prueba simule un dron
+     * que no acepta ([rechazarElAterrizaje]): ahí avisa, como el real, que no se
+     * pudo, y queda estacionario donde está.
+     */
     override fun land() {
         synchronized(cerrojo) {
             if (enElSuelo || cancelarDespegueEnElSuelo(FlightEvent.Aterrizado)) return
-            regresoDeLaApp = false
             alturaPedida = null
+            rumboPedido = null
+            if (aterrizajeRechazado) {
+                alturaObjetivo = altM
+                mode = Mode.HOLD
+                emitEvent(FlightEvent.Problema("${DroneController.NO_SE_PUDO_ATERRIZAR}: el dron simulado no aceptó la orden"))
+                return
+            }
+            regresoDeLaApp = false
+            aterrizajeDeLaApp = true
             mode = Mode.LANDING
+            emitEvent(FlightEvent.AterrizajeAceptado)
+        }
+    }
+
+    /** Sale del aterrizaje de la app: estacionario a la altura que tiene, a la espera de la orden que sigue. */
+    override fun cancelarAterrizaje() {
+        synchronized(cerrojo) {
+            if (!aterrizandoPorLaApp) return
+            aterrizajeDeLaApp = false
+            alturaObjetivo = altM
+            mode = Mode.HOLD
         }
     }
 
@@ -616,6 +678,7 @@ class SimulatedDroneController(
         synchronized(cerrojo) {
             if (!alturaM.isFinite()) return
             if (rechazarEnElSuelo("cambiar de altura")) return
+            if (rechazarAterrizando("cambiar de altura")) return
             if (rechazarSiElDronTieneElControl("cambiar de altura")) return
             val altura = alturaM.coerceIn(ALTURA_MINIMA_M, ALTURA_MAXIMA_M)
             alturaPedida = altura
@@ -639,6 +702,7 @@ class SimulatedDroneController(
     override fun volarHacia(lat: Double, lon: Double) {
         synchronized(cerrojo) {
             if (rechazarEnElSuelo("volar hacia un punto")) return
+            if (rechazarAterrizando("volar hacia un punto")) return
             if (mode == Mode.TAKING_OFF) {
                 rechazar("el dron todavía está despegando: sube por su columna y recién arriba puede volar hacia un punto")
                 return
@@ -668,6 +732,7 @@ class SimulatedDroneController(
         synchronized(cerrojo) {
             if (!rumboGrados.isFinite()) return
             if (rechazarEnElSuelo("girar en el lugar")) return
+            if (rechazarAterrizando("girar en el lugar")) return
             if (rechazarSiElDronTieneElControl("girar en el lugar")) return
             val altura = alturaPedida ?: altM
             alturaPedida = altura
@@ -800,6 +865,13 @@ class SimulatedDroneController(
         return true
     }
 
+    /** Aterrizando por la app, la navegación se rechaza (avisando una vez), como en el real. */
+    private fun rechazarAterrizando(que: String): Boolean {
+        if (!aterrizandoPorLaApp) return false
+        rechazar("el dron está aterrizando: no se puede $que (lo corta solo otra orden de vuelo de una persona)")
+        return true
+    }
+
     /**
      * Con el vuelo tomado por el propio dron, las órdenes de vuelo se rechazan
      * (avisando una vez). Una orden que pasa con enlace es la app retomando el
@@ -855,6 +927,8 @@ class SimulatedDroneController(
         if (mode == Mode.LANDING && tomaDelDron == MotivoDelDron.ATERRIZAJE_BATERIA_CRITICA) return
         rumboPedido = null
         alturaPedida = null
+        // Lo que haga desde acá es del propio dron, no el aterrizaje de la app.
+        aterrizajeDeLaApp = false
         val aviso = when {
             motivo == MotivoDelDron.ATERRIZAJE_BATERIA_CRITICA ||
                 (motivo == MotivoDelDron.RTH_SENIAL && failsafeAterrizar) -> {
@@ -910,6 +984,7 @@ class SimulatedDroneController(
         rthPorBateriaPreguntado = false
         rthPropioPermitido = true
         failsafeAterrizar = false
+        aterrizajeDeLaApp = false
         rumboPedido = null
         alturaPedida = null
         destino = null

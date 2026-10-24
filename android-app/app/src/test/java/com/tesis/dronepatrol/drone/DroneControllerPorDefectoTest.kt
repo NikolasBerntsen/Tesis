@@ -50,6 +50,9 @@ class DroneControllerPorDefectoTest {
         dron.permitirRthPropioPorBateria(false)
         dron.fijarFailsafeAterrizar(true)
         dron.soltarDespegue()
+        // Un controlador que no sostiene el aterrizaje no tiene nada que cortar:
+        // la orden que sigue lo corta sola.
+        dron.cancelarAterrizaje()
 
         assertEquals("ni despega, ni sube, ni gira, ni corta un regreso", emptyList<String>(), dron.ordenes)
     }

@@ -141,13 +141,13 @@ class SimulatedDroneControllerBordesTest {
         enElAire.land()
         dron.setSignalLost(true)
         enElAire.setSignalLost(true)
-        withTimeout(15_000) { while (avisosAterrizando.isEmpty()) delay(100) }
+        withTimeout(15_000) { while (FlightEvent.Aterrizado !in avisosAterrizando) delay(100) }
         delay(1_200) // ya en tierra, con el enlace todavía cortado
         dron.setSignalLost(false)
         enElAire.setSignalLost(false)
         delay(700)
 
-        assertEquals(listOf<FlightEvent>(FlightEvent.Aterrizado), avisosAterrizando.toList())
+        assertEquals(listOf(FlightEvent.AterrizajeAceptado, FlightEvent.Aterrizado), avisosAterrizando.toList())
         val aterrizado = enElAire.telemetry.first()
         assertEquals(0.0, aterrizado.altM, 0.0)
         assertEquals("salió hacia la base", 0.0, metrosAlNorte(aterrizado.lat), 1e-6)
