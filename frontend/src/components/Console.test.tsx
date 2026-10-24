@@ -886,4 +886,70 @@ describe('Console — el control manual entre personas', () => {
     expect(enviados.at(-1)).toEqual({ type: 'manual_stick', droneId: 'd1', pitch: 0.5, roll: 0, yaw: 0, throttle: 0 });
     fireEvent.keyUp(window, { code: 'KeyW' });
   });
+
+  it('con los ajustes del control abiertos, el pedido cuelga aparte y cada uno se queda con su teclado y su Esc', async () => {
+    dronesFix = [
+      makeDrone({
+        droneId: 'd1',
+        displayName: 'Alfa',
+        online: true,
+        controlledBy: 'oper1',
+        lastStatus: makeStatus({ droneId: 'd1', state: 'MANUAL', controlledBy: 'oper1' }),
+      }),
+    ];
+    render(<Console onLogout={() => {}} />);
+    await abrirDetalleDelPrimerDron();
+    await userEvent.click(await screen.findByRole('button', { name: 'Volver a la vista de pilotaje' }));
+    const vista = await screen.findByRole('dialog', { name: 'Pilotaje de Alfa' });
+    await userEvent.click(within(vista).getByRole('button', { name: 'Ajustes del control' }));
+    const ajustes = within(vista).getByRole('dialog', { name: 'Ajustes del control' });
+    const cerrarAjustes = within(ajustes).getByRole('button', { name: 'Cerrar los ajustes' });
+    expect(cerrarAjustes).toHaveFocus();
+    const mandos = () => enviados.filter((m) => (m as { type?: string }).type === 'manual_stick');
+
+    fire({ type: 'control_request', droneId: 'd1', ...PEDIDO });
+    const aviso = within(vista).getByTestId('pedido-al-titular');
+    // Adentro de la vista pero no del panel, y sin sacarle el foco: el que
+    // estaba probando un deslizador sigue donde estaba.
+    expect(ajustes).not.toContainElement(aviso);
+    expect(cerrarAjustes).toHaveFocus();
+
+    // Lo que se teclea en los ajustes tampoco vuela con el pedido a la vista.
+    const interruptor = within(ajustes).getByRole('switch', { name: 'Invertir eje vertical' });
+    act(() => interruptor.focus());
+    fireEvent.keyDown(interruptor, { code: 'Space', key: ' ' });
+    fireEvent.keyUp(interruptor, { code: 'Space', key: ' ' });
+    expect(mandos()).toEqual([]);
+
+    // W sostenida desde la imagen y el piloto que entra al pedido con la W
+    // abajo: la repetición adentro no se la come, y la soltada frena al dron.
+    fireEvent.keyDown(vista, { code: 'KeyW' });
+    expect(mandos().at(-1)).toEqual({ type: 'manual_stick', droneId: 'd1', pitch: 0.5, roll: 0, yaw: 0, throttle: 0 });
+    const ceder = within(aviso).getByRole('button', { name: 'Ceder el control' });
+    act(() => ceder.focus());
+    fireEvent.keyDown(ceder, { code: 'KeyW', repeat: true });
+    fireEvent.keyUp(ceder, { code: 'KeyW' });
+    expect(mandos().at(-1)).toEqual({ type: 'manual_stick', droneId: 'd1', pitch: 0, roll: 0, yaw: 0, throttle: 0 });
+    // Y lo que se aprieta en el pedido es de sus botones: no sale ningún mando.
+    const antes = mandos().length;
+    for (const code of ['KeyW', 'Space', 'ShiftLeft', 'KeyQ']) {
+      fireEvent.keyDown(ceder, { code });
+      fireEvent.keyUp(ceder, { code });
+    }
+    expect(mandos()).toHaveLength(antes);
+
+    // Esc con el foco en el pedido lo mantiene, y los ajustes siguen abiertos.
+    await act(async () => {
+      fireEvent.keyDown(ceder, { key: 'Escape', code: 'Escape' });
+    });
+    const respuestas = () => pedidos.filter((p) => p.ruta === '/drones/d1/control/request/answer');
+    await waitFor(() => expect(respuestas().map((p) => p.cuerpo)).toEqual([JSON.stringify({ respuesta: 'mantener' })]));
+    expect(within(vista).getByRole('dialog', { name: 'Ajustes del control' })).toBeInTheDocument();
+
+    // Esc con el foco en los ajustes los cierra, sin contestar nada más.
+    fireEvent.keyDown(within(ajustes).getByRole('slider', { name: 'Velocidad normal (W A S D)' }), { key: 'Escape' });
+    expect(within(vista).queryByRole('dialog', { name: 'Ajustes del control' })).not.toBeInTheDocument();
+    expect(within(vista).getByRole('button', { name: 'Ajustes del control' })).toHaveFocus();
+    expect(respuestas()).toHaveLength(1);
+  });
 });

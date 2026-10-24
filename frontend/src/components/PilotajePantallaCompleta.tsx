@@ -531,8 +531,9 @@ export default function PilotajePantallaCompleta({
 
   // Lo de atrás queda inerte mientras se vuela: el tabulador no puede ir a
   // parar a un botón de la página que no se ve, y un lector de pantalla tampoco.
-  // Se apaga lo que había al abrir; los diálogos que se abran después se montan
-  // al final del body y quedan vivos.
+  // Se apaga lo que había al abrir. Los diálogos que se abran después y los
+  // avisos del control se cuelgan adentro de la vista (CapaDePilotaje y
+  // Modal.tsx) o, sin la consola alrededor, al final del body: vivos igual.
   useEffect(() => {
     const elemento = raiz.current!;
     const apagados = [...document.body.children].filter((hijo) => hijo !== elemento && !hijo.hasAttribute('inert'));

@@ -63,6 +63,20 @@ describe('orden de apilado', () => {
     // incluidos. Que vayan juntos lo prueba AvisosDelControl.test.tsx.
     expect(avisosDelControl).toBeGreaterThan(velo);
   });
+
+  it('adentro de la vista nada se apila encima de un diálogo ni del pedido: tampoco los globos de la ayuda y los ajustes', () => {
+    // La vista arma su propio contexto de apilado, y los avisos y los diálogos
+    // compiten adentro con todo lo suyo. Un z-index de más en un globo (los
+    // ajustes, abiertos en pleno vuelo para probarlos) le taparía al piloto la
+    // cuenta regresiva de un pedido o la confirmación de aterrizar.
+    const reglas = [...pilotaje.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)];
+    const apiladas = reglas
+      .map(([, selector, cuerpo]) => ({ selector: selector.trim(), z: /z-index:\s*(\d+)/.exec(cuerpo)?.[1] }))
+      .filter((r) => r.z !== undefined && r.selector !== '.pilotaje');
+    expect(apiladas.length).toBeGreaterThan(0);
+    for (const { selector, z } of apiladas) expect(Number(z), selector).toBeLessThan(velo);
+    for (const { selector } of apiladas) expect(selector).not.toMatch(/pilotaje-(globo|ajustes|ayuda|capa|derecha)/);
+  });
 });
 
 /**
