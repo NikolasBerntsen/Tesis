@@ -187,7 +187,12 @@ export interface Insignia {
   clave: string;
   texto: string;
   tono: TonoDeInsignia;
-  /** Lo que se lee al pasar el mouse: el detalle que no entra en la pastilla. */
+  /**
+   * El detalle que no entra en la pastilla: va en el `title` para el mouse y,
+   * fuera de la vista, para el lector de pantalla. Nada que haga falta para
+   * entender la insignia puede ir sólo acá: en la cámara del tablero el botón
+   * que abre el dron tapa el `title`, y con el dedo o el teclado no se ve.
+   */
   titulo?: string;
 }
 
@@ -239,14 +244,23 @@ export function insigniasDelDron(
   const insignias: Insignia[] = [];
   const espera = status?.relevo;
   if (espera?.enEspera) {
-    insignias.push({
-      clave: 'espera',
-      texto: 'En espera para relevos',
-      tono: espera.disponible ? 'ok' : 'neutro',
-      titulo: espera.disponible
-        ? 'Listo para salir si otro dron lo necesita.'
-        : 'En espera, pero ahora no puede salir: revisá la batería, el GPS y que esté en su base.',
-    });
+    // Si puede salir o no lo dice el texto, no sólo el color: el verde y el
+    // gris de la pastilla no se distinguen para todos (WCAG 1.4.1).
+    insignias.push(
+      espera.disponible
+        ? {
+            clave: 'espera',
+            texto: 'En espera para relevos',
+            tono: 'ok',
+            titulo: 'Listo para salir si otro dron lo necesita.',
+          }
+        : {
+            clave: 'espera',
+            texto: 'En espera: no puede salir',
+            tono: 'neutro',
+            titulo: 'Revisá la batería, el GPS y que esté en su base.',
+          },
+    );
   }
   for (const r of relevos) {
     if (!relevoActivo(r)) continue;

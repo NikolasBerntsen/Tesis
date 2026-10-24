@@ -126,6 +126,10 @@ describe('BasesView — punto de aterrizaje para visitantes (RELEVOS §0)', () =
     const dialogo = await abrirAlta();
     const deVisitantes = within(dialogo).getByRole('button', { name: 'El punto para visitantes' });
     expect(within(dialogo).getByRole('button', { name: 'La base' })).toHaveAttribute('aria-pressed', 'true');
+    // Cada tecla con su dibujo (la torre, el alfiler), mudo: el nombre es el texto.
+    for (const tecla of [within(dialogo).getByRole('button', { name: 'La base' }), deVisitantes]) {
+      expect(tecla.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+    }
 
     await userEvent.click(deVisitantes);
     expect(deVisitantes).toHaveAttribute('aria-pressed', 'true');
@@ -155,8 +159,10 @@ describe('BasesView — punto de aterrizaje para visitantes (RELEVOS §0)', () =
     basesMock.mockResolvedValue([base(PUNTO)]);
     apiMock.mockResolvedValue(base());
     render(<BasesView me={ADMIN} />);
-    // La tabla dice a cuánto está, debajo de las coordenadas.
-    expect(await screen.findByText('Visitantes a 20 m')).toBeInTheDocument();
+    // La ficha de la base dice a cuánto está, como un dato más de la base.
+    const ficha = await screen.findByRole('article', { name: 'Base Norte' });
+    expect(within(ficha).getByText('Punto para visitantes')).toBeInTheDocument();
+    expect(within(ficha).getByText('A 20 m de la base')).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Editar' }));
     let dialogo = screen.getByRole('dialog');

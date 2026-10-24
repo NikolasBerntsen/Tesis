@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { api, rutasDeBase, traerBases, traerRutas } from '../api';
+import { nombresDeBotones } from '../test/botones';
 import { makeMe } from '../test/fixtures';
 import { estadoMapa, fondosPuestos, limpiarEstadoMapa, pintarComoLeaflet } from '../test/dobleLeaflet';
 import { ProveedorDeAvisos } from './AvisosFlotantes';
@@ -554,7 +555,7 @@ describe('BasesView — el alta y la edición son un diálogo de formulario', ()
     await screen.findByText('Base Norte');
 
     const grupo = screen.getByRole('group', { name: 'Acciones de Base Norte' });
-    expect(within(grupo).getAllByRole('button').map((b) => b.textContent)).toEqual([
+    expect(nombresDeBotones(within(grupo).getAllByRole('button'))).toEqual([
       'Editar',
       'Rutas',
       'Desactivar',
@@ -773,14 +774,14 @@ describe('BasesView — rutas de una base que ya existe', () => {
     render(<BasesView me={ADMIN} />);
     await screen.findByText('Base Norte');
 
-    await userEvent.click(within(screen.getByText('Base Norte').closest('tr')!).getByRole('button', { name: 'Rutas' }));
+    await userEvent.click(within(screen.getByText('Base Norte').closest('article')!).getByRole('button', { name: 'Rutas' }));
     let dialogo = await screen.findByRole('dialog', { name: /rutas de base norte/i });
     await within(dialogo).findAllByRole('option');
     await userEvent.click(within(dialogo).getByRole('button', { name: 'Asignar 1 ruta' }));
     await within(dialogo).findByRole('alert');
     await userEvent.click(within(dialogo).getByRole('button', { name: 'Cancelar' }));
 
-    await userEvent.click(within(screen.getByText('Base Sur').closest('tr')!).getByRole('button', { name: 'Rutas' }));
+    await userEvent.click(within(screen.getByText('Base Sur').closest('article')!).getByRole('button', { name: 'Rutas' }));
     dialogo = await screen.findByRole('dialog', { name: /rutas de base sur/i });
     await within(dialogo).findAllByRole('option');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
@@ -1010,12 +1011,12 @@ describe('BasesView — carga sin saltos', () => {
     await act(async () => contestar([base({ active: false })]));
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
 
-    // Activar recarga la lista: la tabla se queda, marcada como ocupada.
+    // Activar recarga la lista: las fichas se quedan, marcadas como ocupadas.
     let recargar: (v: ReturnType<typeof base>[]) => void = () => {};
     basesMock.mockReturnValueOnce(new Promise((r) => (recargar = r)));
     apiMock.mockResolvedValue(base());
     await userEvent.click(screen.getByRole('button', { name: 'Activar' }));
-    const envoltorio = screen.getByRole('table').parentElement as HTMLElement;
+    const envoltorio = screen.getByRole('list', { name: 'Bases dadas de alta' });
     await waitFor(() => expect(envoltorio).toHaveAttribute('aria-busy', 'true'));
     expect(screen.queryByText(/trayendo las bases/i)).not.toBeInTheDocument();
 
@@ -1031,5 +1032,51 @@ describe('BasesView — carga sin saltos', () => {
     await userEvent.click(interruptor);
     expect(interruptor).toHaveAttribute('aria-pressed', 'true');
     expect(interruptor).toHaveTextContent('Ver eliminadas');
+  });
+});
+
+describe('BasesView — fichas', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    limpiarEstadoMapa();
+  });
+
+  it('cada base es una ficha: el nombre como título, el alfiler con sus coordenadas y si está activa', async () => {
+    basesMock.mockResolvedValue([base(), base({ id: 2, name: 'Base Sur', active: false })]);
+    render(<BasesView me={ADMIN} />);
+    await screen.findByText('Base Norte');
+
+    const norte = screen.getByRole('article', { name: 'Base Norte' });
+    expect(within(norte).getByRole('heading', { name: 'Base Norte' })).toHaveClass('ficha-nombre');
+    const lugar = within(norte).getByText('-34.85650, -56.20750');
+    expect(lugar).toHaveClass('ficha-sub');
+    expect(lugar.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+    expect(within(norte).getByText('Activa')).toHaveClass('estado', 'pastilla', 'ok');
+    expect(within(screen.getByRole('article', { name: 'Base Sur' })).getByText('Inactiva')).toHaveClass('muted');
+  });
+
+  it('la cabecera cuenta las bases y las activas, sin las bajas', async () => {
+    basesMock.mockResolvedValue([
+      base(),
+      base({ id: 2, name: 'Base Sur', active: false }),
+      base({ id: 3, name: 'Vieja', deleted: true, deletedAt: '2026-01-02T00:00:00.000Z' }),
+    ]);
+    const { container } = render(<BasesView me={ADMIN} />);
+    await screen.findByText('Base Norte');
+    expect(container.querySelector('.vista-subtitulo')).toHaveTextContent('2 bases · 1 activa');
+  });
+
+  it('quien no gestiona bases ve las fichas sin acciones', async () => {
+    basesMock.mockResolvedValue([base()]);
+    render(<BasesView me={OPERADOR} />);
+    await screen.findByText('Base Norte');
+    expect(screen.queryByRole('group', { name: 'Acciones de Base Norte' })).not.toBeInTheDocument();
+  });
+
+  it('sin bases, el vacío lleva el medallón de la torre', async () => {
+    basesMock.mockResolvedValue([]);
+    const { container } = render(<BasesView me={ADMIN} />);
+    await screen.findByText(/todavía no hay bases/i);
+    expect(container.querySelector('.con-medalla .medalla svg')).not.toBeNull();
   });
 });

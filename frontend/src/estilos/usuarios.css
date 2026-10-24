@@ -94,3 +94,8 @@
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+/* El nombre de la persona en negrita, como en el prototipo: es lo que se
+   busca con la vista. Antes iba en Cormorant a 14 px y era lo más chico y lo
+   más liviano de la fila. */
+.tabla td.celda-nombre { font-weight: 600; }

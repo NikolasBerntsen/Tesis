@@ -2,7 +2,7 @@ import { useId } from 'react';
 import { time } from '../format';
 import { useRelevosYEmergencias } from '../relevosYEmergencias';
 import DetalleDeEmergencia from './DetalleDeEmergencia';
-import IconoCerrar from './IconoCerrar';
+import { IconoCerrar } from './Iconos';
 import Modal from './Modal';
 
 /**
@@ -36,7 +36,7 @@ export default function ModalDeEmergencia({
           {actual && <p className="modal-subtitulo">{`${actual.displayName} · ${time(actual.creadaEn)}`}</p>}
         </div>
         <button type="button" className="modal-cerrar" aria-label="Cerrar la ficha" onClick={onCerrar}>
-          <IconoCerrar />
+          <IconoCerrar tamano={18} />
         </button>
       </header>
 

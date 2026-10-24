@@ -2,12 +2,25 @@ import { useEffect, useState } from 'react';
 import { api, buscarUsuarios } from '../api';
 import { formatearDni } from '../dni';
 import type { Me, UserView } from '../types';
+import { BotonEditar, BotonEliminar, BotonRestaurar } from './AccionesDeGestion';
 import { useAvisar } from './AvisosFlotantes';
 import DialogoConfirmacion, { type PedidoDeConfirmacion } from './DialogoConfirmacion';
 import { CONSECUENCIA, DialogoEditarUsuario, DialogoNuevoUsuario, ROL, textoError } from './DialogosDeUsuario';
 import EncabezadoDeVista from './EncabezadoDeVista';
 import { EsqueletoDeTabla, EstadoVacio } from './EstadosDeVista';
+import { IconoMas, IconoUsuarios } from './Iconos';
 import Modal from './Modal';
+
+/**
+ * El dato corto de la cabecera. Con una búsqueda escrita, la lista es la de
+ * los que coinciden, y contarlos como "cuentas" haría pensar que son todas.
+ */
+function resumenDeCuentas(visibles: UserView[], hayBusqueda: boolean): string {
+  const vivas = visibles.filter((u) => !u.deleted);
+  if (hayBusqueda) return `${vivas.length} ${vivas.length === 1 ? 'coincide' : 'coinciden'} con la búsqueda`;
+  const activas = vivas.filter((u) => u.active).length;
+  return `${vivas.length} ${vivas.length === 1 ? 'cuenta' : 'cuentas'} · ${activas} ${activas === 1 ? 'activa' : 'activas'}`;
+}
 
 /**
  * Gestión de usuarios. El supervisor ve a los operadores y les suspende o
@@ -23,7 +36,7 @@ import Modal from './Modal';
  * con la consecuencia dicha: todo eso le cae encima a otra persona, a veces en
  * pleno vuelo.
  */
-export default function UsersView({ me }: { me: Me }) {
+export default function UsersView({ me }: Readonly<{ me: Me }>) {
   const [users, setUsers] = useState<UserView[]>([]);
   // Hasta la primera respuesta no se puede afirmar que "no hay usuarios": antes
   // el cartel salía en el primer cuadro, antes de preguntarle nada al backend.
@@ -207,6 +220,7 @@ export default function UsersView({ me }: { me: Me }) {
     <main className="page-main">
       <EncabezadoDeVista
         titulo="Usuarios"
+        subtitulo={visibles.length > 0 ? resumenDeCuentas(visibles, hayBusqueda) : undefined}
         filtros={
           <input
             className="buscador"
@@ -232,6 +246,7 @@ export default function UsersView({ me }: { me: Me }) {
         accion={
           esAdmin && (
             <button type="button" className="primario" onClick={() => setCreando(true)}>
+              <IconoMas tamano={18} />
               Nuevo usuario
             </button>
           )
@@ -252,11 +267,16 @@ export default function UsersView({ me }: { me: Me }) {
         {consultaMostrada !== null && !error && visibles.length === 0 && (
           <div aria-busy={cargando || undefined}>
             {hayBusqueda ? (
-              <EstadoVacio titulo="Ningún usuario coincide con la búsqueda.">
+              <EstadoVacio titulo="Ningún usuario coincide con la búsqueda." icono={<IconoUsuarios tamano={46} />}>
                 Probá con otra parte del nombre, el DNI sin puntos o el rol.
               </EstadoVacio>
             ) : (
-              <EstadoVacio titulo="No hay usuarios para mostrar." />
+              // En la práctica es el del supervisor, que ve sólo a los operadores:
+              // el admin siempre se ve a sí mismo. Sin texto, EstadoVacio no
+              // dibuja el medallón, así que lleva qué esperar.
+              <EstadoVacio titulo="No hay usuarios para mostrar." icono={<IconoUsuarios tamano={46} />}>
+                Las cuentas las crea el administrador; cuando haya operadores, van a aparecer acá.
+              </EstadoVacio>
             )}
           </div>
         )}
@@ -294,13 +314,18 @@ export default function UsersView({ me }: { me: Me }) {
                         {u.username}
                         {esYo && <span className="muted"> (vos)</span>}
                       </td>
-                      <td className="inscripcion">{u.fullName || <span className="muted">—</span>}</td>
+                      {/* El nombre de la persona es lo que se busca con la vista:
+                          va en negrita, como en el prototipo. */}
+                      <td className="celda-nombre">{u.fullName || <span className="muted">—</span>}</td>
                       <td className="dni">{dni || <span className="muted">—</span>}</td>
-                      <td>{ROL[u.role]}</td>
+                      <td>
+                        {/* El rol en un sello con filo; el del administrador, en oro. */}
+                        <span className={u.role === 'admin' ? 'rol admin' : 'rol'}>{ROL[u.role]}</span>
+                      </td>
                       <td>
                         {controlAplica ? (
                           <span className="celda-con-accion">
-                            <span className={u.canControl ? 'ok' : 'bad'}>
+                            <span className={`estado ${u.canControl ? 'ok' : 'bad'}`}>
                               {u.canControl ? 'Autorizado' : 'Suspendido'}
                             </span>
                             {puedeTocarControl && (
@@ -315,7 +340,8 @@ export default function UsersView({ me }: { me: Me }) {
                       </td>
                       <td>
                         {eliminado ? (
-                          <span className="badge">Eliminado</span>
+                          // La misma pastilla de la ficha de un dron eliminado.
+                          <span className="estado pastilla muted">Eliminado</span>
                         ) : (
                           <span className="celda-con-accion">
                             <span className={`estado ${u.active ? 'ok' : 'muted'}`}>
@@ -335,39 +361,25 @@ export default function UsersView({ me }: { me: Me }) {
                               y Rutas: Editar primero, Eliminar al final. */}
                           <div className="acciones-fila" role="group" aria-label={`Acciones de ${u.username}`}>
                             {puedeEditar && (
-                              <button
-                                type="button"
-                                className="chico"
-                                aria-label={`Editar a ${u.username}`}
-                                onClick={() => setEditando(u)}
-                              >
-                                Editar
-                              </button>
+                              <BotonEditar etiqueta={`Editar a ${u.username}`} onClick={() => setEditando(u)} />
                             )}
                             {esAdmin &&
                               (eliminado ? (
-                                <button
-                                  type="button"
-                                  className="chico"
+                                <BotonRestaurar
+                                  chico
                                   onClick={() =>
-                                    accion(
+                                    void accion(
                                       () => api(`/users/${u.username}/restore`, { method: 'POST' }),
                                       `Cuenta de ${u.username} restaurada.`,
                                     )
                                   }
-                                >
-                                  Restaurar
-                                </button>
+                                />
                               ) : (
                                 <>
                                   <button type="button" className="chico" onClick={() => regenerar(u)}>
                                     Regenerar contraseña
                                   </button>
-                                  {!esYo && (
-                                    <button type="button" className="chico dismiss" onClick={() => pedirBaja(u)}>
-                                      Eliminar
-                                    </button>
-                                  )}
+                                  {!esYo && <BotonEliminar onClick={() => pedirBaja(u)} />}
                                 </>
                               ))}
                           </div>

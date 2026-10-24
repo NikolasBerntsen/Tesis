@@ -1,9 +1,10 @@
 import { useEffect, useState, type KeyboardEvent } from 'react';
 import { TAMANIOS_PAGINA, TAMANIO_PAGINA_POR_DEFECTO, traerLogs, type ParametrosLogs } from '../api';
-import { fechaYHora } from '../format';
+import { etiquetaDeEvento, fechaYHora, tonoDeEvento } from '../format';
 import type { EventRow, PaginaLogs, TamanioPagina } from '../types';
 import EncabezadoDeVista from './EncabezadoDeVista';
 import { EsqueletoDeTabla, EstadoVacio } from './EstadosDeVista';
+import { IconoRegistro } from './Iconos';
 import LogDetailModal from './LogDetailModal';
 
 type Categoria = NonNullable<ParametrosLogs['category']>;
@@ -110,6 +111,28 @@ export default function LogsView() {
     <main className="page-main" style={{ flexBasis: 0 }}>
       <EncabezadoDeVista
         titulo="Registro del sistema"
+        subtitulo="Altas, decisiones e inicios de sesión"
+        // Las categorías van al medio de la cabecera, donde las otras vistas
+        // tienen su buscador: son el filtro de esta. Se ven como fichas
+        // redondas (la elegida en oro, nuevos.css) pero siguen siendo
+        // pestañas para el lector, con su panel abajo.
+        filtros={
+          <div className="tabs" role="tablist" aria-label="Categorías del registro">
+            {PESTANIAS.map((p) => (
+              <button
+                key={p.clave}
+                id={`pestania-${p.clave || 'todos'}`}
+                type="button"
+                role="tab"
+                aria-selected={categoria === p.clave}
+                className={categoria === p.clave ? 'active' : ''}
+                onClick={() => cambiarPestania(p.clave)}
+              >
+                {p.rotulo}
+              </button>
+            ))}
+          </div>
+        }
         opciones={
           <>
             <label className="etiqueta selector-en-linea">
@@ -136,22 +159,6 @@ export default function LogsView() {
       />
 
       <section className="card vista-alta">
-        <div className="tabs" role="tablist" aria-label="Categorías del registro">
-          {PESTANIAS.map((p) => (
-            <button
-              key={p.clave}
-              id={`pestania-${p.clave || 'todos'}`}
-              type="button"
-              role="tab"
-              aria-selected={categoria === p.clave}
-              className={categoria === p.clave ? 'active' : ''}
-              onClick={() => cambiarPestania(p.clave)}
-            >
-              {p.rotulo}
-            </button>
-          ))}
-        </div>
-
         {/* Al cambiar de pestaña o de página la lista de antes se queda, apagada,
             hasta que llega la nueva: vaciarla en el medio era un parpadeo de
             "sin registros" en cada clic. */}
@@ -168,7 +175,7 @@ export default function LogsView() {
           )}
           {cargando && !error && datos.items.length === 0 && <EsqueletoDeTabla texto="Trayendo el registro…" filas={5} />}
           {!error && datos.items.length === 0 && !cargando && (
-            <EstadoVacio titulo="Sin registros.">
+            <EstadoVacio titulo="Sin registros." icono={<IconoRegistro tamano={46} />}>
               Lo que pase en esta categoría (altas, decisiones, inicios de sesión) va a quedar anotado acá.
             </EstadoVacio>
           )}
@@ -184,11 +191,15 @@ export default function LogsView() {
                   onClick={() => setAbierta(l)}
                   onKeyDown={(ev) => abrirConTeclado(ev, l)}
                 >
-                  <time className="muted mono" dateTime={l.ts}>
+                  <time className="muted" dateTime={l.ts}>
                     {fechaYHora(l.ts)}
                   </time>
                   <span className={`cat-badge cat-${l.category}`}>{CATEGORIA[l.category]}</span>
-                  <span className="event-type mono">{l.type}</span>
+                  {/* Como en el historial de un dron: el código, resaltado si es
+                      grave, y el rótulo de los que la consola conoce en el globo. */}
+                  <span className={`event-type mono ${tonoDeEvento(l.type)}`} title={etiquetaDeEvento(l.type) ?? undefined}>
+                    {l.type}
+                  </span>
                   <span>{l.message}</span>
                 </div>
               ))}

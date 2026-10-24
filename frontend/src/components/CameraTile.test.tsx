@@ -126,9 +126,49 @@ describe('CameraTile', () => {
       expect(img.src).toContain('data:image/jpeg;base64,AAAA');
     });
 
-    it('encuadra la cámara en un marco de mármol con filo dorado', () => {
+    it('encuadra la cámara en el visor negro, el mismo de la captura de una alerta', () => {
       renderTile({ frame: 'AAAA' });
-      expect(document.querySelector('.hueco.filo-oro .tile-video img.video')).toBeInTheDocument();
+      expect(document.querySelector('.visor.tile-video .visor-cuadro img.video')).toBeInTheDocument();
+    });
+
+    it('dice "En vivo" sólo con imagen y con señal: sin ellas no hay nada en vivo', () => {
+      renderTile({ frame: 'AAAA' });
+      expect(screen.getByText('En vivo')).toHaveClass('visor-vivo');
+    });
+
+    it('sin imagen no dice "En vivo"', () => {
+      renderTile({ frame: null });
+      expect(screen.queryByText('En vivo')).not.toBeInTheDocument();
+    });
+
+    it('con la señal perdida no dice "En vivo": el cuadro que queda es viejo', () => {
+      renderTile({ frame: 'AAAA', status: makeStatus({ signal: 'LOST' }) });
+      expect(screen.queryByText('En vivo')).not.toBeInTheDocument();
+    });
+
+    it('la batería también va en una barra, del ancho del nivel y teñida como la cifra', () => {
+      const { container } = render(
+        <CameraTile
+          drone={makeDrone()}
+          status={makeStatus({ battery: 32.4 })}
+          frame={null}
+          pendingAlerts={0}
+          onOpen={vi.fn()}
+          onRename={vi.fn()}
+        />,
+      );
+      const barra = container.querySelector('.medidor.barra') as HTMLElement;
+      // Es dibujo: la cifra de al lado ya lo dice.
+      expect(barra).toHaveAttribute('aria-hidden', 'true');
+      const relleno = barra.querySelector('.medidor-relleno') as HTMLElement;
+      expect(relleno).toHaveClass('warn');
+      expect(relleno.style.width).toBe('32.4%');
+      expect(screen.getByText('32%')).toHaveClass('warn');
+    });
+
+    it('sin estado no dibuja la barra de batería', () => {
+      renderTile({ status: null });
+      expect(document.querySelector('.medidor.barra')).toBeNull();
     });
 
     it('muestra el placeholder sin señal de video', () => {
@@ -150,13 +190,13 @@ describe('CameraTile', () => {
 
     it('muestra el contador de alertas pendientes cuando hay', () => {
       renderTile({ pendingAlerts: 3 });
-      expect(screen.getByText('Alertas pendientes')).toBeInTheDocument();
+      expect(screen.getByText('Alertas')).toBeInTheDocument();
       expect(screen.getByText('3')).toBeInTheDocument();
     });
 
     it('no muestra contador de alertas cuando es 0', () => {
       renderTile({ pendingAlerts: 0 });
-      expect(screen.queryByText(/alertas pendientes/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/^alertas$/i)).not.toBeInTheDocument();
     });
   });
 
@@ -204,13 +244,14 @@ describe('CameraTile', () => {
       expect(screen.getByText('ATERRIZAJE DE EMERGENCIA')).toBeInTheDocument();
       expect(screen.queryByText('SEÑAL PERDIDA')).not.toBeInTheDocument();
       expect(screen.getByText('EMERGENCIA')).toHaveClass('tile-esquina', 'esquina-roja');
-      expect(screen.getByText('Aterrizaje de emergencia')).toBeInTheDocument();
+      // La pastilla del estado también en óxido: es lo que se lee de un vistazo en la grilla.
+      expect(screen.getByText('Aterrizaje de emergencia')).toHaveClass('estado', 'pastilla', 'bad');
     });
 
     it('relevando va en oro, como el que está sobre un objetivo', () => {
       renderTile({ status: makeStatus({ state: 'RELEVANDO' }) });
       expect(screen.getByText('RELEVANDO')).toHaveClass('esquina-oro');
-      expect(screen.getByText('Relevando a otro dron')).toBeInTheDocument();
+      expect(screen.getByText('Relevando a otro dron')).toHaveClass('estado', 'pastilla', 'accent');
     });
 
     it('las insignias de relevo van en la ficha del mosaico', () => {
@@ -219,8 +260,40 @@ describe('CameraTile', () => {
         status: makeStatus({ droneId: 'a1' }),
         relevos: [makeRelevo()],
       });
-      expect(screen.getByText('Relevo en camino: Bravo')).toHaveClass('badge', 'oro');
+      expect(screen.getByText('Relevo en camino: Bravo')).toHaveClass('estado', 'pastilla', 'accent');
       expect(screen.getByTestId('insignias-relevo').closest('.tile-info')).not.toBeNull();
+    });
+
+    describe('en espera, si puede salir o no se lee en el texto y no sólo en el color', () => {
+      const espera = { enEspera: true, relayId: null, rol: null, fase: null };
+
+      it('el que puede salir dice «En espera para relevos»', () => {
+        renderTile({ status: makeStatus({ relevo: { ...espera, disponible: true } }) });
+        expect(screen.getByText('En espera para relevos')).toBeInTheDocument();
+        expect(screen.queryByText(/no puede salir/i)).not.toBeInTheDocument();
+      });
+
+      it('el que no puede salir lo dice, y el motivo no queda sólo en el title', () => {
+        renderTile({ status: makeStatus({ relevo: { ...espera, disponible: false } }) });
+        const noPuede = screen.getByText('En espera: no puede salir');
+        expect(screen.queryByText('En espera para relevos')).not.toBeInTheDocument();
+        // En la cámara el `title` lo tapa el botón que abre el dron: el motivo
+        // lo lee también el lector de pantalla.
+        expect(noPuede).toHaveTextContent(
+          'En espera: no puede salir. Revisá la batería, el GPS y que esté en su base.',
+        );
+      });
+    });
+
+    it('lo que tarda en llegar el relevo también se lee, no sólo al pasar el mouse', () => {
+      renderTile({
+        drone: makeDrone({ droneId: 'a1', displayName: 'Alfa' }),
+        status: makeStatus({ droneId: 'a1' }),
+        relevos: [makeRelevo()],
+      });
+      expect(screen.getByText('Relevo en camino: Bravo')).toHaveTextContent(
+        'Relevo en camino: Bravo. Llega en 1 min 14 s, según el hub.',
+      );
     });
 
     it('sin relevos ni espera no hay insignias', () => {

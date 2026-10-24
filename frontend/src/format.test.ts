@@ -4,6 +4,7 @@ import {
   batteryClass,
   coordenadas,
   coordenadasODato,
+  cronometro,
   decisionDelObjetivo,
   duracion,
   ETIQUETAS_DE_EVENTO,
@@ -21,6 +22,8 @@ import {
   situacionDelObjetivo,
   sobreObjetivo,
   fechaYHora,
+  tonoDeEvento,
+  tonoDelEstadoDelDron,
   STATE_LABELS,
   stateLabel,
   textoSinGps,
@@ -145,6 +148,44 @@ describe('sobreObjetivo', () => {
   });
 });
 
+describe('tonoDelEstadoDelDron', () => {
+  it('va en oro sobre un objetivo y cuando va a relevar al que lo sigue', () => {
+    expect(tonoDelEstadoDelDron('ORBITING')).toBe('accent');
+    expect(tonoDelEstadoDelDron('FOLLOWING')).toBe('accent');
+    expect(tonoDelEstadoDelDron('RELEVANDO')).toBe('accent');
+  });
+
+  it('va en óxido mientras baja de emergencia', () => {
+    expect(tonoDelEstadoDelDron('ATERRIZAJE_EMERGENCIA')).toBe('bad');
+  });
+
+  it('lo demás, y la falta de estado, en la tinta de siempre', () => {
+    expect(tonoDelEstadoDelDron('PATROLLING')).toBe('muted');
+    expect(tonoDelEstadoDelDron('RETURNING_HOME_BATTERY')).toBe('muted');
+    expect(tonoDelEstadoDelDron(null)).toBe('muted');
+  });
+});
+
+describe('tonoDeEvento', () => {
+  it('en óxido lo grave: un dron en el piso fuera de base o un relevo que falló', () => {
+    expect(tonoDeEvento('EMERGENCY_LANDING')).toBe('bad');
+    expect(tonoDeEvento('EMERGENCY_LANDED')).toBe('bad');
+    expect(tonoDeEvento('RELAY_FAILED')).toBe('bad');
+    expect(tonoDeEvento('ALERT_CREATED')).toBe('bad');
+  });
+
+  it('en ámbar lo que hay que mirar: sin relevo disponible, un regreso desviado', () => {
+    expect(tonoDeEvento('RELAY_UNAVAILABLE')).toBe('warn');
+    expect(tonoDeEvento('RTH_DIVERTED')).toBe('warn');
+  });
+
+  it('lo demás, con la tinta de siempre', () => {
+    expect(tonoDeEvento('RELAY_COMPLETED')).toBe('');
+    expect(tonoDeEvento('EMERGENCY_RECOVERED')).toBe('');
+    expect(tonoDeEvento('LOGIN')).toBe('');
+  });
+});
+
 describe('posición del dron', () => {
   it('una posición normal es válida', () => {
     expect(posicionValida(-34.6, -58.4)).toBe(true);
@@ -235,6 +276,16 @@ describe('datos del objetivo', () => {
     expect(velocidad(Number.NaN)).toBe('—');
     expect(rumbo(null)).toBe('—');
     expect(rumbo(Number.POSITIVE_INFINITY)).toBe('—');
+  });
+
+  it('el cronómetro de una alerta: horas, minutos y segundos, y los días aparte', () => {
+    expect(cronometro(0)).toBe('00:00:00');
+    expect(cronometro(497)).toBe('00:08:17');
+    expect(cronometro(3600 * 5 + 61.9)).toBe('05:01:01');
+    expect(cronometro(86_400 * 2 + 3600 * 3 + 14 * 60 + 5)).toBe('2 d 03:14:05');
+    // El reloj del navegador atrás del servidor, o una fecha ilegible: cero.
+    expect(cronometro(-12)).toBe('00:00:00');
+    expect(cronometro(Number.NaN)).toBe('00:00:00');
   });
 
   it('hace cuánto se lo vio', () => {

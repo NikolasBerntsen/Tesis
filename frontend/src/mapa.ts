@@ -181,15 +181,15 @@ export const PALETA = {
   // El halo de los marcadores: un marfil casi blanco, más claro que la piedra
   // de la página, para que el marcador se despegue de cualquier tesela.
   marfil: '#FBFAF7',
-  tinta: '#2B2620', // --tinta
-  tintaMedia: '#5C544A', // --tinta-media
-  oroClaro: '#F0E3B8',
-  oroMedio: '#D9BE6B',
-  oro: '#B8912F', // --oro
+  tinta: '#1C1914', // --tinta
+  tintaMedia: '#463F33', // --tinta-media
+  oroClaro: '#F3E6BE',
+  oroMedio: '#DCC27A',
+  oro: '#C39A45', // --oro
   oroOscuro: '#8A6A1C', // --oro-oscuro
-  oliva: '#4F7A46', // --ok
-  oxido: '#8E3328', // --peligro
-  info: '#375870', // --info
+  oliva: '#1F8A4C', // --ok
+  oxido: '#A82D26', // --peligro
+  info: '#1D5AA6', // --info
   negro: '#14120F',
   ambar: '#F2C230', // el par negro/ámbar es el de mayor contraste posible
 } as const;

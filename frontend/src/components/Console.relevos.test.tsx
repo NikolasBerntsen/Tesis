@@ -191,7 +191,7 @@ describe('Console — relevos', () => {
         relevo: { enEspera: true, disponible: true, relayId: null, rol: null, fase: null },
       }),
     });
-    expect(await within(bravo).findByText('En espera para relevos', {}, { timeout: 3000 })).toHaveClass('badge', 'ok');
+    expect(await within(bravo).findByText('En espera para relevos', {}, { timeout: 3000 })).toHaveClass('estado', 'pastilla', 'ok');
   });
 
   it('al reconectar vuelve a pedirlos, y se va el relevo que terminó mientras tanto', async () => {
@@ -265,7 +265,7 @@ describe('Console — relevos', () => {
     await within(await mosaico('Bravo')).findByText('Relevando a Alfa');
     await userEvent.click(screen.getByRole('button', { name: 'Ver detalle de Bravo' }));
     const cabecera = (await screen.findByRole('button', { name: 'Volver a Operación' })).closest('.detail-head') as HTMLElement;
-    expect(within(cabecera).getByText('Relevando a Alfa')).toHaveClass('badge', 'oro');
+    expect(within(cabecera).getByText('Relevando a Alfa')).toHaveClass('estado', 'pastilla', 'accent');
     // Y la tarjeta de patrullaje avisa qué le hace al relevo una orden.
     expect(screen.getByTestId('aviso-relevo')).toHaveTextContent('Está yendo a relevar a Alfa');
   });
@@ -276,11 +276,11 @@ describe('Console — la alerta cambia de dueño', () => {
     alertasFix = [makeAlert({ id: 12, drone_id: 'a1', status: 'PENDING' })];
     render(<Console onLogout={() => {}} />);
     const alfa = await mosaico('Alfa');
-    expect(await within(alfa).findByText('Alertas pendientes')).toBeInTheDocument();
+    expect(await within(alfa).findByText('Alertas')).toBeInTheDocument();
 
     fire({ type: 'alert_updated', alert: { ...alertasFix[0], seguidaPor: 'b2' } });
-    expect(within(alfa).queryByText('Alertas pendientes')).not.toBeInTheDocument();
-    expect(within(await mosaico('Bravo')).getByText('Alertas pendientes')).toBeInTheDocument();
+    expect(within(alfa).queryByText('Alertas')).not.toBeInTheDocument();
+    expect(within(await mosaico('Bravo')).getByText('Alertas')).toBeInTheDocument();
   });
 
   it('«Ver feed en vivo» de una alerta relevada lleva al dron que la sigue', async () => {
@@ -573,15 +573,15 @@ describe('Console — los ejemplos del contrato (docs/contrato/relevos.json)', (
     const mosaicoAlfa = await mosaico('Alfa');
     // Del REST: Alfa tiene un seguimiento en camino y un pedido de patrulla sin candidato.
     expect(await within(mosaicoAlfa).findByText('Relevo en camino: Bravo')).toBeInTheDocument();
-    expect(within(mosaicoAlfa).getByText('Sin relevo disponible')).toHaveClass('badge', 'malo');
-    expect(within(mosaicoAlfa).getByText('Alertas pendientes')).toBeInTheDocument();
+    expect(within(mosaicoAlfa).getByText('Sin relevo disponible')).toHaveClass('estado', 'pastilla', 'bad');
+    expect(within(mosaicoAlfa).getByText('Alertas')).toBeInTheDocument();
 
     for (const tipo of ['relay_updated', 'emergency_updated', 'emergency_photo', 'base_updated']) fire(mensaje(tipo));
     fire({ ...mensaje('alert_updated'), alert: { ...alerta, status: 'PENDING' } });
 
     expect(within(await mosaico('Bravo')).getByText('Relevando a Alfa')).toBeInTheDocument();
-    expect(within(await mosaico('Bravo')).getByText('Alertas pendientes')).toBeInTheDocument();
-    expect(within(mosaicoAlfa).queryByText('Alertas pendientes')).not.toBeInTheDocument();
+    expect(within(await mosaico('Bravo')).getByText('Alertas')).toBeInTheDocument();
+    expect(within(mosaicoAlfa).queryByText('Alertas')).not.toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Aterrizaje de emergencia sin recuperar' })).toHaveTextContent(
       'En tierra desde las',
     );

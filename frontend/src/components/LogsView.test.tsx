@@ -317,3 +317,57 @@ describe('LogsView', () => {
   });
 });
 
+
+describe('LogsView — filtros en la cabecera', () => {
+  beforeEach(() => {
+    traerLogsMock.mockReset();
+    traerLogsMock.mockResolvedValue(pagina([makeEvent({ id: 1, message: 'arranque del sistema', category: 'sistema' })]));
+  });
+
+  it('las categorías van al medio de la cabecera, donde las otras vistas tienen el buscador', async () => {
+    const { container } = render(<LogsView />);
+    await screen.findByText('arranque del sistema');
+    const filtros = container.querySelector('.vista-cabecera .vista-filtros') as HTMLElement;
+    expect(filtros).toContainElement(screen.getByRole('tablist', { name: 'Categorías del registro' }));
+    // Y siguen gobernando su panel, aunque ya no estén pegadas a él.
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', 'pestania-todos');
+    expect(screen.getByRole('tab', { name: 'Todos' })).toHaveAttribute('id', 'pestania-todos');
+  });
+
+  it('la categoría de cada evento es un sello, y la hora se lee con las cifras del cuerpo', async () => {
+    const { container } = render(<LogsView />);
+    await screen.findByText('arranque del sistema');
+    expect(screen.getByText('Sistema', { selector: '.cat-badge' })).toHaveClass('cat-sistema');
+    expect(container.querySelector('.log-row time')).not.toHaveClass('mono');
+  });
+
+  it('los relevos y las emergencias se resaltan como en el historial del dron, con su rótulo en el globo', async () => {
+    traerLogsMock.mockResolvedValue(
+      pagina([
+        makeEvent({ id: 1, type: 'EMERGENCY_LANDED', message: 'Alfa tocó tierra fuera de base' }),
+        makeEvent({ id: 2, type: 'RELAY_UNAVAILABLE', message: 'Ningún dron puede relevar a Alfa' }),
+        makeEvent({ id: 3, type: 'RELAY_COMPLETED', message: 'Bravo relevó a Alfa' }),
+        makeEvent({ id: 4, type: 'LOGIN', message: 'entró admin' }),
+      ]),
+    );
+    render(<LogsView />);
+    await screen.findByText('entró admin');
+    const tipo = (codigo: string) => screen.getByText(codigo, { selector: '.event-type' });
+    expect(tipo('EMERGENCY_LANDED')).toHaveClass('bad');
+    expect(tipo('EMERGENCY_LANDED')).toHaveAttribute('title', 'Aterrizó fuera de base');
+    expect(tipo('RELAY_UNAVAILABLE')).toHaveClass('warn');
+    // Un relevo que salió bien no es una alarma: va con la tinta de siempre, pero rotulado.
+    expect(tipo('RELAY_COMPLETED')).not.toHaveClass('bad');
+    expect(tipo('RELAY_COMPLETED')).not.toHaveClass('warn');
+    expect(tipo('RELAY_COMPLETED')).toHaveAttribute('title', 'Relevo completado');
+    // Lo que la consola no rotula queda sin globo.
+    expect(tipo('LOGIN')).not.toHaveAttribute('title');
+  });
+
+  it('sin registros, el vacío lleva el medallón de la hoja', async () => {
+    traerLogsMock.mockResolvedValue(pagina([]));
+    const { container } = render(<LogsView />);
+    await screen.findByText('Sin registros.');
+    expect(container.querySelector('.con-medalla .medalla svg')).not.toBeNull();
+  });
+});

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { api, traerRutas } from '../api';
+import { nombresDeBotones } from '../test/botones';
 import { makeMe, makeRoute } from '../test/fixtures';
 import { estadoMapa, fondosPuestos, limpiarEstadoMapa, pintarComoLeaflet } from '../test/dobleLeaflet';
 import { ProveedorDeAvisos } from './AvisosFlotantes';
@@ -404,7 +405,7 @@ describe('RutasView — el editor es un formulario y la lista, más prolija', ()
     await screen.findAllByText('Perímetro Norte');
 
     const grupo = screen.getByRole('group', { name: 'Acciones de Perímetro Norte' });
-    expect(within(grupo).getAllByRole('button').map((b) => b.textContent)).toEqual(['Editar', 'Eliminar']);
+    expect(nombresDeBotones(within(grupo).getAllByRole('button'))).toEqual(['Editar', 'Eliminar']);
   });
 
   it('una ruta eliminada sólo ofrece restaurarla', async () => {
@@ -414,7 +415,7 @@ describe('RutasView — el editor es un formulario y la lista, más prolija', ()
     await screen.findAllByText('Perímetro Norte');
 
     const grupo = screen.getByRole('group', { name: 'Acciones de Perímetro Norte' });
-    expect(within(grupo).getAllByRole('button').map((b) => b.textContent)).toEqual(['Restaurar']);
+    expect(nombresDeBotones(within(grupo).getAllByRole('button'))).toEqual(['Restaurar']);
     await userEvent.click(within(grupo).getByRole('button', { name: 'Restaurar' }));
     expect(apiMock).toHaveBeenLastCalledWith('/routes/1/restore', { method: 'POST' });
   });
@@ -582,10 +583,67 @@ describe('RutasView — avisos y carga', () => {
     let recargar: (v: ReturnType<typeof ruta>[]) => void = () => {};
     rutasMock.mockReturnValueOnce(new Promise((r) => (recargar = r)));
     await userEvent.click(screen.getByRole('button', { name: 'Ver eliminadas' }));
-    const envoltorio = screen.getByRole('table').parentElement as HTMLElement;
+    const envoltorio = screen.getByRole('list', { name: 'Rutas de patrullaje' });
     expect(envoltorio).toHaveAttribute('aria-busy', 'true');
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
     await act(async () => recargar([ruta()]));
     expect(envoltorio).not.toHaveAttribute('aria-busy');
+  });
+});
+
+describe('RutasView — catálogo en placas', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('cada ruta es una placa con cuántos nodos tiene y su descripción; la elegida lleva el filo de oro', async () => {
+    rutasMock.mockResolvedValue([
+      ruta({ description: 'vuelta al predio' }),
+      ruta({ id: 2, name: 'Acceso Este', description: '' }),
+    ]);
+    render(<RutasView me={ADMIN} />);
+    const primera = (await screen.findAllByRole('button', { name: 'Perímetro Norte' }))[0];
+
+    const placa = primera.closest('li') as HTMLElement;
+    expect(placa).toHaveClass('ruta-item', 'seleccionada');
+    expect(placa.querySelector('.ruta-item-detalle')).toHaveTextContent('2 nodos · vuelta al predio');
+    const otra = screen.getByRole('button', { name: 'Acceso Este' }).closest('li') as HTMLElement;
+    expect(otra).not.toHaveClass('seleccionada');
+    expect(otra.querySelector('.ruta-item-detalle')?.textContent).toBe('2 nodos');
+
+    // La placa entera responde al mouse, no sólo el nombre.
+    await userEvent.click(otra);
+    expect(otra).toHaveClass('seleccionada');
+    expect(placa).not.toHaveClass('seleccionada');
+  });
+
+  it('la cabecera cuenta las rutas y sus nodos, sin las eliminadas', async () => {
+    rutasMock.mockResolvedValue([
+      ruta(),
+      ruta({ id: 2, name: 'Acceso Este' }),
+      ruta({ id: 3, name: 'Vieja', deleted: true, deletedAt: '2026-01-02T00:00:00.000Z' }),
+    ]);
+    const { container } = render(<RutasView me={ADMIN} />);
+    await screen.findAllByText('Perímetro Norte');
+    expect(container.querySelector('.vista-subtitulo')).toHaveTextContent('2 rutas · 4 nodos');
+  });
+
+  it('una ruta eliminada se ve tachada en su placa', async () => {
+    rutasMock.mockResolvedValue([ruta({ deleted: true, deletedAt: '2026-01-02T00:00:00.000Z' })]);
+    render(<RutasView me={ADMIN} />);
+    const nombre = (await screen.findAllByRole('button', { name: 'Perímetro Norte' }))[0];
+    expect(nombre.closest('li')).toHaveClass('eliminada');
+  });
+
+  it('subir, bajar y quitar un nodo son íconos con el nombre del nodo para el lector', async () => {
+    rutasMock.mockResolvedValue([ruta()]);
+    render(<RutasView me={ADMIN} />);
+    await screen.findAllByText('Perímetro Norte');
+    await userEvent.click(screen.getByRole('button', { name: 'Editar' }));
+    const dialogo = screen.getByRole('dialog', { name: 'Editar ruta' });
+    for (const nombre of ['Subir el nodo 2', 'Bajar el nodo 1', 'Quitar el nodo 1']) {
+      const boton = within(dialogo).getByRole('button', { name: nombre });
+      expect(boton).toHaveClass('icono-boton', 'cuadrado');
+      expect(boton.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+    }
+    expect(within(dialogo).getByRole('button', { name: 'Quitar el nodo 1' })).toHaveClass('dismiss');
   });
 });

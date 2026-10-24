@@ -48,14 +48,27 @@ describe('Dashboard', () => {
     renderDashboard({ drones: [makeDrone({ online: false })] });
     expect(screen.getByText('No hay drones activos.')).toBeInTheDocument();
     expect(screen.getByText(/Cuando un dron se conecte al Comando Central, su cámara aparece acá/)).toBeInTheDocument();
+    // En el medallón del dron, dentro del panel de los activos.
+    const activos = screen.getByRole('region', { name: 'Drones activos' });
+    expect(activos.querySelector('.vacio-guia.con-medalla .medalla svg')).toBeInTheDocument();
+  });
+
+  it('las cámaras van en su panel, rotulado "Drones activos"', () => {
+    renderDashboard();
+    const activos = screen.getByRole('region', { name: 'Drones activos' });
+    expect(within(activos).getByRole('button', { name: 'Ver detalle de Alfa' })).toBeInTheDocument();
   });
 
   it('la cabecera es la de todas las vistas: título, la flota al lado y cómo mirarla a la derecha', () => {
     renderDashboard();
     expect(screen.getByRole('heading', { level: 2, name: 'Operación' })).toBeInTheDocument();
     const como = screen.getByRole('group', { name: 'Cómo ver la flota' });
-    expect(within(como).getByRole('button', { name: 'Cámaras' })).toHaveAttribute('aria-pressed', 'true');
-    expect(within(como).getByRole('button', { name: 'Mapa' })).toHaveAttribute('aria-pressed', 'false');
+    const camaras = within(como).getByRole('button', { name: 'Cámaras' });
+    const mapa = within(como).getByRole('button', { name: 'Mapa' });
+    expect(camaras).toHaveAttribute('aria-pressed', 'true');
+    expect(mapa).toHaveAttribute('aria-pressed', 'false');
+    // Cada uno con su dibujo, que no le cambia el nombre.
+    for (const boton of [camaras, mapa]) expect(boton.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
   });
 
   it('la alerta sin atender va debajo de la cabecera y arriba de las cámaras', () => {
@@ -70,7 +83,9 @@ describe('Dashboard', () => {
     expect(screen.queryByTestId('mapa-mock')).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Mapa' }));
-    expect(screen.getByTestId('mapa-mock')).toBeInTheDocument();
+    const mapa = screen.getByRole('region', { name: 'Posición de la flota' });
+    expect(within(mapa).getByTestId('mapa-mock')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Drones activos' })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Cámaras' }));
     expect(screen.queryByTestId('mapa-mock')).not.toBeInTheDocument();

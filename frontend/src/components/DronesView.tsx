@@ -1,16 +1,152 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { api, traerBases, traerDrones } from '../api';
 import type { BaseAsset, Drone, Me, NovedadDron } from '../types';
+import { BotonEditar, BotonEliminar, BotonRestaurar } from './AccionesDeGestion';
 import { useAvisar } from './AvisosFlotantes';
 import DialogoConfirmacion, { type PedidoDeConfirmacion } from './DialogoConfirmacion';
 import DialogoDron, { type CuerpoDron } from './DialogoDron';
 import EncabezadoDeVista from './EncabezadoDeVista';
 import { EsqueletoDeTabla, EstadoVacio } from './EstadosDeVista';
+import { IconoDron, IconoMas, IconoQr } from './Iconos';
 import QrDronModal from './QrDronModal';
 
 /** Primeros 6 y últimos 4: alcanza para reconocer el dron sin volcar los 32 hex. */
 function abreviar(hash: string): string {
   return hash.length > 12 ? `${hash.slice(0, 6)}…${hash.slice(-4)}` : hash;
+}
+
+/**
+ * El dato corto de la cabecera, como el "0 en vuelo · 3 registrados" de
+ * Operación: cuántos hay dados de alta y cuántos están conectados ahora.
+ * Las bajas no cuentan, aunque estén a la vista con «Ver eliminados».
+ */
+function resumenDeFlota(drones: Drone[]): string {
+  const vivos = drones.filter((d) => !d.deleted);
+  const enLinea = vivos.filter((d) => d.online).length;
+  return `${vivos.length} ${vivos.length === 1 ? 'registrado' : 'registrados'} · ${enLinea} en línea`;
+}
+
+/**
+ * La pastilla de arriba a la derecha: si el dron está conectado ahora, que es
+ * lo primero que se pregunta de un activo. Una baja dice que es una baja.
+ */
+function pastillaDelDron(dron: Drone): { clase: string; texto: string } {
+  if (dron.deleted) return { clase: 'muted', texto: 'Eliminado' };
+  return dron.online ? { clase: 'ok', texto: 'En línea' } : { clase: 'muted', texto: 'Desconectado' };
+}
+
+type PropsDeFicha = Readonly<{
+  dron: Drone;
+  esSupervisor: boolean;
+  /** Si el identificador de este dron se acaba de copiar. */
+  copiado: boolean;
+  onCopiar: () => void;
+  onAlternarOperativo: () => void;
+  onEditar: () => void;
+  onVerQr: () => void;
+  onEliminar: () => void;
+  onRestaurar: () => void;
+}>;
+
+/**
+ * Lo que se puede hacer con un dron desde su ficha. Una baja sólo la ve el
+ * supervisor (la vista la filtra para el resto), así que restaurar no
+ * necesita preguntar el rol otra vez. El orden es el de todas las vistas de
+ * gestión: Editar primero, Eliminar al final.
+ */
+function AccionesDelDron({ dron, esSupervisor, onEditar, onVerQr, onEliminar, onRestaurar }: PropsDeFicha) {
+  return (
+    <div className="ficha-acciones" role="group" aria-label={`Acciones de ${dron.displayName}`}>
+      {dron.deleted ? (
+        <BotonRestaurar onClick={onRestaurar} />
+      ) : (
+        <>
+          {esSupervisor && <BotonEditar onClick={onEditar} />}
+          <button type="button" onClick={onVerQr}>
+            <IconoQr tamano={18} />
+            Ver QR
+          </button>
+          {esSupervisor && <BotonEliminar onClick={onEliminar} />}
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Operativo o no: el supervisor lo cambia con el interruptor; el resto lo ve
+ * escrito, con su punto. A una baja no se le muestra: la pastilla de arriba ya
+ * dice "Eliminado".
+ */
+function EstadoOperativo({ dron, esSupervisor, onAlternarOperativo }: PropsDeFicha) {
+  const texto = dron.active ? 'Operativo' : 'No operativo';
+  if (!esSupervisor) return <span className={`estado ${dron.active ? 'ok' : 'muted'}`}>{texto}</span>;
+  return (
+    <label className="switch">
+      <input
+        type="checkbox"
+        checked={dron.active}
+        aria-label={`Dron ${dron.displayName} operativo`}
+        onChange={onAlternarOperativo}
+      />
+      <span className="switch-pista" />
+      <span className="switch-texto">{texto}</span>
+    </label>
+  );
+}
+
+/**
+ * La ficha de un dron, como en el prototipo: el nombre en Cinzel con el modelo
+ * debajo, la pastilla de si está conectado, los datos con su rótulo y las
+ * acciones al pie. Es un panel translúcido con el hilo de oro, igual que las
+ * cámaras de Operación.
+ */
+function FichaDeDron(props: PropsDeFicha) {
+  const { dron, copiado, onCopiar } = props;
+  const idNombre = useId();
+  const pastilla = pastillaDelDron(dron);
+  return (
+    <li>
+      <article className={dron.deleted ? 'ficha eliminada' : 'ficha'} aria-labelledby={idNombre}>
+        <header className="ficha-cabecera">
+          <div className="ficha-titulos">
+            <h3 className="ficha-nombre" id={idNombre}>
+              {dron.displayName}
+            </h3>
+            {/* Sin modelo, una raya: el renglón no desaparece y la ficha no salta. */}
+            <p className="ficha-sub">{dron.model || '—'}</p>
+          </div>
+          <span className={`estado pastilla ${pastilla.clase}`}>{pastilla.texto}</span>
+        </header>
+        <dl className="ficha-datos">
+          <div>
+            <dt className="rotulo">Base</dt>
+            <dd>{dron.base ? dron.base.name : <span className="muted">Sin base</span>}</dd>
+          </div>
+          {!dron.deleted && (
+            <div>
+              <dt className="rotulo">Estado</dt>
+              <dd>
+                <EstadoOperativo {...props} />
+              </dd>
+            </div>
+          )}
+          <div className="ficha-dato-ancho">
+            <dt className="rotulo">Identificador</dt>
+            <dd>
+              <span className="hash">
+                {abreviar(dron.hash)}
+                <button type="button" aria-label={`Copiar el identificador de ${dron.displayName}`} onClick={onCopiar}>
+                  {copiado ? 'Copiado' : 'Copiar'}
+                </button>
+              </span>
+            </dd>
+          </div>
+        </dl>
+        <AccionesDelDron {...props} />
+      </article>
+    </li>
+  );
 }
 
 function textoError(e: unknown): string {
@@ -30,7 +166,7 @@ function upsert(lista: Drone[], ficha: Drone): Drone[] {
  */
 type Dialogo = Drone | null | undefined;
 
-type PropsDronesView = {
+type PropsDronesView = Readonly<{
   me: Me;
   /**
    * Última novedad del canal en vivo: la ficha entera de `drone_updated`
@@ -39,7 +175,7 @@ type PropsDronesView = {
    * lista: con eso se mantiene al día sin volver a consultar cada tanto.
    */
   novedad?: NovedadDron | null;
-};
+}>;
 
 /**
  * Los drones como activos: alta con su QR, edición, baja lógica y restauración.
@@ -101,9 +237,9 @@ export default function DronesView({ me, novedad = null }: PropsDronesView) {
   useEffect(() => () => clearTimeout(temporizador.current), []);
 
   /**
-   * Las acciones de la fila (interruptor, baja, restauración) devuelven la
+   * Las acciones de cada ficha (interruptor, baja, restauración) devuelven la
    * ficha ya actualizada, así que no hay que recargar. Las que no preguntan
-   * (restaurar, volver a poner operativo) dejan su error arriba de la tabla:
+   * (restaurar, volver a poner operativo) dejan su error arriba de las fichas:
    * no hay ningún diálogo abierto donde mostrarlo.
    */
   async function accion(fn: () => Promise<Drone>, aviso: (ficha: Drone) => string) {
@@ -122,7 +258,7 @@ export default function DronesView({ me, novedad = null }: PropsDronesView) {
    * el diálogo lo muestre adentro y siga abierto. Tragárselo acá cerraría el
    * diálogo como si hubiera salido bien. Si sale bien, se lleva el error de
    * una acción anterior, como hace `accion`: si no, quedaba en rojo arriba de
-   * la tabla al lado del aviso de "Dron eliminado".
+   * las fichas al lado del aviso de "Dron eliminado".
    */
   function confirmada(fn: () => Promise<Drone>, aviso: (ficha: Drone) => string) {
     return async () => {
@@ -215,6 +351,7 @@ export default function DronesView({ me, novedad = null }: PropsDronesView) {
     <main className="page-main">
       <EncabezadoDeVista
         titulo="Drones"
+        subtitulo={visibles.length > 0 ? resumenDeFlota(drones) : undefined}
         opciones={
           esSupervisor && (
             // El rótulo no cambia al apretarlo: el estado lo dice aria-pressed
@@ -233,6 +370,7 @@ export default function DronesView({ me, novedad = null }: PropsDronesView) {
         accion={
           puedeDarDeAlta && (
             <button type="button" className="primario" onClick={() => setDialogo(null)}>
+              <IconoMas tamano={18} />
               Nuevo dron
             </button>
           )
@@ -245,124 +383,50 @@ export default function DronesView({ me, novedad = null }: PropsDronesView) {
         </p>
       )}
 
-      <section className="card">
-        {/* Mientras el pedido viaja no se puede afirmar que no haya drones: ese
-            cartel es justo el que empuja a dar de alta uno que ya existe, y el
-            alta genera un hash nuevo, o sea un activo duplicado con su propio QR. */}
-        {cargando && visibles.length === 0 && <EsqueletoDeTabla texto="Trayendo los drones…" />}
-        {!cargando && !error && visibles.length === 0 && (
-          <EstadoVacio titulo="Todavía no hay drones dados de alta.">
-            {puedeDarDeAlta
-              ? 'Con «Nuevo dron» se da de alta y sale su sticker con el QR, que la app escanea para emparejarse.'
-              : 'Cuando un supervisor o un operador de campo dé de alta uno, va a aparecer acá.'}
-          </EstadoVacio>
-        )}
-        {visibles.length > 0 && (
-          // Con la lista a la vista, una recarga (el interruptor de eliminados)
-          // no la saca: la apaga un poco mientras llega la nueva, y así la
-          // tabla no salta a un cartel y de vuelta.
-          <div className="tabla-envoltorio" aria-busy={cargando || undefined}>
-            <table className="tabla tabla-gestion">
-              <thead>
-                <tr>
-                  <th>Nombre</th>
-                  <th>Identificador</th>
-                  <th>Modelo</th>
-                  <th>Estado</th>
-                  <th>En línea</th>
-                  <th className="columna-acciones">Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibles.map((d) => {
-                  const eliminado = d.deleted;
-                  return (
-                    <tr key={d.hash} className={eliminado ? 'fila-eliminada' : undefined}>
-                      <td>
-                        <div>{d.displayName}</div>
-                        {d.base && <div className="muted">{d.base.name}</div>}
-                      </td>
-                      <td>
-                        <span className="hash">
-                          {abreviar(d.hash)}
-                          <button
-                            type="button"
-                            aria-label={`Copiar el identificador de ${d.displayName}`}
-                            onClick={() => copiar(d.hash)}
-                          >
-                            {copiado === d.hash ? 'Copiado' : 'Copiar'}
-                          </button>
-                        </span>
-                      </td>
-                      <td>{d.model || <span className="muted">—</span>}</td>
-                      <td>
-                        {eliminado ? (
-                          <span className="badge">Eliminado</span>
-                        ) : esSupervisor ? (
-                          <label className="switch">
-                            <input
-                              type="checkbox"
-                              checked={d.active}
-                              aria-label={`Dron ${d.displayName} operativo`}
-                              onChange={() => alternarOperativo(d)}
-                            />
-                            <span className="switch-pista" />
-                            <span className="switch-texto">{d.active ? 'Operativo' : 'No operativo'}</span>
-                          </label>
-                        ) : (
-                          <span className={`estado ${d.active ? 'ok' : 'muted'}`}>
-                            {d.active ? 'Operativo' : 'No operativo'}
-                          </span>
-                        )}
-                      </td>
-                      <td>
-                        <span className={`estado ${d.online ? 'ok' : 'muted'}`}>{d.online ? 'Sí' : 'No'}</span>
-                      </td>
-                      <td className="barra-acciones">
-                        <div className="acciones-fila" role="group" aria-label={`Acciones de ${d.displayName}`}>
-                          {/* Una fila eliminada sólo la ve el supervisor (`visibles`
-                              la filtra para el resto), así que restaurar no
-                              necesita preguntar el rol otra vez. */}
-                          {eliminado ? (
-                            <button
-                              type="button"
-                              className="chico"
-                              onClick={() =>
-                                accion(
-                                  () => api<Drone>(`/drones/${d.hash}/restore`, { method: 'POST' }),
-                                  (f) => `Dron ${f.displayName} restaurado.`,
-                                )
-                              }
-                            >
-                              Restaurar
-                            </button>
-                          ) : (
-                            <>
-                              {esSupervisor && (
-                                <button type="button" className="chico" onClick={() => setDialogo(d)}>
-                                  Editar
-                                </button>
-                              )}
-                              <button type="button" className="chico" onClick={() => setQr(d)}>
-                                Ver QR
-                              </button>
-                              {esSupervisor && (
-                                <button type="button" className="chico dismiss" onClick={() => pedirBaja(d)}>
-                                  Eliminar
-                                </button>
-                              )}
-                            </>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+      {/* Mientras el pedido viaja no se puede afirmar que no haya drones: ese
+          cartel es justo el que empuja a dar de alta uno que ya existe, y el
+          alta genera un hash nuevo, o sea un activo duplicado con su propio QR.
+          El panel sólo aparece si tiene algo que mostrar: con la carga caída,
+          el aviso de arriba ya lo dice todo. */}
+      {visibles.length === 0 && (cargando || !error) && (
+        <section className="card">
+          {cargando ? (
+            <EsqueletoDeTabla texto="Trayendo los drones…" />
+          ) : (
+            <EstadoVacio titulo="Todavía no hay drones dados de alta." icono={<IconoDron tamano={46} />}>
+              {puedeDarDeAlta
+                ? 'Con «Nuevo dron» se da de alta y sale su sticker con el QR, que la app escanea para emparejarse.'
+                : 'Cuando un supervisor o un operador de campo dé de alta uno, va a aparecer acá.'}
+            </EstadoVacio>
+          )}
+        </section>
+      )}
+      {visibles.length > 0 && (
+        // Con las fichas a la vista, una recarga (el interruptor de
+        // eliminados) no las saca: las apaga un poco mientras llega la lista
+        // nueva, y así la vista no salta a un cartel y de vuelta.
+        <ul className="fichas" aria-label="Drones dados de alta" aria-busy={cargando || undefined}>
+          {visibles.map((d) => (
+            <FichaDeDron
+              key={d.hash}
+              dron={d}
+              esSupervisor={esSupervisor}
+              copiado={copiado === d.hash}
+              onCopiar={() => void copiar(d.hash)}
+              onAlternarOperativo={() => alternarOperativo(d)}
+              onEditar={() => setDialogo(d)}
+              onVerQr={() => setQr(d)}
+              onEliminar={() => pedirBaja(d)}
+              onRestaurar={() =>
+                void accion(
+                  () => api<Drone>(`/drones/${d.hash}/restore`, { method: 'POST' }),
+                  (f) => `Dron ${f.displayName} restaurado.`,
+                )
+              }
+            />
+          ))}
+        </ul>
+      )}
 
       {dialogo !== undefined && (
         <DialogoDron dron={dialogo} bases={bases} onGuardar={guardarDron} onCerrar={() => setDialogo(undefined)} />

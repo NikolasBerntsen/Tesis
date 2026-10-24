@@ -19,6 +19,19 @@
     background-image: none !important;
     color: var(--papel-tinta);
   }
+  /* La piedra con vetas es una imagen a pantalla completa: en papel sería
+     una hoja entera de tóner negro (o gris, de día) detrás del sticker. */
+  body::before { display: none !important; }
+
+  /* El lienzo de cada vista se aplana: ni velo, ni filo, ni margen. */
+  .page-main,
+  .dashboard-main,
+  .detail-main {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none !important;
+  }
 
   /* Fuera todo lo que no sea el sticker. El pad de control se va entero: sin
      sus botones queda un plato vacío con una instrucción que en papel no
@@ -49,6 +62,15 @@
     background: none !important;
     background-image: none !important;
   }
+  /* El visor es negro en los dos temas: en papel, una placa de tóner con la
+     letra clara encima, que no sale. Queda la imagen con su borde, y el pie
+     en tinta de imprenta. */
+  .visor,
+  .visor-pie,
+  .visor-vivo {
+    background: none !important;
+    color: var(--papel-tinta) !important;
+  }
 
   .modal,
   .modal-fondo {
@@ -69,10 +91,11 @@
     box-shadow: none;
     animation: none;
   }
-  .modal-caja::before { display: none; }
   .modal-cuerpo { padding: 0; overflow: visible; }
 
   .card,
+  .ficha,
+  .ruta-item,
   .qr-sticker {
     background: var(--papel) !important;
     background-image: none !important;
@@ -108,11 +131,11 @@
   .regla-ornamental,
   .filo-oro::after,
   .card > h2::after,
+  .carrusel-cabecera::after,
+  .mapa-head::after,
+  .visor-cuadro::after,
   .card.activa::after,
-  .comparacion-despues::after,
-  .login-card::before,
-  .modal-caja::before,
-  .topbar::after { display: none !important; }
+  .vista-titulo::before { display: none !important; }
 
   /* Lo dorado que sí lleva información se imprime en blanco y negro */
   .tabla tbody tr.seleccionada {

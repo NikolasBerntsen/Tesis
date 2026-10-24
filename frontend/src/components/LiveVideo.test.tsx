@@ -14,8 +14,25 @@ describe('LiveVideo', () => {
     expect(screen.getByText('Sin señal de video')).toBeInTheDocument();
   });
 
-  it('encuadra el video en un marco de mármol con filo dorado', () => {
+  it('encuadra el video en el visor negro, con las escuadras de una cámara', () => {
     const { container } = render(<LiveVideo frame="ZZZ" />);
-    expect(container.querySelector('.hueco.filo-oro img.video')).toBeInTheDocument();
+    expect(container.querySelector('.visor > .visor-cuadro > img.video')).toBeInTheDocument();
+  });
+
+  it('dice "En vivo" sólo con imagen y con el enlace arriba: el último cuadro de un enlace caído es viejo', () => {
+    const { rerender } = render(<LiveVideo frame="ZZZ" />);
+    expect(screen.getByText('En vivo')).toHaveClass('visor-vivo');
+
+    rerender(<LiveVideo frame="ZZZ" senalPerdida />);
+    expect(screen.queryByText('En vivo')).not.toBeInTheDocument();
+
+    rerender(<LiveVideo frame={null} />);
+    expect(screen.queryByText('En vivo')).not.toBeInTheDocument();
+  });
+
+  it('el título lleva el ícono de la cámara, oculto al lector', () => {
+    render(<LiveVideo frame={null} />);
+    const titulo = screen.getByRole('heading', { name: 'Video en vivo' });
+    expect(titulo.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
   });
 });

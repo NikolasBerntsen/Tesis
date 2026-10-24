@@ -115,6 +115,34 @@ describe('DetalleDeEmergencia', () => {
     expect(screen.getByRole('button', { name: 'Marcar como recuperado' })).toBeInTheDocument();
   });
 
+  it('habla como el pop-up de una alerta: la foto en el visor con escuadras, los datos al lado', async () => {
+    traerMock.mockResolvedValue(ficha());
+    const { container } = montar({ conTitulo: false });
+    const galeria = await screen.findByTestId('galeria-emergencia');
+
+    // La foto grande va en el visor negro, con su pie de visor; las miniaturas, en visores chicos.
+    const principal = within(galeria).getByRole('img', { name: /^Foto 1 del lugar/ });
+    expect(principal.closest('.visor-cuadro')?.parentElement).toHaveClass('visor', 'galeria-principal');
+    expect(galeria.querySelector('figcaption')).toHaveClass('visor-pie');
+    for (const miniatura of within(galeria).getAllByRole('button', { name: /^Ver la foto/ })) {
+      expect(miniatura.querySelector('.visor-cuadro img')).not.toBeNull();
+    }
+
+    // Las fotos y el mapa a un lado; lo que se lee y se hace, al otro.
+    const vistas = container.querySelector('.detalle-alerta-cuerpo > .detalle-alerta-vistas') as HTMLElement;
+    const datos = container.querySelector('.detalle-alerta-cuerpo > .detalle-alerta-datos') as HTMLElement;
+    expect(vistas).toContainElement(galeria);
+    expect(vistas).toContainElement(screen.getByTestId('mapa-emergencia'));
+    expect(within(datos).getByText('EMERGENCIA')).toHaveClass('chip', 'rojo');
+    expect(within(datos).getByText('Alfa', { selector: '.chip' })).toHaveClass('chip', 'oro');
+    expect(within(datos).getByText('En tierra, sin recuperar')).toHaveClass('estado', 'pastilla', 'bad');
+
+    // «Marcar como recuperado» es la acción dorada, con su tilde.
+    const marcar = within(datos).getByRole('button', { name: 'Marcar como recuperado' });
+    expect(marcar).toHaveClass('primario');
+    expect(marcar.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+  });
+
   it('las miniaturas cambian la foto grande', async () => {
     traerMock.mockResolvedValue(ficha());
     montar();

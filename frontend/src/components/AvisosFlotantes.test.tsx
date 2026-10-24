@@ -60,6 +60,16 @@ describe('AvisosFlotantes', () => {
     expect(screen.getByRole('status')).toBeEmptyDOMElement();
   });
 
+  it('lleva el tilde del "listo" adelante, oculto al lector: lo que se anuncia es el texto', () => {
+    const { guardar } = montar();
+    guardar();
+    const aviso = screen.getByText('Dron Alfa eliminado.');
+    expect(aviso).toHaveClass('aviso-flotante');
+    expect(aviso.firstElementChild?.tagName.toLowerCase()).toBe('svg');
+    expect(aviso.firstElementChild).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByRole('status')).toHaveTextContent(/^Dron Alfa eliminado\.$/);
+  });
+
   it('no se lleva el foco: el que guardó sigue donde estaba', () => {
     const { guardar } = montar();
     const boton = screen.getByRole('button', { name: 'Guardar' });

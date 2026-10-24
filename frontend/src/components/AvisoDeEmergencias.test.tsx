@@ -79,6 +79,23 @@ describe('AvisoDeEmergencias', () => {
     ).toHaveTextContent('Ver la ficha');
   });
 
+  it('el título lleva el ícono del aterrizaje, cada dron su luz roja, y la ficha se abre como un camino', () => {
+    render(
+      <ContextoDeRelevosYEmergencias.Provider
+        value={{ ...SIN_OPERACION, emergencias: [makeEmergencia()], abrirEmergencia: vi.fn() }}
+      >
+        <AvisoDeEmergencias />
+      </ContextoDeRelevosYEmergencias.Provider>,
+    );
+    const aviso = screen.getByRole('region', { name: 'Aterrizaje de emergencia sin recuperar' });
+    // Los dibujos son mudos: el nombre lo pone el texto.
+    expect(within(aviso).getByRole('heading').querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+    expect(within(aviso).getByRole('listitem').querySelector('.punto-vivo')).toHaveAttribute('aria-hidden', 'true');
+    const ficha = within(aviso).getByRole('button', { name: /Ver la ficha/ });
+    expect(ficha).toHaveClass('enlace', 'versal');
+    expect(ficha.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+  });
+
   it('varias: la más nueva arriba, las que tocaron tierra lo dicen, y las recuperadas no están', () => {
     render(
       <ContextoDeRelevosYEmergencias.Provider

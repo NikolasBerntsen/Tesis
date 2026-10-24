@@ -149,9 +149,10 @@ describe('insigniasDelDron', () => {
     expect(disponible).toMatchObject({ texto: 'En espera para relevos', tono: 'ok' });
     expect(disponible.titulo).toMatch(/listo para salir/i);
 
+    // Que no puede salir lo dice el texto, no sólo el gris (WCAG 1.4.1).
     const [noPuede] = insigniasDelDron('b2', makeStatus({ relevo: enEspera({ disponible: false }) }), []);
-    expect(noPuede).toMatchObject({ texto: 'En espera para relevos', tono: 'neutro' });
-    expect(noPuede.titulo).toMatch(/no puede salir/i);
+    expect(noPuede).toMatchObject({ texto: 'En espera: no puede salir', tono: 'neutro' });
+    expect(noPuede.titulo).toMatch(/revisá la batería, el GPS/i);
   });
 
   it('en el que lo pidió: «Relevo en camino: Bravo», con lo que tarda en llegar', () => {

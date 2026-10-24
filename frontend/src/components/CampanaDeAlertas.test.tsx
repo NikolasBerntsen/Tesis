@@ -56,7 +56,10 @@ describe('CampanaDeAlertas', () => {
     ]);
     await userEvent.click(screen.getByRole('button', { name: /1 pendiente/ }));
     const panel = screen.getByRole('region', { name: /alertas de detección/i });
-    expect(within(panel).getByText('ANIMAL')).toHaveClass('badge', 'animal');
+    // En la placa óxido de cualquier alerta, pero sin dibujo: no hay ícono que adivinar.
+    const chip = within(panel).getByText('ANIMAL');
+    expect(chip).toHaveClass('chip', 'rojo');
+    expect(chip.querySelector('svg')).toBeNull();
     expect(within(panel).getByText(/ANIMAL · Alfa/)).toBeInTheDocument();
   });
 

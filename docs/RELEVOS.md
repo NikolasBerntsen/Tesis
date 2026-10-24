@@ -323,7 +323,8 @@ del mismo dron), y la deja abierta hasta que alguien la marca **recuperada**.
   `GET /api/emergencias/:id` (con fotos), `POST /api/emergencias/:id/recuperada`
   (operador de campo o más). La consola los pide al montar y en cada reconexión.
 - Badges en la tarjeta del dron (salen de `relay_updated`): «En espera para
-  relevos», «Relevo en camino: Bravo», «Relevando a Alfa».
+  relevos» («En espera: no puede salir» si ahora no puede; lo dice el texto,
+  no sólo el color), «Relevo en camino: Bravo», «Relevando a Alfa».
 - Aterrizaje de emergencia: aviso destacado hasta marcarlo recuperado; ficha
   en el mismo pop-up que las alertas (hora, dron, galería de fotos con tipo y
   rumbo, mapa con la última posición, coordenadas para copiar, «Marcar como
