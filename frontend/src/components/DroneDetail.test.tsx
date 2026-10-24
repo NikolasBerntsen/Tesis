@@ -1399,6 +1399,38 @@ describe('DroneDetail — en el suelo, despegar y aterrizar', () => {
     expect(screen.queryByText('En vuelo')).not.toBeInTheDocument();
   });
 
+  it('la cabecera habla como la de las demás vistas: el nombre es el título y el modelo va debajo', async () => {
+    renderDetail({ drone: makeDrone({ droneId: 'd1', displayName: 'Alfa', model: 'DJI Mini 4 Pro', online: true }) });
+    await esperarCarga();
+    const cabecera = document.querySelector('.detail-head') as HTMLElement;
+    const titulo = within(cabecera).getByRole('heading', { level: 2, name: /^Alfa/ });
+    expect(titulo).toHaveClass('vista-titulo');
+    expect(within(cabecera).getByText('DJI Mini 4 Pro')).toHaveClass('vista-subtitulo');
+    // El estado de vuelo en su pastilla, y los íconos son dibujo: el nombre
+    // de cada botón sigue siendo su texto.
+    expect(within(cabecera).getByText('En vuelo')).toHaveClass('estado', 'pastilla', 'ok');
+    for (const nombre of ['Volver a Operación', 'Ver historial de eventos']) {
+      const boton = within(cabecera).getByRole('button', { name: nombre });
+      expect(boton.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+    }
+  });
+
+  it('sin modelo cargado no deja un subtítulo vacío', async () => {
+    renderDetail({ drone: makeDrone({ droneId: 'd1', displayName: 'Alfa', model: '', online: true }) });
+    await esperarCarga();
+    expect(document.querySelector('.detail-head .vista-subtitulo')).toBeNull();
+  });
+
+  it('las órdenes llevan su ícono sin cambiar su nombre: el mando para pilotear, la pausa para interrumpir', async () => {
+    renderDetail();
+    await esperarCarga();
+    const icono = (nombre: string) => screen.getByRole('button', { name: nombre }).querySelector('svg');
+    expect(icono('Tomar control manual')).toHaveAttribute('aria-hidden', 'true');
+    expect(icono('Interrumpir')).toHaveAttribute('aria-hidden', 'true');
+    expect(icono('Comenzar')).toHaveAttribute('aria-hidden', 'true');
+    expect(icono('Retomar ruta')).toHaveAttribute('aria-hidden', 'true');
+  });
+
   it('en el suelo el mando queda inerte con la leyenda, y se ofrece despegar', async () => {
     const usados = renderDetail(conControl({ state: 'MANUAL', flying: false }));
     await esperarCarga();

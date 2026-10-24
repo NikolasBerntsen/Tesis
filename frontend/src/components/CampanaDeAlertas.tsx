@@ -1,10 +1,10 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { useAlertasEnVivo } from '../alertasEnVivo';
-import { time } from '../format';
+import { time, tipoDeAlerta } from '../format';
 import type { Alert, Drone } from '../types';
 import { useDecisionDeAlerta, type DecidirAlerta } from '../useDecisionDeAlerta';
-
-const TIPO = { PERSON: 'PERSONA', VEHICLE: 'VEHÍCULO' } as const;
+import { IconoCampana, IconoChevronDerecha } from './Iconos';
+import { BotonesDeDecision, ChipDeTipo } from './PiezasDeAlerta';
 
 /**
  * Las alertas de detección son lo único de la consola que no se puede esperar a
@@ -92,10 +92,7 @@ export default function CampanaDeAlertas({
         }
         onClick={() => setAbierta((v) => !v)}
       >
-        <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
-          <path d="M10 2.5a5 5 0 0 0-5 5v3l-1.4 2.6h12.8L15 10.5v-3a5 5 0 0 0-5-5z" strokeLinejoin="round" />
-          <path d="M8 15.2a2 2 0 0 0 4 0" strokeLinecap="round" />
-        </svg>
+        <IconoCampana />
         {pendientes.length > 0 && <span className="badge-count">{pendientes.length}</span>}
       </button>
 
@@ -110,7 +107,9 @@ export default function CampanaDeAlertas({
           {pendientes.map((a) => (
             <div key={a.id} className="campana-alerta">
               <div className="campana-alerta-head">
-                <span className={`badge ${a.type.toLowerCase()}`}>{TIPO[a.type as keyof typeof TIPO] ?? a.type}</span>
+                {/* La misma placa óxido con su ícono que la tarjeta y el pop-up:
+                    la alerta se reconoce igual venga de donde venga. */}
+                <ChipDeTipo tipo={a.type} tamanoIcono={18} />
                 <button type="button" className="enlace" onClick={() => { onVerDron(a.drone_id!); setAbierta(false); }} disabled={!a.drone_id}>
                   {nombre(a.drone_id)}
                 </button>
@@ -118,8 +117,9 @@ export default function CampanaDeAlertas({
                   {time(a.created_at)}
                 </time>
                 {abrirAlerta && (
-                  <button type="button" className="enlace alerta-ver-detalle" onClick={() => abrir(a, abrirAlerta)}>
+                  <button type="button" className="enlace versal alerta-ver-detalle" onClick={() => abrir(a, abrirAlerta)}>
                     Ver detalle
+                    <IconoChevronDerecha tamano={16} />
                   </button>
                 )}
               </div>
@@ -136,14 +136,9 @@ export default function CampanaDeAlertas({
               {a.snapshot && !abrirAlerta && (
                 <img className="snapshot" src={`data:image/jpeg;base64,${a.snapshot}`} alt="Detección" />
               )}
-              <div className="alert-actions">
-                <button className="validate" disabled={decidiendo(a.id)} onClick={() => decidir(a.id, 'VALIDATED')}>
-                  Validar
-                </button>
-                <button className="dismiss" disabled={decidiendo(a.id)} onClick={() => decidir(a.id, 'DISMISSED')}>
-                  Descartar
-                </button>
-              </div>
+              {/* El mismo par de la tarjeta del tablero, con el tilde y el tacho:
+                  se reconoce igual en los dos lugares. */}
+              <BotonesDeDecision ocupado={decidiendo(a.id)} tamanoIcono={18} onDecidir={(d) => decidir(a.id, d)} />
               {/* Pegado a los botones de ESA alerta: con tres pendientes en la
                   lista, un aviso suelto arriba no diría cuál falló. */}
               {errorDe(a.id) && (
@@ -165,7 +160,7 @@ export default function CampanaDeAlertas({
                       {a.status === 'VALIDATED' ? 'Validada' : 'Descartada'}
                     </span>
                     <span className="muted">
-                      {TIPO[a.type as keyof typeof TIPO] ?? a.type} · {nombre(a.drone_id)}
+                      {tipoDeAlerta(a.type)} · {nombre(a.drone_id)}
                     </span>
                     <time className="mono muted" dateTime={a.created_at}>
                       {time(a.created_at)}

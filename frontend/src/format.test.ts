@@ -4,6 +4,7 @@ import {
   batteryClass,
   coordenadas,
   coordenadasODato,
+  cronometro,
   decisionDelObjetivo,
   fechaHoraLarga,
   hashCorto,
@@ -196,6 +197,16 @@ describe('datos del objetivo', () => {
     expect(velocidad(Number.NaN)).toBe('—');
     expect(rumbo(null)).toBe('—');
     expect(rumbo(Number.POSITIVE_INFINITY)).toBe('—');
+  });
+
+  it('el cronómetro de una alerta: horas, minutos y segundos, y los días aparte', () => {
+    expect(cronometro(0)).toBe('00:00:00');
+    expect(cronometro(497)).toBe('00:08:17');
+    expect(cronometro(3600 * 5 + 61.9)).toBe('05:01:01');
+    expect(cronometro(86_400 * 2 + 3600 * 3 + 14 * 60 + 5)).toBe('2 d 03:14:05');
+    // El reloj del navegador atrás del servidor, o una fecha ilegible: cero.
+    expect(cronometro(-12)).toBe('00:00:00');
+    expect(cronometro(Number.NaN)).toBe('00:00:00');
   });
 
   it('hace cuánto se lo vio', () => {

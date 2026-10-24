@@ -11,6 +11,18 @@ import DroneStatusCard from './DroneStatusCard';
 import DronesMap, { type MapItem, type WaypointsLayer } from './DronesMap';
 import EditableName from './EditableName';
 import HistorialDeEventos from './HistorialDeEventos';
+import {
+  IconoAterrizar,
+  IconoDespegar,
+  IconoHistorial,
+  IconoMando,
+  IconoOperacion,
+  IconoPausa,
+  IconoReanudar,
+  IconoRutas,
+  IconoUbicacion,
+  IconoVolver,
+} from './Iconos';
 import LiveVideo from './LiveVideo';
 import type { Ejes } from './MandoVirtual';
 import PanelObjetivo from './PanelObjetivo';
@@ -38,6 +50,61 @@ function Flecha({ rumbo }: { rumbo: number }) {
     <svg width="22" height="22" viewBox="0 0 18 18" {...TRAZO}>
       <path d="M9 14.6V4.2M4.4 8.8 9 4.2l4.6 4.6" transform={`rotate(${rumbo} 9 9)`} />
     </svg>
+  );
+}
+
+/**
+ * La cabecera de la vista, como la de las demás (EncabezadoDeVista): el nombre
+ * del dron es el título, en Cormorant con su barra de oro, y se renombra ahí
+ * mismo; debajo, su modelo en versalitas. Arriba, el camino de vuelta; a la
+ * derecha, si está en el aire, quién tiene el control y el historial.
+ */
+function CabeceraDelDron({
+  drone,
+  enElSuelo,
+  controlador,
+  onBack,
+  onRename,
+  onHistorial,
+}: Readonly<{
+  drone: Drone;
+  enElSuelo: boolean;
+  controlador: string | null;
+  onBack: () => void;
+  onRename: (displayName: string) => void;
+  onHistorial: () => void;
+}>) {
+  // Conectado no es lo mismo que volando: con el dron apoyado esto decía "En
+  // vuelo", y el operador agarraba un mando que no podía mover nada.
+  let estado = 'En vuelo';
+  if (!drone.online) estado = 'Desconectado';
+  else if (enElSuelo) estado = 'En tierra';
+
+  return (
+    <header className="detail-head">
+      <div className="detail-titulos">
+        <button type="button" className="enlace versal detalle-volver" onClick={onBack}>
+          <IconoVolver tamano={16} />
+          Volver a Operación
+        </button>
+        {/* Enfocable sólo desde el código, como el título de las otras vistas
+            (EncabezadoDeVista): adonde vuelve el foco si el carrusel de
+            alertas se fue mientras su pop-up estaba abierto. */}
+        <h2 className="vista-titulo" tabIndex={-1}>
+          <EditableName name={drone.displayName} onRename={onRename} />
+        </h2>
+        {drone.model && <p className="vista-subtitulo">{drone.model}</p>}
+      </div>
+      <span className={`estado pastilla ${drone.online ? 'ok' : 'muted'}`}>{estado}</span>
+      {controlador && <span className="badge oro">Control manual: {controlador}</span>}
+      {/* Arriba a la derecha, sobre la telemetría: el historial es consulta,
+          no algo que se mira todo el tiempo, y al pie de la vista quedaba
+          debajo de todo, donde en pleno vuelo nadie llegaba. */}
+      <button type="button" className="detalle-historial" onClick={onHistorial}>
+        <IconoHistorial tamano={18} />
+        Ver historial de eventos
+      </button>
+    </header>
   );
 }
 
@@ -530,37 +597,14 @@ export default function DroneDetail({
 
   return (
     <main className="detail-main">
-      <div className="detail-head">
-        <button className="ghost" onClick={onBack}>
-          <svg width="15" height="15" viewBox="0 0 16 16" {...TRAZO} style={{ verticalAlign: '-2px' }}>
-            <path d="M13 8H3.4M7.4 3.4 3 8l4.4 4.6" />
-          </svg>{' '}
-          Volver a Operación
-        </button>
-        {/* Enfocable sólo desde el código, como el título de las otras vistas
-            (EncabezadoDeVista): adonde vuelve el foco si el carrusel de
-            alertas se fue mientras su pop-up estaba abierto. */}
-        <h2 tabIndex={-1}>
-          <EditableName name={drone.displayName} onRename={onRename} />
-        </h2>
-        {/* Conectado no es lo mismo que volando: con el dron apoyado esto
-            decía "En vuelo", y el operador agarraba un mando que no podía
-            mover nada. */}
-        <span className={`estado ${drone.online ? 'ok' : 'muted'}`}>
-          {!drone.online ? 'Desconectado' : enElSuelo ? 'En tierra' : 'En vuelo'}
-        </span>
-        {controlador && <span className="badge oro">Control manual: {controlador}</span>}
-        {/* Arriba a la derecha, sobre la telemetría: el historial es consulta,
-            no algo que se mira todo el tiempo, y al pie de la vista quedaba
-            debajo de todo, donde en pleno vuelo nadie llegaba. */}
-        <button type="button" className="detalle-historial" onClick={() => setViendoHistorial(true)}>
-          <svg width="15" height="15" viewBox="0 0 16 16" {...TRAZO} style={{ verticalAlign: '-2px' }}>
-            <circle cx="8" cy="8" r="5.8" />
-            <path d="M8 4.8V8l2.2 1.4" />
-          </svg>{' '}
-          Ver historial de eventos
-        </button>
-      </div>
+      <CabeceraDelDron
+        drone={drone}
+        enElSuelo={enElSuelo}
+        controlador={controlador}
+        onBack={onBack}
+        onRename={onRename}
+        onHistorial={() => setViendoHistorial(true)}
+      />
       {/* El error va en su propia línea: dentro del encabezado empujaba el nombre */}
       {error && (
         <p className="aviso malo" role="alert">
@@ -584,7 +628,7 @@ export default function DroneDetail({
           la captura ENTRE las dos, pegada al video: decidir es comparar lo que
           vio la detección con lo que el dron está viendo ahora. */}
       <div className={hayAlerta ? 'par-video-mapa con-alerta' : 'par-video-mapa'}>
-        <LiveVideo frame={frame} />
+        <LiveVideo frame={frame} senalPerdida={status?.signal === 'LOST'} />
         {/* Con `key` por dron: al saltar de un dron a otro desde la campana, las
             alertas del nuevo no son "nuevas" para el carrusel del anterior. */}
         {hayAlerta && (
@@ -597,8 +641,12 @@ export default function DroneDetail({
         )}
         <div className="card">
           <div className="mapa-head">
-            <h2>Ubicación</h2>
+            <h2>
+              <IconoUbicacion />
+              Ubicación
+            </h2>
             <button
+              type="button"
               onClick={retomar}
               disabled={!drone.online || !interrumpido}
               title={
@@ -607,6 +655,7 @@ export default function DroneDetail({
                   : 'Vuelve al patrullaje, hacia el próximo nodo de la ruta'
               }
             >
+              <IconoReanudar tamano={18} />
               Retomar ruta
             </button>
           </div>
@@ -637,7 +686,10 @@ export default function DroneDetail({
         {objetivo && <PanelObjetivo objetivo={objetivo} />}
 
         <div className="card">
-          <h2>Patrullaje</h2>
+          <h2>
+            <IconoRutas />
+            Patrullaje
+          </h2>
           <div className="hueco">
             <div className="etiqueta">Ruta actual</div>
             {rutaActiva ? (
@@ -663,10 +715,16 @@ export default function DroneDetail({
                 </option>
               ))}
             </select>
-            <button className="primario" onClick={comenzarRuta} disabled={!rutaElegida || !drone.online}>
+            <button type="button" className="primario" onClick={comenzarRuta} disabled={!rutaElegida || !drone.online}>
+              <IconoReanudar tamano={18} />
               Comenzar
             </button>
-            <button onClick={interrumpirRuta} disabled={!drone.online || status?.state !== 'PATROLLING'}>
+            <button
+              type="button"
+              onClick={interrumpirRuta}
+              disabled={!drone.online || status?.state !== 'PATROLLING'}
+            >
+              <IconoPausa tamano={18} />
               Interrumpir
             </button>
           </div>
@@ -681,15 +739,20 @@ export default function DroneDetail({
 
         {puedeControlar && (
           <div className="card con-esquina">
-            <h2>Control del dron</h2>
+            <h2>
+              <IconoMando />
+              Control del dron
+            </h2>
             {!controlador && (
               <>
                 <button
                   ref={refDelBotonDelControl}
+                  type="button"
                   className="primario"
                   onClick={tomarControl}
                   disabled={!drone.online}
                 >
+                  <IconoMando tamano={18} />
                   Tomar control manual
                 </button>
                 <p className="muted">
@@ -706,11 +769,23 @@ export default function DroneDetail({
                   <>
                     <h3>{enElSuelo ? 'En el suelo' : 'En el aire'}</h3>
                     {enElSuelo ? (
-                      <button className="primario" onClick={() => setAConfirmar('despegar')} disabled={!drone.online}>
+                      <button
+                        type="button"
+                        className="primario"
+                        onClick={() => setAConfirmar('despegar')}
+                        disabled={!drone.online}
+                      >
+                        <IconoDespegar tamano={18} />
                         Despegar
                       </button>
                     ) : (
-                      <button className="dismiss" onClick={() => setAConfirmar('aterrizar')} disabled={!drone.online}>
+                      <button
+                        type="button"
+                        className="dismiss"
+                        onClick={() => setAConfirmar('aterrizar')}
+                        disabled={!drone.online}
+                      >
+                        <IconoAterrizar tamano={18} />
                         Aterrizar
                       </button>
                     )}
@@ -763,7 +838,8 @@ export default function DroneDetail({
                 <hr className="regla" />
                 <h3>Vuelo continuo</h3>
                 <p className="muted">Teclado, mouse y sticks virtuales, con la cámara a pantalla completa.</p>
-                <button ref={refDelBotonDelControl} className="primario" onClick={volverAPilotar}>
+                <button ref={refDelBotonDelControl} type="button" className="primario" onClick={volverAPilotar}>
+                  <IconoMando tamano={18} />
                   Volver a la vista de pilotaje
                 </button>
 
@@ -773,15 +849,18 @@ export default function DroneDetail({
                     objetivo, y eso tiene que ser una decisión explícita. */}
                 {objetivo ? (
                   <>
-                    <button className="resume" onClick={() => soltarControl('none')}>
+                    <button type="button" className="resume" onClick={() => soltarControl('none')}>
+                      <IconoOperacion tamano={18} />
                       Soltar control (el dron vuelve al objetivo)
                     </button>
-                    <button className="ghost soltar-y-patrullar" onClick={() => soltarControl('last')}>
+                    <button type="button" className="ghost soltar-y-patrullar" onClick={() => soltarControl('last')}>
+                      <IconoReanudar tamano={18} />
                       Soltar y reanudar patrullaje
                     </button>
                   </>
                 ) : (
-                  <button className="resume" onClick={() => soltarControl('last')}>
+                  <button type="button" className="resume" onClick={() => soltarControl('last')}>
+                    <IconoReanudar tamano={18} />
                     Devolver al patrullaje
                   </button>
                 )}
@@ -791,7 +870,7 @@ export default function DroneDetail({
               <p className="muted">
                 Controlado por <strong>{controlador}</strong>.{' '}
                 {esSupervisor && (
-                  <button className="chico dismiss" onClick={() => setQuitando(true)}>
+                  <button type="button" className="chico dismiss" onClick={() => setQuitando(true)}>
                     Quitar control
                   </button>
                 )}

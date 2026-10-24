@@ -1,24 +1,13 @@
-import { useEffect, useId, useRef, type FocusEvent, type KeyboardEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { useAlertasEnVivo } from '../alertasEnVivo';
-import { time } from '../format';
+import { cronometro, time } from '../format';
 import type { Alert, Drone } from '../types';
 import { useCarruselDeAlertas } from '../useCarruselDeAlertas';
-import { useDecisionDeAlerta, type DecidirAlerta } from '../useDecisionDeAlerta';
+import { useDecisionDeAlerta, type DecidirAlerta, type Decision } from '../useDecisionDeAlerta';
+import { IconoChevronDerecha, IconoChevronIzquierda, IconoReloj } from './Iconos';
+import { BotonesDeDecision, ChipDeTipo, ConsecuenciasDeDecidir, VisorDeCaptura } from './PiezasDeAlerta';
 
-const TIPO = { PERSON: 'PERSONA', VEHICLE: 'VEHÍCULO' } as const;
-
-/** Chevron de los pasos del carrusel: un solo trazo, espejado para el otro lado. */
-function Chevron({ hacia }: { hacia: 'atras' | 'adelante' }) {
-  return (
-    <svg viewBox="0 0 16 16" aria-hidden="true">
-      <path
-        d={hacia === 'atras' ? 'M10 3.5 5.5 8l4.5 4.5' : 'M6 3.5 10.5 8 6 12.5'}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
+type Carrusel = ReturnType<typeof useCarruselDeAlertas>;
 
 /**
  * El título de la vista que se está mirando: el primer encabezado de su
@@ -27,6 +16,245 @@ function Chevron({ hacia }: { hacia: 'atras' | 'adelante' }) {
  */
 function enfocarElTituloDeLaVista() {
   document.querySelector<HTMLElement>('main h2')?.focus();
+}
+
+/** Si el foco no quedó en ningún lado: se cayó con el botón que lo tenía. */
+function focoEnNingunLado(): boolean {
+  return document.activeElement === null || document.activeElement === document.body;
+}
+
+/** Hacia dónde mueve el carrusel una tecla: sólo las flechas de costado, solas. */
+function pasoDeLaTecla(ev: KeyboardEvent<HTMLElement>): 'anterior' | 'siguiente' | null {
+  // Con modificadores son atajos del navegador (Alt+← es "atrás"): no se tocan.
+  if (ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return null;
+  if (ev.key === 'ArrowLeft') return 'anterior';
+  if (ev.key === 'ArrowRight') return 'siguiente';
+  return null;
+}
+
+/**
+ * Si el foco se fue de verdad del carrusel. Sin destino, el foco puede
+ * haberse caído solo —el botón se deshabilitó o se quitó—, y eso no es que el
+ * operador se haya ido del carrusel.
+ */
+function seFueDelCarrusel(ev: FocusEvent<HTMLElement>): boolean {
+  const destino = ev.relatedTarget as Node | null;
+  if (destino && ev.currentTarget.contains(destino)) return false;
+  const origen = ev.target as HTMLButtonElement;
+  const caido = destino === null && (origen.disabled === true || !origen.isConnected);
+  return !caido;
+}
+
+/** La hora del reloj, renovada cada `cadaMs`: lo que necesita un cronómetro en pantalla. */
+function useAhora(cadaMs: number): number {
+  const [ahora, setAhora] = useState(Date.now);
+  useEffect(() => {
+    const id = setInterval(() => setAhora(Date.now()), cadaMs);
+    return () => clearInterval(id);
+  }, [cadaMs]);
+  return ahora;
+}
+
+/**
+ * Cuánto hace que la alerta espera una decisión, al segundo ("00:08:17"): con
+ * varias en fila, lo primero que el operador quiere saber es cuál lleva más
+ * tiempo sin que nadie la mire. Es un componente aparte para que el segundero
+ * vuelva a dibujar este renglón y no la tarjeta entera con su captura. Queda
+ * fuera de las regiones vivas: un lector de pantalla no tiene que anunciar
+ * cada segundo.
+ */
+function EsperaDeLaAlerta({ desde }: Readonly<{ desde: string }>) {
+  const ahora = useAhora(1000);
+  const llegada = Date.parse(desde);
+  if (Number.isNaN(llegada)) return null;
+  const segundos = Math.floor((ahora - llegada) / 1000);
+  return (
+    <span className="alerta-espera" title={`Llegó a las ${time(desde)}`}>
+      <IconoReloj tamano={18} />
+      <span className="carrusel-solo-lector">Sin atender hace </span>
+      <time dateTime={`PT${Math.max(0, segundos)}S`}>{cronometro(segundos)}</time>
+    </span>
+  );
+}
+
+/**
+ * Los pasos del carrusel, a la derecha del título: flecha, cuenta, flecha.
+ *
+ * Están siempre, vacíos con una sola alerta: adentro va la región que anuncia
+ * la cuenta, y una región viva que aparece ya con su texto no se anuncia. Si
+ * naciera con la segunda alerta, en la vista del dron —cuyo título no cambia—
+ * esa llegada pasaba callada.
+ */
+function PasosDelCarrusel({ carrusel }: Readonly<{ carrusel: Carrusel }>) {
+  const varias = carrusel.total > 1;
+  return (
+    <div
+      className="carrusel-pasos"
+      role={varias ? 'group' : undefined}
+      aria-label={varias ? 'Recorrer las alertas pendientes' : undefined}
+    >
+      {/* `aria-disabled` y no `disabled`: un botón deshabilitado suelta el
+          foco, y el operador que llegaba a la punta con el teclado se
+          quedaba sin flechas. Así sigue enfocado y el paso no hace nada. */}
+      {varias && (
+        <button
+          type="button"
+          className="icono-boton carrusel-paso"
+          aria-label="Alerta anterior, más nueva"
+          aria-disabled={!carrusel.hayAnterior}
+          onClick={carrusel.anterior}
+        >
+          <IconoChevronIzquierda />
+        </button>
+      )}
+      {/* El contenedor del aviso queda fijo y la pastilla se rehace con cada
+          tanda nueva (`key`): así el pulso se repite y el lector de pantalla
+          anuncia el número nuevo. Las nuevas sin ver se dicen acá y no en el
+          botón de abrirlas, que aparece sin anunciarse. */}
+      <span className="carrusel-indicador" role="status" aria-live="polite" aria-atomic="true">
+        {varias && (
+          <>
+            <span className="carrusel-solo-lector">Alerta </span>
+            <span
+              key={carrusel.llegadas}
+              className={carrusel.llegadas > 0 ? 'badge carrusel-cuenta llego' : 'badge carrusel-cuenta'}
+              data-testid="carrusel-cuenta"
+            >
+              {carrusel.posicion} de {carrusel.total}
+            </span>
+          </>
+        )}
+        {carrusel.sinVer > 0 && (
+          <span className="carrusel-solo-lector">
+            {carrusel.sinVer === 1 ? ', una alerta nueva sin ver' : `, ${carrusel.sinVer} alertas nuevas sin ver`}
+          </span>
+        )}
+      </span>
+      {varias && (
+        <button
+          type="button"
+          className="icono-boton carrusel-paso"
+          aria-label="Alerta siguiente, más vieja"
+          aria-disabled={!carrusel.haySiguiente}
+          onClick={carrusel.siguiente}
+        >
+          <IconoChevronDerecha />
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * El pulso de la cuenta es movimiento, y con movimiento reducido no se ve:
+ * este aviso queda quieto hasta que el operador abre la nueva.
+ */
+function AvisoDeNuevas({ sinVer, onVer }: Readonly<{ sinVer: number; onVer: () => void }>) {
+  if (sinVer === 0) return null;
+  return (
+    <button type="button" className="enlace carrusel-nuevas" onClick={onVer}>
+      {sinVer === 1 ? 'Ver la alerta nueva' : `Ver las ${sinVer} alertas nuevas`}
+    </button>
+  );
+}
+
+/**
+ * De qué dron es la alerta, en la pastilla de oro: como en la campana, el
+ * nombre es el que lleva a la vista del dron, con su video en vivo. Un dron
+ * que ya no está queda escrito pero apagado, sin llevar a ningún lado.
+ */
+function ChipDelDron({ dron, onVerDron }: Readonly<{ dron: Drone | null; onVerDron: (droneId: string) => void }>) {
+  if (!dron) {
+    return (
+      <button type="button" className="chip oro" disabled>
+        Dron desconocido
+      </button>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="chip oro"
+      title={`Abrir la vista de ${dron.displayName}`}
+      onClick={() => onVerDron(dron.droneId)}
+    >
+      {dron.displayName}
+      <IconoChevronDerecha tamano={16} />
+    </button>
+  );
+}
+
+/**
+ * La alerta en pantalla. Se dibuja con `key` por id (ver AlertaEnCurso): al
+ * irse una, todo lo de adentro se rehace en vez de pasar a ser de la vecina.
+ * Con varias es una diapositiva del carrusel y dice cuál es de cuántas.
+ */
+function DiapositivaDeAlerta({ carrusel, children }: Readonly<{ carrusel: Carrusel; children: ReactNode }>) {
+  const varias = carrusel.total > 1;
+  return (
+    <div
+      className="carrusel-diapositiva"
+      role={varias ? 'group' : undefined}
+      aria-roledescription={varias ? 'alerta' : undefined}
+      aria-label={varias ? `${carrusel.posicion} de ${carrusel.total}` : undefined}
+    >
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Lo que se decide, a la derecha de la captura (o debajo, en la vista del
+ * dron): qué es y de qué dron, la consigna, los dos botones y qué le hace cada
+ * uno al dron.
+ */
+function DecisionDeLaAlerta({
+  alerta,
+  drones,
+  onVerDron,
+  siguiendo,
+  ocupado,
+  error,
+  onDecidir,
+  onAbrir,
+}: Readonly<{
+  alerta: Alert;
+  drones?: readonly Drone[];
+  onVerDron?: (droneId: string) => void;
+  siguiendo: boolean;
+  ocupado: boolean;
+  error: string | null;
+  onDecidir: (decision: Decision) => void;
+  onAbrir?: () => void;
+}>) {
+  return (
+    <div className="alerta-detalle">
+      <div className="alert-head">
+        <ChipDeTipo tipo={alerta.type} />
+        {onVerDron && (
+          <ChipDelDron dron={drones?.find((d) => d.droneId === alerta.drone_id) ?? null} onVerDron={onVerDron} />
+        )}
+      </div>
+      <p className="alerta-consigna">
+        {siguiendo
+          ? 'El dron está sobre este objetivo: compará la captura con el video en vivo antes de decidir.'
+          : 'Compará la captura con el video en vivo antes de decidir.'}
+      </p>
+      <BotonesDeDecision ocupado={ocupado} onDecidir={onDecidir} />
+      <ConsecuenciasDeDecidir />
+      {error && (
+        <p className="aviso malo" role="alert">
+          {error}
+        </p>
+      )}
+      {onAbrir && (
+        <button type="button" className="enlace versal alerta-ver-detalle" onClick={onAbrir}>
+          Ver detalle
+          <IconoChevronDerecha tamano={16} />
+        </button>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -54,7 +282,7 @@ export default function AlertaEnCurso({
   onVerDron,
   apaisada = false,
   onDecidir,
-}: {
+}: Readonly<{
   /** Las pendientes a recorrer, en cualquier orden: la más nueva va primero. */
   alertas: readonly Alert[];
   titulo?: string;
@@ -66,7 +294,7 @@ export default function AlertaEnCurso({
   /** Captura y botones lado a lado: para el ancho completo del tablero. */
   apaisada?: boolean;
   onDecidir: DecidirAlerta;
-}) {
+}>) {
   const carrusel = useCarruselDeAlertas(alertas);
   const { decidir, errorDe, decidiendo } = useDecisionDeAlerta(onDecidir);
   // El pop-up con todo lo de la alerta (mapa, dron, video) lo abre la consola:
@@ -93,25 +321,17 @@ export default function AlertaEnCurso({
   // estaba adentro y no quedó en ningún lado: nunca se lo roba a otra pieza.
   useEffect(() => {
     const caja = seccion.current;
-    const enNingunLado = document.activeElement === null || document.activeElement === document.body;
-    if (caja && focoAdentro.current && enNingunLado) caja.focus();
+    if (caja && focoAdentro.current && focoEnNingunLado()) caja.focus();
   }, [alerta?.id, ocupado]);
 
   if (!alerta) return null;
 
-  const error = errorDe(alerta.id);
-  const siguiendo = seguidas.includes(alerta.id);
-  const captura = alerta.snapshot ? (
-    <img className="snapshot" src={`data:image/jpeg;base64,${alerta.snapshot}`} alt="Captura que disparó la detección" />
-  ) : null;
-  const dron = drones?.find((d) => d.droneId === alerta.drone_id) ?? null;
+  const abrir = abrirAlerta ? () => abrirAlerta(alerta, devolverFoco) : undefined;
 
   function alTeclear(ev: KeyboardEvent<HTMLElement>) {
-    // Con modificadores son atajos del navegador (Alt+← es "atrás"): no se tocan.
-    if (ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
-    if (ev.key === 'ArrowLeft') carrusel.anterior();
-    else if (ev.key === 'ArrowRight') carrusel.siguiente();
-    else return;
+    const paso = pasoDeLaTecla(ev);
+    if (!paso) return;
+    carrusel[paso]();
     ev.preventDefault();
   }
 
@@ -130,13 +350,7 @@ export default function AlertaEnCurso({
   }
 
   function alSalirElFoco(ev: FocusEvent<HTMLElement>) {
-    const destino = ev.relatedTarget as Node | null;
-    if (destino && ev.currentTarget.contains(destino)) return;
-    // Sin destino, el foco puede haberse caído solo —el botón se deshabilitó o
-    // se quitó—, y eso no es que el operador se haya ido del carrusel.
-    const origen = ev.target as HTMLButtonElement;
-    const caido = destino === null && (origen.disabled === true || !origen.isConnected);
-    if (!caido) focoAdentro.current = false;
+    if (seFueDelCarrusel(ev)) focoAdentro.current = false;
   }
 
   return (
@@ -156,162 +370,39 @@ export default function AlertaEnCurso({
       onFocus={() => (focoAdentro.current = true)}
       onBlur={alSalirElFoco}
     >
+      {/* La cabecera: el punto rojo y la cuenta a la izquierda; los pasos del
+          carrusel y cuánto hace que espera, a la derecha. */}
       <div className="carrusel-cabecera">
         {/* El título del tablero lleva la cuenta ("3 alertas sin atender"):
-            se anuncia al cambiar, como lo hacía la franja que reemplaza. */}
+            se anuncia al cambiar, como lo hacía la franja que reemplaza. El
+            punto es dibujo: no suma nada al nombre de la región. */}
         <h2 id={idTitulo} aria-live="polite">
+          <span className="punto-vivo" aria-hidden="true" />
           {titulo}
         </h2>
-        {/* Los pasos están siempre, vacíos con una sola alerta: adentro va la
-            región que anuncia la cuenta, y una región viva que aparece ya con
-            su texto no se anuncia. Si naciera con la segunda alerta, en la
-            vista del dron —cuyo título no cambia— esa llegada pasaba callada. */}
-        <div
-          className="carrusel-pasos"
-          role={varias ? 'group' : undefined}
-          aria-label={varias ? 'Recorrer las alertas pendientes' : undefined}
-        >
-          {/* `aria-disabled` y no `disabled`: un botón deshabilitado suelta el
-              foco, y el operador que llegaba a la punta con el teclado se
-              quedaba sin flechas. Así sigue enfocado y el paso no hace nada. */}
-          {varias && (
-            <button
-              type="button"
-              className="icono-boton carrusel-paso"
-              aria-label="Alerta anterior, más nueva"
-              aria-disabled={!carrusel.hayAnterior}
-              onClick={carrusel.anterior}
-            >
-              <Chevron hacia="atras" />
-            </button>
-          )}
-          {/* El contenedor del aviso queda fijo y la pastilla se rehace con
-              cada tanda nueva (`key`): así el pulso se repite y el lector de
-              pantalla anuncia el número nuevo. Las nuevas sin ver se dicen acá
-              y no en el botón de abrirlas, que aparece sin anunciarse. */}
-          <span className="carrusel-indicador" role="status" aria-live="polite" aria-atomic="true">
-            {varias && (
-              <>
-                <span className="carrusel-solo-lector">Alerta </span>
-                <span
-                  key={carrusel.llegadas}
-                  className={carrusel.llegadas > 0 ? 'badge carrusel-cuenta llego' : 'badge carrusel-cuenta'}
-                  data-testid="carrusel-cuenta"
-                >
-                  {carrusel.posicion} de {carrusel.total}
-                </span>
-              </>
-            )}
-            {carrusel.sinVer > 0 && (
-              <span className="carrusel-solo-lector">
-                {carrusel.sinVer === 1 ? ', una alerta nueva sin ver' : `, ${carrusel.sinVer} alertas nuevas sin ver`}
-              </span>
-            )}
-          </span>
-          {varias && (
-            <button
-              type="button"
-              className="icono-boton carrusel-paso"
-              aria-label="Alerta siguiente, más vieja"
-              aria-disabled={!carrusel.haySiguiente}
-              onClick={carrusel.siguiente}
-            >
-              <Chevron hacia="adelante" />
-            </button>
-          )}
+        {/* Juntos y a la derecha: en una columna angosta bajan los dos al
+            renglón de abajo, sin que el reloj quede suelto a la izquierda. */}
+        <div className="carrusel-lado">
+          <PasosDelCarrusel carrusel={carrusel} />
+          <EsperaDeLaAlerta key={alerta.id} desde={alerta.created_at} />
         </div>
       </div>
 
-      {/* El pulso de la cuenta es movimiento, y con movimiento reducido no se
-          ve: este aviso queda quieto hasta que el operador abre la nueva. */}
-      {carrusel.sinVer > 0 && (
-        <button type="button" className="enlace carrusel-nuevas" onClick={carrusel.irALaNueva}>
-          {carrusel.sinVer === 1 ? 'Ver la alerta nueva' : `Ver las ${carrusel.sinVer} alertas nuevas`}
-        </button>
-      )}
+      <AvisoDeNuevas sinVer={carrusel.sinVer} onVer={carrusel.irALaNueva} />
 
-      <div
-        key={alerta.id}
-        className="carrusel-diapositiva"
-        role={varias ? 'group' : undefined}
-        aria-roledescription={varias ? 'alerta' : undefined}
-        aria-label={varias ? `${carrusel.posicion} de ${carrusel.total}` : undefined}
-      >
-        <div className="alert-head">
-          <span className={`badge ${alerta.type.toLowerCase()}`}>{TIPO[alerta.type] ?? alerta.type}</span>
-          {/* Como en la campana: el nombre del dron es el que lleva a su vista. */}
-          {onVerDron && (
-            <button
-              type="button"
-              className="enlace carrusel-dron"
-              title={dron ? `Abrir la vista de ${dron.displayName}` : undefined}
-              disabled={!dron}
-              onClick={dron ? () => onVerDron(dron.droneId) : undefined}
-            >
-              {dron?.displayName ?? 'Dron desconocido'}
-            </button>
-          )}
-          <time className="mono muted" dateTime={alerta.created_at}>
-            {time(alerta.created_at)}
-          </time>
-          {abrirAlerta && (
-            <button
-              type="button"
-              className="enlace alerta-ver-detalle"
-              onClick={() => abrirAlerta(alerta, devolverFoco)}
-            >
-              Ver detalle
-            </button>
-          )}
-        </div>
-        <div className="alerta-cuerpo">
-          {captura && abrirAlerta && (
-            // La captura es lo que se mira primero: tocarla la abre en grande,
-            // con el mapa y el dron al lado. "Ver detalle" es el mismo camino
-            // para la alerta que llegó sin captura.
-            <button
-              type="button"
-              className="snapshot-boton"
-              aria-label={`Ampliar la captura de la alerta #${alerta.id}`}
-              onClick={() => abrirAlerta(alerta, devolverFoco)}
-            >
-              {captura}
-            </button>
-          )}
-          {captura && !abrirAlerta && captura}
-          {!captura && (
-            // No `.video`: en el par del video y el mapa esa clase fija 420 px de
-            // alto, y un aviso de una línea quedaría flotando en un hueco enorme.
-            <p className="vacio">La alerta llegó sin captura</p>
-          )}
-          <div className="alerta-detalle">
-            <p className="muted">
-              {siguiendo
-                ? 'El dron está sobre este objetivo: compará la captura con el video en vivo antes de decidir.'
-                : 'Compará la captura con el video en vivo antes de decidir.'}
-            </p>
-            <div className="alert-actions">
-              <button className="validate" disabled={ocupado} onClick={() => decidir(alerta.id, 'VALIDATED')}>
-                Validar
-              </button>
-              <button className="dismiss" disabled={ocupado} onClick={() => decidir(alerta.id, 'DISMISSED')}>
-                Descartar
-              </button>
-            </div>
-            {/* Lo que hace cada botón con el dron, dicho antes de apretarlo: validar
-                no lo "libera", y descartar lo saca de encima del objetivo. */}
-            <p className="muted alerta-consecuencias">
-              Validar: el dron se queda sobre el objetivo hasta que lo mandes a patrullar. Descartar: retoma la ruta
-              hacia el próximo nodo.
-            </p>
-            {error && (
-              <p className="aviso malo" role="alert">
-                {error}
-              </p>
-            )}
-          </div>
-        </div>
-      </div>
+      <DiapositivaDeAlerta key={alerta.id} carrusel={carrusel}>
+        <VisorDeCaptura alerta={alerta} onAmpliar={abrir} />
+        <DecisionDeLaAlerta
+          alerta={alerta}
+          drones={drones}
+          onVerDron={onVerDron}
+          siguiendo={seguidas.includes(alerta.id)}
+          ocupado={ocupado}
+          error={errorDe(alerta.id)}
+          onDecidir={(decision) => decidir(alerta.id, decision)}
+          onAbrir={abrir}
+        />
+      </DiapositivaDeAlerta>
     </section>
   );
 }

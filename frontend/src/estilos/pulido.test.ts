@@ -74,10 +74,14 @@ describe('pulido.css', () => {
   });
 
   it('los controles de la cabecera miden lo mismo que el ícono redondo que tienen al lado', () => {
-    expect(bloque(pulido, '.vista-cabecera button:not(.icono-boton)')).toMatch(/min-height:\s*var\(--alto-control\)/);
-    const icono = bloque(sinComentarios(leer('./nuevos.css')), '.icono-boton');
-    expect(icono).toMatch(/width:\s*var\(--alto-control\)/);
-    expect(icono).toMatch(/height:\s*var\(--alto-control\)/);
+    // Todos al alto táctil, como los botones del prototipo: el buscador, los
+    // filtros, "Nuevo …" y el ícono de actualizar se tocan con el dedo.
+    expect(bloque(pulido, '.vista-cabecera button:not(.icono-boton)')).toMatch(/min-height:\s*var\(--alto-tactil\)/);
+    const icono = bloque(pulido, '.vista-cabecera .icono-boton');
+    expect(icono).toMatch(/width:\s*var\(--alto-tactil\)/);
+    expect(icono).toMatch(/height:\s*var\(--alto-tactil\)/);
+    expect(valorDe(pulido, '.vista-cabecera input', 'height')).toBe('var(--alto-tactil)');
+    expect(tokens.claro.get('--alto-tactil')).toBe('44px');
   });
 
   it('la acción del pie de un diálogo no cambia de ancho mientras el pedido viaja', () => {

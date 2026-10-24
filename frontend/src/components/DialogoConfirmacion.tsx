@@ -1,5 +1,5 @@
 import { useId, useState, type ReactNode } from 'react';
-import IconoCerrar from './IconoCerrar';
+import { IconoCerrar } from './Iconos';
 import Modal from './Modal';
 
 export type TonoDeConfirmacion = 'peligro' | 'primario';
@@ -45,7 +45,7 @@ function textoError(e: unknown): string {
  * dejaba a sus drones sin punto de retorno. Ahora todo lo que borra, apaga o le
  * saca algo a alguien pasa por acá, y se lee igual en todas las vistas: el
  * título dice qué, la primera oración dice la consecuencia, y abajo van
- * "Cancelar" y el verbo de la acción, con el filo óxido de Eliminar.
+ * "Cancelar" y el verbo de la acción, en la placa óxido de Descartar.
  *
  * El foco arranca en "Cancelar" (la recomendación de WAI-ARIA para lo
  * destructivo): Enter o Espacio sin mirar no rompen nada.
@@ -102,7 +102,7 @@ export default function DialogoConfirmacion({
           onClick={cerrar}
           disabled={ocupado}
         >
-          <IconoCerrar />
+          <IconoCerrar tamano={18} />
         </button>
       </header>
 
@@ -117,7 +117,7 @@ export default function DialogoConfirmacion({
       </div>
 
       <footer className="modal-pie">
-        <button type="button" className="ghost" onClick={cerrar} disabled={ocupado} data-autofoco>
+        <button type="button" onClick={cerrar} disabled={ocupado} data-autofoco>
           {cancelar ?? 'Cancelar'}
         </button>
         <button

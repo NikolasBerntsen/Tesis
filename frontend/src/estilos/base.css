@@ -20,24 +20,54 @@ body {
   font-size: var(--txt-base);
   line-height: var(--interlinea);
   -webkit-font-smoothing: antialiased;
-  /* La piedra: veta + grano + dos manchas de luz alta. Sin la iluminación
-     despareja el mármol se lee como cartulina. El fondo va un punto más hondo
-     que las tarjetas (mármol 1/2 contra 0/1) para que estas se levanten. */
-  background-color: var(--marmol-1);
-  background-image:
-    var(--grano-textura),
-    var(--veta-textura),
-    radial-gradient(120% 85% at 8% -18%, var(--luz-rasante) 0%, transparent 58%),
-    radial-gradient(80% 55% at 100% 0%, var(--luz-alta) 0%, transparent 60%),
-    linear-gradient(166deg, var(--marmol-1) 0%, var(--marmol-2) 62%, var(--marmol-3) 100%);
-  background-attachment: fixed;
+  /* Cormorant trae por defecto cifras de estilo antiguo: el "1" de "Halcón 1"
+     o de "1 alerta sin atender" se leía como una "ı". Con las cifras de caja
+     alta heredadas desde acá, ningún nombre ni título cambia de número. */
+  font-variant-numeric: lining-nums;
+  /* La piedra lisa: lo que se ve mientras la textura carga. */
+  background-color: var(--fondo-pagina);
+}
+
+/* La piedra con sus vetas, quieta detrás de todo. Va en una capa fija y no
+   con background-attachment: fixed, que en cada scroll obliga al navegador a
+   repintar la página entera; una capa fija se compone una sola vez. El body
+   no arma contexto de apilado, así que el z-index negativo la deja encima del
+   color de la página y debajo de todo el contenido. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: var(--fondo-vetas) center / cover no-repeat;
+  pointer-events: none;
 }
 
 /* --- Tipografía ---------------------------------------------------------- */
 
+/* Las cifras de la marca. El "1" de Cinzel es una I con serifas: "1 alerta
+   sin atender" se leía "I alerta", "Halcón 1" como "Halcón I", y "11
+   alertas" como "II", que es un dos. En una consola de guardia un número no
+   puede leerse como otro. Esta familia cubre sólo los dígitos (unicode-range)
+   y los toma de Cormorant, en su versión de caja alta (lining-nums, que el
+   body hereda): --fuente-marca la pone primera, así que las letras siguen
+   siendo de Cinzel y sólo los números cambian de mano. Las mayúsculas de
+   Cormorant son un 10 % más bajas que las de Cinzel (63 y 70 milésimas del
+   cuerpo): sin el ajuste, "3 ALERTAS" quedaba con el número más chico. */
+@font-face {
+  font-family: 'Cifras de la marca';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 500 700;
+  src: url('@fontsource/cormorant-garamond/files/cormorant-garamond-latin-600-normal.woff2') format('woff2');
+  unicode-range: U+0030-0039;
+  size-adjust: 110%;
+}
+
+/* Cormorant se dibuja liviana: a 400 los títulos de tarjeta se veían
+   desteñidos al lado del Inter del cuerpo. Se sirven 500, 600 y 700. */
 h1, h2, h3, h4 {
   font-family: var(--fuente-serif);
-  font-weight: 400;
+  font-weight: 600;
   line-height: var(--interlinea-titulo);
   letter-spacing: .005em;
   color: var(--tinta);
@@ -72,13 +102,22 @@ samp {
 
 /* Etiqueta grabada: versalitas espaciadas. Es LA marca del sistema. */
 .etiqueta,
-.versalita {
+.versalita,
+.rotulo {
   font-family: var(--fuente-cuerpo);
   font-size: var(--txt-xs);
   text-transform: uppercase;
   letter-spacing: var(--versalita);
   font-weight: 600;
   color: var(--tinta-media);
+}
+/* El rótulo de un dato en una ficha ("BATERÍA", "BASE"): la misma etiqueta,
+   un escalón más chica y más abierta, arriba de un valor en negrita, como el
+   .rotulo del prototipo. */
+.rotulo {
+  font-size: var(--txt-xxs);
+  letter-spacing: .14em;
+  line-height: 1.2;
 }
 
 /* Cifra clave: serif grande, como un número cincelado */

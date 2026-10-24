@@ -35,8 +35,15 @@ export default function LoginForm({ onLogin }: { onLogin: () => void }) {
     <div className="login-wrapper">
       <form className="login-card" onSubmit={handleSubmit}>
         <img className="login-escudo" src={escudo} alt="" />
-        <h1>Alta en el Cielo</h1>
-        <p className="login-subtitle">Comando Central · patrullaje con drones</p>
+        {/* La misma marca que la barra de la consola: el nombre escrito como
+            se dice (es lo que anuncia el lector de pantalla) y las mayúsculas
+            y los colores, de la hoja. */}
+        <div className="marca-textos login-marca">
+          <h1 className="marca-nombre">
+            Alta <span className="marca-en">en el</span> <span className="marca-cielo">Cielo</span>
+          </h1>
+          <p className="marca-lema">Comando de drones</p>
+        </div>
         {/* La filigrana separa el encabezado de los campos como el grabado de
             una placa: se tiene que adivinar, nunca competir con el dato. */}
         <hr className="regla-ornamental" />

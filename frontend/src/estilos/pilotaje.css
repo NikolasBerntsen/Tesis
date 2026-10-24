@@ -74,6 +74,10 @@
   gap: var(--e-3);
   padding: var(--e-4);
   pointer-events: none;
+  /* Los botones del HUD van directo sobre el video: el velo al 62 % de
+     --boton-fondo dejaba la tinta bajo AA con cielo blanco o noche cerrada
+     detrás. Acá se apoyan en el panel firme, que se mide contra los dos. */
+  --boton-fondo: var(--panel-firme);
 }
 .pilotaje-capa button,
 .pilotaje-panel,
@@ -95,6 +99,11 @@
 /* Los botones del HUD llevan la misma sombra: sobre una imagen cualquiera, la
    cara de piedra sola se pierde contra un cielo claro. */
 .pilotaje-capa button { box-shadow: var(--sombra-flotante); }
+/* Salir y Aterrizar con el mouse encima toman la placa óxido, que de noche es
+   translúcida: va encima del panel firme, como el aviso grave del HUD. */
+.pilotaje-capa button.dismiss:hover:not(:disabled) {
+  background: linear-gradient(var(--descarta-fondo), var(--descarta-fondo)), var(--panel-firme);
+}
 
 .pilotaje-izquierda {
   grid-column: 1;
@@ -265,9 +274,9 @@
   max-height: calc(100vh - 120px);
   overflow-y: auto;
   padding: var(--e-4) var(--e-5);
-  border: 1px solid var(--veta);
+  border: 1px solid var(--veta-fuerte);
   border-radius: var(--radio);
-  background-color: var(--marmol-0);
+  background-color: var(--panel-firme);
   background-image: var(--piedra-cara);
   box-shadow: var(--sombra-flotante);
   /* El texto de la ayuda sí se tiene que poder seleccionar y copiar. */

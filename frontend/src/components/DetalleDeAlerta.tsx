@@ -11,11 +11,12 @@ import {
   situacionDelObjetivo,
   stateLabel,
   textoSinGps,
-  tipoDeAlerta,
 } from '../format';
 import type { Alert, Drone, DroneStatus, MetaAlerta, MetaDron, ObjetivoEnSeguimiento } from '../types';
 import { useDecisionDeAlerta, type Decision } from '../useDecisionDeAlerta';
+import { IconoCamara } from './Iconos';
 import MapaDeAlerta from './MapaDeAlerta';
+import { BotonesDeDecision, ChipDeTipo, ConsecuenciasDeDecidir, VisorDeCaptura } from './PiezasDeAlerta';
 
 type Punto = [number, number];
 
@@ -112,9 +113,11 @@ function ObjetivoAhora({
   );
 }
 
-/** Lo que dejó la detección: qué, cuándo, dónde, y cómo terminó. */
+/**
+ * Lo que dejó la detección: cuándo, dónde y cómo terminó. Qué vio va arriba,
+ * en la placa óxido de la alerta (ChipDeTipo), como en la tarjeta del tablero.
+ */
 function DatosDeLaDeteccion({
-  tipo,
   momento,
   lat,
   lon,
@@ -122,7 +125,6 @@ function DatosDeLaDeteccion({
   objetivo,
   resolucion,
 }: Readonly<{
-  tipo: string;
   momento: string | null;
   lat: number | null;
   lon: number | null;
@@ -134,8 +136,6 @@ function DatosDeLaDeteccion({
 }>) {
   return (
     <dl className="datos">
-      <dt>Tipo</dt>
-      <dd>{tipo ? <span className={`badge ${tipo.toLowerCase()}`}>{tipoDeAlerta(tipo)}</span> : '—'}</dd>
       <dt>Detectada</dt>
       <dd>{momento ? <time dateTime={momento}>{fechaHoraLarga(momento)}</time> : '—'}</dd>
       <dt>Coordenadas</dt>
@@ -228,7 +228,7 @@ function AccionesDeLaAlerta({
       {verDron && (
         <button
           type="button"
-          className="detalle-alerta-video"
+          className="primario detalle-alerta-video"
           disabled={!dron}
           title={dron ? `Abrir la vista de ${dron.displayName}` : 'El dron de esta alerta ya no está en la flota'}
           onClick={
@@ -240,25 +240,16 @@ function AccionesDeLaAlerta({
               : undefined
           }
         >
+          <IconoCamara tamano={18} />
           Ver feed en vivo
         </button>
       )}
       {puedeDecidir && (
         <>
-          <div className="alert-actions">
-            <button type="button" className="validate" disabled={ocupado} onClick={() => onDecidir('VALIDATED')}>
-              Validar
-            </button>
-            <button type="button" className="dismiss" disabled={ocupado} onClick={() => onDecidir('DISMISSED')}>
-              Descartar
-            </button>
-          </div>
+          <BotonesDeDecision ocupado={ocupado} onDecidir={onDecidir} />
           {/* Lo que hace cada botón con el dron, dicho antes de apretarlo,
               como en el carrusel. */}
-          <p className="muted alerta-consecuencias">
-            Validar: el dron se queda sobre el objetivo hasta que lo mandes a patrullar. Descartar: retoma la ruta
-            hacia el próximo nodo.
-          </p>
+          <ConsecuenciasDeDecidir />
         </>
       )}
       {error && (
@@ -365,67 +356,76 @@ export default function DetalleDeAlerta({
   const posicionDron = posicionDelDron(status);
   const deteccion: Punto | null = posicionValida(lat, lon) ? [lat as number, lon as number] : null;
   const nombre = dron?.displayName || dronDeRespaldo?.displayName || '';
+  const tipo = alerta?.type ?? referencia?.tipo ?? '';
 
   return (
     <div className="detalle-alerta" data-testid="detalle-alerta">
       {conTitulo && (
         <h3 className="etiqueta detalle-alerta-titulo">
           Alerta #{alertaId}
-          {alerta && <span className={`estado ${TONO[alerta.status]}`}>{ESTADO[alerta.status]}</span>}
+          {alerta && <span className={`estado pastilla ${TONO[alerta.status]}`}>{ESTADO[alerta.status]}</span>}
         </h3>
       )}
       {error && <p className="aviso malo">No se pudo traer la alerta: {error}</p>}
       {cargando && <p className="muted">Trayendo la alerta…</p>}
 
-      {/* La captura y el mapa, lado a lado si entran: son las dos cosas que se
-          miran juntas para decidir adónde mandar a alguien. */}
-      <div className="detalle-alerta-vistas">
-        <div className="detalle-alerta-captura">
-          {alerta?.snapshot && (
-            <img className="snapshot" src={`data:image/jpeg;base64,${alerta.snapshot}`} alt="Captura de la detección" />
-          )}
-          {alerta && !alerta.snapshot && <p className="vacio">La detección no dejó captura.</p>}
+      {/* Como el pop-up del prototipo: a la izquierda lo que se mira (la
+          captura en su visor y, debajo, el mapa), y a la derecha lo que se
+          lee y se decide. En una caja angosta (el panel del historial, el
+          detalle del Registro) la columna de los datos baja abajo. */}
+      <div className="detalle-alerta-cuerpo">
+        <div className="detalle-alerta-vistas">
+          {alerta && <VisorDeCaptura alerta={alerta} alt="Captura de la detección" />}
+          <MapaOAviso
+            deteccion={deteccion}
+            objetivo={objetivo}
+            posicionDron={posicionDron}
+            nombreDron={nombre}
+            cargando={cargando}
+          />
         </div>
-        <MapaOAviso
-          deteccion={deteccion}
-          objetivo={objetivo}
-          posicionDron={posicionDron}
-          nombreDron={nombre}
-          cargando={cargando}
-        />
+
+        <div className="detalle-alerta-datos">
+          {tipo && (
+            <div className="alert-head">
+              <ChipDeTipo tipo={tipo} />
+            </div>
+          )}
+          <DatosDeLaDeteccion
+            momento={alerta?.created_at ?? referencia?.ts ?? null}
+            lat={lat}
+            lon={lon}
+            seguido={seguido}
+            objetivo={objetivo}
+            resolucion={textoDeResolucion(alerta)}
+          />
+
+          {/* Lo que se decide va antes que la ficha del dron: es para lo que
+              se abre el pop-up, y debajo de siete renglones de ficha quedaba
+              fuera de la caja, a un scroll de distancia. */}
+          <AccionesDeLaAlerta
+            dron={dron}
+            verDron={vivo.verDron}
+            puedeDecidir={alerta?.status === 'PENDING' && vivo.decidir !== null}
+            ocupado={decidiendo(alertaId)}
+            error={errorDe(alertaId)}
+            onDecidir={(decision) => {
+              void decidir(alertaId, decision);
+            }}
+            onIrAlVideo={onIrAlVideo}
+          />
+
+          <DatosDelDron
+            nombre={nombre}
+            dron={dron}
+            dronDeRespaldo={dronDeRespaldo}
+            droneId={droneId}
+            hayConsola={vivo.verDron !== null}
+            status={status}
+            posicion={posicionDron}
+          />
+        </div>
       </div>
-
-      <DatosDeLaDeteccion
-        tipo={alerta?.type ?? referencia?.tipo ?? ''}
-        momento={alerta?.created_at ?? referencia?.ts ?? null}
-        lat={lat}
-        lon={lon}
-        seguido={seguido}
-        objetivo={objetivo}
-        resolucion={textoDeResolucion(alerta)}
-      />
-
-      <DatosDelDron
-        nombre={nombre}
-        dron={dron}
-        dronDeRespaldo={dronDeRespaldo}
-        droneId={droneId}
-        hayConsola={vivo.verDron !== null}
-        status={status}
-        posicion={posicionDron}
-      />
-
-      <AccionesDeLaAlerta
-        dron={dron}
-        verDron={vivo.verDron}
-        puedeDecidir={alerta?.status === 'PENDING' && vivo.decidir !== null}
-        ocupado={decidiendo(alertaId)}
-        error={errorDe(alertaId)}
-        onDecidir={(decision) => {
-          void decidir(alertaId, decision);
-        }}
-        onIrAlVideo={onIrAlVideo}
-      />
     </div>
   );
 }
