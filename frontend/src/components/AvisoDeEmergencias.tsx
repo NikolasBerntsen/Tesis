@@ -2,10 +2,12 @@ import { useId, useRef } from 'react';
 import { emergenciaAbierta, motivoDeEmergencia } from '../emergencias';
 import { time } from '../format';
 import { useRelevosYEmergencias } from '../relevosYEmergencias';
+import { IconoAterrizar, IconoChevronDerecha } from './Iconos';
 
 /**
- * El aviso de los aterrizajes de emergencia sin recuperar: una franja de óxido
- * debajo de la barra, en todas las secciones y para todos los roles. Se queda
+ * El aviso de los aterrizajes de emergencia sin recuperar: un panel con el
+ * filo y el velo de óxido de una alerta, debajo de la barra y arriba del
+ * lienzo de la vista, en todas las secciones y para todos los roles. Se queda
  * hasta que alguien marca el dron como recuperado: un dron en el piso, fuera
  * de base, no deja de ser urgente porque el operador cambió de pantalla.
  *
@@ -38,6 +40,7 @@ export default function AvisoDeEmergencias() {
       {abiertas.length > 0 && (
         <section className="aviso-emergencias" aria-labelledby={idTitulo}>
           <h2 id={idTitulo} className="aviso-emergencias-titulo">
+            <IconoAterrizar tamano={20} />
             {abiertas.length === 1
               ? 'Aterrizaje de emergencia sin recuperar'
               : `${abiertas.length} aterrizajes de emergencia sin recuperar`}
@@ -48,6 +51,9 @@ export default function AvisoDeEmergencias() {
               // separación), pero sin ellos un lector de pantalla leería
               // "AlfaBajando desde las…" de corrido.
               <li key={e.id} className="aviso-emergencia">
+                {/* La luz roja de lo que todavía nadie atendió, como la de una
+                    alerta pendiente: el dron sigue en el piso, fuera de base. */}
+                <span className="punto-vivo" aria-hidden="true" />
                 <strong className="aviso-emergencia-dron">{e.displayName}</strong>{' '}
                 <span>
                   {e.aterrizadaEn
@@ -58,11 +64,12 @@ export default function AvisoDeEmergencias() {
                 {abrirEmergencia && (
                   <button
                     type="button"
-                    className="chico"
+                    className="enlace versal aviso-emergencia-ficha"
                     aria-label={`Ver la ficha del aterrizaje de emergencia de ${e.displayName}`}
                     onClick={() => abrirEmergencia(e.id, devolverFoco)}
                   >
                     Ver la ficha
+                    <IconoChevronDerecha tamano={16} />
                   </button>
                 )}
               </li>

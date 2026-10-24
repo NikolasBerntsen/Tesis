@@ -2,29 +2,28 @@
    RELEVOS Y EMERGENCIAS — las insignias de relevo de cada dron, el aviso de
    los aterrizajes de emergencia sin recuperar y la ficha de uno (galería de
    fotos), más el punto para visitantes del diálogo de una base (RELEVOS §6).
+   Hablan con las piezas de "Alta en el Cielo": las pastillas de estado, el
+   panel con filo, el visor negro con escuadras y las placas de una alerta.
    Todo sale de los tokens: los dos temas cambian solos.
    ========================================================================= */
 
 /* --- Insignias de relevo ------------------------------------------------------
-   Pastillas de las de siempre (.badge), en una fila que se parte si no entra:
-   en el mosaico del tablero y en la cabecera de la vista del dron. */
+   Pastillas de estado (.estado.pastilla, primitivos.css), en una fila que se
+   parte si no entra: en la ficha de la cámara del tablero y en la cabecera de
+   la vista del dron, al lado de su estado. */
 .insignias-relevo {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--e-1) var(--e-2);
+  gap: var(--e-2);
   min-width: 0;
 }
 .tile-info > .insignias-relevo { display: flex; }
-/* Lo que falló o no tiene salida: el óxido de las alertas, como .badge.person. */
-.badge.malo {
-  background: var(--peligro-velo);
-  border-color: color-mix(in srgb, var(--peligro) 40%, transparent);
-  color: var(--peligro);
-}
+/* En la cabecera miden lo mismo que la pastilla de "En vuelo" de al lado. */
+.detail-head > .insignias-relevo > .estado.pastilla { min-height: 32px; }
 
-/* El mosaico de un dron que baja de emergencia: la esquina va en óxido, el
-   mismo del aviso que tapa la imagen. */
+/* El mosaico de un dron que baja de emergencia: la esquina va en óxido, con
+   el filo del mismo color, como la de oro de un dron sobre un objetivo. */
 .esquina-roja { color: var(--peligro); border-color: var(--peligro); }
 /* "ATERRIZAJE DE EMERGENCIA" no entra en un renglón de un mosaico angosto:
    partido, se lee centrado y en dos mitades parejas, no colgado a la izquierda. */
@@ -34,118 +33,149 @@
 }
 
 /* --- Aviso de emergencias -------------------------------------------------------
-   Una franja de óxido debajo de la barra, con el margen de la página: no es
-   una tarjeta más del tablero sino algo que cruza todas las secciones. El texto
-   va en la tinta del tema sobre el velo de óxido, y el título en óxido. */
+   Un panel debajo de la barra, con el margen del lienzo de la vista: no es
+   una tarjeta más de una sección sino algo que cruza todas. Es el panel
+   translúcido de siempre con el velo y el filo de óxido de una alerta encima
+   (contraste.test.ts lo mide sobre los dos extremos de la veta). El título
+   habla como el de una tarjeta, en Cinzel, pero en óxido. */
 .aviso-emergencias {
   display: flex;
   flex-direction: column;
-  gap: var(--e-2);
-  margin: var(--e-4) var(--e-6) 0;
-  padding: var(--e-3) var(--e-4);
-  border: 1px solid var(--peligro);
-  border-left-width: 4px;
-  border-radius: var(--radio-chico);
-  background: var(--peligro-velo);
+  gap: var(--e-3);
+  margin: var(--e-4) var(--e-5) 0;
+  padding: var(--e-4) var(--e-5);
+  border: 1px solid var(--descarta-filo);
+  border-radius: var(--radio);
   color: var(--tinta);
+  background-color: var(--panel);
+  background-image: linear-gradient(var(--peligro-velo), var(--peligro-velo)), var(--piedra-cara);
+  box-shadow: var(--sombra-relieve);
 }
 .aviso-emergencias-titulo {
+  display: flex;
+  align-items: center;
+  gap: var(--e-3);
   margin: 0;
-  font-family: var(--fuente-cuerpo);
+  font-family: var(--fuente-marca);
   font-size: var(--txt-sm);
-  font-weight: 700;
+  font-weight: 600;
+  line-height: var(--interlinea-titulo);
+  letter-spacing: var(--versalita-ancha);
   text-transform: uppercase;
-  letter-spacing: var(--versalita);
   color: var(--peligro);
 }
+.aviso-emergencias-titulo > svg { flex: none; }
 .aviso-emergencias-lista {
   display: flex;
   flex-direction: column;
-  gap: var(--e-2);
   margin: 0;
   padding: 0;
   list-style: none;
 }
+/* Cada dron en su renglón, sobre un hilo de oro como las filas de .datos. */
 .aviso-emergencia {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--e-1) var(--e-3);
+  padding-block: var(--e-2);
+}
+.aviso-emergencia + .aviso-emergencia { border-top: 1px solid var(--veta); }
+/* El nombre grabado en Cinzel, como en la cámara del tablero. */
+.aviso-emergencia-dron {
+  font-family: var(--fuente-marca);
+  font-size: var(--txt-md);
+  font-weight: 600;
+  letter-spacing: .04em;
 }
 .aviso-emergencia-motivo { color: var(--tinta-media); font-size: var(--txt-sm); }
-.aviso-emergencia > button { margin-left: auto; }
-@media (max-width: 1100px) {
-  .aviso-emergencias { margin-inline: var(--e-5); }
-}
+.aviso-emergencia-ficha { margin-left: auto; }
 @media (max-width: 900px) {
-  .aviso-emergencias { margin-inline: var(--e-4); }
-  .aviso-emergencia > button { margin-left: 0; }
+  .aviso-emergencias {
+    margin-inline: var(--e-3);
+    padding: var(--e-3) var(--e-4);
+  }
+  .aviso-emergencia-ficha { margin-left: 0; }
 }
 
 /* --- Ficha de una emergencia: la galería ------------------------------------------
-   La foto elegida grande, con su pie (tipo, rumbo, inclinación), y las demás
-   en miniatura debajo. La ficha comparte la grilla del pop-up de una alerta
-   (.detalle-alerta-vistas): las fotos a un lado y el mapa al otro. */
+   La ficha usa la grilla del pop-up de una alerta (alertas.css): las fotos y
+   el mapa a la izquierda, los datos y «Marcar como recuperado» a la derecha.
+   La foto elegida va grande en el visor negro con escuadras (vistas.css), con
+   su pie: qué foto es y qué toma, hacia dónde mira y cuánto baja la cámara.
+   Debajo, las demás en visores chicos. */
 .galeria {
   display: flex;
   flex-direction: column;
-  gap: var(--e-2);
+  gap: var(--e-3);
   min-width: 0;
 }
-.galeria-principal {
-  display: flex;
-  flex-direction: column;
-  gap: var(--e-1);
-  margin: 0;
-}
-.galeria-principal figcaption {
-  font-size: var(--txt-xs);
-  color: var(--tinta-media);
-}
+.galeria-principal { margin: 0; }
+/* El pie de una foto es más largo que el de una captura: en una caja angosta
+   el tipo baja abajo del número en vez de apretarse. */
+.galeria .visor-pie { flex-wrap: wrap; }
 .galeria-miniaturas {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
   gap: var(--e-2);
   margin: 0;
   padding: 0;
   list-style: none;
 }
+/* Un botón común (la que se mira, presionado, toma el oro de lo encendido):
+   arriba el visor chico, abajo el tipo en versalitas. */
 .galeria-miniatura {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--e-1);
   width: 100%;
-  padding: 3px;
+  padding: var(--e-1);
   font-size: var(--txt-xxs);
   font-weight: 600;
+  letter-spacing: .12em;
   text-transform: uppercase;
-  letter-spacing: var(--versalita);
 }
-.galeria-miniatura img {
+.galeria-miniatura-cuadro {
+  overflow: hidden;
+  border-radius: var(--radio-sello);
+  background-color: var(--recuadro-video);
+}
+.galeria-miniatura-cuadro img {
   display: block;
   width: 100%;
   aspect-ratio: 4 / 3;
   object-fit: cover;
-  border-radius: var(--radio-sello);
 }
-/* La que se está mirando lleva la cara de lo activo, como un chip elegido. */
-.galeria-miniatura[aria-pressed='true'] {
-  border-color: var(--oro);
-  background-image: var(--cara-activa);
+/* Las escuadras del visor, en chico: a 24 px de brazo taparían la foto. */
+.galeria-miniatura .visor-cuadro::after {
+  --brazo: 9px;
+  inset: 4px;
+}
+/* Se encienden en la que se mira y bajo el mouse, como las de una cámara. */
+.galeria-miniatura:is([aria-pressed='true'], :hover) .visor-cuadro::after {
+  --esquina: var(--visor-esquina-encendida);
+}
+
+/* Las coordenadas para copiar, en la columna angosta de los datos: si no
+   entran con el botón al lado, el botón baja entero abajo de ellas en vez de
+   partirse en "Copia / r". */
+.detalle-emergencia .hash { flex-wrap: wrap; }
+.detalle-emergencia .hash > button {
+  flex: none;
+  white-space: nowrap;
 }
 
 /* --- Bases: el punto para visitantes ----------------------------------------------- */
+/* Qué marca el clic en el mapa: las dos teclas al alto táctil, como las de
+   "Cámaras / Mapa", con su ícono (la torre de la base, el alfiler del punto). */
 .elector-de-punto { margin-top: calc(-1 * var(--e-1)); }
+.elector-de-punto > button {
+  flex: 1 1 12rem;
+  min-height: var(--alto-tactil);
+}
 .campo-grupo {
   display: flex;
   flex-direction: column;
   gap: var(--e-3);
   margin: 0;
-}
-.campo-grupo > p { margin: 0; }
-/* En la tabla, debajo de las coordenadas: un dato de la base, no una columna. */
-.base-visitantes {
-  display: block;
-  font-family: var(--fuente-cuerpo);
-  font-size: var(--txt-xs);
 }

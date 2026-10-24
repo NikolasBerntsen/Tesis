@@ -707,6 +707,7 @@ export default function BasesView({ me }: Readonly<{ me: Me }>) {
                   aria-pressed={marcando === 'base'}
                   onClick={() => setMarcando('base')}
                 >
+                  <IconoBase tamano={18} />
                   La base
                 </button>
                 <button
@@ -715,6 +716,7 @@ export default function BasesView({ me }: Readonly<{ me: Me }>) {
                   aria-pressed={marcando === 'visitantes'}
                   onClick={() => setMarcando('visitantes')}
                 >
+                  <IconoUbicacion tamano={18} />
                   El punto para visitantes
                 </button>
               </div>
@@ -769,7 +771,7 @@ export default function BasesView({ me }: Readonly<{ me: Me }>) {
                   15 m al norte del punto de la base (RELEVOS §0). */}
               <fieldset className="campo-grupo">
                 <legend>Punto de aterrizaje para visitantes (opcional)</legend>
-                <p className="muted">
+                <p className="campo-ayuda">
                   Dónde baja un dron que se desvía desde otra base: un lugar libre, a 10 m o más de toda plataforma, y a
                   entre {VISITANTES_MINIMO_M} y {VISITANTES_MAXIMO_M} m de la base. Sin este punto, baja 15 m al norte
                   de la base.
@@ -809,7 +811,9 @@ export default function BasesView({ me }: Readonly<{ me: Me }>) {
                   </p>
                 ) : (
                   distanciaVisitante !== null && (
-                    <p className="muted" data-testid="distancia-visitantes">{`A ${metros(distanciaVisitante)} de la base.`}</p>
+                    <p className="campo-ayuda" data-testid="distancia-visitantes">
+                      {`A ${metros(distanciaVisitante)} de la base.`}
+                    </p>
                   )
                 )}
               </fieldset>

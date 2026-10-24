@@ -126,6 +126,10 @@ describe('BasesView — punto de aterrizaje para visitantes (RELEVOS §0)', () =
     const dialogo = await abrirAlta();
     const deVisitantes = within(dialogo).getByRole('button', { name: 'El punto para visitantes' });
     expect(within(dialogo).getByRole('button', { name: 'La base' })).toHaveAttribute('aria-pressed', 'true');
+    // Cada tecla con su dibujo (la torre, el alfiler), mudo: el nombre es el texto.
+    for (const tecla of [within(dialogo).getByRole('button', { name: 'La base' }), deVisitantes]) {
+      expect(tecla.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+    }
 
     await userEvent.click(deVisitantes);
     expect(deVisitantes).toHaveAttribute('aria-pressed', 'true');

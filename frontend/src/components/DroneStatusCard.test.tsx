@@ -217,10 +217,10 @@ describe('DroneStatusCard — vuelo y GPS', () => {
     expect(screen.queryByText('Alcance')).not.toBeInTheDocument();
   });
 
-  it('los estados nuevos se rotulan como en el teléfono', () => {
+  it('los estados nuevos se rotulan como en el teléfono, en oro el relevo y en óxido la emergencia', () => {
     const { rerender } = render(<DroneStatusCard status={makeStatus({ state: 'RELEVANDO' })} onResumePatrol={() => {}} />);
-    expect(screen.getByText('Relevando a otro dron')).toBeInTheDocument();
+    expect(screen.getByText('Relevando a otro dron')).toHaveClass('estado-actual', 'accent');
     rerender(<DroneStatusCard status={makeStatus({ state: 'ATERRIZAJE_EMERGENCIA' })} onResumePatrol={() => {}} />);
-    expect(screen.getByText('Aterrizaje de emergencia')).toBeInTheDocument();
+    expect(screen.getByText('Aterrizaje de emergencia')).toHaveClass('estado-actual', 'bad');
   });
 });

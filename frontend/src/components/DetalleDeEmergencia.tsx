@@ -13,6 +13,7 @@ import { fechaHoraLarga, hashCorto, posicionValida } from '../format';
 import { useRelevosYEmergencias } from '../relevosYEmergencias';
 import type { Emergencia, EmergenciaConFotos, FotoDeEmergencia, MetaEmergencia } from '../types';
 import DialogoConfirmacion from './DialogoConfirmacion';
+import { IconoAterrizar, IconoCamara, IconoCheck } from './Iconos';
 import MapaDeEmergencia from './MapaDeEmergencia';
 import { CoordenadasCopiables } from './PanelObjetivo';
 
@@ -40,9 +41,12 @@ function alDisparar(e: Emergencia): string {
 /* --- Galería ---------------------------------------------------------------- */
 
 /**
- * Las fotos del protocolo, una grande y las demás en miniatura. Cada una dice
- * qué toma es, hacia dónde mira y cuánto baja la cámara: con eso el equipo de
- * tierra reconoce el lugar (un techo, una calle, un árbol) antes de llegar.
+ * Las fotos del protocolo, una grande y las demás en miniatura. La grande va
+ * en el visor negro con escuadras de la captura de una alerta, con el pie que
+ * dice qué toma es, hacia dónde mira y cuánto baja la cámara: con eso el
+ * equipo de tierra reconoce el lugar (un techo, una calle, un árbol) antes de
+ * llegar. Las miniaturas son visores chicos, y la que se mira queda encendida
+ * como cualquier botón presionado.
  */
 function Galeria({
   fotos,
@@ -64,15 +68,23 @@ function Galeria({
   const total = Math.max(esperadas, fotos.length);
   return (
     <div className="galeria" data-testid="galeria-emergencia">
-      <figure className="galeria-principal">
-        <img
-          className="snapshot"
-          src={`data:image/jpeg;base64,${actual.jpegBase64}`}
-          alt={`Foto ${indice + 1} del lugar: ${pieDeFoto(actual)}`}
-        />
-        <figcaption>
-          <span className="etiqueta">{`Foto ${indice + 1} de ${total}`}</span> {pieDeFoto(actual)}
-          {Number.isFinite(actual.alt) && ` · a ${Math.round(actual.alt)} m de altura`}
+      <figure className="visor galeria-principal">
+        <span className="visor-cuadro">
+          <img
+            className="snapshot"
+            src={`data:image/jpeg;base64,${actual.jpegBase64}`}
+            alt={`Foto ${indice + 1} del lugar: ${pieDeFoto(actual)}`}
+          />
+        </span>
+        <figcaption className="visor-pie">
+          <span className="visor-rotulo">
+            <IconoCamara tamano={16} />
+            {`Foto ${indice + 1} de ${total}`}
+          </span>{' '}
+          <span>
+            {pieDeFoto(actual)}
+            {Number.isFinite(actual.alt) && ` · a ${Math.round(actual.alt)} m de altura`}
+          </span>
         </figcaption>
       </figure>
       {fotos.length > 1 && (
@@ -86,7 +98,9 @@ function Galeria({
                 aria-label={`Ver la foto ${i + 1}: ${pieDeFoto(f)}`}
                 onClick={() => setElegida(f.seq)}
               >
-                <img src={`data:image/jpeg;base64,${f.jpegBase64}`} alt="" />
+                <span className="visor-cuadro galeria-miniatura-cuadro">
+                  <img src={`data:image/jpeg;base64,${f.jpegBase64}`} alt="" />
+                </span>
                 <span>{tipoDeFoto(f.tipo)}</span>
               </button>
             </li>
@@ -94,6 +108,101 @@ function Galeria({
         </ul>
       )}
     </div>
+  );
+}
+
+/* --- Datos ------------------------------------------------------------------- */
+
+/**
+ * Lo que se lee de la emergencia: la situación (si no la dice ya el título),
+ * el dron, el motivo, cuándo empezó y cómo estaba, dónde ir a buscarlo, con
+ * las coordenadas para copiar, y si alguien ya lo recuperó.
+ */
+function DatosDeLaEmergencia({
+  emergencia,
+  estado,
+  nombre,
+  motivo,
+  creada,
+  buscar,
+}: Readonly<{
+  emergencia: Emergencia | null;
+  /** La situación, cuando no va en el título de la ficha. */
+  estado: { texto: string; tono: string } | null;
+  nombre: string;
+  motivo: string;
+  creada: string | null;
+  buscar: { lat: number; lon: number; aterrizo: boolean } | null;
+}>) {
+  return (
+    <dl className="datos">
+      {estado && (
+        <>
+          <dt>Situación</dt>
+          <dd aria-live="polite">
+            <span className={`estado pastilla ${estado.tono}`}>{estado.texto}</span>
+          </dd>
+        </>
+      )}
+      <dt>Dron</dt>
+      <dd>
+        {nombre || '—'}
+        {/* El espacio va afuera: adentro de .hash (una fila flex) se perdía. */}
+        {emergencia && (
+          <>
+            {' '}
+            <span className="hash mono">{hashCorto(emergencia.droneId)}</span>
+          </>
+        )}
+      </dd>
+      <dt>Motivo</dt>
+      <dd>{motivo ? motivoDeEmergencia(motivo) : '—'}</dd>
+      <dt>Comenzó</dt>
+      <dd>{creada ? <time dateTime={creada}>{fechaHoraLarga(creada)}</time> : '—'}</dd>
+      {emergencia && (
+        <>
+          <dt>Al comenzar</dt>
+          <dd>{alDisparar(emergencia)}</dd>
+          <dt>Tocó tierra</dt>
+          <dd>
+            {emergencia.aterrizadaEn ? (
+              <time dateTime={emergencia.aterrizadaEn}>{fechaHoraLarga(emergencia.aterrizadaEn)}</time>
+            ) : (
+              <span className="muted">Todavía no confirmó el aterrizaje</span>
+            )}
+          </dd>
+        </>
+      )}
+      <dt>{buscar?.aterrizo ? 'Dónde quedó' : 'Última posición'}</dt>
+      <dd>
+        {buscar ? (
+          <>
+            <CoordenadasCopiables
+              lat={buscar.lat}
+              lon={buscar.lon}
+              etiqueta="Copiar las coordenadas del dron"
+              testId="coordenadas-emergencia"
+            />
+            {!buscar.aterrizo && (
+              <span className="muted">{' Es donde arrancó el protocolo: todavía no informó dónde tocó tierra.'}</span>
+            )}
+          </>
+        ) : (
+          <span className="muted">Sin posición</span>
+        )}
+      </dd>
+      {emergencia && (
+        <>
+          <dt>Recuperado</dt>
+          {/* Se anuncia al cambiar: otra persona del equipo la puede marcar con la ficha abierta. */}
+          <dd aria-live="polite">
+            {emergencia.recuperadaEn
+              ? `Por ${emergencia.recuperadaPor ?? '—'} · ${fechaHoraLarga(emergencia.recuperadaEn)}`
+              : 'Todavía no'}
+          </dd>
+        </>
+      )}
+    </dl>
   );
 }
 
@@ -199,99 +308,54 @@ export default function DetalleDeEmergencia({
       {conTitulo && (
         <h3 className="etiqueta detalle-alerta-titulo">
           Aterrizaje de emergencia #{emergenciaId}
-          {estado && <span className={`estado ${estado.tono}`}>{estado.texto}</span>}
+          {estado && <span className={`estado pastilla ${estado.tono}`}>{estado.texto}</span>}
         </h3>
       )}
       {error && <p className="aviso malo">No se pudo traer la ficha completa: {error}</p>}
       {cargando && <p className="muted">Trayendo la ficha…</p>}
 
-      {/* Las fotos y el mapa, lado a lado si entran: son las dos cosas que el
-          equipo mira para reconocer el lugar antes de salir. */}
-      <div className="detalle-alerta-vistas">
-        <Galeria fotos={fotos} esperadas={esperadas} cargando={cargando} />
-        {buscar ? (
-          <MapaDeEmergencia ultima={buscar} disparo={disparo} />
-        ) : (
-          !cargando && <p className="vacio">El dron no informó su posición: no hay un punto que mostrar.</p>
-        )}
-      </div>
-
-      <dl className="datos">
-        {!conTitulo && estado && (
-          <>
-            <dt>Situación</dt>
-            <dd aria-live="polite">
-              <span className={`estado ${estado.tono}`}>{estado.texto}</span>
-            </dd>
-          </>
-        )}
-        <dt>Dron</dt>
-        <dd>
-          {nombre || '—'}
-          {/* El espacio va afuera: adentro de .hash (una fila flex) se perdía. */}
-          {emergencia && (
-            <>
-              {' '}
-              <span className="hash mono">{hashCorto(emergencia.droneId)}</span>
-            </>
-          )}
-        </dd>
-        <dt>Motivo</dt>
-        <dd>{motivo ? motivoDeEmergencia(motivo) : '—'}</dd>
-        <dt>Comenzó</dt>
-        <dd>{creada ? <time dateTime={creada}>{fechaHoraLarga(creada)}</time> : '—'}</dd>
-        {emergencia && (
-          <>
-            <dt>Al comenzar</dt>
-            <dd>{alDisparar(emergencia)}</dd>
-            <dt>Tocó tierra</dt>
-            <dd>
-              {emergencia.aterrizadaEn ? (
-                <time dateTime={emergencia.aterrizadaEn}>{fechaHoraLarga(emergencia.aterrizadaEn)}</time>
-              ) : (
-                <span className="muted">Todavía no confirmó el aterrizaje</span>
-              )}
-            </dd>
-          </>
-        )}
-        <dt>{buscar?.aterrizo ? 'Dónde quedó' : 'Última posición'}</dt>
-        <dd>
+      {/* Como el pop-up de una alerta: a la izquierda lo que se mira (las fotos
+          en su visor y, debajo, el mapa), las dos cosas con que el equipo
+          reconoce el lugar antes de salir; a la derecha, lo que se lee y lo
+          que se hace. En una caja angosta los datos bajan abajo. */}
+      <div className="detalle-alerta-cuerpo">
+        <div className="detalle-alerta-vistas">
+          <Galeria fotos={fotos} esperadas={esperadas} cargando={cargando} />
           {buscar ? (
-            <>
-              <CoordenadasCopiables
-                lat={buscar.lat}
-                lon={buscar.lon}
-                etiqueta="Copiar las coordenadas del dron"
-                testId="coordenadas-emergencia"
-              />
-              {!buscar.aterrizo && (
-                <span className="muted"> Es donde arrancó el protocolo: todavía no informó dónde tocó tierra.</span>
-              )}
-            </>
+            <MapaDeEmergencia ultima={buscar} disparo={disparo} />
           ) : (
-            <span className="muted">Sin posición</span>
+            !cargando && <p className="vacio">El dron no informó su posición: no hay un punto que mostrar.</p>
           )}
-        </dd>
-        {emergencia && (
-          <>
-            <dt>Recuperado</dt>
-            {/* Se anuncia al cambiar: otra persona del equipo la puede marcar con la ficha abierta. */}
-            <dd aria-live="polite">
-              {emergencia.recuperadaEn
-                ? `Por ${emergencia.recuperadaPor ?? '—'} · ${fechaHoraLarga(emergencia.recuperadaEn)}`
-                : 'Todavía no'}
-            </dd>
-          </>
-        )}
-      </dl>
-
-      {puedeMarcar && (
-        <div className="detalle-alerta-acciones">
-          <button type="button" className="primario detalle-alerta-video" onClick={() => setConfirmando(true)}>
-            Marcar como recuperado
-          </button>
         </div>
-      )}
+
+        <div className="detalle-alerta-datos">
+          {/* Qué pasó y con qué dron, en las placas de una alerta: el óxido con
+              su ícono y el nombre propio en oro. */}
+          <div className="alert-head">
+            <span className="chip rojo">
+              <IconoAterrizar tamano={20} />
+              {'EMERGENCIA'}
+            </span>
+            {nombre && <span className="chip oro">{nombre}</span>}
+          </div>
+          <DatosDeLaEmergencia
+            emergencia={emergencia}
+            estado={conTitulo ? null : estado}
+            nombre={nombre}
+            motivo={motivo}
+            creada={creada}
+            buscar={buscar}
+          />
+          {puedeMarcar && (
+            <div className="detalle-alerta-acciones">
+              <button type="button" className="primario detalle-alerta-video" onClick={() => setConfirmando(true)}>
+                <IconoCheck tamano={18} />
+                Marcar como recuperado
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
 
       {confirmando && marcarRecuperada && (
         <DialogoConfirmacion

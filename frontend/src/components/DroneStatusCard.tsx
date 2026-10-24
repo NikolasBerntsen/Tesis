@@ -7,6 +7,7 @@ import {
   sobreObjetivo,
   stateLabel,
   textoSinGps,
+  tonoDelEstadoDelDron,
   waypointLabel,
 } from '../format';
 import type { Autonomia, Base, DroneStatus } from '../types';
@@ -190,6 +191,8 @@ export default function DroneStatusCard({
 
   const sinSenal = status.signal !== 'OK';
   const enObjetivo = sobreObjetivo(status.state);
+  // Relevar y bajar de emergencia también se resaltan: oro y óxido.
+  const tonoDelEstado = tonoDelEstadoDelDron(status.state);
   const claseBateria = batteryClass(status.battery);
   // Al lado del estado, en la línea que se mira, va también la falta de GPS:
   // es lo que explica que el dron no aparezca en el mapa y que las flechas no
@@ -231,7 +234,9 @@ export default function DroneStatusCard({
         <div>
           <dt className="rotulo">Estado</dt>
           <dd>
-            <strong className={`estado-actual ${enObjetivo ? 'accent' : ''}`}>{stateLabel(status.state)}</strong>
+            <strong className={`estado-actual ${tonoDelEstado === 'muted' ? '' : tonoDelEstado}`}>
+              {stateLabel(status.state)}
+            </strong>
             {detalleDeVuelo && (
               <span className="muted" data-testid="detalle-de-vuelo">
                 {detalleDeVuelo}

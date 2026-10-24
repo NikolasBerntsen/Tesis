@@ -41,6 +41,18 @@ export function sobreObjetivo(state: string | null | undefined): boolean {
   return !!state && SOBRE_OBJETIVO.includes(state);
 }
 
+/**
+ * El tono del estado de un dron, en la pastilla de su cámara y en la
+ * telemetría: oro mientras trabaja sobre una alerta —orbitándola, siguiéndola
+ * o yendo a relevar al que la sigue—, óxido mientras baja de emergencia, y la
+ * tinta de siempre para todo lo demás.
+ */
+export function tonoDelEstadoDelDron(state: string | null | undefined): 'accent' | 'bad' | 'muted' {
+  if (state === 'ATERRIZAJE_EMERGENCIA') return 'bad';
+  if (sobreObjetivo(state) || state === 'RELEVANDO') return 'accent';
+  return 'muted';
+}
+
 export function batteryClass(battery: number): string {
   return battery <= 25 ? 'bad' : battery <= 40 ? 'warn' : 'ok';
 }
@@ -278,6 +290,30 @@ export const ETIQUETAS_DE_EVENTO: Record<string, string> = {
 /** El rótulo de un tipo de evento, o `null` si la consola no le conoce uno. */
 export function etiquetaDeEvento(tipo: string): string | null {
   return ETIQUETAS_DE_EVENTO[tipo] ?? null;
+}
+
+/**
+ * Los tipos de evento que se resaltan en una lista de eventos (el historial de
+ * un dron y el Registro): en óxido lo grave, en ámbar lo que hay que mirar.
+ */
+const TONO_DE_EVENTO: Record<string, 'bad' | 'warn'> = {
+  ALERT_CREATED: 'bad',
+  ALERT_VALIDATED: 'warn',
+  SIGNAL_LOST: 'bad',
+  RTH_LOW_BATTERY: 'warn',
+  RTH_SIGNAL_LOSS: 'warn',
+  // Un dron que bajó fuera de base es lo más grave que puede pasar en vuelo;
+  // un relevo que falla o que no encuentra dron deja un hueco en la guardia.
+  EMERGENCY_LANDING: 'bad',
+  EMERGENCY_LANDED: 'bad',
+  RELAY_FAILED: 'bad',
+  RELAY_UNAVAILABLE: 'warn',
+  RTH_DIVERTED: 'warn',
+};
+
+/** El tono de un tipo de evento en la lista, o '' si va con la tinta de siempre. */
+export function tonoDeEvento(tipo: string): 'bad' | 'warn' | '' {
+  return TONO_DE_EVENTO[tipo] ?? '';
 }
 
 /** Las coordenadas de `coordenadas`, o la raya si el dato no vino. */

@@ -2,20 +2,25 @@ import { Fragment } from 'react';
 import { insigniasDelDron, type TonoDeInsignia } from '../relevos';
 import type { DroneStatus, Relevo } from '../types';
 
-/** Las pastillas de siempre (primitivos.css), más `.malo` para lo que falló. */
+/**
+ * Las pastillas de estado de la consola (`.estado.pastilla`, primitivos.css):
+ * el punto y las versalitas dentro de un filo redondo, como el «● Patrullando»
+ * de la cámara o el «● En vuelo» de la cabecera del dron. El oro del relevo es
+ * el de lo que está sobre un objetivo (`.accent`), y lo que falló, el óxido.
+ */
 const CLASE: Record<TonoDeInsignia, string> = {
-  ok: 'badge ok',
-  info: 'badge info',
-  oro: 'badge oro',
-  malo: 'badge malo',
-  neutro: 'badge',
+  ok: 'estado pastilla ok',
+  info: 'estado pastilla info',
+  oro: 'estado pastilla accent',
+  malo: 'estado pastilla bad',
+  neutro: 'estado pastilla muted',
 };
 
 /**
  * Qué papel tiene un dron en los relevos, en pastillas: «En espera para
  * relevos», «Relevo en camino: Bravo» en el que lo pidió y «Relevando a Alfa»
- * en el que va. Van en la tarjeta del tablero y en la cabecera de la vista del
- * dron. Sin nada que decir, no ocupa lugar.
+ * en el que va. Van en la cámara del tablero y en la cabecera de la vista del
+ * dron, al lado de su estado. Sin nada que decir, no ocupa lugar.
  */
 export default function InsigniasDeRelevo({
   droneId,

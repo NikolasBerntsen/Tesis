@@ -311,7 +311,7 @@ function RelevoAhora({ relevoId }: Readonly<{ relevoId: number }>) {
       <dl className="datos" data-testid="relevo-ahora">
         <dt>Estado</dt>
         <dd aria-live="polite">
-          <span className={`estado ${tonoDelEstado(relevo.estado)}`}>{estadoDelRelevo(relevo.estado)}</span>
+          <span className={`estado pastilla ${tonoDelEstado(relevo.estado)}`}>{estadoDelRelevo(relevo.estado)}</span>
           {fin && ` · ${fin}`}
         </dd>
         <dt>Pidió el relevo</dt>

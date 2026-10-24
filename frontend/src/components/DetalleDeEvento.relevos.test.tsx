@@ -97,7 +97,7 @@ describe('el detalle de los eventos de relevos, desvíos y emergencias', () => {
     ]);
     const ahora = within(caja).getByTestId('relevo-ahora');
     expect(within(caja).getByRole('heading', { name: 'Relevo #7 ahora' })).toBeInTheDocument();
-    expect(within(ahora).getByText('Cancelado')).toHaveClass('estado', 'muted');
+    expect(within(ahora).getByText('Cancelado')).toHaveClass('estado', 'pastilla', 'muted');
     expect(ahora).toHaveTextContent('Cancelado · La alerta se descartó');
     expect(dato(ahora, 'Dron de relevo')).toHaveTextContent('Sin candidato');
     // Terminado, ya no llega a ningún lado.

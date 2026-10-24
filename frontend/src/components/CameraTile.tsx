@@ -1,4 +1,4 @@
-import { batteryClass, signalClass, sobreObjetivo, stateLabel } from '../format';
+import { batteryClass, signalClass, stateLabel, tonoDelEstadoDelDron } from '../format';
 import type { Drone, DroneStatus, Relevo } from '../types';
 import EditableName from './EditableName';
 import InsigniasDeRelevo from './InsigniasDeRelevo';
@@ -124,7 +124,7 @@ export default function CameraTile({
       <div className="tile-info">
         <div className="tile-row">
           <EditableName name={drone.displayName} onRename={onRename} />
-          <span className={`estado pastilla ${sobreObjetivo(status?.state) ? 'accent' : 'muted'}`}>
+          <span className={`estado pastilla ${tonoDelEstadoDelDron(status?.state)}`}>
             {status ? stateLabel(status.state) : 'Sin estado'}
           </span>
         </div>

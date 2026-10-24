@@ -244,13 +244,14 @@ describe('CameraTile', () => {
       expect(screen.getByText('ATERRIZAJE DE EMERGENCIA')).toBeInTheDocument();
       expect(screen.queryByText('SEÑAL PERDIDA')).not.toBeInTheDocument();
       expect(screen.getByText('EMERGENCIA')).toHaveClass('tile-esquina', 'esquina-roja');
-      expect(screen.getByText('Aterrizaje de emergencia')).toBeInTheDocument();
+      // La pastilla del estado también en óxido: es lo que se lee de un vistazo en la grilla.
+      expect(screen.getByText('Aterrizaje de emergencia')).toHaveClass('estado', 'pastilla', 'bad');
     });
 
     it('relevando va en oro, como el que está sobre un objetivo', () => {
       renderTile({ status: makeStatus({ state: 'RELEVANDO' }) });
       expect(screen.getByText('RELEVANDO')).toHaveClass('esquina-oro');
-      expect(screen.getByText('Relevando a otro dron')).toBeInTheDocument();
+      expect(screen.getByText('Relevando a otro dron')).toHaveClass('estado', 'pastilla', 'accent');
     });
 
     it('las insignias de relevo van en la ficha del mosaico', () => {
@@ -259,7 +260,7 @@ describe('CameraTile', () => {
         status: makeStatus({ droneId: 'a1' }),
         relevos: [makeRelevo()],
       });
-      expect(screen.getByText('Relevo en camino: Bravo')).toHaveClass('badge', 'oro');
+      expect(screen.getByText('Relevo en camino: Bravo')).toHaveClass('estado', 'pastilla', 'accent');
       expect(screen.getByTestId('insignias-relevo').closest('.tile-info')).not.toBeNull();
     });
 
