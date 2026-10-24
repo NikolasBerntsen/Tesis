@@ -10,9 +10,9 @@ import {
   type UserPatch,
 } from '../store';
 import {
-  broadcastDroneUpdated, broadcastOperators, droneCard, emergencias, enviarBases, enviarBasesATodos, getController,
-  kickDrone, kickUser, listDroneCards, metaDron, relevos, releaseAllControlledBy, releaseControl, sendToDrone,
-  takeControl,
+  broadcastDroneUpdated, broadcastOperators, control, droneCard, emergencias, enviarBases, enviarBasesATodos,
+  getController, kickDrone, kickUser, listDroneCards, metaDron, relevos, releaseAllControlledBy, releaseControl,
+  sendToDrone, takeControl,
 } from '../ws';
 
 export const apiRouter = Router();
@@ -616,6 +616,55 @@ apiRouter.delete('/drones/:droneId/control', requireAuth('operator'), (req: Auth
   const reanudacion = relevos.participaDeUnRelevoActivo(droneId) ? 'none' : reanudacionPedida(req.body?.resume);
   releaseControl(droneId, req.user!.sub, { resume: reanudacion, forced: !esTitular });
   res.json(droneCard(droneId));
+});
+
+// ---- Pedido de control: pasarle el mando a otra persona ----
+
+/**
+ * Pedir el control de un dron que puede tener otro (PROTOCOLS §5). La consola
+ * ya le avisó al que lo pide quién lo está volando y él confirmó: acá libre o
+ * ya suyo se le da en el acto (200, `otorgado`), y si lo tiene otro queda UN
+ * pedido por dron, con 10 s para que el titular conteste (202, `pendiente`).
+ * Pide lo mismo que tomarlo: operador o más y `canControl`.
+ */
+apiRouter.post('/drones/:droneId/control/request', requireAuth('operator'), (req: AuthedRequest, res) => {
+  if (!req.user!.canControl) return res.status(403).json({ error: 'No estás autorizado a controlar drones' });
+  const { droneId } = req.params;
+  if (!getDroneIdentity(droneId)) return res.status(404).json({ error: 'Dron inexistente' });
+
+  const r = control.pedir(droneId, req.user!.sub);
+  if (r.resultado === 'ocupado') {
+    return res.status(409).json({ error: `${r.solicitante} ya pidió el control de este dron: esperá a que le contesten` });
+  }
+  if (r.resultado === 'pendiente') return res.status(202).json({ resultado: 'pendiente', pedido: r.pedido });
+  res.json({ resultado: 'otorgado', drone: droneCard(droneId) });
+});
+
+/**
+ * La respuesta del titular a un pedido: `ceder` le pasa el control al que lo
+ * pidió sin soltarlo (el dron queda en MANUAL, estacionario), `mantener` lo
+ * conserva. Solo la puede dar el titular (403 para cualquier otro), y fuera
+ * de plazo cuenta como no contestada: el control pasa igual.
+ */
+apiRouter.post('/drones/:droneId/control/request/answer', requireAuth('operator'), (req: AuthedRequest, res) => {
+  const { droneId } = req.params;
+  if (!getDroneIdentity(droneId)) return res.status(404).json({ error: 'Dron inexistente' });
+  const respuesta: unknown = req.body?.respuesta;
+  if (respuesta !== 'ceder' && respuesta !== 'mantener') {
+    return res.status(400).json({ error: "respuesta debe ser 'ceder' o 'mantener'" });
+  }
+  const r = control.contestar(droneId, req.user!.sub, respuesta);
+  if (!r.ok) return res.status(r.status).json({ error: r.error });
+  res.json({ resultado: r.resultado, drone: droneCard(droneId) });
+});
+
+/** El que pidió el control se arrepiente antes de que le contesten. Solo él. */
+apiRouter.delete('/drones/:droneId/control/request', requireAuth('operator'), (req: AuthedRequest, res) => {
+  const { droneId } = req.params;
+  if (!getDroneIdentity(droneId)) return res.status(404).json({ error: 'Dron inexistente' });
+  const r = control.cancelar(droneId, req.user!.sub);
+  if (!r.ok) return res.status(r.status).json({ error: r.error });
+  res.json({ resultado: r.resultado });
 });
 
 apiRouter.post('/drones/:droneId/manual_move', requireAuth('operator'), (req: AuthedRequest, res) => {

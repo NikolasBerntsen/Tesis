@@ -1,8 +1,9 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { db } from '../../src/db';
+import { PLAZOS_DEL_CONTROL } from '../../src/control';
 import { PLAZOS } from '../../src/relevos';
 import { relojDelHub } from '../../src/reloj';
-import { relevos } from '../../src/ws';
+import { control, relevos } from '../../src/ws';
 import { cumpleContrato } from '../contrato';
 import {
   CREDS, DRON, api, connectWs, crearUsuario, login, mkStatus, seed, startServer, tokenDeDron, wait,
@@ -400,10 +401,16 @@ describe('integración — relevos entre drones', () => {
     const { relayId: id } = await b.waitFor((m) => m.type === 'relay_start');
 
     // tomar el control de B no cancela nada, y si al piloto se le cae la consola
-    // se suelta con 'none' aunque B no tenga objetivo
+    // (30 s sin señales de vida) se suelta con 'none' aunque B no tenga objetivo
     const consolaPiloto = await conn(piloto);
     expect((await api(srv.base, `/api/drones/${B}/control`, piloto, { method: 'POST' })).status).toBe(200);
     await consolaPiloto.close();
+    // Los 30 s los ve solo el barrido del control: el reloj vuelve en el mismo
+    // paso, sin que el barrido de relevos alcance a correr, y los 10 s que B
+    // tiene para contestar siguen donde estaban.
+    t += PLAZOS_DEL_CONTROL.sinSenalesMs;
+    control.barrer();
+    t -= PLAZOS_DEL_CONTROL.sinSenalesMs;
     await b.waitFor(() => liberados(b) === 2);
     await wait(100);
     expect(b.got.some((m) => m.type === 'resume_patrol')).toBe(false);
