@@ -133,6 +133,19 @@ describe('integración — migración desde el esquema original', () => {
     expect(tablas).toContain('drones');
   });
 
+  // La tabla se crea después de reconstruir `users`: creada antes, el RENAME de
+  // la reconstrucción le habría reapuntado la clave foránea a `users_old`, que
+  // se borra enseguida, y ninguna persona habría podido guardar nada.
+  it('crea las preferencias apuntando a la tabla users reconstruida', () => {
+    const fk = db.prepare('PRAGMA foreign_key_list(preferencias_de_usuario)').all();
+    expect(fk.map((f) => [f.table, f.from, f.to])).toEqual([['users', 'username', 'username']]);
+    expect(() =>
+      db
+        .prepare("INSERT INTO preferencias_de_usuario (username, controles, actualizado_en) VALUES ('oldop', '{}', 'hoy')")
+        .run(),
+    ).not.toThrow();
+  });
+
   it('crea los índices del registro y de los drones', () => {
     const indices = db.prepare("SELECT name FROM sqlite_master WHERE type='index'").all().map((i) => i.name as string);
     expect(indices).toContain('idx_events_cat_id');

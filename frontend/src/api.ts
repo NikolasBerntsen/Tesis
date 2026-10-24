@@ -18,6 +18,7 @@ import type {
   TamanioPagina,
   UserView,
 } from './types';
+import type { ControlesDeVuelo } from './preferenciasDeControl';
 
 const TOKEN_KEY = 'cc_token';
 const USER_KEY = 'cc_user';
@@ -120,6 +121,40 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   const body = await res.json();
   if (!res.ok) throw new ErrorDeApi(body.error ?? `Error ${res.status}`, res.status);
   return body as T;
+}
+
+// ---- Preferencias de la persona ----
+
+/** Lo que devuelven GET y PUT /api/me/preferencias (PROTOCOLS §5). */
+export interface PreferenciasGuardadas {
+  /** Sin validar: quien la usa la pasa por `normalizarControles`. */
+  controles: unknown;
+  actualizadoEn: string | null;
+}
+
+/**
+ * Como `api`, pero un 401 no recarga la página. Las preferencias se guardan de
+ * fondo mientras se vuela: que la sesión venza no puede sacar al operador de la
+ * vista de pilotaje en medio de un vuelo por un ajuste del mouse. El vencimiento
+ * lo avisa el resto de la consola; acá es un guardado que no salió.
+ */
+async function pedidoDeFondo<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const res = await fetch(`/api${path}`, {
+    ...options,
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ErrorDeApi(body.error ?? `Error ${res.status}`, res.status);
+  return body as T;
+}
+
+export function traerPreferencias(): Promise<PreferenciasGuardadas> {
+  return pedidoDeFondo<PreferenciasGuardadas>('/me/preferencias');
+}
+
+/** Reemplaza los ajustes del control de la persona por estos (el PUT no mezcla). */
+export function guardarPreferencias(controles: ControlesDeVuelo): Promise<PreferenciasGuardadas> {
+  return pedidoDeFondo<PreferenciasGuardadas>('/me/preferencias', { method: 'PUT', body: JSON.stringify({ controles }) });
 }
 
 /**

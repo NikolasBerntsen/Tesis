@@ -8,6 +8,7 @@ import {
   getRole,
   getToken,
   getUsername,
+  guardarPreferencias,
   login,
   marcarEmergenciaRecuperada,
   motivoDelRechazoDeDecision,
@@ -17,9 +18,11 @@ import {
   traerEmergencia,
   traerEmergenciasAbiertas,
   traerLogs,
+  traerPreferencias,
   traerRelevosActivos,
   traerUsuarios,
 } from './api';
+import { CONTROLES_POR_DEFECTO } from './preferenciasDeControl';
 
 function mockResponse(body: unknown, init: { ok?: boolean; status?: number } = {}) {
   return {
@@ -333,6 +336,49 @@ describe('api.ts', () => {
       expect(fetchMock.mock.calls[0][0]).toBe('/api/emergencias/3/recuperada');
       expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'POST' });
       expect(fetchMock.mock.calls[0][1].body).toBeUndefined();
+    });
+  });
+
+  describe('preferencias de la persona', () => {
+    it('las trae y las guarda en /me/preferencias con el token de la sesión', async () => {
+      localStorage.setItem('cc_token', 'tok');
+      const guardadas = { controles: CONTROLES_POR_DEFECTO, actualizadoEn: null };
+      let fetchMock = vi.fn().mockResolvedValue(mockResponse(guardadas));
+      vi.stubGlobal('fetch', fetchMock);
+      expect(await traerPreferencias()).toEqual(guardadas);
+      expect(fetchMock.mock.calls[0][0]).toBe('/api/me/preferencias');
+      expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe('Bearer tok');
+
+      fetchMock = vi.fn().mockResolvedValue(mockResponse(guardadas));
+      vi.stubGlobal('fetch', fetchMock);
+      await guardarPreferencias({ ...CONTROLES_POR_DEFECTO, pasoDeRueda: 3 });
+      expect(fetchMock.mock.calls[0][0]).toBe('/api/me/preferencias');
+      expect(fetchMock.mock.calls[0][1].method).toBe('PUT');
+      // El PUT reemplaza: va el juego entero, adentro de `controles` y nada más.
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ controles: { ...CONTROLES_POR_DEFECTO, pasoDeRueda: 3 } });
+    });
+
+    // Se guardan de fondo mientras se vuela: un 401 no puede recargar la página
+    // y sacar al operador de la vista de pilotaje por un ajuste del mouse.
+    it('un 401 es un guardado que no salió: ni recarga ni cierra la sesión', async () => {
+      localStorage.setItem('cc_token', 'tok');
+      const reload = vi.fn();
+      Object.defineProperty(window, 'location', { configurable: true, value: { ...window.location, reload } });
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse({ error: 'Token inválido o ausente' }, { ok: false, status: 401 })));
+      const error = await guardarPreferencias({ ...CONTROLES_POR_DEFECTO }).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(ErrorDeApi);
+      expect((error as ErrorDeApi).status).toBe(401);
+      expect((error as ErrorDeApi).message).toBe('Token inválido o ausente');
+      expect(reload).not.toHaveBeenCalled();
+      expect(getToken()).toBe('tok');
+    });
+
+    it('una respuesta que no es JSON (un proxy caído) sale con el código', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({ ok: false, status: 502, json: async () => Promise.reject(new SyntaxError('html')) } as Response),
+      );
+      await expect(traerPreferencias()).rejects.toThrow('Error 502');
     });
   });
 

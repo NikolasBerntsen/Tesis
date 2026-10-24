@@ -348,7 +348,7 @@ textarea:focus {
    :focus-visible encima le armaba un triple marco concéntrico. Las casillas y
    los radios sí lo necesitan (no tienen borde propio que virar), así que
    quedan afuera. */
-input:not([type='checkbox']):not([type='radio']):focus-visible,
+input:not([type='checkbox']):not([type='radio']):not([type='range']):focus-visible,
 select:focus-visible,
 textarea:focus-visible {
   outline: none;
@@ -367,6 +367,71 @@ input[type='radio'] {
   height: 15px;
   padding: 0;
   box-shadow: none;
+}
+
+/* --- Deslizador ------------------------------------------------------------
+   Los ajustes del control de la vista de pilotaje. La pista es un hueco con el
+   filo de los campos y lo recorrido va en el oro de lo encendido; el cursor es
+   una moneda de ese oro con canto de mármol, que es lo que se ve contra
+   cualquier panel (contraste.test.ts mide los dos). Chromium no tiene un
+   pseudo-elemento para lo recorrido: el componente pasa el porcentaje en
+   --relleno y la pista lo pinta con un corte seco. Como las casillas, no tiene
+   borde propio que virar con el foco: lleva el anillo (ver arriba). */
+input[type='range'] {
+  appearance: none;
+  width: 100%;
+  height: 22px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+}
+input[type='range']:focus { box-shadow: none; }
+input[type='range']::-webkit-slider-runnable-track {
+  box-sizing: border-box;
+  height: 6px;
+  border: 1px solid var(--filo-campo);
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--filo-activo) 0 var(--relleno, 0%), var(--marmol-2) var(--relleno, 0%) 100%);
+}
+input[type='range']::-moz-range-track {
+  box-sizing: border-box;
+  height: 6px;
+  border: 1px solid var(--filo-campo);
+  border-radius: 999px;
+  background: var(--marmol-2);
+}
+input[type='range']::-moz-range-progress {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--filo-activo);
+}
+/* El cursor se centra sobre el contenido de la pista (4 px adentro del filo). */
+input[type='range']::-webkit-slider-thumb {
+  appearance: none;
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  border: 2px solid var(--marmol-0);
+  border-radius: 50%;
+  background: var(--filo-activo);
+  box-shadow: var(--sombra-boton);
+}
+input[type='range']::-moz-range-thumb {
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--marmol-0);
+  border-radius: 50%;
+  background: var(--filo-activo);
+  box-shadow: var(--sombra-boton);
+}
+input[type='range']:focus-visible {
+  outline: var(--filo) solid var(--anillo-foco);
+  outline-offset: 2px;
 }
 
 label {

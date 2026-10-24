@@ -1,9 +1,8 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { getUsername } from '../api';
 import { posicionDelDron, rumbo, tipoDeObjetivo } from '../format';
 import {
-  GRADOS_POR_MUESCA,
-  GRADOS_POR_PIXEL,
   INCLINACION_POR_DEFECTO,
   ZOOM_AL_APRETAR,
   ZOOM_POR_MUESCA,
@@ -12,6 +11,7 @@ import {
   acotarInclinacion,
   acotarZoom,
   giroDelMouse,
+  inclinacionDelMouse,
   muescasDeRueda,
   pasosDeRueda,
   recortarInclinacion,
@@ -19,13 +19,17 @@ import {
   textoDeInclinacion,
   textoDeZoom,
 } from '../pilotaje';
+import { velocidadesDeTeclado } from '../preferenciasDeControl';
 import { duenioDeLaAlerta } from '../relevos';
 import type { Alert, DroneStatus } from '../types';
+import AjustesDeControl from './AjustesDeControl';
 import AyudaDeControles from './AyudaDeControles';
 import { useAnotarCapaDePilotaje } from './CapaDePilotaje';
+import { IconoEngranaje } from './Iconos';
 import MandoVirtual, { EJES_EN_CERO, type Ejes } from './MandoVirtual';
 import Minimapa from './Minimapa';
 import Modal from './Modal';
+import { usePreferenciasDeControl } from './usePreferenciasDeControl';
 import { useTecladoDeVuelo } from './useTecladoDeVuelo';
 
 /**
@@ -48,6 +52,12 @@ const PASO_DE_DECAIMIENTO_MS = 50;
 const PASOS_DE_DECAIMIENTO = 3;
 
 type Zoom = { escala: number; x: number; y: number };
+
+/**
+ * El globo abierto arriba a la derecha. Uno solo a la vez: la ayuda y los
+ * ajustes cuelgan del mismo rincón, y uno encima del otro no se leería ninguno.
+ */
+type Globo = 'ayuda' | 'ajustes' | null;
 
 /** Los manejadores de los eventos nativos que la vista escucha (ver `manejadores`). */
 type Manejadores = {
@@ -121,8 +131,9 @@ function mayorIdDeAlertas(alertas: readonly Alert[], droneId: string): number {
 /**
  * La vista de pilotaje: la cámara del dron a pantalla completa y, encima, lo
  * justo para volar como en un juego. Arriba a la izquierda la salida y el
- * minimapa; arriba al centro el HUD; arriba a la derecha la ayuda; abajo las
- * órdenes de vuelo y, si se piden, los sticks virtuales.
+ * minimapa; arriba al centro el HUD; arriba a la derecha los ajustes del
+ * control (el engranaje) y la ayuda; abajo las órdenes de vuelo y, si se piden,
+ * los sticks virtuales.
  *
  * Se pinta en un portal sobre el `body`: un `position: fixed` adentro de la
  * página queda atrapado por cualquier ancestro con `transform` o `filter`, y
@@ -212,7 +223,10 @@ export default function PilotajePantallaCompleta({
   const raiz = useRef<HTMLElement>(null);
   const video = useRef<HTMLDivElement>(null);
   const botonAyuda = useRef<HTMLButtonElement>(null);
+  const botonAjustes = useRef<HTMLButtonElement>(null);
+  const panelDeAjustes = useRef<HTMLElement>(null);
   const idAyuda = useId();
+  const idAjustes = useId();
   const idSticks = useId();
   const idSalida = useId();
   const idSalidaTexto = useId();
@@ -232,7 +246,12 @@ export default function PilotajePantallaCompleta({
   const onDevolverFocoRef = useRef(onDevolverFoco);
   onDevolverFocoRef.current = onDevolverFoco;
   const [modoMouse, setModoMouse] = useState(false);
-  const [ayudaAbierta, setAyudaAbierta] = useState(false);
+  const [globo, setGlobo] = useState<Globo>(null);
+  // Los ajustes del control son de quien inició sesión, no de este dron: se
+  // leen y se guardan con su usuario (ver usePreferenciasDeControl).
+  const preferencias = usePreferenciasDeControl(getUsername());
+  const { controles } = preferencias;
+  const velocidades = useMemo(() => velocidadesDeTeclado(controles), [controles]);
   const [sticksVisibles, setSticksVisibles] = useState(false);
   const [confirmandoSalida, setConfirmandoSalida] = useState(false);
   const [zoom, setZoom] = useState<Zoom>(SIN_ZOOM);
@@ -254,8 +273,9 @@ export default function PilotajePantallaCompleta({
   // redondeada, la que se muestra y se manda.
   const inclinacionRef = useRef(inclinacion);
   // La cuenta exacta, sin redondear, que es de donde parte cada gesto: el modo
-  // mouse suma 0,15° por píxel, y redondear cada paso torcía la cuenta para
-  // arriba (ver `recortarInclinacion`).
+  // mouse suma una fracción de grado por píxel (GRADOS_POR_PIXEL por la
+  // sensibilidad vertical), y redondear cada paso torcía la cuenta para arriba
+  // (ver `recortarInclinacion`).
   const inclinacionExacta = useRef(inclinacion);
   const ultimoGestoDeCamara = useRef(Number.NEGATIVE_INFINITY);
   const derechoApretado = useRef(false);
@@ -281,6 +301,10 @@ export default function PilotajePantallaCompleta({
     giroExtra: giroMouse,
     sticks: ejesDeSticks,
     ctrlBaja: pantallaCompleta && tecladoBloqueado,
+    velocidades,
+    // Lo que se teclea en los ajustes es de sus controles: las flechas mueven
+    // un deslizador, y sin esto Espacio sobre el interruptor también subía.
+    teclaAjena: (ev) => ev.target instanceof Node && !!panelDeAjustes.current?.contains(ev.target),
   });
   const puedeMoverLaCamara = controlTomado && camaraDisponible;
 
@@ -402,30 +426,33 @@ export default function PilotajePantallaCompleta({
         setZoom((previo) => ({ ...previo, escala: acotarZoom(previo.escala - pasos * ZOOM_POR_MUESCA) }));
         return;
       }
-      inclinar(-pasos * GRADOS_POR_MUESCA);
+      inclinar(-pasos * controles.pasoDeRueda);
     },
+    // Lee los ajustes del render vigente: un deslizador movido en pleno vuelo
+    // vale desde el movimiento siguiente, sin volver a entrar al modo mouse.
     movimiento(ev) {
       if (!modoMouse) return;
       // jsdom y algún navegador viejo no traen `movementX`: sin él no hay giro.
       const dx = ev.movementX || 0;
       const dy = ev.movementY || 0;
       if (dx !== 0) {
-        setGiroMouse(giroDelMouse(dx));
+        setGiroMouse(giroDelMouse(dx, controles.sensibilidadHorizontal));
         armarDecaimiento();
       }
-      // Mouse hacia arriba (dy negativo) es mirar más alto, como en un juego.
-      if (dy !== 0) inclinar(-dy * GRADOS_POR_PIXEL);
+      if (dy !== 0) inclinar(inclinacionDelMouse(dy, controles.sensibilidadVertical, controles.invertirVertical));
     },
     tecla(ev) {
       if (ev.key !== 'Escape' || hayDialogo) return;
       // Con el teclado bloqueado (pantalla completa en Chromium) el Esc ya no
       // suelta solo la captura del puntero: llega a la página, y es acá donde
-      // tiene que soltarla.
+      // tiene que soltarla. Va primero: es lo que dice la pista del HUD, y sin
+      // el teclado bloqueado el navegador la suelta igual antes que nada.
       if (document.pointerLockElement === raiz.current) {
         sinFallar(() => document.exitPointerLock());
         return;
       }
-      if (ayudaAbierta) cerrarAyuda();
+      // Después, el globo abierto: los ajustes o la ayuda, de a uno por Esc.
+      if (globo) cerrarGlobo();
     },
   };
 
@@ -585,9 +612,35 @@ export default function PilotajePantallaCompleta({
     };
   }
 
-  function cerrarAyuda() {
-    setAyudaAbierta(false);
-    botonAyuda.current?.focus();
+  /**
+   * Cierra el globo abierto y le devuelve el foco a su botón. Cerrar los ajustes
+   * guarda en el acto lo que esperaba su turno: es el momento en que la persona
+   * da por terminado el cambio.
+   */
+  function cerrarGlobo() {
+    if (globo === 'ajustes') {
+      preferencias.guardarYa();
+      botonAjustes.current?.focus();
+    } else {
+      botonAyuda.current?.focus();
+    }
+    setGlobo(null);
+  }
+
+  /**
+   * Los ajustes se tocan con el cursor, así que abrirlos suelta la captura del
+   * puntero (como un diálogo). Al revés no: con los ajustes abiertos se puede
+   * entrar al modo mouse para probar la sensibilidad en el acto.
+   */
+  function abrirAjustes() {
+    if (document.pointerLockElement === raiz.current) sinFallar(() => document.exitPointerLock());
+    setGlobo('ajustes');
+  }
+
+  function alternarGlobo(cual: 'ayuda' | 'ajustes') {
+    if (globo === cual) cerrarGlobo();
+    else if (cual === 'ajustes') abrirAjustes();
+    else setGlobo('ayuda');
   }
 
   function salir() {
@@ -730,6 +783,18 @@ export default function PilotajePantallaCompleta({
               {avisoDelNavegador}
             </p>
           )}
+          {/* El último de la lista y sin rojo: el ajuste ya vale, lo único que
+              falta es la copia del Comando Central para la próxima vez. Con
+              los ajustes abiertos va adentro del panel, que es donde se está
+              mirando (y que acá le taparía la punta). */}
+          {preferencias.aviso && globo !== 'ajustes' && (
+            <p className="aviso" role="status" data-testid="pilotaje-aviso-ajustes">
+              {preferencias.aviso}{' '}
+              <button type="button" className="ghost chico" onClick={preferencias.reintentar}>
+                Reintentar
+              </button>
+            </p>
+          )}
           {modoMouse && (
             <p className="pilotaje-pista" data-testid="pilotaje-pista-mouse">
               <kbd>Esc</kbd> para salir del modo mouse
@@ -737,24 +802,60 @@ export default function PilotajePantallaCompleta({
           )}
         </div>
 
+        {/* La columna baja hasta el pie (pilotaje.css): los globos cuelgan
+            del hueco que queda entre los botones y las órdenes de vuelo, así
+            que por largos que sean nunca tapan Aterrizar ni el modo mouse. */}
         <div className="pilotaje-derecha">
-          {!pantallaCompleta && (
-            <button type="button" onClick={pedirPantallaCompleta}>
-              Pantalla completa
-            </button>
-          )}
-          <button
-            ref={botonAyuda}
-            type="button"
-            className="icono-boton pilotaje-boton-ayuda"
-            aria-label="Ayuda de los controles"
-            aria-expanded={ayudaAbierta}
-            aria-controls={ayudaAbierta ? idAyuda : undefined}
-            onClick={() => (ayudaAbierta ? cerrarAyuda() : setAyudaAbierta(true))}
-          >
-            ?
-          </button>
-          {ayudaAbierta && <AyudaDeControles id={idAyuda} onCerrar={cerrarAyuda} />}
+          <div className="pilotaje-derecha-botones">
+            {!pantallaCompleta && (
+              <button type="button" className="pilotaje-boton-pantalla" onClick={pedirPantallaCompleta}>
+                Pantalla completa
+              </button>
+            )}
+            {/* El engranaje va a la izquierda del "?": la ayuda sigue siendo
+                lo de la esquina, donde la busca el que recién empieza. */}
+            <div className="pilotaje-iconos">
+              <button
+                ref={botonAjustes}
+                type="button"
+                className="icono-boton pilotaje-boton-ajustes"
+                aria-label="Ajustes del control"
+                aria-expanded={globo === 'ajustes'}
+                aria-controls={globo === 'ajustes' ? idAjustes : undefined}
+                onClick={() => alternarGlobo('ajustes')}
+              >
+                <IconoEngranaje tamano={18} />
+              </button>
+              <button
+                ref={botonAyuda}
+                type="button"
+                className="icono-boton pilotaje-boton-ayuda"
+                aria-label="Ayuda de los controles"
+                aria-expanded={globo === 'ayuda'}
+                aria-controls={globo === 'ayuda' ? idAyuda : undefined}
+                onClick={() => alternarGlobo('ayuda')}
+              >
+                ?
+              </button>
+            </div>
+          </div>
+          <div className="pilotaje-globos">
+            {globo === 'ayuda' && (
+              <AyudaDeControles id={idAyuda} gradosPorMuesca={controles.pasoDeRueda} onCerrar={cerrarGlobo} />
+            )}
+            {globo === 'ajustes' && (
+              <AjustesDeControl
+                id={idAjustes}
+                raiz={panelDeAjustes}
+                controles={controles}
+                aviso={preferencias.aviso}
+                onCambiar={preferencias.cambiar}
+                onRestablecer={preferencias.restablecer}
+                onReintentar={preferencias.reintentar}
+                onCerrar={cerrarGlobo}
+              />
+            )}
+          </div>
         </div>
 
         <div className="pilotaje-pie">
