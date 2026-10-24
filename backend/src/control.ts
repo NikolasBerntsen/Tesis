@@ -62,7 +62,8 @@ export interface PedidoDeControlView {
 export type AlPedir =
   | { resultado: 'otorgado' }
   | { resultado: 'pendiente'; pedido: PedidoDeControlView }
-  | { resultado: 'ocupado'; solicitante: string };
+  | { resultado: 'ocupado'; solicitante: string }
+  | { resultado: 'sinConsola' };
 
 export type RespuestaDelCoordinador =
   | { ok: true; resultado: ResultadoDelPedido }
@@ -89,6 +90,13 @@ export interface DependenciasDelControl {
    * que lo pidió le pueden haber quitado el permiso.
    */
   puedeControlar: (username: string) => boolean;
+  /**
+   * Si la cuenta tiene alguna consola conectada al hub AHORA. El REST anda
+   * aunque el WebSocket de la consola esté caído (reintentando): sin esto, un
+   * pedido hecho en ese rato no lo cancelaba nadie y a los 10 s el dron pasaba
+   * a alguien que no lo estaba mirando.
+   */
+  tieneConsola: (username: string) => boolean;
   /** Difunde a las consolas, con el filtro por rol del hub. */
   difundir: (msg: { type: string; [clave: string]: unknown }) => void;
 }
@@ -147,7 +155,9 @@ export class CoordinadorDelControl {
    * y él confirmó). Libre o ya suyo, se le da en el acto. Si lo tiene otro,
    * queda UN pedido por dron, con 10 s para que el titular conteste: el mismo
    * solicitante que vuelve a pedir (otra pestaña, un doble clic) recibe el que
-   * ya estaba, y uno distinto se entera de quién se le adelantó.
+   * ya estaba, y uno distinto se entera de quién se le adelantó. Sin una
+   * consola conectada no queda pedido: el traspaso le abre la vista de
+   * pilotaje a quien lo pidió, y sin el canal en vivo no la ve ni late.
    */
   pedir(droneId: string, solicitante: string): AlPedir {
     const titular = this.deps.titular(droneId);
@@ -165,6 +175,7 @@ export class CoordinadorDelControl {
         ? { resultado: 'pendiente', pedido: this.vista(previo) }
         : { resultado: 'ocupado', solicitante: previo.solicitante };
     }
+    if (!this.deps.tieneConsola(solicitante)) return { resultado: 'sinConsola' };
     const ahora = this.deps.ahora();
     const pedido: PedidoDeControl = { droneId, solicitante, titular, creadoEn: ahora, venceEn: ahora + PLAZOS_DEL_CONTROL.respuestaMs };
     this.pedidos.set(droneId, pedido);
@@ -226,7 +237,7 @@ export class CoordinadorDelControl {
    * Lo que vence, una vez por segundo. Primero los pedidos: un titular
    * fantasma con un pedido encima le pasa el dron al que lo pidió a los 10 s,
    * sin esperar a los 30 del barrido de señales. Después los titulares sin
-   * señales, que se sueltan.
+   * señales (ver `soltarOTraspasar`).
    */
   barrer(): void {
     const ahora = this.deps.ahora();
@@ -238,25 +249,50 @@ export class CoordinadorDelControl {
       // las dudas, empieza a contar desde ahora en vez de soltarse en el acto.
       const vivo = this.vivoEn.get(droneId);
       if (vivo === undefined) this.vivoEn.set(droneId, ahora);
-      else if (ahora - vivo >= PLAZOS_DEL_CONTROL.sinSenalesMs) this.deps.soltarPorInactividad(droneId, titular);
+      else if (ahora - vivo >= PLAZOS_DEL_CONTROL.sinSenalesMs) this.soltarOTraspasar(droneId, titular);
     }
   }
 
   /**
-   * El control pasa al que lo pidió (cedido o vencido), si todavía puede
-   * pilotear; si no, el pedido termina cancelado y el titular sigue.
+   * Un titular que lleva 30 s sin señales. Con un pedido encima, el control
+   * pasa en el acto al que lo pidió, sin esperar a que el pedido venza: es lo
+   * que la consola le prometió («si no contesta, el control pasa a vos»), el
+   * que pidió está ahí, y soltarlo dejaba el pedido `liberado` con el dron sin
+   * nadie al mando. Acá nadie eligió nada (el barrido suelta con 'none'), así
+   * que no hay una orden que se pise al dárselo. Sin pedido, o si el que lo
+   * pidió ya no puede recibirlo, se suelta.
    */
-  private resolver(pedido: PedidoDeControl, motivo: 'cedido' | 'vencido'): ResultadoDelPedido {
-    if (!this.deps.puedeControlar(pedido.solicitante)) {
-      this.terminar(pedido, 'cancelado', `${pedido.solicitante} ya no puede controlar drones`, 'backend');
+  private soltarOTraspasar(droneId: string, titular: string): void {
+    const pedido = this.pedidos.get(droneId);
+    const sinSenales = `${titular} estuvo ${PLAZOS_DEL_CONTROL.sinSenalesMs / 1000} s sin dar señales`;
+    if (pedido && this.resolver(pedido, 'vencido', sinSenales) === 'vencido') return;
+    this.deps.soltarPorInactividad(droneId, titular);
+  }
+
+  /** Por qué el que pidió ya no puede recibir el control; null si puede. */
+  private porQueNoLoRecibe(solicitante: string): string | null {
+    if (!this.deps.puedeControlar(solicitante)) return `${solicitante} ya no puede controlar drones`;
+    if (!this.deps.tieneConsola(solicitante)) return `${solicitante} no tiene ninguna consola conectada`;
+    return null;
+  }
+
+  /**
+   * El control pasa al que lo pidió (cedido o vencido), si todavía puede
+   * pilotear y está mirando; si no, el pedido termina cancelado y el titular
+   * sigue. `texto` es por qué pasó, si no es el de siempre.
+   */
+  private resolver(pedido: PedidoDeControl, motivo: 'cedido' | 'vencido', texto?: string): ResultadoDelPedido {
+    const impedimento = this.porQueNoLoRecibe(pedido.solicitante);
+    if (impedimento) {
+      this.terminar(pedido, 'cancelado', impedimento, 'backend');
       return 'cancelado';
     }
     this.pedidos.delete(pedido.droneId);
     this.deps.traspasar(pedido.droneId, pedido.titular, pedido.solicitante, motivo);
     // El que recibe el control recién lo pidió: está ahí.
     this.vivoEn.set(pedido.droneId, this.deps.ahora());
-    const texto = motivo === 'cedido' ? `${pedido.titular} cedió el control` : `${pedido.titular} no contestó a tiempo`;
-    this.anunciar(pedido, motivo, texto);
+    const siempre = motivo === 'cedido' ? `${pedido.titular} cedió el control` : `${pedido.titular} no contestó a tiempo`;
+    this.anunciar(pedido, motivo, texto ?? siempre);
     return motivo;
   }
 

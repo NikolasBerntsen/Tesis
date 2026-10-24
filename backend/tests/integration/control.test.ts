@@ -182,8 +182,45 @@ describe('integración — control manual exclusivo', () => {
     expect(force.status).toBe(200);
     expect(force.body.controlledBy).toBeNull();
     await alfa.waitFor((m) => m.type === 'control_released');
-    await alfa.waitFor((m) => m.type === 'resume_patrol');
+    // el que acompaña a un soltar va marcado: la app no corta con él un aterrizaje (§2)
+    expect(await alfa.waitFor((m) => m.type === 'resume_patrol')).toEqual({
+      type: 'resume_patrol', orderedBy: 'supervisor', alSoltar: true,
+    });
     await operWs.waitFor((m) => m.type === 'control_changed' && m.controlledBy === null);
+  });
+
+  it('el DELETE que dice qué titular suelta da 409 si el control ya es de otro; «Quitar control» fuerza', async () => {
+    await api(srv.base, `/api/drones/${DRON.alfa}/control`, op, { method: 'POST' });
+    alfa.got.length = 0;
+    const viejo = await api(srv.base, `/api/drones/${DRON.alfa}/control`, sup, {
+      method: 'DELETE',
+      body: JSON.stringify({ resume: 'last', titular: 'supervisor' }),
+    });
+    expect(viejo.status).toBe(409);
+    expect(viejo.body.error).toBe('El control ya no lo tiene supervisor: ahora lo tiene operador');
+    // el de un operador que miraba un control viejo, también
+    const deOtro = await api(srv.base, `/api/drones/${DRON.alfa}/control`, oper2, {
+      method: 'DELETE',
+      body: JSON.stringify({ titular: 'oper2' }),
+    });
+    expect(deOtro.status).toBe(409);
+    await wait(80);
+    expect(alfa.got).toEqual([]);
+    expect(await titular()).toBe('operador');
+
+    const quitar = await api(srv.base, `/api/drones/${DRON.alfa}/control`, sup, {
+      method: 'DELETE',
+      body: JSON.stringify({ resume: 'none', titular: 'supervisor', forzar: true }),
+    });
+    expect(quitar.status).toBe(200);
+    expect(await titular()).toBeNull();
+    // y el titular que suelta lo suyo, diciéndolo, suelta como siempre
+    await api(srv.base, `/api/drones/${DRON.alfa}/control`, op, { method: 'POST' });
+    const propio = await api(srv.base, `/api/drones/${DRON.alfa}/control`, op, {
+      method: 'DELETE',
+      body: JSON.stringify({ resume: 'none', titular: 'operador' }),
+    });
+    expect(propio.status).toBe(200);
   });
 
   it('el titular libera con resume=none (no manda resume_patrol)', async () => {
@@ -223,8 +260,32 @@ describe('integración — control manual exclusivo', () => {
     const r = await api(srv.base, `/api/drones/${DRON.alfa}/resume`, op, { method: 'POST', body: JSON.stringify({ fromIndex: 1 }) });
     expect(r.status).toBe(200);
     await alfa.waitFor((m) => m.type === 'control_released');
-    await alfa.waitFor((m) => m.type === 'resume_patrol' && m.fromIndex === 1);
+    // la orden explícita de reanudar no va marcada: esa sí corta un aterrizaje
+    expect(await alfa.waitFor((m) => m.type === 'resume_patrol')).toEqual({
+      type: 'resume_patrol', orderedBy: 'operador', fromIndex: 1,
+    });
     expect(await titular()).toBeNull();
+  });
+
+  it('cerrar la sesión suelta en el acto el control del titular, como una salida', async () => {
+    const o2ws = await connectWs(srv.wsUrl, oper2);
+    try {
+      expect((await api(srv.base, `/api/drones/${DRON.alfa}/control`, oper2, { method: 'POST' })).status).toBe(200);
+      await alfa.waitFor((m) => m.type === 'control_taken' && m.by === 'oper2');
+      alfa.got.length = 0;
+      operWs.got.length = 0;
+
+      const salida = await api(srv.base, '/api/auth/logout', oper2, { method: 'POST', body: JSON.stringify({}) });
+      expect(salida.body).toEqual({ ok: true });
+      expect(await titular()).toBeNull();
+      expect(await alfa.waitFor((m) => m.type === 'control_released')).toEqual({ type: 'control_released', by: 'oper2' });
+      // sin objetivo ni relevo, vuelve a su ruta como antes, marcado como el de un soltar
+      expect(await alfa.waitFor((m) => m.type === 'resume_patrol')).toMatchObject({ alSoltar: true });
+      const ev = await operWs.waitFor((m) => m.type === 'event' && m.event.type === 'CONTROL_RELEASED');
+      expect(JSON.parse(ev.event.meta).detalle).toMatchObject({ por: 'oper2', forzado: false, motivo: 'oper2 cerró la sesión' });
+    } finally {
+      await o2ws.close();
+    }
   });
 
   it('reanudar sin nodo mientras se tiene el control lo libera y sigue desde el último', async () => {
@@ -482,7 +543,9 @@ describe('integración — control manual exclusivo', () => {
     it('sin titular, al conectarse le suelta el control (a una app sin el control tomado no le hace nada)', async () => {
       const c = await connectWs(srv.wsUrl, tokenDeDron(DRON.charlie));
       try {
-        expect(await c.waitFor((m) => m.type === 'control_released')).toEqual({ type: 'control_released', by: 'Comando Central' });
+        expect(await c.waitFor((m) => m.type === 'control_released')).toEqual({
+          type: 'control_released', by: 'Comando Central', resync: true,
+        });
         await wait(100);
         expect(delControl(c)).toHaveLength(1);
         // soltarlo no es una orden de patrullar
@@ -513,6 +576,40 @@ describe('integración — control manual exclusivo', () => {
         expect(delControl(despues)).toHaveLength(1);
       } finally {
         await despues.close();
+      }
+    });
+
+    it('el soltar por inactividad que se perdió con el dron desconectado llega al reconectar, con resync', async () => {
+      const relojReal = relojDelHub.ahora;
+      let t = Date.now();
+      relojDelHub.ahora = () => t;
+      try {
+        const antes = await connectWs(srv.wsUrl, tokenDeDron(DRON.charlie));
+        await antes.waitFor((m) => m.type === 'control_released');
+        expect((await api(srv.base, `/api/drones/${DRON.charlie}/control`, op, { method: 'POST' })).status).toBe(200);
+        await antes.waitFor((m) => m.type === 'control_taken');
+        await antes.close();
+        await wait(150);
+
+        // el barrido lo suelta con el dron afuera: el `motivo: 'inactividad'` no le llega a nadie
+        t += PLAZOS_DEL_CONTROL.sinSenalesMs;
+        control.barrer();
+        expect(await titularDeCharlie()).toBeNull();
+
+        const despues = await connectWs(srv.wsUrl, tokenDeDron(DRON.charlie));
+        try {
+          // la app que todavía lo tiene tomado lo suelta con el mando al control físico (§2)
+          expect(await despues.waitFor((m) => m.type === 'control_released')).toEqual({
+            type: 'control_released', by: 'Comando Central', resync: true,
+          });
+          await wait(100);
+          expect(delControl(despues)).toHaveLength(1);
+          expect(despues.got.some((m) => m.type === 'resume_patrol')).toBe(false);
+        } finally {
+          await despues.close();
+        }
+      } finally {
+        relojDelHub.ahora = relojReal;
       }
     });
 

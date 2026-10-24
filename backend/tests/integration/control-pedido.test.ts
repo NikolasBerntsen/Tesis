@@ -153,6 +153,21 @@ describe('integración — pedido de control entre personas', () => {
     expect(JSON.parse(ev.event.meta).detalle.motivo).toBe('vencido');
   });
 
+  it('el titular fantasma con un pedido encima lo pasa al cumplir 30 s sin señales, aunque el pedido no haya vencido', async () => {
+    t += PLAZOS_DEL_CONTROL.sinSenalesMs - 5_000;
+    expect((await pedir(oper2)).status).toBe(202);
+    t += 5_000;
+    control.barrer();
+    expect(await titular()).toBe('oper2');
+    expect(await alfa.waitFor((m) => m.type === 'control_transferred')).toEqual({
+      type: 'control_transferred', by: 'oper2', de: 'operador',
+    });
+    expect(await resultado(pideWs)).toMatchObject({ resultado: 'vencido', motivo: 'operador estuvo 30 s sin dar señales' });
+    await wait(80);
+    // ni soltar ni reanudar: el dron no queda sin nadie al mando
+    expect(delControl(alfa)).toEqual([{ type: 'control_transferred', by: 'oper2', de: 'operador' }]);
+  });
+
   it('una respuesta fuera de plazo cuenta como no contestada', async () => {
     expect((await pedir(oper2)).status).toBe(202);
     t += PLAZOS_DEL_CONTROL.respuestaMs;
@@ -171,6 +186,45 @@ describe('integración — pedido de control entre personas', () => {
     expect(sup1.body.error).toBe('oper2 ya pidió el control de este dron: esperá a que le contesten');
     await wait(80);
     expect(titularWs.got.filter((m) => m.type === 'control_request')).toHaveLength(1);
+  });
+
+  it('sin una consola conectada no queda pedido: el dron no se le pasa a quien no está mirando', async () => {
+    const cuenta = await crearUsuario(srv.base, adm, { username: 'sinpestania', canControl: true });
+    const tok = (await login(srv.base, 'sinpestania', cuenta.password))!;
+    const r = await pedir(tok);
+    expect(r.status).toBe(409);
+    expect(r.body.error).toBe(
+      'Tu consola no está conectada al Comando Central: esperá a que se reconecte y volvé a pedir el control',
+    );
+    await wait(80);
+    expect(titularWs.got.some((m) => m.type === 'control_request')).toBe(false);
+    // con la consola de vuelta, el pedido sale como siempre
+    const consola = await connectWs(srv.wsUrl, tok);
+    extras.push(consola);
+    expect((await pedir(tok)).status).toBe(202);
+    await cancelar(tok);
+  });
+
+  it('el «Salir» de un supervisor titular que se cruza con el traspaso no le saca el dron al que lo recibió', async () => {
+    await api(srv.base, `/api/drones/${A}/control`, op, { method: 'DELETE', body: JSON.stringify({ resume: 'none' }) });
+    expect((await api(srv.base, `/api/drones/${A}/control`, sup, { method: 'POST' })).status).toBe(200);
+    expect((await pedir(oper2)).status).toBe(202);
+    t += PLAZOS_DEL_CONTROL.respuestaMs;
+    control.barrer();
+    expect(await titular()).toBe('oper2');
+    await alfa.waitFor((m) => m.type === 'control_transferred');
+    alfa.got.length = 0;
+
+    // la consola del supervisor todavía no vio el control_changed: suelta lo que cree suyo
+    const salir = await api(srv.base, `/api/drones/${A}/control`, sup, {
+      method: 'DELETE',
+      body: JSON.stringify({ resume: 'last', titular: 'supervisor' }),
+    });
+    expect(salir.status).toBe(409);
+    expect(salir.body.error).toBe('El control ya no lo tiene supervisor: ahora lo tiene oper2');
+    await wait(80);
+    expect(await titular()).toBe('oper2');
+    expect(delControl(alfa)).toEqual([]);
   });
 
   it('pedir un dron libre o propio lo da en el acto', async () => {

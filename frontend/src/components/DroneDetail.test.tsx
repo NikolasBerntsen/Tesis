@@ -188,7 +188,7 @@ describe('DroneDetail', () => {
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', {
         method: 'DELETE',
-        body: JSON.stringify({ resume: 'last' }),
+        body: JSON.stringify({ resume: 'last', titular: 'admin1' }),
       }),
     );
   });
@@ -203,11 +203,20 @@ describe('DroneDetail', () => {
 
     // Le corta el vuelo a otra persona: primero pregunta, con la consecuencia dicha.
     const dialogo = await screen.findByRole('dialog', { name: 'Quitarle el control a oper9' });
-    expect(dialogo).toHaveTextContent('oper9 deja de pilotear Alfa en el acto y el dron vuelve a patrullar su ruta.');
+    expect(dialogo).toHaveTextContent(
+      'oper9 deja de pilotear Alfa en el acto y el dron vuelve a patrullar su ruta, o sigue bajando hasta el suelo si ' +
+        'está aterrizando.',
+    );
     expect(apiMock).not.toHaveBeenCalledWith('/drones/d1/control', expect.anything());
 
     await userEvent.click(within(dialogo).getByRole('button', { name: 'Quitar control' }));
-    await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', expect.objectContaining({ method: 'DELETE' })));
+    // Fuerza: el supervisor eligió sacárselo a quien lo tenga, aunque haya cambiado de manos.
+    await waitFor(() =>
+      expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', {
+        method: 'DELETE',
+        body: JSON.stringify({ resume: 'last', titular: 'oper9', forzar: true }),
+      }),
+    );
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
@@ -590,7 +599,7 @@ describe('DroneDetail — salir de la vista de pilotaje', () => {
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', {
         method: 'DELETE',
-        body: JSON.stringify({ resume: 'last' }),
+        body: JSON.stringify({ resume: 'last', titular: 'admin1' }),
       }),
     );
     // Lo cerró el operador: no hay nada que explicarle.
@@ -603,7 +612,7 @@ describe('DroneDetail — salir de la vista de pilotaje', () => {
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', {
         method: 'DELETE',
-        body: JSON.stringify({ resume: 'none' }),
+        body: JSON.stringify({ resume: 'none', titular: 'admin1' }),
       }),
     );
   });
@@ -1347,7 +1356,7 @@ describe('DroneDetail — objetivo', () => {
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', {
         method: 'DELETE',
-        body: JSON.stringify({ resume: 'none' }),
+        body: JSON.stringify({ resume: 'none', titular: 'admin1' }),
       }),
     );
 
@@ -1355,7 +1364,7 @@ describe('DroneDetail — objetivo', () => {
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', {
         method: 'DELETE',
-        body: JSON.stringify({ resume: 'last' }),
+        body: JSON.stringify({ resume: 'last', titular: 'admin1' }),
       }),
     );
   });
@@ -1373,7 +1382,7 @@ describe('DroneDetail — objetivo', () => {
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', {
         method: 'DELETE',
-        body: JSON.stringify({ resume: 'none' }),
+        body: JSON.stringify({ resume: 'none', titular: 'oper9', forzar: true }),
       }),
     );
   });
@@ -1600,9 +1609,13 @@ describe('DroneDetail — soltar el control de un dron en un relevo (RELEVOS §3
     status: makeStatus({ state: 'MANUAL', controlledBy: 'admin1', flying: true, routeId: null, target: null, ...status }),
   });
 
-  const soltoCon = (resume: 'none' | 'last') =>
+  /** Soltó con `resume`, diciendo qué titular suelta (y, el «Quitar control» de un supervisor, forzando). */
+  const soltoCon = (resume: 'none' | 'last', quien: Record<string, unknown> = { titular: 'admin1' }) =>
     waitFor(() =>
-      expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', { method: 'DELETE', body: JSON.stringify({ resume }) }),
+      expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', {
+        method: 'DELETE',
+        body: JSON.stringify({ resume, ...quien }),
+      }),
     );
 
   async function salirDelPilotaje(): Promise<HTMLElement> {
@@ -1624,7 +1637,10 @@ describe('DroneDetail — soltar el control de un dron en un relevo (RELEVOS §3
       }),
     );
     await soltoCon('none');
-    expect(apiMock).not.toHaveBeenCalledWith('/drones/d1/control', { method: 'DELETE', body: JSON.stringify({ resume: 'last' }) });
+    expect(apiMock).not.toHaveBeenCalledWith('/drones/d1/control', {
+      method: 'DELETE',
+      body: JSON.stringify({ resume: 'last', titular: 'admin1' }),
+    });
   });
 
   it('el supervisor que le quita el control al que va a relevar tampoco cancela el relevo', async () => {
@@ -1638,7 +1654,7 @@ describe('DroneDetail — soltar el control de un dron en un relevo (RELEVOS §3
     const dialogo = await screen.findByRole('dialog', { name: 'Quitarle el control a oper9' });
     expect(dialogo).toHaveTextContent('oper9 deja de pilotear Alfa en el acto y el dron sigue con el relevo.');
     await userEvent.click(within(dialogo).getByRole('button', { name: 'Quitar control' }));
-    await soltoCon('none');
+    await soltoCon('none', { titular: 'oper9', forzar: true });
   });
 
   it('en la tarjeta, soltar sin orden va primero; reanudar queda aparte y dice qué le hace al relevo', async () => {
@@ -1747,6 +1763,11 @@ describe('DroneDetail — pedirle el control a quien lo tiene', () => {
     const dialogo = await preguntar();
     expect(dialogo).toHaveTextContent('piloto está piloteando este dron. ¿Querés pedirle el control?');
     expect(dialogo).toHaveTextContent('piloto tiene 10 segundos para cedértelo o mantenerlo.');
+    // No promete que queda quieto: eso pasa solo si lo estaban volando a mano.
+    expect(dialogo).toHaveTextContent(
+      'si lo estaba volando a mano, el dron queda quieto donde está, a la espera de tus órdenes; si no, sigue con lo ' +
+        'que estaba haciendo.',
+    );
     // Sin confirmar no se pide nada.
     expect(pedirControlMock).not.toHaveBeenCalled();
 
@@ -1797,6 +1818,13 @@ describe('DroneDetail — pedirle el control a quien lo tiene', () => {
     const dialogo = await preguntar();
     fireEvent.click(within(dialogo).getByRole('button', { name: 'Pedir el control' }));
     expect(await within(dialogo).findByRole('alert')).toHaveTextContent('relevo ya pidió el control de este dron');
+  });
+
+  it('con el dron desconectado no se pide, como no se toma: no se puede volar', async () => {
+    renderDetail({ ...conOtroAlMando, drone: { ...conOtroAlMando.drone, online: false } });
+    await esperarCarga();
+    expect(screen.getByText(/Controlado por/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pedir el control' })).toBeDisabled();
   });
 
   it('con el pedido de otro en curso, el botón espera y dice de quién es', async () => {

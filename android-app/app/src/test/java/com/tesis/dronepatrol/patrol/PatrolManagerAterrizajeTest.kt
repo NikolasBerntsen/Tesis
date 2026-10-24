@@ -307,6 +307,56 @@ class PatrolManagerAterrizajeTest {
         assertTrue(ordenes.toString(), ordenes.indexOf("cancelarAterrizaje") in 0 until ordenes.indexOfFirst { it.startsWith("startRoute") })
     }
 
+    /**
+     * El `resume_patrol` que acompaña a un soltar (la salida de la vista de
+     * pilotaje, «Quitar control», un cierre de sesión) no es una orden de
+     * vuelo: no corta el aterrizaje ni manda al dron a la ruta que patrullaba
+     * antes de que lo tomaran. El de `POST /resume`, sin la marca, sí.
+     */
+    @Test
+    fun laReanudacionQueAcompaniaAUnSoltarNoCortaElAterrizaje() = runBlocking {
+        banco.arrancar()
+        banco.telemetria(norteM = 100.0)
+        patrulla.startPatrol(RUTA)
+        esperarA("el patrullaje") { patrulla.state.value == PatrolState.PATROLLING }
+        tomarElControl()
+        esperarA("el control manual") { patrulla.state.value == PatrolState.MANUAL }
+        consola("""{"type":"land","by":"op"}""")
+        esperarA("el LANDING") { banco.comando.eventos("LANDING").isNotEmpty() }
+        val i = dron.ordenes.size
+
+        consola("""{"type":"control_released","by":"op"}""")
+        esperarA("la pausa") { patrulla.state.value == PatrolState.PAUSED }
+        consola("""{"type":"resume_patrol","orderedBy":"op","alSoltar":true}""")
+        esperarA("el aviso de que sigue bajando") { registro("sigue bajando hasta el suelo, sin retomar la ruta") }
+        delay(200)
+
+        assertEquals(PatrolState.PAUSED, patrulla.state.value)
+        assertEquals("ni cancelarAterrizaje ni startRoute: ${desde(i)}", listOf(DronEspia.CANCELAR_CAMARA), desde(i))
+
+        // La orden explícita de reanudar sí lo corta, antes de ir a la ruta.
+        consola("""{"type":"resume_patrol","orderedBy":"op"}""")
+        esperarA("la ruta") { desde(i).any { it.startsWith("startRoute") } }
+        val ordenes = desde(i)
+        assertTrue(ordenes.toString(), ordenes.indexOf("cancelarAterrizaje") in 0 until ordenes.indexOfFirst { it.startsWith("startRoute") })
+    }
+
+    /** Sin un aterrizaje en curso, la que acompaña a un soltar es la reanudación de siempre. */
+    @Test
+    fun sinAterrizajeLaReanudacionDeUnSoltarVuelveALaRuta() = runBlocking {
+        banco.arrancar()
+        banco.telemetria(norteM = 100.0)
+        patrulla.startPatrol(RUTA)
+        esperarA("el patrullaje") { patrulla.state.value == PatrolState.PATROLLING }
+        tomarElControl()
+        esperarA("el control manual") { patrulla.state.value == PatrolState.MANUAL }
+
+        consola("""{"type":"control_released","by":"op"}""")
+        esperarA("la pausa") { patrulla.state.value == PatrolState.PAUSED }
+        consola("""{"type":"resume_patrol","orderedBy":"op","alSoltar":true}""")
+        esperarA("la ruta") { patrulla.state.value == PatrolState.PATROLLING }
+    }
+
     @Test
     fun volverALaBaseDesdeElCampoCortaElAterrizaje() = runBlocking {
         val i = aterrizandoDesdeElCampo()

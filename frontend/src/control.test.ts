@@ -4,8 +4,12 @@ import {
   avisoDelFin,
   esFinDelPedido,
   esPedidoDelHub,
+  GRACIA_DEL_PEDIDO_MS,
+  MARGEN_DEL_TITULAR_MS,
   pedidoLocal,
+  segundosParaContestar,
   segundosRestantes,
+  sinLosVencidos,
   type FinDelPedido,
 } from './control';
 
@@ -53,6 +57,29 @@ describe('control — lo que llega del hub', () => {
     // un restante negativo (un mensaje viejo) no corre el vencimiento para atrás
     expect(pedidoLocal('d1', { ...PEDIDO, restanteMs: -5 }, ahora).venceEnMs).toBe(ahora);
   });
+
+  it('al titular la cuenta se le termina un margen antes que al hub, para que la respuesta no llegue vencida', () => {
+    const ahora = Date.parse('2026-10-24T11:00:00.000Z');
+    const pedido = pedidoLocal('d1', PEDIDO, ahora);
+    expect(MARGEN_DEL_TITULAR_MS).toBe(1_000);
+    expect(segundosParaContestar(pedido, ahora)).toBe(9);
+    // en el borde: al que pidió todavía le queda "1 s", al titular ya no
+    const borde = pedido.venceEnMs - MARGEN_DEL_TITULAR_MS;
+    expect(segundosParaContestar(pedido, borde - 1)).toBe(1);
+    expect(segundosParaContestar(pedido, borde)).toBe(0);
+    expect(segundosRestantes(pedido, borde)).toBe(1);
+  });
+
+  it('descarta los pedidos que vencieron hace más de la gracia, y si no sobra ninguno devuelve el mismo objeto', () => {
+    const ahora = Date.parse('2026-10-24T11:00:00.000Z');
+    const pedidos = {
+      d1: pedidoLocal('d1', PEDIDO, ahora),
+      d2: pedidoLocal('d2', { ...PEDIDO, restanteMs: 2_000 }, ahora),
+    };
+    expect(sinLosVencidos(pedidos, ahora + 2_000 + GRACIA_DEL_PEDIDO_MS - 1)).toBe(pedidos);
+    expect(sinLosVencidos(pedidos, ahora + 2_000 + GRACIA_DEL_PEDIDO_MS)).toEqual({ d1: pedidos.d1 });
+    expect(sinLosVencidos(pedidos, ahora + 10_000 + GRACIA_DEL_PEDIDO_MS)).toEqual({});
+  });
 });
 
 describe('control — lo que se le dice a cada uno cuando el pedido termina', () => {
@@ -94,6 +121,9 @@ describe('control — el control que el hub soltó solo', () => {
     expect(propio?.tono).toBe('malo');
     expect(propio?.texto).toMatch(/^Se soltó el control de Alfa: tu consola estuvo 30 s sin dar señales/);
     expect(propio?.texto).toContain('El dron no sale a patrullar solo');
+    // y no promete que queda quieto: eso es solo el que estaba en vuelo manual (PROTOCOLS §2)
+    expect(propio?.texto).toContain('si lo estaban volando a mano, queda quieto donde está con el mando en el control físico');
+    expect(propio?.texto).toContain('si seguía un objetivo, un relevo o un aterrizaje, sigue con eso');
     const ajeno = avisoDeLaLiberacion('inactividad', 'piloto', 'supervisor', 'd1', 'Alfa');
     expect(ajeno?.texto).toMatch(/^Se soltó el control de Alfa: la consola de piloto estuvo 30 s/);
   });

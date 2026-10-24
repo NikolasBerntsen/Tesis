@@ -95,7 +95,13 @@ relevo (el dron no sale a patrullar porque a alguien se le cayó internet):
   de `MANUAL`, **queda en vuelo estacionario y le devuelve el mando al control
   físico** (deshabilita el Virtual Stick), para que el que está al lado con el
   RC-N3 lo pueda volar. Con un objetivo o un relevo vuelve a ellos, como con
-  cualquier soltar sin orden; aterrizando, sigue bajando; en el suelo, reposo;
+  cualquier soltar sin orden; aterrizando, sigue bajando; en el suelo, reposo.
+  **Mientras el mando siga en el control físico, la app no le da al dron
+  ninguna orden de vuelo por su cuenta** —cada una vuelve a habilitar el
+  Virtual Stick—: una detección confirmada alerta sin seguimiento (§4), y
+  perder o recuperar la señal no lo frena ni le retoma la ruta. Lo termina una
+  orden de una persona (tomar el control, una ruta, reanudar, un desvío,
+  aterrizar, volver a base), una toma del propio DJI o el regreso por batería;
 - a las consolas, `control_changed` con `motivo: "inactividad"` y
   `teniaElControl` (§3), que avisan que el control se soltó solo;
 - en el registro, `CONTROL_RELEASED` con `por: "Comando Central"`, `forzado:
@@ -104,11 +110,23 @@ relevo (el dron no sale a patrullar porque a alguien se le cayó internet):
 Desde ahí, desde la consola lo pueden **volver a tomar** o **mandar a
 patrullar** (`POST /resume` o una ruta), y el del control físico lo vuela.
 
+**Con un pedido de control encima** (abajo), el titular que cumple 30 s sin
+señales no se suelta: **el control pasa en el acto al que lo pidió**
+(`vencido`), sin esperar a que venza el pedido. Es lo que la consola le
+prometió («si no contesta, el control pasa a vos»), el que pidió está mirando,
+y acá nadie eligió una orden que se pise. Si el que pidió ya no puede recibirlo
+(perdió `canControl` o no tiene consola), el pedido termina `cancelado` y el
+titular se suelta como siempre.
+
 **Cerrar la última consola de la cuenta ya no suelta el control en el acto**:
 una pestaña que recarga o un corte de dos segundos le sacaban el dron al que lo
 estaba volando. Lo suelta el barrido de arriba, a los 30 s. (Suspenderle el
 control, desactivar o dar de baja la cuenta y pasarla a operador de campo lo
-siguen soltando en el acto, como antes.)
+siguen soltando en el acto, como antes.) **Cerrar la sesión (`POST
+/auth/logout`) sí lo suelta en el acto**: es irse a propósito, y el lock no
+puede quedar 30 s a nombre de alguien que no va a volver. Suelta como una baja
+(`resume` con la regla de `reanudacionAlSoltar`: `'none'` con objetivo o en un
+relevo, `'last'` si no) y cancela sus pedidos.
 
 **El espejo en la app**: si la app se queda **30 s sin el Comando Central con el
 control tomado**, lo suelta sola de la misma forma —estacionario, mando al
@@ -129,14 +147,24 @@ dron. ¿Querés pedirle el control?»). Entonces:
 2. Si no, queda **UN pedido por dron** (`202`, `pendiente`) con **10 s** para que el
    titular conteste. El mismo que vuelve a pedir (otra pestaña, un doble clic)
    recibe el mismo pedido; otro recibe `409` con el nombre del que se adelantó.
-   Todas las consolas reciben `control_request` (§3) y la ficha lo trae en
-   `pedidoDeControl` (§6), así que una consola que recarga lo sigue viendo.
+   **Sin una consola conectada al hub (el WebSocket caído, reintentando) no
+   queda pedido: `409`**; el traspaso le abriría la vista de pilotaje a quien no
+   la ve ni late. Todas las consolas reciben `control_request` (§3) y la ficha
+   lo trae en `pedidoDeControl` (§6), así que una consola que recarga lo sigue
+   viendo. **Una consola descarta sola el pedido que no vio terminar a los 3 s
+   de su vencimiento** (`GRACIA_DEL_PEDIDO_MS`): una recarga de `/drones`
+   armada antes del final y llegada después lo revivía para siempre.
 3. Al titular —en cualquier sección, **también encima de la vista de pilotaje a
    pantalla completa**— le aparece «Y quiere tomar el control» con la cuenta
    regresiva y dos respuestas, **«Mantener el control»** y **«Ceder el
    control»** (`POST /control/request/answer`, solo el titular). El aviso no se
    lleva el foco: el que vuela sigue con el teclado de vuelo; con el foco
-   adentro, las teclas de vuelo son de los botones y Escape mantiene.
+   adentro, las teclas de vuelo son de los botones y Escape mantiene. **La
+   cuenta del titular termina 1 s antes que el plazo del hub**
+   (`MARGEN_DEL_TITULAR_MS`): la suya arranca una latencia tarde, y una
+   respuesta que llega vencida cuenta como no contestada. En modo mouse el
+   aviso suelta la captura del puntero, y con un diálogo abierto se llega a él
+   con el tabulador (los diálogos y los avisos van en la misma capa).
 4. **Ceder, o no contestar en 10 s**, pasa el lock al que lo pidió **sin
    soltarlo**: la app recibe `control_transferred` (§2), no sale de `MANUAL`, y
    queda estacionaria donde está a la espera del nuevo titular. Registra
@@ -151,10 +179,10 @@ son un traspaso dejan `CONTROL_REQUEST_ENDED` en el registro:
 | Resultado | Cuándo |
 |---|---|
 | `cedido` | El titular contestó «Ceder»: el control pasó |
-| `vencido` | El titular no contestó en 10 s (o contestó tarde): el control pasó |
+| `vencido` | El titular no contestó en 10 s (o contestó tarde), **o cumplió 30 s sin señales de vida con el pedido encima** (`motivo`: «X estuvo 30 s sin dar señales»): el control pasó |
 | `mantenido` | El titular contestó «Mantener» |
-| `cancelado` | El que pidió lo canceló (`DELETE /control/request`), cerró su última consola —no se le pasa un dron a quien no está mirando—, o perdió `canControl` (o la cuenta) en la espera |
-| `liberado` | El lock se soltó mientras tanto —el titular, un supervisor con «Quitar control», el barrido de señales de vida, una baja—: el dron quedó libre y **no** se le da solo al que lo pidió (el que soltó pudo haberlo mandado a patrullar); lo toma si todavía lo quiere |
+| `cancelado` | El que pidió lo canceló (`DELETE /control/request`), cerró su última consola —no se le pasa un dron a quien no está mirando—, perdió `canControl` (o la cuenta) en la espera, **o al resolverse no tenía ninguna consola conectada** |
+| `liberado` | El lock se soltó mientras tanto —el titular, un supervisor con «Quitar control», una baja, un cierre de sesión—: el dron quedó libre y **no** se le da solo al que lo pidió (el que soltó pudo haberlo mandado a patrullar); lo toma si todavía lo quiere. **El barrido de señales ya no termina acá**: con un pedido encima, traspasa (`vencido`) |
 
 ### El dron que se desconecta: el lock sigue, y al volver se ponen de acuerdo
 
@@ -164,10 +192,14 @@ dron se conecta, lo primero que recibe, siempre, es quién tiene el control**,
 antes que cualquier otro mensaje de la reconexión:
 
 - **Sin titular** (también después de un reinicio del hub, que guarda los locks en
-  memoria): `control_released` con `by: "Comando Central"`. La app que seguía en
-  `MANUAL` con nadie al mando —que es justo donde no alerta (§4)— lo suelta; a
-  una que no lo tenía tomado no le cambia nada. No va acompañado de un
-  `resume_patrol`: el dron queda como con cualquier `control_released` (§2).
+  memoria): `control_released` con `by: "Comando Central"` y **`resync: true`**.
+  La app que seguía con el control tomado —en `MANUAL` con nadie al mando, que
+  es justo donde no alerta (§4)— lo suelta **como el de la inactividad: con el
+  mando de vuelta en el control físico**. Ese soltar pasó con la app afuera y
+  tampoco lo eligió nadie: el `motivo: "inactividad"` del barrido se pierde si
+  el dron estaba desconectado justo al barrer, y un reinicio del hub no avisa.
+  A una que no lo tenía tomado no le cambia nada. No va acompañado de un
+  `resume_patrol`.
 - **Con titular**: `control_taken` con **`resync: true`**, que la app **no** toma
   como una toma nueva. Si ya lo tenía tomado no cambia nada (ni frena, ni le saca
   la ruta que el titular le mandó sin soltarlo). Si no lo tenía —lo soltó sola sin
@@ -325,7 +357,7 @@ Conexión: `ws://<backend>:4000/ws?token=<JWT>` (el rol `drone` sale del token).
 | `video_frame` | `jpegBase64, ts` | Se reenvía a los operadores etiquetado con `droneId`. JPEG de 640 px de ancho, calidad 60; el ritmo es el del controlador (**5 por segundo con el dron real**; el simulado emite al suyo) |
 | `alert_request` | `alertType (PERSON\|VEHICLE), lat, lon, snapshotBase64, confidence, classes`, **`ref`, `droneLat?`, `droneLon?`, `droneAlt?`** | Crea fila en `alerts` (PENDING) + evento `ALERT_CREATED`, y notifica a los operadores. `lat`/`lon` son la **posición estimada del objetivo** (no la del dron) y `snapshotBase64` el cuadro **anotado** que disparó la detección. **`confidence`, `classes` y la pose del dron (`droneLat/Lon/Alt`) quedan en `meta.detalle` del `ALERT_CREATED`** (`{confianza, clases, dronLat, dronLon, dronAlt}`). **`ref`** es un identificador que inventa la app (texto ≤ 64): el hub le contesta al dron con `alert_ack {ref, alertId}` (§2), y así la app sabe qué alerta es la del objetivo que está siguiendo |
 | `set_name` | `displayName` | Renombra el dron y avisa a los operadores con `drone_renamed` |
-| **`control_dropped`** | **`by, motivo`** | **La app no tiene el control que el hub cree que le dio a `by`: lo soltó sola tras 30 s sin el Comando Central, o se reinició. Lo manda al recibir un `control_taken` con `resync: true` o un `control_transferred` sin tener el control tomado. El hub suelta el lock solo si su titular es `by` (si en el medio pasó a otro, no es de este aviso), con `resume: 'none'`, y registra `CONTROL_RELEASED` con `motivo` (texto, hasta 200 caracteres; sin él, «la app del dron no tenía el control tomado»)** |
+| **`control_dropped`** | **`by, motivo`** | **La app no tiene el control que el hub cree que le dio a `by`: lo soltó sola tras 30 s sin el Comando Central, se reinició, o el operador de campo lo soltó con una orden desde el teléfono (volver a base, aterrizar). Lo manda al recibir un `control_taken` con `resync: true` o un `control_transferred` sin tener el control tomado, y en el acto con la orden de campo si el enlace está arriba (sin enlace, el motivo queda para el resync). El hub suelta el lock solo si su titular es `by` (si en el medio pasó a otro, no es de este aviso), con `resume: 'none'`, y registra `CONTROL_RELEASED` con `motivo` (texto, hasta 200 caracteres; sin él, «la app del dron no tenía el control tomado»)** |
 | **`relay_*`, `landing_at_base`, `landed_at_base`, `rth_diverted`, `emergency_*`** | **Ver §1.b** | **Relevos entre drones, desvío a otra base y protocolo de última ubicación** |
 
 ### Campos de `status`
@@ -757,8 +789,9 @@ La última posición queda además fija en la pantalla del teléfono.
 ### Reconexión
 
 Cuando un dron se reconecta, lo primero, sin esperar su status: quién tiene el
-control manual —`control_released` sin titular, `control_taken` con `resync:
-true` con titular (ver "Control manual — bloqueo exclusivo")—. Después, el
+control manual —`control_released` con `resync: true` sin titular,
+`control_taken` con `resync: true` con titular (ver "Control manual — bloqueo
+exclusivo")—. Después, el
 `relevo.relayId` de su **primer
 status** decide qué hace el hub (RELEVOS §7):
 - Un relevo activo en el que el dron tiene ese rol: le reenvía la última orden,
@@ -791,18 +824,18 @@ Los mensajes se dirigen **solo al dron correspondiente**, salvo que se indique.
 |---|---|---|
 | **`alert_ack`** | **`ref, alertId`** | **Respuesta del hub a un `alert_request`: el id que la alerta recibió. La app lo asocia al objetivo que está siguiendo y lo manda en `status.target.alertId` y en los eventos de seguimiento** |
 | `alert_decision` | `alertId, decision (VALIDATED\|DISMISSED), decidedBy`, **`resent?`** | **Se aplica solo si `alertId` es la alerta del objetivo en curso** (o si la app todavía no conoce el id de su alerta, salvo que sea un reenvío: `resent: true` solo vale para la alerta exacta); una decisión sobre una alerta vieja no toca el objetivo nuevo. `DISMISSED`: termina el seguimiento, marca la zona como descartada (§4) y reanuda el patrullaje **hacia el próximo waypoint** de la ruta. `VALIDATED`: el dron sigue sobre el objetivo (órbita o seguimiento) hasta un `resume_patrol`. **Al reconectarse un dron, el hub le reenvía las decisiones de sus alertas de los últimos 10 minutos** (con `resent: true`), por si se decidieron mientras estaba desconectado |
-| `resume_patrol` | `orderedBy, fromIndex?` | Reanuda el patrullaje; con `fromIndex` vuela hacia ese nodo, **sin él hacia el próximo nodo de la ruta (el que tenía por delante cuando se interrumpió)**. **Termina el seguimiento de un objetivo, si lo había** |
+| `resume_patrol` | `orderedBy, fromIndex?`, **`alSoltar?`** | Reanuda el patrullaje; con `fromIndex` vuela hacia ese nodo, **sin él hacia el próximo nodo de la ruta (el que tenía por delante cuando se interrumpió)**. **Termina el seguimiento de un objetivo, si lo había**. **Con `alSoltar: true` es el que acompaña a un soltar que nadie eligió como orden de vuelo (`DELETE /control` con `'last'` o un nodo —la salida de la vista de pilotaje, «Quitar control»—, una baja, un cierre de sesión): con un aterrizaje en curso la app lo ignora y el dron sigue bajando; sin aterrizaje, es la reanudación de siempre. El de `POST /resume`, la orden explícita, va sin la marca y sí corta un aterrizaje** |
 | `start_route` | `routeId, fromIndex, orderedBy` | Comienza a patrullar esa ruta. **Con el dron en el suelo es despegar solo: pide GPS, punto de retorno y la misma batería que `takeoff`; si no, `DRONE_PROBLEM` con el motivo** |
 | `stop_patrol` | `orderedBy` | Interrumpe el patrullaje: el dron queda en vuelo estacionario (`PAUSED`). **Con un aterrizaje en curso es otra orden de vuelo: lo corta** |
 | `force_goto` | `routeId, index, orderedBy` | Vuela forzado hacia ese nodo y queda estacionario sobre él (`FORCED`) |
 | `control_taken` | `by`, **`resync?`** | Entra en control manual (`MANUAL`): vuelo estacionario a la espera de movimientos. **Con un objetivo en seguimiento, la app lo sigue estimando con las detecciones mientras el operador vuela. Mientras dure `MANUAL` (en el aire o en el suelo), las detecciones se dibujan en el video pero no generan alertas (§4). Con un aterrizaje en curso no lo frena: el control queda tomado y el dron sigue bajando hasta el suelo. Con `resync: true` (lo manda el hub al reconectarse el dron) NO es una toma: si la app ya lo tenía tomado no hace nada; si no, no lo toma y contesta `control_dropped` (§1)** |
 | **`control_transferred`** | **`by, de`** | **El control pasó de `de` a `by` sin soltarse: `de` cedió el pedido de control o no lo contestó en 10 s. En `MANUAL`, en el aire y sin un aterrizaje en curso, la app queda estacionaria donde está (frena la palanca o el salto de 25 m que haya dejado el anterior) y sigue en `MANUAL`, a la espera de `by`; en cualquier otro estado (una ruta que el titular mandó sin soltar, la señal perdida, aterrizando) sigue con lo que estaba haciendo. Sin el control tomado, contesta `control_dropped`** |
 | **`takeoff`** | **`by`** | **Despegue automático en el lugar (~1,2 m, el del SDK) y queda suspendido a la espera del mando. Solo con el control manual tomado y el dron en el suelo. No exige GPS (la aeronave se sostiene con sus sensores de visión); sí exige enlace con la aeronave y batería: ni al 25 % o menos, ni por cambiar (aterrizó con la batería baja y todavía no se la cambió, aunque después se haya tomado el control o la lectura haya rebotado; la batería nueva se reconoce por una lectura de 50 % o más en el suelo). Si no despega, la app avisa el motivo con un `DRONE_PROBLEM`** |
-| **`land`** | **`by`** | **Aterriza donde está. Solo con el control manual tomado y el dron en el aire. Al tocar el suelo el control sigue tomado (`MANUAL` en el suelo). El aterrizaje se SOSTIENE hasta el suelo (también el que se ordena desde el teléfono): mientras baja, `manual_stick` —incluido el de los cuatro ejes en cero al soltar la palanca, que puede llegar después del `land`—, `manual_move`, el watchdog del mando, `control_taken`, `control_released` y la pérdida de señal no le dan ninguna orden al dron, el regreso por batería no lo pisa y una detección alerta sin seguimiento; `manual_gimbal` sí mueve la cámara. Lo corta otra orden de vuelo de una persona: `start_route`, `resume_patrol`, `force_goto`, `stop_patrol`, o volver a base desde el teléfono. `LANDING` sale cuando el dron lo acepta (el hub ya registró `LANDING_ORDERED` al recibir la orden); si no se puede, `DRONE_PROBLEM` «No se pudo aterrizar: …», que sale siempre** |
+| **`land`** | **`by`** | **Aterriza donde está. Solo con el control manual tomado y el dron en el aire. Al tocar el suelo el control sigue tomado (`MANUAL` en el suelo). El aterrizaje se SOSTIENE hasta el suelo (también el que se ordena desde el teléfono): mientras baja, `manual_stick` —incluido el de los cuatro ejes en cero al soltar la palanca, que puede llegar después del `land`—, `manual_move`, el watchdog del mando, `control_taken`, `control_released` y la pérdida de señal no le dan ninguna orden al dron, el regreso por batería no lo pisa y una detección alerta sin seguimiento; `manual_gimbal` sí mueve la cámara. Lo corta otra orden de vuelo de una persona: `start_route`, `resume_patrol` sin `alSoltar`, `force_goto`, `stop_patrol`, o volver a base desde el teléfono. `LANDING` sale cuando el dron lo acepta (el hub ya registró `LANDING_ORDERED` al recibir la orden); si no se puede, `DRONE_PROBLEM` «No se pudo aterrizar: …», que sale siempre** |
 | `manual_move` | `bearing, distanceM, by` | **Desplazamiento puntual** de esa distancia en ese rumbo (solo en `MANUAL`, en el aire y con GPS; **con el dron aterrizando se ignora**) |
 | `manual_stick` | `pitch, roll, yaw, throttle, by` | **Vuelo continuo con palancas** (solo en `MANUAL` y **en el aire**: en el suelo se descarta en silencio, la consola muestra "despegá primero"; **con el dron aterrizando también, ver `land`**): cada eje es un número en `[-1, 1]` y el dron lo sostiene hasta el mensaje siguiente. Ver §3.b |
 | **`manual_gimbal`** | **`pitch, by`** | **Inclina la cámara a `pitch` grados, en ángulo ABSOLUTO** (`0` horizonte, negativo hacia abajo; llega ya recortado a `[-90, 30]`). **Solo con el control manual tomado (`MANUAL`), en el suelo o en el aire**: inclinar la cámara no mueve al dron. En cualquier otro estado se descarta en silencio (patrullando, orbitando o siguiendo, la cámara la maneja la app). No cambia el estado ni toca el vuelo; la inclinación nueva se ve en `status.gimbalPitch`. **Al salir de `MANUAL` la app tira la inclinación que todavía no le pasó al gimbal: después de salir, al gimbal solo puede llegarle la que ya estaba cumpliendo, y la cámara que apunta el estado siguiente (la de patrulla al retomar la ruta, la de la órbita o el seguimiento al volver al objetivo) sale después de esa, nunca antes.** Ver §3.b |
-| `control_released` | `by`, **`motivo?`** | Sale del control manual. **Con un objetivo en seguimiento, el dron vuelve a él (`ORBITING` o `FOLLOWING`, evento `TRACKING_RESUMED`)**; sin objetivo, si no llega un `resume_patrol` a continuación queda `PAUSED`. **Desde ahí las detecciones vuelven a alertar como siempre: la próxima confirmada, sin ráfaga de lo que se vio durante el control. Con `motivo: "inactividad"` (el titular estuvo 30 s sin dar señales) el final cambia: el dron que esperaba quieto en `MANUAL` queda `PAUSED` en vuelo estacionario con el mando devuelto al control físico (sin Virtual Stick), en vez de sostenido por la app; con objetivo, relevo, aterrizaje o en el suelo, lo mismo que siempre. `motivo: "app"` (la app avisó con `control_dropped`) no cambia nada: ya lo había soltado** |
+| `control_released` | `by`, **`motivo?`** | Sale del control manual. **Con un objetivo en seguimiento, el dron vuelve a él (`ORBITING` o `FOLLOWING`, evento `TRACKING_RESUMED`)**; sin objetivo, si no llega un `resume_patrol` a continuación queda `PAUSED`. **Desde ahí las detecciones vuelven a alertar como siempre: la próxima confirmada, sin ráfaga de lo que se vio durante el control. Con `motivo: "inactividad"` (el titular estuvo 30 s sin dar señales) el final cambia: el dron que esperaba quieto en `MANUAL` queda `PAUSED` en vuelo estacionario con el mando devuelto al control físico (sin Virtual Stick), en vez de sostenido por la app; con objetivo, relevo, aterrizaje o en el suelo, lo mismo que siempre. Desde ahí la app no le da órdenes de vuelo por su cuenta hasta que una persona dé una (ver "Control manual"). Con `resync: true` (lo manda el hub al reconectarse el dron, sin titular) termina igual que con `motivo: "inactividad"`, si la app todavía lo tenía tomado. `motivo: "app"` (la app avisó con `control_dropped`) no cambia nada: ya lo había soltado** |
 | `renamed` | `displayName` | El operador renombró al dron: la app actualiza el nombre que muestra |
 | **`bases`, `relay_*`, `emergency_ack`, `emergency_photo_ack`** | **Ver §2.b** | **Relevos entre drones, desvío a otra base y protocolo de última ubicación** |
 
@@ -1481,8 +1514,10 @@ cuadro viejo y nunca acumula retraso.
      desvío**: **orbita el objetivo** a 30 m con la cámara apuntada al centro
      y arranca el seguimiento (`ORBIT_STARTED`).
    - **En el suelo, a baja altura, sin GPS o con el objetivo sin posición**
-     (o en el aire sin patrullar): alerta sin seguimiento (`DETECTION`), como
-     mucho una por minuto.
+     (o en el aire sin patrullar), **aterrizando o con el mando devuelto al
+     control físico** (la órbita es el Virtual Stick, que le sacaría el dron a
+     quien lo vuela con las palancas): alerta sin seguimiento (`DETECTION`),
+     como mucho una por minuto.
    En los dos casos manda `alert_request` (tipo, **captura anotada**,
    posición del objetivo si se pudo ubicar, confianza, pose del dron y un
    `ref`) y, con seguimiento, queda a la espera del `alert_ack`.
@@ -1533,7 +1568,7 @@ Lo que cambió respecto de la versión anterior está marcado con **negrita**.
 | Método | Ruta | Auth | Descripción |
 |---|---|---|---|
 | POST | `/api/auth/login` | — | `{username, password}` → **`{token, expiresIn, user}`**. `expiresIn` en segundos: lo usa la app para la cuenta regresiva de la sesión efímera |
-| **POST** | **`/api/auth/logout`** | JWT | `{motivo?}`. No invalida nada del lado del servidor (el JWT vive en el cliente): existe para **dejar registrado** el cierre de la sesión efímera del operador de campo |
+| **POST** | **`/api/auth/logout`** | JWT | `{motivo?}`. No invalida nada del lado del servidor (el JWT vive en el cliente): existe para **dejar registrado** el cierre de la sesión efímera del operador de campo. **Para las demás cuentas suelta en el acto el control manual que tuvieran (`CONTROL_RELEASED` con «X cerró la sesión») y cancela sus pedidos de control** |
 | GET | `/api/me` | JWT | Ficha del usuario autenticado. Para un dron incluye `displayName` y `base` |
 | GET | `/api/health` | — | Ping |
 
@@ -1559,8 +1594,8 @@ Lo que cambió respecto de la versión anterior está marcado con **negrita**.
 | POST | `/api/drones/:droneId/resume` | operador+ | `{fromIndex?}`: reanuda hacia ese nodo o **hacia el próximo de la ruta**. Libera el control manual y **termina el seguimiento de un objetivo** |
 | POST | `/api/drones/:droneId/goto` | con `canControl` | `{routeId, index}`: fuerza el vuelo hacia ese nodo |
 | POST | `/api/drones/:droneId/control` | con `canControl` | Toma el control manual (409 si otro lo tiene) |
-| DELETE | `/api/drones/:droneId/control` | titular o supervisor+ | `{resume: 'last'\|'none'\|número}`. **Con un objetivo en seguimiento la consola manda `'none'`: el dron vuelve al objetivo.** **Si el titular deja de dar señales de vida 30 s, el hub lo suelta solo con `'none'` (ver "Control manual"); suspenderle el control o darle de baja la cuenta lo suelta en el acto, con `'none'` cuando el último status del dron trae `target` y con `'last'` si no.** **A un dron que participa de un relevo activo (A o B) el hub lo suelta siempre con `'none'`, pida lo que pida el cuerpo: soltar no es una orden y no toca el relevo (RELEVOS §3.9). Para reanudarlo está `POST /resume`, que sí cuenta como orden del operador.** **Un pedido de control que esperaba termina `liberado`** |
-| **POST** | **`/api/drones/:droneId/control/request`** | **con `canControl`** | **Pedir el control (la consola ya pidió confirmación). Libre o propio: `200 {resultado: 'otorgado', drone}`. Si lo tiene otro: `202 {resultado: 'pendiente', pedido: {solicitante, titular, venceEn, restanteMs}}`, un pedido por dron con 10 s para el titular (el mismo solicitante recibe el mismo pedido). `409` si ya hay un pedido de otro, `403` sin `canControl`, `404` dron inexistente. Registra `CONTROL_REQUESTED`** |
+| DELETE | `/api/drones/:droneId/control` | titular o supervisor+ | `{resume: 'last'\|'none'\|número, titular?, forzar?}`. **`titular` es quien la consola cree que suelta: si ya no es el del lock (un traspaso se cruzó con el «Salir»), `409` «El control ya no lo tiene X: ahora lo tiene Y», salvo `forzar: true`, que manda solo «Quitar control». La consola manda siempre `titular`.** **El `resume_patrol` que sale de acá va con `alSoltar: true` (§2).** **Con un objetivo en seguimiento la consola manda `'none'`: el dron vuelve al objetivo.** **Si el titular deja de dar señales de vida 30 s, el hub lo suelta solo con `'none'` (ver "Control manual"); suspenderle el control o darle de baja la cuenta lo suelta en el acto, con `'none'` cuando el último status del dron trae `target` y con `'last'` si no.** **A un dron que participa de un relevo activo (A o B) el hub lo suelta siempre con `'none'`, pida lo que pida el cuerpo: soltar no es una orden y no toca el relevo (RELEVOS §3.9). Para reanudarlo está `POST /resume`, que sí cuenta como orden del operador.** **Un pedido de control que esperaba termina `liberado`** |
+| **POST** | **`/api/drones/:droneId/control/request`** | **con `canControl`** | **Pedir el control (la consola ya pidió confirmación). Libre o propio: `200 {resultado: 'otorgado', drone}`. Si lo tiene otro: `202 {resultado: 'pendiente', pedido: {solicitante, titular, venceEn, restanteMs}}`, un pedido por dron con 10 s para el titular (el mismo solicitante recibe el mismo pedido). `409` si ya hay un pedido de otro o si el que pide no tiene ninguna consola conectada al hub, `403` sin `canControl`, `404` dron inexistente. Registra `CONTROL_REQUESTED`** |
 | **POST** | **`/api/drones/:droneId/control/request/answer`** | **solo el titular** | **`{respuesta: 'ceder'\|'mantener'}` → `{resultado, drone}`. `ceder` pasa el control sin soltarlo (`control_transferred`); fuera de plazo cuenta como no contestada (`vencido`, el control pasa igual). Si el que pidió perdió `canControl` en la espera, `cancelado` y el titular sigue. `400` con otra respuesta, `403` si no es el titular, `409` sin pedido pendiente, `404` dron inexistente** |
 | **DELETE** | **`/api/drones/:droneId/control/request`** | **solo el que pidió** | **Cancela el pedido antes de que le contesten → `{resultado: 'cancelado'}`. `403` si el pedido es de otro, `409` sin pedido, `404` dron inexistente** |
 | **POST** | **`/api/drones/:droneId/takeoff`** | **titular del control (con `canControl`)** | **Despegue en el lugar (§2 `takeoff`). 409 si no tenés el control. Registra `TAKEOFF_ORDERED`** |
@@ -1688,7 +1723,7 @@ Piezas que se repiten: `Dron = {hash, displayName, model}` ·
 | drone | `CONTROL_TAKEN` | `{drone, detalle: {por}}` |
 | drone | `CONTROL_RELEASED` | `{drone, detalle: {por, teniaElControl, forzado, motivo}}` (**el barrido de señales de vida y el `control_dropped` de la app lo registran con `por: "Comando Central"`, `forzado: true` y su motivo en texto**) |
 | drone | **`CONTROL_REQUESTED`** | **`{drone, detalle: {solicitante, titular}}`; `source` es el que pidió** |
-| drone | **`CONTROL_TRANSFERRED`** | **`{drone, detalle: {de, a, motivo: "cedido"\|"vencido"}}`; `source` es el que cedió, o `backend` si no contestó** |
+| drone | **`CONTROL_TRANSFERRED`** | **`{drone, detalle: {de, a, motivo: "cedido"\|"vencido"}}`; `source` es el que cedió, o `backend` si no contestó (en 10 s, o con 30 s sin señales y el pedido encima)** |
 | drone | **`CONTROL_REQUEST_ENDED`** | **`{drone, detalle: {solicitante, titular, resultado: "mantenido"\|"cancelado"\|"liberado", motivo}}`: un pedido que terminó sin traspaso; `source` es el titular (mantenido), el que pidió (canceló) o `backend`** |
 | drone | **`TAKEOFF_ORDERED` / `LANDING_ORDERED`** | **`{drone, detalle: {por}}`** |
 | drone | `ALERT_CREATED` | `{alerta: {id, tipo, lat, lon, ts}, drone, detalle: {confianza, clases, dronLat, dronLon, dronAlt}}` (**`detalle` es nuevo**; cada campo puede faltar) |

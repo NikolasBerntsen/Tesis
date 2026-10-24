@@ -105,9 +105,12 @@ function queHaceAlSalir(hayObjetivo: boolean, enRelevo: boolean): string {
       ? 'Se suelta el control y el dron vuelve al objetivo que estaba siguiendo; el relevo sigue en marcha.'
       : 'Se suelta el control sin darle ninguna orden al dron: sigue con el relevo.';
   }
+  // Aterrizando, el `resume_patrol` de este soltar no le corta el aterrizaje
+  // (PROTOCOLS §2): sigue bajando hasta el suelo.
   return hayObjetivo
     ? 'Se suelta el control y el dron vuelve al objetivo que estaba siguiendo.'
-    : 'Se suelta el control y el dron vuelve a patrullar, hacia el próximo nodo de su ruta.';
+    : 'Se suelta el control y el dron vuelve a patrullar, hacia el próximo nodo de su ruta; si está aterrizando, ' +
+        'sigue bajando hasta el suelo.';
 }
 
 /** El id más alto entre las alertas de este dron: lo que ya estaba al abrir la vista. */
@@ -268,7 +271,7 @@ export default function PilotajePantallaCompleta({
   // Lo que tiene que verse encima del vuelo (un pedido de control) se cuelga
   // adentro de la vista mientras está abierta: afuera queda inerte, y en
   // pantalla completa ni se pinta (ver CapaDePilotaje).
-  useAnotarCapaDePilotaje(raiz);
+  useAnotarCapaDePilotaje(raiz, droneId);
 
   const hayDialogo = suspendido || confirmandoSalida;
   const { rapido, ultimoSalio } = useTecladoDeVuelo({

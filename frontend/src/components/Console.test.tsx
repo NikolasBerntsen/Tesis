@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { GRACIA_DEL_PEDIDO_MS } from '../control';
 import Console from './Console';
 import type { MapItem, WaypointsLayer } from './DronesMap';
 import { makeDrone, makeEvent, makeMe, makeRoute, makeStatus } from '../test/fixtures';
@@ -814,6 +815,29 @@ describe('Console — el control manual entre personas', () => {
     expect(screen.queryByTestId('pedido-al-titular')).not.toBeInTheDocument();
     expect(screen.queryByTestId('pedido-en-espera')).not.toBeInTheDocument();
     expect(screen.queryByTestId('aviso-del-control')).not.toBeInTheDocument();
+  });
+
+  it('un pedido que en esta consola nunca terminó se va solo poco después de vencer', async () => {
+    dronesFix = [makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true, controlledBy: 'piloto' })];
+    render(<Console onLogout={() => {}} />);
+    await screen.findByText('Alfa');
+    vi.useFakeTimers();
+    try {
+      // El final le llegó antes que la recarga de /drones que lo traía vivo: no
+      // queda nada que lo saque, y sin esto se quedaba para siempre.
+      fire({ type: 'control_request', droneId: 'd1', ...PEDIDO, solicitante: 'oper1', titular: 'piloto' });
+      expect(screen.getByTestId('pedido-en-espera')).toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(PEDIDO.restanteMs + GRACIA_DEL_PEDIDO_MS - 1);
+      });
+      expect(screen.getByTestId('pedido-en-espera')).toHaveTextContent('el control está pasando a vos');
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(screen.queryByTestId('pedido-en-espera')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('un control que el hub soltó por inactividad se avisa; uno soltado a mano, no', async () => {

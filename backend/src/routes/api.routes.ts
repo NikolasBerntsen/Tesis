@@ -528,7 +528,10 @@ apiRouter.post('/drones/:droneId/resume', requireAuth('operator'), (req: AuthedR
   const fromIndex = req.body?.fromIndex;
   relevos.ordenDelOperador(droneId);
   if (getController(droneId)) {
-    releaseControl(droneId, req.user!.sub, { resume: typeof fromIndex === 'number' ? fromIndex : 'last' });
+    releaseControl(droneId, req.user!.sub, {
+      resume: typeof fromIndex === 'number' ? fromIndex : 'last',
+      ordenDeReanudar: true,
+    });
   } else {
     const msg: Record<string, unknown> = { type: 'resume_patrol', orderedBy: req.user!.sub };
     if (typeof fromIndex === 'number') msg.fromIndex = fromIndex;
@@ -601,6 +604,16 @@ apiRouter.delete('/drones/:droneId/control', requireAuth('operator'), (req: Auth
   const { droneId } = req.params;
   const holder = getController(droneId);
   if (!holder) return res.status(409).json({ error: 'El dron no está bajo control manual' });
+  // El titular que la consola cree que suelta. Si ya no es el del lock, la
+  // consola miraba un control viejo: el traspaso de un pedido pudo cruzarse
+  // con el «Salir» del anterior, y para un supervisor ese DELETE le quitaba a
+  // la fuerza el dron recién traspasado al que lo pidió (y lo mandaba a
+  // patrullar). Solo «Quitar control» manda `forzar`: ahí el supervisor eligió
+  // sacarle el dron a quien lo tenga.
+  const esperado: unknown = req.body?.titular;
+  if (typeof esperado === 'string' && esperado !== holder && req.body?.forzar !== true) {
+    return res.status(409).json({ error: `El control ya no lo tiene ${esperado}: ahora lo tiene ${holder}` });
+  }
 
   const esTitular = holder === req.user!.sub;
   const esSupervisor = esSupervisorOMas(req.user!.role);
@@ -635,6 +648,11 @@ apiRouter.post('/drones/:droneId/control/request', requireAuth('operator'), (req
   const r = control.pedir(droneId, req.user!.sub);
   if (r.resultado === 'ocupado') {
     return res.status(409).json({ error: `${r.solicitante} ya pidió el control de este dron: esperá a que le contesten` });
+  }
+  if (r.resultado === 'sinConsola') {
+    return res.status(409).json({
+      error: 'Tu consola no está conectada al Comando Central: esperá a que se reconecte y volvé a pedir el control',
+    });
   }
   if (r.resultado === 'pendiente') return res.status(202).json({ resultado: 'pendiente', pedido: r.pedido });
   res.json({ resultado: 'otorgado', drone: droneCard(droneId) });

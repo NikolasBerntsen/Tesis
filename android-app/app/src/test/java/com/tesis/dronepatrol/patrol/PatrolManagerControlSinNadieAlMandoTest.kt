@@ -1,5 +1,7 @@
 package com.tesis.dronepatrol.patrol
 
+import com.tesis.dronepatrol.model.Caja
+import com.tesis.dronepatrol.model.Deteccion
 import com.tesis.dronepatrol.model.PatrolState
 import com.tesis.dronepatrol.patrol.BancoDeRelevos.Companion.RUTA
 import kotlinx.coroutines.delay
@@ -46,6 +48,22 @@ class PatrolManagerControlSinNadieAlMandoTest {
     private fun registro(texto: String) = patrulla.localLog.replayCache.any { it.contains(texto) }
 
     private fun soltados(): List<JSONObject> = banco.mensajes("control_dropped")
+
+    /** Una persona en el centro del cuadro, con la cámara a 70° hacia abajo: un objetivo que se puede orbitar. */
+    private val persona = Deteccion(listOf("PERSON"), 0.9, listOf(Caja("PERSON", 0.9, 0.5, 0.5, 0.02, 0.05)), "/9j/x", 1L)
+
+    private suspend fun detectar() {
+        banco.deteccion.onDetection?.invoke(persona)
+        delay(80)
+    }
+
+    /** Soltado por inactividad, con el mando ya en el control físico; devuelve desde qué orden mirar. */
+    private suspend fun conElMandoEnElControlFisico(): Int {
+        enManual()
+        consola("""{"type":"control_released","by":"Comando Central","motivo":"inactividad"}""")
+        esperarA("el mando devuelto") { dron.ultimaOrden == DronEspia.DEVOLVER_EL_MANDO }
+        return dron.ordenes.size
+    }
 
     /** En el aire, con el control de op tomado; devuelve desde qué orden mirar. */
     private suspend fun enManual(): Int {
@@ -140,6 +158,143 @@ class PatrolManagerControlSinNadieAlMandoTest {
 
         assertEquals(PatrolState.PATROLLING, patrulla.state.value)
         assertEquals(emptyList<String>(), desde(i))
+    }
+
+    // ---- Con el mando en el control físico, la app no se lo saca ----
+
+    /**
+     * La órbita es el Virtual Stick a 10 Hz: le sacaba el dron a quien lo vuela
+     * con las palancas, y ni el botón de pausa del control se lo devolvía. La
+     * detección alerta igual, sin seguimiento.
+     */
+    @Test
+    fun conElMandoEnElControlFisicoUnaDeteccionAlertaSinOrbitar() = runBlocking {
+        val i = conElMandoEnElControlFisico()
+
+        detectar()
+        detectar()
+        esperarA("la alerta") { banco.comando.alertas.isNotEmpty() }
+        delay(200)
+
+        assertEquals("ni órbita ni estacionario: ${desde(i)}", emptyList<String>(), desde(i))
+        assertEquals(PatrolState.PAUSED, patrulla.state.value)
+        val deteccion = banco.comando.eventos("DETECTION").single().getString("message")
+        assertTrue(deteccion, deteccion.contains("con el mando en el control físico"))
+    }
+
+    /** Ni el freno de la señal perdida ni la ruta que se patrullaba antes de que lo tomaran. */
+    @Test
+    fun conElMandoEnElControlFisicoPerderYRecuperarLaSenialNoLeDaOrdenes() = runBlocking {
+        banco.arrancar()
+        banco.telemetria(norteM = 100.0)
+        patrulla.availableRoutes = listOf(RUTA)
+        consola("""{"type":"start_route","routeId":${RUTA.id},"fromIndex":0,"orderedBy":"op"}""")
+        esperarA("la ruta") { patrulla.state.value == PatrolState.PATROLLING }
+        consola("""{"type":"control_taken","by":"op"}""")
+        esperarA("el control manual") { patrulla.state.value == PatrolState.MANUAL }
+        consola("""{"type":"control_released","by":"Comando Central","motivo":"inactividad"}""")
+        esperarA("el mando devuelto") { dron.ultimaOrden == DronEspia.DEVOLVER_EL_MANDO }
+        val i = dron.ordenes.size
+
+        banco.relojDeLaSenial.adelantar(PatrolManager.SIGNAL_TIMEOUT_MS + 1_000)
+        esperarA("la señal perdida") { patrulla.state.value == PatrolState.RETURNING_HOME_SIGNAL }
+        banco.telemetria(norteM = 100.0)
+        esperarA("la señal de vuelta") { patrulla.state.value == PatrolState.PAUSED }
+        delay(200)
+
+        assertEquals("ni estacionario ni ruta: ${desde(i)}", emptyList<String>(), desde(i))
+        assertTrue(registro("Vuelve la señal con el mando en el control físico"))
+    }
+
+    /** Una persona que vuelve a tomarlo le devuelve el vuelo a la app: después, una detección orbita como siempre. */
+    @Test
+    fun volverATomarElControlTerminaElMandoEnElControlFisico() = runBlocking {
+        conElMandoEnElControlFisico()
+        consola("""{"type":"control_taken","by":"otro"}""")
+        esperarA("el control de nuevo") { patrulla.state.value == PatrolState.MANUAL }
+        consola("""{"type":"control_released","by":"otro"}""")
+        esperarA("la pausa") { patrulla.state.value == PatrolState.PAUSED }
+        val i = dron.ordenes.size
+
+        detectar()
+        detectar()
+        esperarA("la órbita") { "startOrbit" in desde(i) }
+    }
+
+    // ---- La reconexión sin titular: el soltar que se perdió con el enlace caído ----
+
+    @Test
+    fun laReconexionSinTitularConElControlTomadoDevuelveElMandoAlControlFisico() = runBlocking {
+        val i = enManual()
+        palanca(1.0)
+        val j = dron.ordenes.size
+
+        consola("""{"type":"control_released","by":"Comando Central","resync":true}""")
+        esperarA("la pausa") { patrulla.state.value == PatrolState.PAUSED }
+        delay(PatrolManager.MANDO_TIMEOUT_MS + 500)
+
+        // Como el de la inactividad: ni el estacionario del Virtual Stick ni el cero del watchdog.
+        assertEquals(listOf(DronEspia.CANCELAR_CAMARA, DronEspia.DEVOLVER_EL_MANDO), desde(j))
+        assertTrue(registro("se soltó mientras la app no estaba"))
+        assertTrue("antes del soltar no se frenó: ${desde(i)}", desde(i).none { it == "hold" })
+    }
+
+    @Test
+    fun laReconexionSinTitularSinElControlTomadoNoLeDaOrdenes() = runBlocking {
+        banco.arrancar()
+        banco.telemetria(norteM = 100.0)
+        val i = dron.ordenes.size
+
+        consola("""{"type":"control_released","by":"Comando Central","resync":true}""")
+        delay(200)
+
+        assertEquals(emptyList<String>(), desde(i))
+        assertEquals(PatrolState.IDLE, patrulla.state.value)
+    }
+
+    // ---- El teléfono lo suelta con una orden de campo: el hub se entera ----
+
+    @Test
+    fun volverALaBaseDesdeElCampoLeAvisaAlHubQueSoltoElControl() = runBlocking {
+        enManual()
+
+        patrulla.volverABase()
+        esperarA("el aviso al hub") { soltados().isNotEmpty() }
+
+        val aviso = soltados().single()
+        assertEquals("op", aviso.getString("by"))
+        assertEquals("el operador de campo ordenó volver a la base", aviso.getString("motivo"))
+        assertEquals(PatrolState.RETURNING_HOME, patrulla.state.value)
+    }
+
+    /** Sin enlace no sale nada; al volver, el hub pregunta y la app le dice por qué lo soltó. */
+    @Test
+    fun aterrizarDesdeElCampoSinEnlaceSeLoDiceAlHubAlReconectar() = runBlocking {
+        enManual()
+        sinComandoCentral()
+
+        patrulla.aterrizar()
+        esperarA("el aterrizaje") { "land" in dron.ordenes }
+        delay(100)
+        assertTrue("sin enlace no sale nada: ${soltados()}", soltados().isEmpty())
+
+        banco.comando.connected.value = true
+        delay(100)
+        consola("""{"type":"control_taken","by":"op","resync":true}""")
+        esperarA("el aviso al hub") { soltados().isNotEmpty() }
+        assertEquals("el operador de campo ordenó aterrizar", soltados().single().getString("motivo"))
+    }
+
+    /** Con el traspaso, el aviso nombra al titular de ahora: el hub solo suelta el lock de ese. */
+    @Test
+    fun elAvisoDeUnaOrdenDeCampoNombraAlTitularDeAhora() = runBlocking {
+        enManual()
+        consola("""{"type":"control_transferred","by":"nuevo","de":"op"}""")
+        esperarA("el traspaso") { registro("op le pasó el control manual a nuevo") }
+
+        patrulla.aterrizar()
+        esperarA("el aviso al hub") { soltados().isNotEmpty() }
+        assertEquals("nuevo", soltados().single().getString("by"))
     }
 
     // ---- La app lo suelta sola: 30 s sin el Comando Central ----

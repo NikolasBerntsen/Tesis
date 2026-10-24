@@ -267,6 +267,7 @@ export const control = new CoordinadorDelControl({
   traspasar: transferirControl,
   soltarPorInactividad,
   puedeControlar: cuentaQuePuedePilotear,
+  tieneConsola: (username) => [...operators.values()].some((s) => s.username === username),
   difundir: broadcastOperators,
 });
 
@@ -385,6 +386,14 @@ export interface ReleaseOptions {
   forced?: boolean;
   reason?: string;
   motivo?: MotivoDeSoltar;
+  /**
+   * El `resume_patrol` de este soltar es una orden de reanudar que una persona
+   * eligió (`POST /resume`). Sin esto sale con `alSoltar: true`: es el que
+   * acompaña a un soltar (la salida de la vista de pilotaje, «Quitar control»,
+   * una baja, el cierre de sesión), y la app no le corta con él un aterrizaje
+   * en curso (PROTOCOLS §2).
+   */
+  ordenDeReanudar?: boolean;
 }
 
 /** Lo que se le dice a quien pidió el control si el lock se suelta mientras espera. */
@@ -422,6 +431,7 @@ export function releaseControl(droneId: string, byUser: string, opts: ReleaseOpt
   if (opts.resume !== 'none') {
     const msg: Record<string, unknown> = { type: 'resume_patrol', orderedBy: byUser };
     if (typeof opts.resume === 'number') msg.fromIndex = opts.resume;
+    if (!opts.ordenDeReanudar) msg.alSoltar = true;
     sendToDrone(droneId, msg);
   }
   return true;
@@ -442,8 +452,7 @@ function transferirControl(droneId: string, de: string, a: string, motivo: 'cedi
   const mensaje =
     motivo === 'cedido'
       ? `${de} le cedió a ${a} el control manual del dron ${droneId}`
-      : `El control manual del dron ${droneId} pasó de ${de} a ${a}: ${de} no contestó el pedido en ` +
-        `${PLAZOS_DEL_CONTROL.respuestaMs / 1000} s`;
+      : `El control manual del dron ${droneId} pasó de ${de} a ${a}: ${de} no contestó el pedido a tiempo`;
   const ev = createLog('drone', 'CONTROL_TRANSFERRED', motivo === 'cedido' ? de : 'backend', mensaje, {
     droneId,
     meta: { drone: metaDron(droneId), detalle: { de, a, motivo } },
@@ -1210,9 +1219,13 @@ export function setupWebSocket(server: Server) {
       // El estado del control va antes que todo lo demás, y SIEMPRE: mientras
       // el dron estuvo desconectado el lock pudo cambiar (lo soltaron, pasó a
       // otro, el hub se reinició y los olvidó todos) sin que nadie pudiera
-      // avisarle. Sin titular, `control_released`: la app que seguía en MANUAL
-      // con nadie al mando —que es justo donde no alerta (PROTOCOLS §4)— lo
-      // suelta, y a una sin el control tomado no le hace nada. Con titular,
+      // avisarle. Sin titular, `control_released` con `resync: true`: la app
+      // que seguía en MANUAL con nadie al mando —que es justo donde no alerta
+      // (PROTOCOLS §4)— lo suelta como si lo hubiera soltado el barrido, con el
+      // mando de vuelta en el control físico, porque ese soltar tampoco lo
+      // eligió nadie (el `motivo: 'inactividad'` que se perdió con el dron
+      // desconectado, un reinicio del hub); a una sin el control tomado no le
+      // hace nada. Con titular,
       // `control_taken` con `resync: true`, que la app NO toma como una toma
       // nueva: si ya lo tenía no frena ni le saca la ruta que el titular le
       // mandó sin soltarlo, y si no lo tenía contesta `control_dropped` y el hub
@@ -1221,7 +1234,9 @@ export function setupWebSocket(server: Server) {
       const titular = controlledBy.get(droneId);
       sendToDrone(
         droneId,
-        titular ? { type: 'control_taken', by: titular, resync: true } : { type: 'control_released', by: 'Comando Central' },
+        titular
+          ? { type: 'control_taken', by: titular, resync: true }
+          : { type: 'control_released', by: 'Comando Central', resync: true },
       );
       reenviarDecisionesRecientes(droneId);
       // Las bases donde puede bajar (desvío, RELEVOS §4), y el primer status

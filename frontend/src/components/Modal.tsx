@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { useCapaSobreElPilotaje } from './CapaDePilotaje';
 
 const FOCUSABLES =
   'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -72,10 +73,49 @@ function dejarEco(fondo: HTMLElement, contenedor: Element) {
  * invisible. Un elemento que ya salió de la página no sirve: el navegador
  * todavía lo puede nombrar como el de pantalla completa en el instante en que
  * se lo saca, antes de avisar con `fullscreenchange`.
+ *
+ * Sin pantalla completa pero con la vista de pilotaje abierta (`capa`, ver
+ * CapaDePilotaje), también adentro de ella. La vista es una capa fija con su
+ * propio z-index: un diálogo en el body tapaba con su velo la vista entera y
+ * todo lo de adentro, incluido el pedido de control al titular, que se quedaba
+ * sin poder contestarlo. Pasa seguido: la vista del que recibe un control se
+ * abre sin un gesto y nunca entra en pantalla completa, Esc la deja, y el
+ * iPhone no la tiene.
  */
-function elegirContenedor(): Element {
+function elegirContenedor(capa: Element): Element {
   const completa = document.fullscreenElement;
-  return completa?.isConnected ? completa : document.body;
+  if (completa?.isConnected) return completa;
+  return capa.isConnected ? capa : document.body;
+}
+
+/**
+ * Lo que va encima de los diálogos y se contesta con uno abierto: el pedido de
+ * control al titular, con diez segundos de plazo (AvisosDelControl). Entra en
+ * la vuelta del tabulador después de la caja; sin esto, el foco atrapado en una
+ * confirmación dejaba al titular sin poder llegar a «Mantener el control».
+ */
+const SOBRE_LOS_DIALOGOS = '[data-sobre-los-dialogos]';
+
+/**
+ * Adónde lleva el tabulador desde `foco`, o null si el navegador lo hace solo.
+ * Los tramos son la caja y lo que va encima de los diálogos, en ese orden: el
+ * tabulador recorre cada uno con el orden de siempre y, en una punta, salta a
+ * la otra punta del tramo vecino, dando la vuelta. Desde la caja misma o desde
+ * afuera entra por una de las puntas. Sin nada que enfocar, se queda en la caja.
+ */
+function saltoDelTabulador(caja: HTMLElement, foco: Element | null, atras: boolean): HTMLElement | null {
+  const tramos = [caja, ...document.querySelectorAll<HTMLElement>(SOBRE_LOS_DIALOGOS)]
+    .map((zona) => [...zona.querySelectorAll<HTMLElement>(FOCUSABLES)])
+    .filter((tramo) => tramo.length > 0);
+  if (tramos.length === 0) return caja;
+  const ultimoDe = (tramo: HTMLElement[]) => tramo[tramo.length - 1];
+  const vecino = (i: number) => tramos[(i + tramos.length) % tramos.length];
+  const i = tramos.findIndex((tramo) => tramo.includes(foco as HTMLElement));
+  if (i < 0) return atras ? ultimoDe(tramos[tramos.length - 1]) : tramos[0][0];
+  const tramo = tramos[i];
+  if (!atras && foco === ultimoDe(tramo)) return vecino(i + 1)[0];
+  if (atras && foco === tramo[0]) return ultimoDe(vecino(i - 1));
+  return null;
 }
 
 /**
@@ -161,7 +201,8 @@ export default function Modal({
   // render siguiente reaparecía en el body, viejo. Si la pantalla completa
   // cambia con el diálogo abierto, el diálogo se queda donde nació, con UNA
   // excepción, la de abajo: la entrada a pantalla completa.
-  const [contenedor, setContenedor] = useState(elegirContenedor);
+  const capa = useCapaSobreElPilotaje();
+  const [contenedor, setContenedor] = useState(() => elegirContenedor(capa));
   // Lo último que se sabe del diálogo en la página, para el eco del cierre: el
   // contenedor de ahora y el velo que de verdad estuvo puesto. La ref del velo
   // no alcanza porque React la pone en null al desmontar; esta se queda con el
@@ -258,27 +299,14 @@ export default function Modal({
         return;
       }
       if (ev.key !== 'Tab' || !caja.current) return;
-      const dentro = [...caja.current.querySelectorAll<HTMLElement>(FOCUSABLES)];
       // Casi siempre hay al menos una forma de cerrar. La excepción es una
       // confirmación esperando al backend, con sus tres botones apagados: ahí
       // el tabulador no tiene adónde ir, y el foco se queda en la caja en vez
-      // de escaparse a la página de atrás.
-      if (dentro.length === 0) {
-        ev.preventDefault();
-        caja.current.focus();
-        return;
-      }
-      const primero = dentro[0];
-      const ultimo = dentro[dentro.length - 1];
-      const foco = document.activeElement;
-      const afuera = !caja.current.contains(foco);
-      if (ev.shiftKey && (foco === primero || foco === caja.current || afuera)) {
-        ev.preventDefault();
-        ultimo.focus();
-      } else if (!ev.shiftKey && (foco === ultimo || afuera)) {
-        ev.preventDefault();
-        primero.focus();
-      }
+      // de escaparse a la página de atrás (ver `saltoDelTabulador`).
+      const destino = saltoDelTabulador(caja.current, document.activeElement, ev.shiftKey);
+      if (!destino) return;
+      ev.preventDefault();
+      destino.focus();
     }
     document.addEventListener('keydown', alTeclear);
     return () => document.removeEventListener('keydown', alTeclear);

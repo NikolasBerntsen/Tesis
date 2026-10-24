@@ -12,6 +12,10 @@
    Arriba al centro, encima de todo: también de la vista de pilotaje (que es
    donde está el que recibe un pedido mientras vuela) y del velo de un diálogo
    abierto, porque un pedido con diez segundos de plazo no puede quedar tapado.
+   Con la vista abierta, la columna y los diálogos van adentro de ella (ver
+   CapaDePilotaje), así que el z-index compite con el velo en la misma capa.
+   Con más avisos que pantalla (un teléfono acostado) la columna se desplaza,
+   en vez de dejar los últimos afuera sin forma de cerrarlos.
    La columna deja pasar el mouse; cada aviso, no. Es el panel firme de los
    diálogos —atrás puede haber video— con el velo de ámbar de lo que hay que
    mirar ahora, y el filo de oro de lo encendido en el pedido al titular.
@@ -25,6 +29,9 @@
   flex-direction: column;
   gap: var(--e-3);
   width: min(560px, calc(100vw - var(--e-4) * 2));
+  max-height: calc(100vh - var(--e-5) * 2);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   transform: translateX(-50%);
   pointer-events: none;
 }
@@ -111,6 +118,6 @@
   .aviso-control { animation: none; }
 }
 @media (max-width: 640px) {
-  .avisos-del-control { top: var(--e-4); }
+  .avisos-del-control { top: var(--e-4); max-height: calc(100vh - var(--e-4) * 2); }
   .aviso-control { padding: var(--e-3) var(--e-4); }
 }

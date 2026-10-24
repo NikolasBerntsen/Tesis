@@ -19,6 +19,24 @@ export const PLAZO_DE_RESPUESTA_MS = 10_000;
 /** Lo que tarda el hub en soltar a un titular sin señales de vida. */
 export const SIN_SENALES_S = 30;
 
+/**
+ * Lo que el titular le resta a su plazo para contestar. Su cuenta regresiva
+ * arranca cuando le llega el pedido, una latencia después que la del hub, y
+ * el hub toma como no contestada toda respuesta que le llega vencida: un
+ * «Mantener el control» apretado con la pantalla en «1 s» podía llegar tarde y
+ * pasarle el dron al otro. Con este margen las respuestas se van antes de que
+ * el hub deje de aceptarlas.
+ */
+export const MARGEN_DEL_TITULAR_MS = 1_000;
+
+/**
+ * Cuánto después de vencer se descarta solo un pedido que en esta consola
+ * nunca terminó: el barrido del hub (cada 1 s) ya lo resolvió y el
+ * `control_request_result` tendría que haber llegado. Lo que lo deja vivo es
+ * una recarga de /drones armada antes del final que llega después de él.
+ */
+export const GRACIA_DEL_PEDIDO_MS = 3_000;
+
 /** Un pedido de control tal como llega del hub: en `control_request` y en la ficha del dron. */
 export interface PedidoDelHub {
   solicitante: string;
@@ -84,6 +102,24 @@ export function pedidoLocal(droneId: string, p: PedidoDelHub, ahora: number): Pe
 /** Los segundos que le quedan, redondeados para arriba: "1 s" hasta el final, nunca "0 s" con tiempo. */
 export function segundosRestantes(pedido: PedidoDeControl, ahora: number): number {
   return Math.max(0, Math.ceil((pedido.venceEnMs - ahora) / 1000));
+}
+
+/** Los segundos que le quedan al titular para contestar, ya con su margen restado (ver `MARGEN_DEL_TITULAR_MS`). */
+export function segundosParaContestar(pedido: PedidoDeControl, ahora: number): number {
+  return segundosRestantes({ ...pedido, venceEnMs: pedido.venceEnMs - MARGEN_DEL_TITULAR_MS }, ahora);
+}
+
+/**
+ * Los pedidos sin los que vencieron hace más de `GRACIA_DEL_PEDIDO_MS`. Si no
+ * sobra ninguno devuelve el mismo objeto, para que el estado no cambie y la
+ * consola no se redibuje por nada.
+ */
+export function sinLosVencidos(
+  pedidos: Record<string, PedidoDeControl>,
+  ahora: number,
+): Record<string, PedidoDeControl> {
+  const vigentes = Object.entries(pedidos).filter(([, p]) => ahora < p.venceEnMs + GRACIA_DEL_PEDIDO_MS);
+  return vigentes.length === Object.keys(pedidos).length ? pedidos : Object.fromEntries(vigentes);
 }
 
 /** Un aviso del control para esta consola: el fin de un pedido o un control que se soltó solo. */
@@ -157,8 +193,13 @@ export function avisoDeLaLiberacion(
   droneId: string,
   nombre: string,
 ): Omit<AvisoDelControl, 'id'> | null {
+  // Lo que hace la app al soltarlo así (PROTOCOLS §2): solo el que estaba en
+  // vuelo manual queda quieto; el que seguía un objetivo o un relevo vuelve a
+  // eso, y el que aterrizaba sigue bajando.
   const quedo =
-    'El dron no sale a patrullar solo: queda a la espera, y lo pueden volver a tomar desde la consola o con el control físico.';
+    'El dron no sale a patrullar solo: si lo estaban volando a mano, queda quieto donde está con el mando en el ' +
+    'control físico; si seguía un objetivo, un relevo o un aterrizaje, sigue con eso. Lo pueden volver a tomar ' +
+    'desde la consola.';
   if (motivo === 'inactividad') {
     const quien = teniaElControl === yo ? 'tu consola estuvo' : `la consola de ${teniaElControl} estuvo`;
     return {

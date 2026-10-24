@@ -78,6 +78,13 @@ open class CommandCenterClient(
     var onLand: ((by: String) -> Unit)? = null
     /** Reanudar el patrullaje; [fromIndex] nulo = desde el último nodo alcanzado. */
     var onResumePatrol: ((fromIndex: Int?) -> Unit)? = null
+
+    /**
+     * El `resume_patrol` que acompaña a un soltar (`alSoltar: true`, §2): nadie
+     * lo eligió como orden de vuelo, y la app no corta con él un aterrizaje en
+     * curso. Va aparte para que no se confunda con la orden de reanudar.
+     */
+    var onReanudacionAlSoltar: ((fromIndex: Int?) -> Unit)? = null
     var onStartRoute: ((routeId: Int, fromIndex: Int, orderedBy: String) -> Unit)? = null
     var onStopPatrol: ((orderedBy: String) -> Unit)? = null
     var onForceGoto: ((routeId: Int, index: Int, orderedBy: String) -> Unit)? = null
@@ -104,6 +111,13 @@ open class CommandCenterClient(
      * soltar de siempre, la app le devuelve el mando al control físico.
      */
     var onControlSoltadoPorInactividad: ((by: String) -> Unit)? = null
+
+    /**
+     * Al reconectarse, el hub dice que nadie tiene el control (`control_released`
+     * con `resync: true`, §2): un soltar que pasó con la app afuera y que
+     * tampoco eligió nadie, así que termina como el de la inactividad.
+     */
+    var onControlSoltadoAlReconectar: ((by: String) -> Unit)? = null
 
     /**
      * Al reconectarse, el hub dice quién tiene el control (`control_taken` con
@@ -395,9 +409,7 @@ open class CommandCenterClient(
             }
             "takeoff" -> onTakeoff?.invoke(msg.optString("by"))
             "land" -> onLand?.invoke(msg.optString("by"))
-            "resume_patrol" -> onResumePatrol?.invoke(
-                if (msg.isNull("fromIndex")) null else msg.optInt("fromIndex"),
-            )
+            "resume_patrol" -> reanudar(msg)
             "start_route" -> onStartRoute?.invoke(
                 msg.optInt("routeId"),
                 msg.optInt("fromIndex"),
@@ -444,15 +456,27 @@ open class CommandCenterClient(
         when (tipo) {
             "control_taken" -> if (msg.optBoolean("resync", false)) onControlResync?.invoke(by) else onControlTaken?.invoke(by)
             "control_transferred" -> onControlTransferred?.invoke(by, msg.optString("de"))
-            "control_released" ->
-                if (msg.optString("motivo") == MOTIVO_INACTIVIDAD) {
-                    onControlSoltadoPorInactividad?.invoke(by)
-                } else {
-                    onControlReleased?.invoke(by)
-                }
+            "control_released" -> soltado(by, msg)
             else -> return false
         }
         return true
+    }
+
+    /**
+     * Un `control_released`: el del barrido por inactividad, el de la
+     * reconexión (`resync`) o el de siempre. Los dos primeros no los eligió
+     * nadie, y la app le devuelve el mando al control físico.
+     */
+    private fun soltado(by: String, msg: JSONObject) = when {
+        msg.optString("motivo") == MOTIVO_INACTIVIDAD -> onControlSoltadoPorInactividad?.invoke(by)
+        msg.optBoolean("resync", false) -> onControlSoltadoAlReconectar?.invoke(by)
+        else -> onControlReleased?.invoke(by)
+    }
+
+    /** `resume_patrol`: la orden de reanudar, o el que acompaña a un soltar (`alSoltar`, §2). */
+    private fun reanudar(msg: JSONObject) {
+        val desde = if (msg.isNull("fromIndex")) null else msg.optInt("fromIndex")
+        if (msg.optBoolean("alSoltar", false)) onReanudacionAlSoltar?.invoke(desde) else onResumePatrol?.invoke(desde)
     }
 
     /**

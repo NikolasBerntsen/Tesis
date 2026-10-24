@@ -161,7 +161,11 @@ function queHaceAlSoltarSinOrden(conObjetivo: boolean, enRelevo: boolean): strin
   if (enRelevo) {
     return conObjetivo ? 'vuelve al objetivo que estaba siguiendo, y el relevo sigue en marcha' : 'sigue con el relevo';
   }
-  return conObjetivo ? 'vuelve al objetivo que estaba siguiendo' : 'vuelve a patrullar su ruta';
+  // Aterrizando no tiene objetivo (aterrizar lo suelta) y el `resume_patrol`
+  // de un soltar no le corta el aterrizaje (PROTOCOLS §2): sigue bajando.
+  return conObjetivo
+    ? 'vuelve al objetivo que estaba siguiendo'
+    : 'vuelve a patrullar su ruta, o sigue bajando hasta el suelo si está aterrizando';
 }
 
 /** El botón de soltar que no pierde nada: dice a qué vuelve el dron. */
@@ -562,7 +566,13 @@ export default function DroneDetail({
    * control con una alerta validada sacaba al dron de encima del objetivo.
    */
   const soltarControl = (resume: 'none' | 'last') =>
-    llamar(`/drones/${drone.droneId}/control`, { method: 'DELETE', body: JSON.stringify({ resume }) });
+    // Con el titular que esta consola ve: si el control ya pasó a otro (un
+    // traspaso que se cruzó con este clic), el hub contesta 409 en vez de
+    // soltarle el dron al que lo acaba de recibir.
+    llamar(`/drones/${drone.droneId}/control`, {
+      method: 'DELETE',
+      body: JSON.stringify({ resume, titular: controlador }),
+    });
   /**
    * Supervisor: mismo endpoint, el backend registra que fue forzado. Con
    * objetivo, el dron vuelve a él: quitarle el control a alguien no es decidir
@@ -572,9 +582,11 @@ export default function DroneDetail({
    */
   async function quitarControl() {
     const otro = controlador;
+    // `forzar`: el supervisor eligió sacarle el dron a quien lo tenga, aunque
+    // en el medio haya cambiado de manos.
     await api(`/drones/${drone.droneId}/control`, {
       method: 'DELETE',
-      body: JSON.stringify({ resume: reanudacionAlSoltar }),
+      body: JSON.stringify({ resume: reanudacionAlSoltar, titular: otro, forzar: true }),
     });
     avisar(`Se le quitó el control de ${drone.displayName} a ${otro}.`);
   }
@@ -1004,12 +1016,16 @@ export default function DroneDetail({
                     </button>
                   )}
                 </p>
-                {/* Un pedido por dron: con uno en curso el botón espera. */}
+                {/* Un pedido por dron: con uno en curso el botón espera. Y
+                    desconectado no se pide, como no se toma: el hub ya no
+                    suelta el lock cuando se cae el socket del dron, y el que
+                    lo pedía recibía, con su vista abierta sola, un dron que
+                    no se podía volar. */}
                 <button
                   type="button"
                   className="primario"
                   onClick={() => setPidiendo(true)}
-                  disabled={pedidoDeControl !== null}
+                  disabled={pedidoDeControl !== null || !drone.online}
                 >
                   <IconoMando tamano={18} />
                   Pedir el control
@@ -1092,7 +1108,8 @@ export default function DroneDetail({
             consecuencia: `${controlador} está piloteando este dron. ¿Querés pedirle el control?`,
             detalle:
               `${controlador} tiene ${PLAZO_DE_RESPUESTA_MS / 1000} segundos para cedértelo o mantenerlo. Si no ` +
-              'contesta, el control pasa a vos y el dron queda quieto donde está, a la espera de tus órdenes.',
+              'contesta, el control pasa a vos: si lo estaba volando a mano, el dron queda quieto donde está, a la ' +
+              'espera de tus órdenes; si no, sigue con lo que estaba haciendo.',
             confirmar: 'Pedir el control',
             enCurso: 'Pidiendo…',
             tono: 'primario',

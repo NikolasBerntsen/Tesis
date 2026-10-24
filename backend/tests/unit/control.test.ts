@@ -18,6 +18,8 @@ class Banco {
   readonly soltados: [string, string][] = [];
   /** Cuentas que perdieron el permiso de pilotear. */
   readonly sinPermiso = new Set<string>();
+  /** Cuentas sin ninguna consola conectada (el resto, sí). */
+  readonly sinConsola = new Set<string>();
   readonly coord: CoordinadorDelControl;
 
   constructor() {
@@ -40,6 +42,7 @@ class Banco {
         this.coord.alSoltar(droneId, `${titular} estuvo 30 s sin dar señales`);
       },
       puedeControlar: (username) => !this.sinPermiso.has(username),
+      tieneConsola: (username) => !this.sinConsola.has(username),
       difundir: (msg) => this.consolas.push(msg),
     });
   }
@@ -275,15 +278,70 @@ describe('control — pedido de control', () => {
     expect(b.de('control_request_result')).toHaveLength(1);
   });
 
-  it('el barrido de señales suelta al titular y termina el pedido que había', () => {
+  it('el titular sin señales con un pedido encima se lo pasa en el acto al que lo pidió, sin esperar los 10 s', () => {
     const b = new Banco().conTitular();
     b.t += PLAZOS_DEL_CONTROL.sinSenalesMs - 5_000;
     b.coord.pedir(A, 'relevo');
-    // a los 30 s de la toma el pedido todavía no venció: se suelta y el pedido termina
+    // a los 30 s de la toma el pedido todavía no venció: igual pasa, porque el
+    // barrido real de 1 s soltaba el lock antes y el pedido terminaba liberado
     b.t += 5_000;
     b.coord.barrer();
-    expect(b.soltados).toEqual([[A, 'piloto']]);
+    expect(b.soltados).toEqual([]);
+    expect(b.traspasos).toEqual([{ droneId: A, de: 'piloto', a: 'relevo', motivo: 'vencido' }]);
+    expect(b.de('control_request_result')).toEqual([
+      expect.objectContaining({ resultado: 'vencido', motivo: 'piloto estuvo 30 s sin dar señales' }),
+    ]);
+    expect(b.coord.pedidoDe(A)).toBeNull();
+    // y el que lo recibió arranca su cuenta de señales ahora
+    b.t += PLAZOS_DEL_CONTROL.sinSenalesMs - 1;
+    b.coord.barrer();
+    expect(b.soltados).toEqual([]);
+  });
+
+  it('si el que pidió ya no puede recibirlo, el titular sin señales se suelta igual', () => {
+    const b = new Banco().conTitular();
+    b.t += PLAZOS_DEL_CONTROL.sinSenalesMs - 5_000;
+    b.coord.pedir(A, 'relevo');
+    b.sinPermiso.add('relevo');
+    b.t += 5_000;
+    b.coord.barrer();
     expect(b.traspasos).toEqual([]);
-    expect(b.de('control_request_result')[0]).toMatchObject({ resultado: 'liberado', motivo: 'piloto estuvo 30 s sin dar señales' });
+    expect(b.soltados).toEqual([[A, 'piloto']]);
+    expect(b.de('control_request_result')).toEqual([
+      expect.objectContaining({ resultado: 'cancelado', motivo: 'relevo ya no puede controlar drones' }),
+    ]);
+  });
+});
+
+describe('control — el que pide tiene que estar mirando', () => {
+  it('sin una consola conectada no queda pedido: ni aviso al titular ni registro', () => {
+    const b = new Banco().conTitular();
+    b.sinConsola.add('relevo');
+    expect(b.coord.pedir(A, 'relevo')).toEqual({ resultado: 'sinConsola' });
+    expect(b.coord.pedidoDe(A)).toBeNull();
+    expect(b.de('control_request')).toEqual([]);
+    expect(b.eventos('CONTROL_REQUESTED')).toEqual([]);
+    // un dron libre se da igual, como tomarlo
+    b.locks.delete(A);
+    expect(b.coord.pedir(A, 'relevo')).toEqual({ resultado: 'otorgado' });
+  });
+
+  it('si al resolverse ya no tiene consola, el pedido termina cancelado y el titular sigue', () => {
+    for (const comoTermina of ['ceder', 'vencer'] as const) {
+      const b = new Banco().conTitular();
+      b.coord.pedir(A, 'relevo');
+      b.sinConsola.add('relevo');
+      if (comoTermina === 'ceder') {
+        expect(b.coord.contestar(A, 'piloto', 'ceder')).toEqual({ ok: true, resultado: 'cancelado' });
+      } else {
+        b.t += PLAZOS_DEL_CONTROL.respuestaMs;
+        b.coord.barrer();
+      }
+      expect(b.traspasos, comoTermina).toEqual([]);
+      expect(b.locks.get(A)).toBe('piloto');
+      expect(b.de('control_request_result')[0]).toMatchObject({
+        resultado: 'cancelado', motivo: 'relevo no tiene ninguna consola conectada',
+      });
+    }
   });
 });

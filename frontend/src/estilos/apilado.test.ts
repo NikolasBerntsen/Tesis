@@ -56,6 +56,11 @@ describe('orden de apilado', () => {
     // El que recibe un pedido con diez segundos de plazo puede estar volando,
     // o con la confirmación de aterrizar abierta: no puede quedar tapado.
     expect(avisosDelControl).toBeGreaterThan(vistaDePilotaje);
+    // Comparar con el velo vale porque compiten en la MISMA capa: con la vista
+    // abierta, los avisos y los diálogos van adentro de ella (CapaDePilotaje y
+    // `elegirContenedor` en Modal.tsx), que con su z-index arma su propio
+    // contexto de apilado. Un diálogo en el body la tapaba entera, avisos
+    // incluidos. Que vayan juntos lo prueba AvisosDelControl.test.tsx.
     expect(avisosDelControl).toBeGreaterThan(velo);
   });
 });

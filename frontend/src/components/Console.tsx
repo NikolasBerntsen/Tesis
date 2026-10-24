@@ -27,7 +27,9 @@ import {
   avisoDelFin,
   esFinDelPedido,
   esPedidoDelHub,
+  GRACIA_DEL_PEDIDO_MS,
   pedidoLocal,
+  sinLosVencidos,
   type AvisoDelControl,
   type FinDelPedido,
   type PedidoDeControl,
@@ -312,6 +314,22 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
   const descartarAvisoDelControl = useCallback((id: number) => {
     setAvisosDelControl((prev) => prev.filter((a) => a.id !== id));
   }, []);
+
+  // Un pedido que en esta consola nunca terminó se va solo poco después de
+  // vencer. La recarga de /drones pisa los pedidos con los de las fichas, y una
+  // armada antes del `control_request_result` que llega después lo revivía para
+  // siempre: «el control está pasando a vos» sin fin, y «Pedir el control»
+  // apagado para ese dron.
+  useEffect(() => {
+    const lista = Object.values(pedidosDeControl);
+    if (lista.length === 0) return;
+    const proximo = Math.min(...lista.map((p) => p.venceEnMs)) + GRACIA_DEL_PEDIDO_MS;
+    const id = setTimeout(
+      () => setPedidosDeControl((prev) => sinLosVencidos(prev, Date.now())),
+      Math.max(0, proximo - Date.now()),
+    );
+    return () => clearTimeout(id);
+  }, [pedidosDeControl]);
 
   useEffect(() => {
     api<Me>('/me').then(setMe).catch(console.error);
