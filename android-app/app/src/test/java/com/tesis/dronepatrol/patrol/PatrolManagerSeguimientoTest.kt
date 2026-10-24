@@ -381,8 +381,11 @@ class PatrolManagerSeguimientoTest {
         withTimeout(5_000) { patrulla.state.first { it == PatrolState.MANUAL } }
 
         reloj.adelantar(500)
+        assertTrue("antes de verlo en MANUAL, hace medio segundo que no", patrulla.objetivo!!.vistoHaceMs >= 500)
         detectar()
         detectar()
+        // El rastreador se sigue alimentando con lo que ve en MANUAL: el objetivo no se pierde.
+        esperarA("la detección en MANUAL en el rastreador") { patrulla.objetivo!!.vistoHaceMs == 0L }
         val vehiculo = Deteccion(listOf("VEHICLE"), 0.9, listOf(Caja("VEHICLE", 0.9, 0.2, 0.2, 0.1, 0.1)), null, 2L)
         detectar(vehiculo)
         detectar(vehiculo)

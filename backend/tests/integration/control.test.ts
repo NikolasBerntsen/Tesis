@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
-import { crearUsuario, seed, startServer, login, api, connectWs, tokenDeDron, tokenHumano, CREDS, DRON, type TestServer, type WsClient } from '../helpers';
+import { crearUsuario, seed, startServer, login, api, connectWs, tokenDeDron, tokenHumano, wait, CREDS, DRON, type TestServer, type WsClient } from '../helpers';
 import { db } from '../../src/db';
 import type { Role } from '../../src/store';
 
@@ -377,5 +377,56 @@ describe('integración — control manual exclusivo', () => {
     // dar tiempo al handler de cierre del servidor
     await new Promise((r) => setTimeout(r, 200));
     expect(await titular()).toBeNull();
+  });
+
+  describe('el dron que se reconecta: el lock se reconcilia', () => {
+    const liberados = (c: WsClient) => c.got.filter((m) => m.type === 'control_released');
+    const titularDeCharlie = async () =>
+      (await api(srv.base, '/api/drones', adm)).body.find((d: any) => d.droneId === DRON.charlie).controlledBy;
+
+    afterEach(async () => {
+      await api(srv.base, `/api/drones/${DRON.charlie}/control`, adm, { method: 'DELETE', body: JSON.stringify({ resume: 'none' }) });
+    });
+
+    it('si el hub registró el cierre, el lock ya no está y al volver le suelta el control', async () => {
+      const antes = await connectWs(srv.wsUrl, tokenDeDron(DRON.charlie));
+      // sin titular desde el arranque: también se le suelta, y a una app sin el control tomado no le hace nada
+      expect(await antes.waitFor((m) => m.type === 'control_released')).toEqual({ type: 'control_released', by: 'Comando Central' });
+      expect((await api(srv.base, `/api/drones/${DRON.charlie}/control`, op, { method: 'POST' })).status).toBe(200);
+      await antes.waitFor((m) => m.type === 'control_taken');
+      await antes.close();
+      await wait(150);
+      // el cierre borró el lock sin poder avisarle a la app, que sigue en MANUAL
+      expect(await titularDeCharlie()).toBeNull();
+
+      const despues = await connectWs(srv.wsUrl, tokenDeDron(DRON.charlie));
+      try {
+        expect(await despues.waitFor((m) => m.type === 'control_released')).toEqual({ type: 'control_released', by: 'Comando Central' });
+        await wait(100);
+        expect(liberados(despues)).toHaveLength(1);
+        // soltarlo no es una orden de patrullar: queda en PAUSED y alerta
+        expect(despues.got.some((m) => m.type === 'resume_patrol')).toBe(false);
+      } finally {
+        await despues.close();
+      }
+    });
+
+    it('si la reconexión reemplaza al socket viejo, el lock sigue en pie y no le llega nada del control', async () => {
+      const viejo = await connectWs(srv.wsUrl, tokenDeDron(DRON.charlie));
+      await viejo.waitFor((m) => m.type === 'control_released');
+      expect((await api(srv.base, `/api/drones/${DRON.charlie}/control`, op, { method: 'POST' })).status).toBe(200);
+      await viejo.waitFor((m) => m.type === 'control_taken');
+
+      const nuevo = await connectWs(srv.wsUrl, tokenDeDron(DRON.charlie));
+      try {
+        await nuevo.waitFor((m) => m.type === 'bases');
+        await wait(150);
+        expect(nuevo.got.filter((m) => m.type === 'control_released' || m.type === 'control_taken')).toEqual([]);
+        expect(await titularDeCharlie()).toBe('operador');
+      } finally {
+        await nuevo.close();
+        await viejo.close();
+      }
+    });
   });
 });

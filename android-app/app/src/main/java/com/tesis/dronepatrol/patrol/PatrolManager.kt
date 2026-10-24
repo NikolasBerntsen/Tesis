@@ -1151,7 +1151,9 @@ class PatrolManager(
         pasarA(PatrolState.MANUAL)
         // Solo log local: el Comando Central ya registra su propio CONTROL_TAKEN.
         // Lo de las alertas va acá y no en cada detección, que llegan dos por segundo.
-        log("$by tomó el control manual del dron: mientras lo tenga, lo que vea el detector se marca en el video pero no alerta")
+        // La regla es el estado y no el lock (ver ESTADOS_SIN_ALERTAS): el texto no
+        // puede prometer silencio mientras dure el control, que también vuela solo.
+        log("$by tomó el control manual del dron: mientras lo maneje (en MANUAL), lo que vea el detector se marca en el video pero no alerta")
     }
 
     /**

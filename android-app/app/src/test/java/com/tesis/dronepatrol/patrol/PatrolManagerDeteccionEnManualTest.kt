@@ -140,23 +140,6 @@ class PatrolManagerDeteccionEnManualTest {
 
     private fun cuadrosALaConsola(): List<String> = comandoCentral.mensajes("video_frame").map { it.getString("jpegBase64") }
 
-    /**
-     * La regla en los dos conjuntos que la deciden: MANUAL no alerta y tampoco
-     * arranca seguimientos (sin esto, sacarlo de uno solo dejaba al otro
-     * alertando por la puerta de atrás). Los demás estados de vuelo de la app
-     * siguen alertando.
-     */
-    @Test
-    fun manualEstaEntreLosEstadosSinAlertasYNoEntreLosQueSiguen() {
-        assertTrue(PatrolState.MANUAL in PatrolManager.ESTADOS_SIN_ALERTAS)
-        assertFalse(PatrolState.MANUAL in PatrolManager.ESTADOS_QUE_SIGUEN)
-        assertEquals(
-            setOf(PatrolState.PATROLLING, PatrolState.PAUSED, PatrolState.FORCED),
-            PatrolManager.ESTADOS_QUE_SIGUEN,
-        )
-        assertTrue(PatrolManager.ESTADOS_QUE_SIGUEN.none { it in PatrolManager.ESTADOS_SIN_ALERTAS })
-    }
-
     @Test
     fun enManualLasDeteccionesNoAlertanPeroLasCajasSiguenEnElVideo() = runBlocking {
         patrullando()
@@ -171,12 +154,15 @@ class PatrolManagerDeteccionEnManualTest {
         esperarA("el cuadro sin cajas") { cuadrosALaConsola().size == 1 }
         assertEquals("sin nada detectado el cuadro sale tal cual", b64(cuadro), cuadrosALaConsola()[0])
 
-        // El reparto mide la vigencia de las cajas con el reloj de verdad.
-        reloj.ms = System.currentTimeMillis()
         repeat(3) { detectarDosVeces() }
+        // El reparto mide la vigencia de las cajas con el reloj de verdad: se
+        // alinea justo antes de la última, y el cuadro sale enseguida, para que
+        // de los 1,5 s de vigencia el test gaste una sola detección.
+        reloj.ms = System.currentTimeMillis()
+        detectar()
+        dron.videoFrames.emit(cuadro)
         assertEquals("las cajas quedan para dibujarlas", persona.cajas, patrulla.cajasRecientes.value)
         assertEquals(persona.cajas, patrulla.cajasVigentes(reloj.ahora()))
-        dron.videoFrames.emit(cuadro)
         esperarA("el cuadro con las cajas") { cuadrosALaConsola().size == 2 }
         assertNotEquals("con cajas vigentes el cuadro sale anotado, también en MANUAL", b64(cuadro), cuadrosALaConsola()[1])
 
@@ -190,12 +176,18 @@ class PatrolManagerDeteccionEnManualTest {
      * Al soltar no sale nada de lo que se vio mientras manejaba, ni siquiera
      * como la primera de una confirmación: la primera detección después de
      * soltar es una candidata nueva, y la segunda alerta y arranca la órbita.
+     *
+     * La tanda en MANUAL termina en una cantidad IMPAR a propósito: con una par,
+     * una confirmación que corriera en MANUAL (y solo callara la alerta) dejaba
+     * la candidata vacía igual, y el test no la veía. Con la impar, la última
+     * quedaría de candidata y la primera después de soltar alertaría.
      */
     @Test
     fun alSoltarLaProximaDeteccionConfirmadaAlertaComoSiempreYSinRafaga() = runBlocking {
         patrullando()
         tomarElControl()
         repeat(5) { detectarDosVeces() }
+        detectar()
         delay(200)
         sinAlertas("manejando")
 
@@ -309,5 +301,35 @@ class PatrolManagerDeteccionEnManualTest {
         detectarDosVeces()
         delay(300)
         sinAlertas("con la señal de vuelta y el control tomado")
+    }
+
+    /**
+     * Se corta el enlace con el Comando Central con el control tomado y el hub
+     * registra el cierre: borra el lock sin poder avisarle a la app, que queda
+     * en MANUAL con nadie al mando. Al reconectar, el hub se lo suelta él
+     * (`by: "Comando Central"`, PROTOCOLS "Control manual — bloqueo exclusivo"):
+     * el dron sale de MANUAL y lo que vea desde ahí vuelve a alertar, que es
+     * justo el caso de "nadie lo está manejando".
+     */
+    @Test
+    fun siAlReconectarElHubLeSueltaElControlHuerfanoVuelveAAlertar() = runBlocking {
+        patrullando()
+        tomarElControl()
+        comandoCentral.connected.value = false
+        delay(100)
+        detectarDosVeces()
+        delay(200)
+        sinAlertas("sin enlace y en MANUAL")
+
+        comandoCentral.connected.value = true
+        mensaje("""{"type":"control_released","by":"Comando Central"}""")
+        esperarEstado(PatrolState.PAUSED)
+        assertTrue(
+            "el teléfono anota quién lo soltó",
+            patrulla.localLog.replayCache.any { it.contains("Comando Central liberó el control") },
+        )
+        detectarDosVeces()
+        esperarEstado(PatrolState.ORBITING)
+        esperarA("la alerta") { comandoCentral.alertas.size == 1 }
     }
 }

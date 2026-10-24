@@ -1070,6 +1070,16 @@ export function setupWebSocket(server: Server) {
       });
       broadcastOperators({ type: 'event', event: ev });
       broadcastOperators({ type: 'drone_online', drone: droneCard(droneId) });
+      // El lock se reconcilia antes que todo lo demás, porque se perdió antes: al
+      // registrar el cierre del socket viejo el hub lo borró sin poder avisarle
+      // (y un reinicio del hub los olvida todos), y la app que tenía el control
+      // tomado seguía en MANUAL con nadie al mando, que es justo donde no alerta
+      // (PROTOCOLS §4). A una app sin el control tomado no le hace nada. Con
+      // titular no se reenvía nada: es la reconexión que reemplazó al socket
+      // viejo antes de que el hub notara el cierre, y el lock sigue en pie; un
+      // control_taken de más le sacaría la ruta a un dron que el titular mandó
+      // a patrullar sin soltarlo.
+      if (!controlledBy.has(droneId)) sendToDrone(droneId, { type: 'control_released', by: 'Comando Central' });
       reenviarDecisionesRecientes(droneId);
       // Las bases donde puede bajar (desvío, RELEVOS §4), y el primer status
       // que llegue decide qué relevo se le reenvía (PROTOCOLS §1.b, "Reconexión").

@@ -79,6 +79,18 @@ el backend libera el lock y reanuda el patrullaje automáticamente, **salvo que
 el dron esté sobre un objetivo (su último `status` trae `target`): en ese caso
 lo suelta sin reanudar y el dron vuelve al objetivo** (§2 `control_released`).
 
+**Si el que se desconecta es el dron**, el hub borra el lock al registrar el
+cierre de su socket, sin poder avisarle. Por eso, **cuando un dron se conecta y
+nadie tiene su lock** (también después de un reinicio del hub, que guarda los
+locks en memoria), el hub le manda `control_released` con `by: "Comando
+Central"`, antes que cualquier otro mensaje de la reconexión: sin eso la app
+quedaba en `MANUAL` sin nadie al mando, que es justo donde no alerta (§4). A una
+app que no tenía el control tomado no le cambia nada, y no va acompañado de un
+`resume_patrol`: el dron queda como con cualquier `control_released` (§2),
+`PAUSED` en el aire, de vuelta al objetivo o al relevo si los tenía, o en reposo
+en el suelo. Si la reconexión reemplaza al socket viejo antes de que el hub
+note el cierre, el lock sigue con su titular y no se le reenvía nada.
+
 Tener el lock es lo que habilita a pilotear: las dos órdenes de vuelo a mano
 (`manual_move` por REST y el mando con palancas `manual_stick` por WebSocket,
 §3.b) y **la inclinación de la cámara (`manual_gimbal`, también por WebSocket)**
@@ -652,8 +664,10 @@ La última posición queda además fija en la pantalla del teléfono.
 
 ### Reconexión
 
-Cuando un dron se reconecta, el `relevo.relayId` de su **primer status**
-decide qué hace el hub (RELEVOS §7):
+Cuando un dron se reconecta, lo primero, sin esperar su status: si nadie tiene
+el lock de su control manual, el hub le manda `control_released` (ver "Control
+manual — bloqueo exclusivo"). Después, el `relevo.relayId` de su **primer
+status** decide qué hace el hub (RELEVOS §7):
 - Un relevo activo en el que el dron tiene ese rol: le reenvía la última orden,
   idempotente por `relayId`. Al relevo (B): `relay_start` o `relay_tracking`
   (más `relay_go` si ya se le había dado). Al origen (A): `relay_status` y, en
