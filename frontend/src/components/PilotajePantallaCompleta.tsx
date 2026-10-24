@@ -269,8 +269,9 @@ export default function PilotajePantallaCompleta({
   // redondeada, la que se muestra y se manda.
   const inclinacionRef = useRef(inclinacion);
   // La cuenta exacta, sin redondear, que es de donde parte cada gesto: el modo
-  // mouse suma 0,15° por píxel, y redondear cada paso torcía la cuenta para
-  // arriba (ver `recortarInclinacion`).
+  // mouse suma una fracción de grado por píxel (GRADOS_POR_PIXEL por la
+  // sensibilidad vertical), y redondear cada paso torcía la cuenta para arriba
+  // (ver `recortarInclinacion`).
   const inclinacionExacta = useRef(inclinacion);
   const ultimoGestoDeCamara = useRef(Number.NEGATIVE_INFINITY);
   const derechoApretado = useRef(false);
@@ -775,8 +776,10 @@ export default function PilotajePantallaCompleta({
             </p>
           )}
           {/* El último de la lista y sin rojo: el ajuste ya vale, lo único que
-              falta es la copia del Comando Central para la próxima vez. */}
-          {preferencias.aviso && (
+              falta es la copia del Comando Central para la próxima vez. Con
+              los ajustes abiertos va adentro del panel, que es donde se está
+              mirando (y que acá le taparía la punta). */}
+          {preferencias.aviso && globo !== 'ajustes' && (
             <p className="aviso" role="status" data-testid="pilotaje-aviso-ajustes">
               {preferencias.aviso}{' '}
               <button type="button" className="ghost chico" onClick={preferencias.reintentar}>
@@ -791,49 +794,60 @@ export default function PilotajePantallaCompleta({
           )}
         </div>
 
+        {/* La columna baja hasta el pie (pilotaje.css): los globos cuelgan
+            del hueco que queda entre los botones y las órdenes de vuelo, así
+            que por largos que sean nunca tapan Aterrizar ni el modo mouse. */}
         <div className="pilotaje-derecha">
-          {!pantallaCompleta && (
-            <button type="button" onClick={pedirPantallaCompleta}>
-              Pantalla completa
-            </button>
-          )}
-          {/* El engranaje va a la izquierda del "?": la ayuda sigue siendo lo
-              de la esquina, donde la busca el que recién empieza. */}
-          <button
-            ref={botonAjustes}
-            type="button"
-            className="icono-boton pilotaje-boton-ajustes"
-            aria-label="Ajustes del control"
-            aria-expanded={globo === 'ajustes'}
-            aria-controls={globo === 'ajustes' ? idAjustes : undefined}
-            onClick={() => alternarGlobo('ajustes')}
-          >
-            <IconoEngranaje tamano={18} />
-          </button>
-          <button
-            ref={botonAyuda}
-            type="button"
-            className="icono-boton pilotaje-boton-ayuda"
-            aria-label="Ayuda de los controles"
-            aria-expanded={globo === 'ayuda'}
-            aria-controls={globo === 'ayuda' ? idAyuda : undefined}
-            onClick={() => alternarGlobo('ayuda')}
-          >
-            ?
-          </button>
-          {globo === 'ayuda' && (
-            <AyudaDeControles id={idAyuda} gradosPorMuesca={controles.pasoDeRueda} onCerrar={cerrarGlobo} />
-          )}
-          {globo === 'ajustes' && (
-            <AjustesDeControl
-              id={idAjustes}
-              raiz={panelDeAjustes}
-              controles={controles}
-              onCambiar={preferencias.cambiar}
-              onRestablecer={preferencias.restablecer}
-              onCerrar={cerrarGlobo}
-            />
-          )}
+          <div className="pilotaje-derecha-botones">
+            {!pantallaCompleta && (
+              <button type="button" className="pilotaje-boton-pantalla" onClick={pedirPantallaCompleta}>
+                Pantalla completa
+              </button>
+            )}
+            {/* El engranaje va a la izquierda del "?": la ayuda sigue siendo
+                lo de la esquina, donde la busca el que recién empieza. */}
+            <div className="pilotaje-iconos">
+              <button
+                ref={botonAjustes}
+                type="button"
+                className="icono-boton pilotaje-boton-ajustes"
+                aria-label="Ajustes del control"
+                aria-expanded={globo === 'ajustes'}
+                aria-controls={globo === 'ajustes' ? idAjustes : undefined}
+                onClick={() => alternarGlobo('ajustes')}
+              >
+                <IconoEngranaje tamano={18} />
+              </button>
+              <button
+                ref={botonAyuda}
+                type="button"
+                className="icono-boton pilotaje-boton-ayuda"
+                aria-label="Ayuda de los controles"
+                aria-expanded={globo === 'ayuda'}
+                aria-controls={globo === 'ayuda' ? idAyuda : undefined}
+                onClick={() => alternarGlobo('ayuda')}
+              >
+                ?
+              </button>
+            </div>
+          </div>
+          <div className="pilotaje-globos">
+            {globo === 'ayuda' && (
+              <AyudaDeControles id={idAyuda} gradosPorMuesca={controles.pasoDeRueda} onCerrar={cerrarGlobo} />
+            )}
+            {globo === 'ajustes' && (
+              <AjustesDeControl
+                id={idAjustes}
+                raiz={panelDeAjustes}
+                controles={controles}
+                aviso={preferencias.aviso}
+                onCambiar={preferencias.cambiar}
+                onRestablecer={preferencias.restablecer}
+                onReintentar={preferencias.reintentar}
+                onCerrar={cerrarGlobo}
+              />
+            )}
+          </div>
         </div>
 
         <div className="pilotaje-pie">

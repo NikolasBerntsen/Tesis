@@ -371,10 +371,10 @@ for (const imagen of ['#FFFFFF', '#000000']) {
 
 // --- Ajustes del control: el globo del engranaje (pilotaje.css) ---------------------
 // Cuelga sobre el video, así que es piedra firme medida sobre un cuadro blanco
-// y uno negro, como los diálogos. El título en Cinzel y los rótulos van en la
-// tinta; el valor de cada deslizador también; la nota, las pistas y los grupos
-// («Mouse», «Teclado») en la media. El engranaje del título es un ícono en oro:
-// alcanza con 3:1. Del deslizador se tienen que ver la pista (el filo de los
+// y uno negro, como los diálogos (y la ayuda, que es el mismo globo). El título
+// en Cinzel y los rótulos van en la tinta; el valor de cada deslizador y el
+// guardado que falló también; la nota, las pistas y los grupos («Mouse»,
+// «Teclado») en la media. El ícono del título va en oro: alcanza con 3:1. Del deslizador se tienen que ver la pista (el filo de los
 // campos), el cursor y lo recorrido (el oro de lo encendido), las dos cosas
 // sobre el panel y lo recorrido también sobre el hueco de la pista.
 sobreSuperficies('ajustes: título, rótulos y valores', '--tinta', [], TEXTO, FIRMES);
@@ -542,12 +542,16 @@ describe('los pares medidos son los que pintan las hojas', () => {
     ['esquina "EMERGENCIA" del mosaico', relevos, '.esquina-roja', 'color', 'var(--peligro)'],
     // Las miniaturas de la galería: visores, negros en los dos temas.
     ['miniatura de la galería', relevos, '.galeria-miniatura-cuadro', 'background-color', 'var(--recuadro-video)'],
-    // Los ajustes del control: piedra firme, con lo que se mide arriba encima.
-    ['ajustes del control', pilotaje, '.pilotaje-ajustes', 'background-color', 'var(--panel-firme)'],
-    ['cara de los ajustes', pilotaje, '.pilotaje-ajustes', 'background-image', 'var(--piedra-cara)'],
-    ['título de los ajustes', pilotaje, '.pilotaje-ajustes h2', 'color', 'var(--tinta)'],
-    ['engranaje del título de los ajustes', pilotaje, '.pilotaje-ajustes h2 > svg', 'color', 'var(--oro-texto)'],
+    // Los globos de la ayuda y de los ajustes del control: piedra firme, con lo
+    // que se mide arriba encima.
+    ['globos del HUD', pilotaje, '.pilotaje-globo', 'background-color', 'var(--panel-firme)'],
+    ['cara de los globos', pilotaje, '.pilotaje-globo', 'background-image', 'var(--piedra-cara)'],
+    ['título de los globos', pilotaje, '.pilotaje-globo h2', 'color', 'var(--tinta)'],
+    ['ícono del título de los globos', pilotaje, '.pilotaje-globo h2 > svg', 'color', 'var(--oro-texto)'],
     ['nota de los ajustes', pilotaje, '.pilotaje-ajustes-nota', 'color', 'var(--tinta-media)'],
+    ['guardado que falló, en los ajustes', pilotaje, '.pilotaje-ajustes-aviso', 'color', 'var(--tinta)'],
+    // El pie pegado al fondo tapa lo que se desplaza con la misma piedra firme.
+    ['pie de los ajustes', pilotaje, '.pilotaje-ajustes-pie', 'background-color', 'var(--panel-firme)'],
     ['grupo de los ajustes', pilotaje, '.ajustes-grupo legend', 'color', 'var(--tinta-media)'],
     ['rótulo de un ajuste', pilotaje, '.ajuste-rotulo label', 'color', 'var(--tinta)'],
     ['valor de un ajuste', pilotaje, '.ajuste-valor', 'color', 'var(--tinta)'],

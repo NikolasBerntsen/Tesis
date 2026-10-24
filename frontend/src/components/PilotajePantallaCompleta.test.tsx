@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('leaflet', async () => (await import('../test/dobleLeaflet')).dobleLeaflet());
@@ -1280,7 +1281,8 @@ describe('PilotajePantallaCompleta — ajustes del control', () => {
     mover('Multiplicador con Shift', 3);
     expect(valorVisible(NORMAL)).toBe('30 %');
     expect(valorVisible('Multiplicador con Shift')).toBe('3×');
-    // Tocar la imagen devuelve el foco a la vista: el teclado vuelve a volar.
+    // Es lo que hace tocar la imagen (ver "tocar la imagen…", más abajo: con el
+    // reloj falso, user-event no termina nunca el clic).
     act(() => vista.focus());
 
     fireEvent.keyDown(vista, { code: 'KeyW' });
@@ -1294,6 +1296,56 @@ describe('PilotajePantallaCompleta — ajustes del control', () => {
     // Con Shift, por tres y con tope en el fondo de la palanca.
     expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, pitch: 0.9, yaw: 1, throttle: 1 });
     expect(screen.getByTestId('hud-velocidad')).toHaveTextContent('Rápido');
+  });
+
+  it('tocar la imagen con los ajustes abiertos devuelve el foco a la vista, y el teclado vuelve a volar', async () => {
+    const { onMando, vista, video } = await montarConAjustes();
+    fireEvent.click(engranaje());
+    const ajustes = panel()!;
+    expect(ajustes).toContainElement(document.activeElement as HTMLElement);
+    // user-event mueve el foco en el mousedown, como el navegador: si algo le
+    // cortara el efecto al botón izquierdo, el teclado quedaría mudo con el
+    // panel abierto y sin otra salida que el tabulador.
+    await userEvent.click(video);
+    expect(vista).toHaveFocus();
+    expect(panel()).toBeInTheDocument();
+    fireEvent.keyDown(document.activeElement!, { code: 'KeyW' });
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, pitch: 0.5 });
+  });
+
+  it('con el multiplicador en 1×, Shift no cambia nada y el HUD no dice "Rápido"', async () => {
+    const { onMando, vista } = await montarConAjustes();
+    fireEvent.click(engranaje());
+    mover('Multiplicador con Shift', 1);
+    fireEvent.click(screen.getByRole('button', { name: 'Cerrar los ajustes' }));
+    fireEvent.keyDown(vista, { code: 'ShiftLeft' });
+    fireEvent.keyDown(vista, { code: 'KeyW' });
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, pitch: 0.5 });
+    expect(screen.getByTestId('hud-velocidad')).toHaveTextContent('Normal');
+  });
+
+  it('la ayuda y los ajustes son el mismo globo, colgado del hueco que termina arriba del pie', async () => {
+    await montarConAjustes();
+    // Lo que fija pilotaje.test.ts sólo vale si el marcado lo sigue.
+    const marco = (globo: HTMLElement) => {
+      const cabecera = globo.firstElementChild as HTMLElement;
+      return {
+        globo: globo.className.split(' ')[0],
+        hueco: globo.parentElement?.className,
+        cabecera: cabecera.className,
+        cerrar: within(cabecera).getByRole('button').className,
+      };
+    };
+    fireEvent.click(screen.getByRole('button', { name: 'Ayuda de los controles' }));
+    const deLaAyuda = marco(screen.getByRole('dialog', { name: 'Controles del dron' }));
+    expect(deLaAyuda).toEqual({
+      globo: 'pilotaje-globo',
+      hueco: 'pilotaje-globos',
+      cabecera: 'pilotaje-globo-cabecera',
+      cerrar: 'modal-cerrar',
+    });
+    fireEvent.click(engranaje());
+    expect(marco(panel()!)).toEqual(deLaAyuda);
   });
 
   it('"Restablecer valores por defecto" vuelve todo a fábrica, y el mouse con ellos', async () => {
@@ -1345,16 +1397,65 @@ describe('PilotajePantallaCompleta — ajustes del control', () => {
   });
 
   it('si la persona ya movió algo, lo que conteste tarde el Comando Central no lo pisa', async () => {
+    vi.useFakeTimers();
     const get = enEspera();
     alPedirGet = () => get.promesa;
     montar();
     fireEvent.click(engranaje());
     mover(VERTICAL, 2);
-    const tarde = { controles: { sensibilidadVertical: 0.4 }, actualizadoEn: 'ayer' };
+    const tarde = { controles: { ...CONTROLES_POR_DEFECTO, sensibilidadVertical: 0.4, pasoDeRueda: 9 }, actualizadoEn: 'ayer' };
     await act(async () => {
       get.cumplir({ ok: true, status: 200, json: async () => tarde } as Response);
     });
     expect(deslizador(VERTICAL)).toHaveValue('2');
+    // Lo que no tocó sí es lo del Comando Central, y el guardado que esperaba
+    // su turno sale uno solo, ya combinado.
+    expect(deslizador(RUEDA)).toHaveValue('9');
+    await act(async () => {
+      vi.advanceTimersByTime(700);
+    });
+    expect(puts()).toHaveLength(1);
+    expect(puts()[0].cuerpo).toEqual({ controles: { ...CONTROLES_POR_DEFECTO, sensibilidadVertical: 2, pasoDeRueda: 9 } });
+  });
+
+  it('lo que contesta el Comando Central con la vista ya cerrada no se aplica ni se copia', async () => {
+    const get = enEspera();
+    alPedirGet = () => get.promesa;
+    const { unmount } = montar();
+    unmount();
+    await act(async () => {
+      get.cumplir({ ok: true, status: 200, json: async () => ({ controles: { pasoDeRueda: 9 }, actualizadoEn: 'ayer' }) } as Response);
+    });
+    expect(localStorage.getItem('cc_controles:oper1')).toBeNull();
+    expect(puts()).toHaveLength(0);
+  });
+
+  it('un ajuste movido antes de que conteste el Comando Central no pisa allá los demás de la persona', async () => {
+    vi.useFakeTimers();
+    const get = enEspera();
+    alPedirGet = () => get.promesa;
+    montar();
+    fireEvent.click(engranaje());
+    mover(RUEDA, 3);
+    // La mano se quedó quieta antes de que contestara: salió lo único que se sabía.
+    await act(async () => {
+      vi.advanceTimersByTime(700);
+    });
+    expect(puts()).toHaveLength(1);
+
+    const deOtraComputadora = { ...CONTROLES_POR_DEFECTO, sensibilidadVertical: 0.4, invertirVertical: true };
+    await act(async () => {
+      get.cumplir({ ok: true, status: 200, json: async () => ({ controles: deOtraComputadora, actualizadoEn: 'ayer' }) } as Response);
+    });
+    expect(deslizador(VERTICAL)).toHaveValue('0.4');
+    expect(screen.getByRole('switch', { name: 'Invertir eje vertical' })).toBeChecked();
+    expect(deslizador(RUEDA)).toHaveValue('3');
+    // Y el juego combinado reemplaza en el Comando Central al que salió sin saberlo.
+    await act(async () => {
+      vi.advanceTimersByTime(700);
+    });
+    expect(puts()).toHaveLength(2);
+    expect(puts()[1].cuerpo).toEqual({ controles: { ...deOtraComputadora, pasoDeRueda: 3 } });
   });
 
   it('guarda cuando la mano se queda quieta: un PUT con el juego entero, y la copia local en el acto', async () => {
@@ -1389,6 +1490,9 @@ describe('PilotajePantallaCompleta — ajustes del control', () => {
     fireEvent.click(engranaje());
     mover(RUEDA, 4);
     unmount();
+    // Sale apenas vuelve el anterior (ver "los guardados van de a uno"), aunque
+    // la vista ya no esté.
+    await act(async () => {});
     expect(puts()).toHaveLength(2);
     expect(pasoGuardado(puts()[1])).toBe(4);
   });
@@ -1415,22 +1519,80 @@ describe('PilotajePantallaCompleta — ajustes del control', () => {
     expect(screen.queryByTestId('pilotaje-aviso-ajustes')).not.toBeInTheDocument();
   });
 
-  it('un fallo viejo que llega tarde no tapa el guardado que sí salió', async () => {
+  it('los guardados van de a uno: el siguiente sale cuando vuelve el anterior, sólo el último, y un fallo viejo no lo tapa', async () => {
     const primero = enEspera();
     alPedirPut = () => primero.promesa;
     await montarConAjustes();
+    const cerrarAjustes = () => fireEvent.click(screen.getByRole('button', { name: 'Cerrar los ajustes' }));
     fireEvent.click(engranaje());
     mover(RUEDA, 2);
-    fireEvent.click(screen.getByRole('button', { name: 'Cerrar los ajustes' }));
+    cerrarAjustes();
     alPedirPut = () => responder({ controles: {}, actualizadoEn: 'hoy' });
+    // Mientras el primero no vuelve, los que siguen esperan: dos en paralelo
+    // podían llegar al revés y dejar guardado el viejo.
+    for (const paso of [3, 4]) {
+      fireEvent.click(engranaje());
+      mover(RUEDA, paso);
+      cerrarAjustes();
+    }
+    await act(async () => {});
+    expect(puts()).toHaveLength(1);
+
+    // Cuando vuelve, aunque sea con un fallo, sale sólo el último juego.
+    await act(async () => primero.rechazar(new TypeError('sin red')));
+    expect(puts()).toHaveLength(2);
+    expect(pasoGuardado(puts()[1])).toBe(4);
+    expect(screen.queryByTestId('pilotaje-aviso-ajustes')).not.toBeInTheDocument();
+  });
+
+  it('con los ajustes abiertos, el guardado que falló se avisa adentro del panel, y "Reintentar" anda desde ahí', async () => {
+    vi.useFakeTimers();
+    alPedirPut = () => responder({ error: 'Error interno' }, 500);
+    await montarConAjustes();
     fireEvent.click(engranaje());
-    mover(RUEDA, 3);
+    mover(RUEDA, 2);
+    await act(async () => {
+      vi.advanceTimersByTime(700);
+    });
+    // Uno solo, y en el panel: en el centro del HUD el panel le tapaba la punta.
+    const aviso = within(panel()!).getByTestId('pilotaje-aviso-ajustes');
+    expect(screen.getAllByTestId('pilotaje-aviso-ajustes')).toEqual([aviso]);
+    expect(aviso).toHaveAttribute('role', 'status');
+    expect(aviso).toHaveTextContent('No se pudieron guardar tus ajustes del control en el Comando Central');
+
+    alPedirPut = () => responder({ controles: {}, actualizadoEn: 'hoy' });
+    await act(async () => {
+      fireEvent.click(within(aviso).getByRole('button', { name: 'Reintentar' }));
+    });
+    expect(puts().at(-1)?.cuerpo).toEqual({ controles: { ...CONTROLES_POR_DEFECTO, pasoDeRueda: 2 } });
+    expect(screen.queryByTestId('pilotaje-aviso-ajustes')).not.toBeInTheDocument();
+  });
+
+  it('un guardado que falló no se pierde: cerrar la vista lo reintenta, y la próxima manda la copia local en vez de creerle al GET', async () => {
+    alPedirPut = () => responder({ error: 'Sesión vencida' }, 401);
+    const primera = await montarConAjustes();
+    fireEvent.click(engranaje());
+    mover(RUEDA, 2);
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Cerrar los ajustes' }));
     });
-    await act(async () => primero.rechazar(new TypeError('sin red')));
+    expect(screen.getByTestId('pilotaje-aviso-ajustes')).toBeInTheDocument();
+    primera.unmount();
+    await act(async () => {});
     expect(puts()).toHaveLength(2);
-    expect(screen.queryByTestId('pilotaje-aviso-ajustes')).not.toBeInTheDocument();
+    expect(pasoGuardado(puts()[1])).toBe(2);
+
+    // De vuelta en la vista, el Comando Central todavía tiene lo de antes.
+    pedidos = [];
+    alPedirGet = () => responder({ controles: { ...CONTROLES_POR_DEFECTO, pasoDeRueda: 9 }, actualizadoEn: 'ayer' });
+    alPedirPut = () => responder({ controles: {}, actualizadoEn: 'hoy' });
+    const { onCamara, video } = await montarConAjustes();
+    expect(pedidos.map((p) => p.metodo)).toEqual(['PUT']);
+    expect(pasoGuardado(puts()[0])).toBe(2);
+    rueda(video, -1);
+    expect(onCamara).toHaveBeenLastCalledWith(-28);
+    // Ya guardada, la copia está al día: la próxima vez vuelve a mandar el GET.
+    expect(JSON.parse(localStorage.getItem('cc_controles:oper1')!)).toEqual({ ...CONTROLES_POR_DEFECTO, pasoDeRueda: 2 });
   });
 
   it('lo que se teclea en los ajustes no mueve el dron: las flechas son del deslizador, Espacio del interruptor', async () => {

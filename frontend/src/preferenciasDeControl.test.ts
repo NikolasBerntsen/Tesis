@@ -9,7 +9,7 @@ import {
   guardarCacheDeControles,
   leerCacheDeControles,
   normalizarControles,
-  sonLosPorDefecto,
+  quedoSinGuardar,
   textoDeAjuste,
   velocidadesDeTeclado,
   type ClaveNumerica,
@@ -85,13 +85,7 @@ describe('normalizarControles', () => {
   });
 });
 
-describe('sonLosPorDefecto y velocidadesDeTeclado', () => {
-  it('sólo los de fábrica son los de fábrica', () => {
-    expect(sonLosPorDefecto({ ...CONTROLES_POR_DEFECTO })).toBe(true);
-    expect(sonLosPorDefecto({ ...CONTROLES_POR_DEFECTO, invertirVertical: true })).toBe(false);
-    expect(sonLosPorDefecto({ ...CONTROLES_POR_DEFECTO, pasoDeRueda: 6 })).toBe(false);
-  });
-
+describe('velocidadesDeTeclado', () => {
   it('cada grupo de teclas lleva su velocidad, y Shift su multiplicador', () => {
     const controles = { ...CONTROLES_POR_DEFECTO, velocidadNormal: 0.3, velocidadSubida: 0.4, velocidadGiro: 0.7, multiplicadorShift: 3 };
     expect(velocidadesDeTeclado(controles)).toEqual({ avance: 0.3, subida: 0.4, giro: 0.7, rapido: 3 });
@@ -127,6 +121,28 @@ describe('la copia local, por usuario', () => {
     expect(leerCacheDeControles('ana')).toEqual({ ...CONTROLES_POR_DEFECTO, velocidadNormal: 0.8 });
   });
 
+  it('la marca de "sin guardar" va en la misma copia, y leerla no cambia los ajustes', () => {
+    const propios = { ...CONTROLES_POR_DEFECTO, pasoDeRueda: 3 };
+    guardarCacheDeControles('ana', propios, true);
+    expect(quedoSinGuardar('ana')).toBe(true);
+    expect(leerCacheDeControles('ana')).toEqual(propios);
+    // Guardada en el Comando Central, la copia vuelve a estar al día.
+    guardarCacheDeControles('ana', propios);
+    expect(quedoSinGuardar('ana')).toBe(false);
+    expect(leerCacheDeControles('ana')).toEqual(propios);
+  });
+
+  it('sin copia, sin usuario, con una copia rota o con una de antes de la marca, nada quedó sin guardar', () => {
+    expect(quedoSinGuardar('ana')).toBe(false);
+    expect(quedoSinGuardar('')).toBe(false);
+    localStorage.setItem(claveDeCache('ana'), '{roto');
+    expect(quedoSinGuardar('ana')).toBe(false);
+    localStorage.setItem(claveDeCache('ana'), 'null');
+    expect(quedoSinGuardar('ana')).toBe(false);
+    localStorage.setItem(claveDeCache('ana'), JSON.stringify({ ...CONTROLES_POR_DEFECTO, sinGuardar: 'sí' }));
+    expect(quedoSinGuardar('ana')).toBe(false);
+  });
+
   it('un navegador que niega el almacenamiento no impide volar', () => {
     vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new DOMException('bloqueado', 'SecurityError');
@@ -135,7 +151,8 @@ describe('la copia local, por usuario', () => {
       throw new DOMException('lleno', 'QuotaExceededError');
     });
     expect(leerCacheDeControles('ana')).toBeNull();
-    expect(() => guardarCacheDeControles('ana', { ...CONTROLES_POR_DEFECTO })).not.toThrow();
+    expect(quedoSinGuardar('ana')).toBe(false);
+    expect(() => guardarCacheDeControles('ana', { ...CONTROLES_POR_DEFECTO }, true)).not.toThrow();
   });
 });
 

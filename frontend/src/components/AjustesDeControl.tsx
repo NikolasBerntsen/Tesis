@@ -71,9 +71,15 @@ function Deslizador({
 
 /**
  * Los ajustes del control: el globo que abre el engranaje, al lado del "?" de
- * la ayuda y con su misma forma. Tampoco es modal: los cambios valen en el acto
- * y se pueden probar sin cerrarlo (con el modo mouse, o tocando la imagen para
- * volver a volar con el teclado).
+ * la ayuda y con su mismo marco y su misma cabecera (`.pilotaje-globo`).
+ * Tampoco es modal: los cambios valen en el acto y se pueden probar sin
+ * cerrarlo (con el modo mouse, o tocando la imagen para volver a volar con el
+ * teclado).
+ *
+ * Si el guardado en el Comando Central falla con el panel abierto, el aviso y
+ * su "Reintentar" van en el pie, arriba de "Restablecer": es donde se está
+ * mirando, el pie queda a la vista aunque el panel se desplace, y al final no
+ * corre de lugar el deslizador que se acaba de soltar.
  *
  * Lo que se escribe acá adentro es de los controles y no del vuelo (ver
  * `teclaAjena` en useTecladoDeVuelo): las flechas mueven un deslizador y
@@ -85,15 +91,20 @@ export default function AjustesDeControl({
   id,
   raiz,
   controles,
+  aviso,
   onCambiar,
   onRestablecer,
+  onReintentar,
   onCerrar,
 }: Readonly<{
   id: string;
   raiz: RefObject<HTMLElement>;
   controles: ControlesDeVuelo;
+  /** Por qué no se pudo guardar en el Comando Central, o vacío. */
+  aviso: string;
   onCambiar: (cambios: Partial<ControlesDeVuelo>) => void;
   onRestablecer: () => void;
+  onReintentar: () => void;
   onCerrar: () => void;
 }>) {
   const idTitulo = useId();
@@ -116,13 +127,13 @@ export default function AjustesDeControl({
     <section
       ref={raiz}
       id={id}
-      className="pilotaje-ajustes"
+      className="pilotaje-globo pilotaje-ajustes"
       role="dialog"
       aria-modal="false"
       aria-labelledby={idTitulo}
       aria-describedby={idNota}
     >
-      <header className="pilotaje-ajustes-cabecera">
+      <header className="pilotaje-globo-cabecera">
         <h2 id={idTitulo}>
           <IconoEngranaje tamano={18} />
           Ajustes del control
@@ -166,6 +177,14 @@ export default function AjustesDeControl({
       </fieldset>
 
       <footer className="pilotaje-ajustes-pie">
+        {aviso && (
+          <p className="pilotaje-ajustes-aviso" role="status" data-testid="pilotaje-aviso-ajustes">
+            {aviso}{' '}
+            <button type="button" className="ghost chico" onClick={onReintentar}>
+              Reintentar
+            </button>
+          </p>
+        )}
         <button type="button" className="ghost chico" onClick={onRestablecer}>
           Restablecer valores por defecto
         </button>

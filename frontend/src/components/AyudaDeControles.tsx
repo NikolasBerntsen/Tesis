@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useId, useRef, type ReactNode } from 'react';
+import { IconoCerrar, IconoInfo } from './Iconos';
 
 type Fila = { teclas: ReactNode; accion: string };
 
@@ -68,6 +69,10 @@ function secciones(gradosPorMuesca: number): readonly Seccion[] {
  * La ayuda de la vista de pilotaje: el globo que abre el "?" de arriba a la
  * derecha. No es modal a propósito: se puede leer mientras se vuela, y por eso
  * no corta el teclado de vuelo.
+ *
+ * Tiene el marco y la cabecera de los ajustes del control (`.pilotaje-globo`):
+ * los dos cuelgan del mismo rincón y uno cierra al otro, y pasar de uno al otro
+ * no puede cambiar el cuadro ni la forma de cerrarlo.
  */
 export default function AyudaDeControles({
   id,
@@ -84,11 +89,20 @@ export default function AyudaDeControles({
   }, []);
 
   return (
-    <section id={id} className="pilotaje-ayuda" role="dialog" aria-modal="false" aria-labelledby={idTitulo}>
-      <header className="pilotaje-ayuda-cabecera">
-        <h2 id={idTitulo}>Controles del dron</h2>
-        <button ref={cerrar} type="button" className="ghost chico" onClick={onCerrar}>
-          Cerrar la ayuda
+    <section
+      id={id}
+      className="pilotaje-globo pilotaje-ayuda"
+      role="dialog"
+      aria-modal="false"
+      aria-labelledby={idTitulo}
+    >
+      <header className="pilotaje-globo-cabecera">
+        <h2 id={idTitulo}>
+          <IconoInfo tamano={18} />
+          Controles del dron
+        </h2>
+        <button ref={cerrar} type="button" className="modal-cerrar" aria-label="Cerrar la ayuda" onClick={onCerrar}>
+          <IconoCerrar tamano={18} />
         </button>
       </header>
       {secciones(gradosPorMuesca).map((seccion) => (

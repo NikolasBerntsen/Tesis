@@ -9,6 +9,7 @@ import {
   esRapido,
   estaSostenida,
   esTeclaDeVuelo,
+  shiftAcelera,
   soltarTecla,
   useTecladoDeVuelo,
   type TeclasSostenidas,
@@ -143,6 +144,14 @@ describe('teclas de vuelo — las velocidades de la persona', () => {
     expect(ejesDeTeclas(secuencia('+ShiftRight', '+KeyW'), { ...propias, rapido: 1 }).pitch).toBe(0.3);
   });
 
+  it('Shift acelera mientras multiplique algo que no esté ya en el fondo de la palanca', () => {
+    expect(shiftAcelera(propias)).toBe(true);
+    expect(shiftAcelera({ ...propias, rapido: 1 })).toBe(false);
+    expect(shiftAcelera({ avance: 1, subida: 1, giro: 1, rapido: 3 })).toBe(false);
+    // Con uno solo que todavía pueda ir más rápido, ya acelera.
+    expect(shiftAcelera({ avance: 1, subida: 1, giro: 0.9, rapido: 1.25 })).toBe(true);
+  });
+
   it('sin velocidades propias son las de siempre: la mitad, y a fondo con Shift', () => {
     expect(VELOCIDADES_POR_DEFECTO).toEqual({ avance: 0.5, subida: 0.5, giro: 0.5, rapido: 2 });
     expect(ejesDeTeclas(secuencia('+ShiftLeft', '+Space'))).toEqual({ ...EJES_EN_CERO, throttle: 1 });
@@ -233,6 +242,14 @@ describe('useTecladoDeVuelo', () => {
     apretar('ShiftRight');
     expect(result.current.rapido).toBe(true);
     soltar('ShiftRight');
+    expect(result.current.rapido).toBe(false);
+  });
+
+  it('con Shift sin efecto (el multiplicador en 1×) no informa "rápido": el dron vuela igual', () => {
+    const { result, onMando } = montar({ velocidades: { ...VELOCIDADES_POR_DEFECTO, rapido: 1 } });
+    apretar('ShiftLeft');
+    apretar('KeyW');
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, pitch: 0.5 });
     expect(result.current.rapido).toBe(false);
   });
 

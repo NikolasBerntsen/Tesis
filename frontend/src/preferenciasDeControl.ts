@@ -81,13 +81,6 @@ export function normalizarControles(crudo: unknown): ControlesDeVuelo {
   return controles;
 }
 
-/** ¿Son todos los de fábrica? Es cuando "Restablecer" no tiene nada que hacer. */
-export function sonLosPorDefecto(controles: ControlesDeVuelo): boolean {
-  return (Object.keys(CONTROLES_POR_DEFECTO) as (keyof ControlesDeVuelo)[]).every(
-    (clave) => controles[clave] === CONTROLES_POR_DEFECTO[clave],
-  );
-}
-
 /** Las velocidades que usa el teclado de vuelo (useTecladoDeVuelo). */
 export function velocidadesDeTeclado(controles: ControlesDeVuelo): VelocidadesDeTeclado {
   return {
@@ -125,12 +118,33 @@ export function leerCacheDeControles(usuario: string): ControlesDeVuelo | null {
   }
 }
 
-export function guardarCacheDeControles(usuario: string, controles: ControlesDeVuelo): void {
+/**
+ * Guarda la copia local. `sinGuardar` la marca como adelantada al Comando
+ * Central: un cambio que todavía no se guardó allá, o cuyo guardado falló. La
+ * marca va en la misma entrada (y `normalizarControles` la ignora al leer) para
+ * que no pueda quedar una sin la otra.
+ */
+export function guardarCacheDeControles(usuario: string, controles: ControlesDeVuelo, sinGuardar = false): void {
   if (!usuario) return;
   try {
-    localStorage.setItem(claveDeCache(usuario), JSON.stringify(controles));
+    localStorage.setItem(claveDeCache(usuario), JSON.stringify(sinGuardar ? { ...controles, sinGuardar } : controles));
   } catch {
     /* sin almacenamiento local queda sólo la copia del Comando Central */
+  }
+}
+
+/**
+ * ¿La copia local quedó adelantada al Comando Central? Es lo que la persona
+ * eligió último en esta computadora (el aviso prometió que seguía valiendo), así
+ * que la próxima vista la manda en vez de aceptar lo que conteste el GET.
+ */
+export function quedoSinGuardar(usuario: string): boolean {
+  if (!usuario) return false;
+  try {
+    const guardado = localStorage.getItem(claveDeCache(usuario));
+    return guardado !== null && (JSON.parse(guardado) as { sinGuardar?: unknown } | null)?.sinGuardar === true;
+  } catch {
+    return false;
   }
 }
 

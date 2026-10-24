@@ -159,6 +159,15 @@ export function esRapido(estado: TeclasSostenidas): boolean {
   return estado.rapidas.length > 0;
 }
 
+/**
+ * Si Shift vuela más rápido con estas velocidades. Con el multiplicador en 1×,
+ * o con los tres grupos ya en el fondo de la palanca, no cambia nada de lo que
+ * sale al dron, y el HUD no puede decir "Rápido" mientras vuela igual.
+ */
+export function shiftAcelera(velocidades: VelocidadesDeTeclado): boolean {
+  return velocidades.rapido > 1 && Math.min(velocidades.avance, velocidades.subida, velocidades.giro) < 1;
+}
+
 /** Si esta tecla está sostenida para volar (en su pila, o entre las Shift). */
 export function estaSostenida(estado: TeclasSostenidas, code: string): boolean {
   if (TECLAS_RAPIDAS.includes(code)) return estado.rapidas.includes(code);
@@ -376,5 +385,6 @@ export function useTecladoDeVuelo({
     };
   }, [comandando]);
 
-  return { ejes, rapido: esRapido(teclas), ultimoSalio };
+  // "Rápido" es lo que el dron recibe, no la tecla: Shift sin efecto no lo es.
+  return { ejes, rapido: esRapido(teclas) && shiftAcelera(velocidades), ultimoSalio };
 }

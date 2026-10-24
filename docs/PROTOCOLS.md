@@ -1441,12 +1441,19 @@ comparan con su código, así que un rango no puede cambiar en una punta sola.
 
 En la consola (el engranaje al lado del "?" de la vista de pilotaje), cada
 cambio vale en el acto, también en pleno vuelo, y se guarda con un PUT cuando la
-mano se queda quieta (700 ms), al cerrar el panel o al cerrar la vista. La
-consola guarda además una copia por usuario en el navegador
-(`cc_controles:<usuario>`): arranca con ella mientras contesta el GET y vuela con
-ella si el Comando Central no responde. Un guardado que falla —también por un
-401: no recarga la página en medio de un vuelo— deja un aviso discreto con
-"Reintentar"; el ajuste sigue valiendo.
+mano se queda quieta (700 ms), al cerrar el panel o al cerrar la vista. Los PUT
+van de a uno: si hay uno en camino, el siguiente espera a que vuelva y sale
+sólo el último juego (como el PUT reemplaza, dos en paralelo que llegaran al
+revés dejarían guardado el viejo). La consola guarda además una copia por
+usuario en el navegador (`cc_controles:<usuario>`): arranca con ella mientras
+contesta el GET y vuela con ella si el Comando Central no responde. Si la
+persona mueve algo antes de que conteste el GET, eso queda como lo dejó, el
+resto toma lo del Comando Central y se guarda el juego combinado. Un guardado
+que falla —también por un 401: no recarga la página en medio de un vuelo— deja
+un aviso discreto con "Reintentar" (adentro del panel si está abierto); el
+ajuste sigue valiendo, cerrar el panel o la vista lo reintenta, y la copia
+local queda marcada (`"sinGuardar": true`): la próxima vista la manda con un
+PUT en vez de aceptar lo que contestaría el GET.
 
 ### Drones como activos
 

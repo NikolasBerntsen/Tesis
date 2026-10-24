@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { valorDe } from '../test/hojas';
 
 /**
  * El apilado de la vista de pilotaje, contra los números reales de Leaflet y
@@ -49,5 +50,54 @@ describe('apilado de la vista de pilotaje', () => {
     expect(estilos.indexOf("@import './estilos/pilotaje.css';")).toBeLessThan(
       estilos.indexOf("@import './estilos/impresion.css';"),
     );
+  });
+});
+
+/** Las líneas de la grilla entre las que va un selector: `1 / 3` → [1, 3], `3` → [3, 4]. */
+function filas(css: string, selector: string): [number, number] {
+  const valor = valorDe(css, selector, 'grid-row');
+  expect(valor, `${selector} no declara grid-row`).not.toBeNull();
+  const [desde, hasta] = valor!.split('/').map((linea) => Number(linea.trim()));
+  return [desde, hasta ?? desde + 1];
+}
+
+describe('los globos de la derecha terminan arriba del pie', () => {
+  /*
+   * Colgados de los botones con un alto sacado de la ventana (100vh menos
+   * 120 px), la ayuda y los ajustes tapaban Aterrizar y Modo mouse en cualquier
+   * pantalla de menos de unos 1000 px de alto, y en jsdom nadie se enteraba: no
+   * maqueta. Lo que se fija es la grilla que lo impide.
+   */
+  const [escritorio, telefono] = pilotaje.split('@media (max-width: 760px)');
+
+  it.each([
+    ['en el escritorio', escritorio],
+    ['en el teléfono', telefono],
+  ])('%s, la columna de la derecha baja hasta la fila del pie, sin entrar en ella', (_donde, css) => {
+    const [arriba, abajo] = filas(css, '.pilotaje-derecha');
+    expect(arriba).toBe(1);
+    expect(abajo).toBe(filas(css, '.pilotaje-pie')[0]);
+  });
+
+  it('la columna se estira hasta ahí, y los globos miden hasta el fondo de su hueco', () => {
+    expect(valorDe(pilotaje, '.pilotaje-derecha', 'align-self')).toBe('stretch');
+    expect(valorDe(pilotaje, '.pilotaje-globos', 'position')).toBe('relative');
+    expect(valorDe(pilotaje, '.pilotaje-globos', 'min-height')).toBe('0');
+    expect(valorDe(pilotaje, '.pilotaje-globo', 'top')).toBe('0');
+    expect(valorDe(pilotaje, '.pilotaje-globo', 'max-height')).toBe('100%');
+    expect(valorDe(pilotaje, '.pilotaje-globo', 'overflow-y')).toBe('auto');
+  });
+
+  it('la ayuda y los ajustes son el mismo cuadro: ninguno pisa el marco común', () => {
+    for (const globo of ['.pilotaje-ayuda', '.pilotaje-ajustes']) {
+      for (const propiedad of ['position', 'top', 'width', 'max-height', 'padding']) {
+        expect(valorDe(pilotaje, globo, propiedad), `${globo} { ${propiedad} }`).toBeNull();
+      }
+    }
+  });
+
+  it('en el teléfono, "Pantalla completa" baja a su renglón y no aprieta la salida', () => {
+    expect(valorDe(escritorio, '.pilotaje-derecha-botones', 'flex-direction')).toBeNull();
+    expect(valorDe(telefono, '.pilotaje-derecha-botones', 'flex-direction')).toBe('column');
   });
 });
