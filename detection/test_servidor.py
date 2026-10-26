@@ -6,7 +6,9 @@
 No cargan ningún modelo ni tocan la GPU: el detector es uno de mentira, y las
 placas de red y las reglas del firewall se arman a mano con la forma que
 devuelven psutil y PowerShell. Lo único "real" es la red de loopback, que se
-usa para probar de punta a punta el "hola" de la app y el WebSocket /phone.
+usa para probar de punta a punta el "hola" de la app y el WebSocket /phone, y
+en Windows el script que lee el firewall (solo lee), para que un error en el
+PowerShell no pase como "firewall cerrado".
 """
 
 from __future__ import annotations
@@ -649,6 +651,41 @@ class Firewall(unittest.TestCase):
     def test_aviso_de_bloqueo_nombra_la_regla(self):
         lineas = servidor.avisos_de_firewall({"Private": ("bloqueado", "python.exe")}, {}, 8765, 8766)
         self.assertTrue(any("python.exe" in l and "BLOQUEA" in l for l in lineas))
+
+    def test_permiso_del_aviso_de_windows_para_el_python_de_uv(self):
+        # El aviso de Windows guarda la ruta real del proceso, y sys._base_executable
+        # pasa por el junction que arma uv (cpython-3.12-... -> cpython-3.12.15-...).
+        junction = r"C:\Users\x\.local\share\uv\python\cpython-3.12-windows-x86_64-none\python.exe"
+        real = r"C:\Users\x\.local\share\uv\python\cpython-3.12.15-windows-x86_64-none\python.exe"
+        with mock.patch.object(servidor.os.path, "realpath", side_effect=lambda p: real if p == junction else p):
+            programas = servidor.rutas_de_programa(junction, None)
+        datos = firewall([regla("python.exe", "Public", puertos=["Any"], programa=real)], categoria="Public")
+        self.assertEqual(servidor.evaluar_firewall(datos, "TCP", 8765, programas), {"Public": ("abierto", "python.exe")})
+
+    def test_rutas_de_programa_sin_ejecutables(self):
+        self.assertEqual(servidor.rutas_de_programa(None, ""), set())
+
+    def test_el_script_lee_las_reglas_por_com(self):
+        # Get-NetFirewallPortFilter sin filtro se corta en el primer "Acceso
+        # denegado" y no ve las reglas más nuevas, como las de iniciar.bat.
+        script = servidor._script_firewall([8765, 8766])
+        self.assertIn("HNetCfg.FwPolicy2", script)
+        self.assertNotIn("Get-NetFirewallPortFilter", script)
+
+    @unittest.skipUnless(sys.platform == "win32", "el Firewall de Windows solo existe en Windows")
+    def test_el_script_corre_y_trae_solo_las_candidatas(self):
+        datos = json.loads(servidor.correr_powershell(servidor._script_firewall([8765, 8766]), timeout=40) or "null")
+        self.assertIsInstance(datos, dict)
+        self.assertEqual(set(datos), {"reglas", "perfilesRed", "perfilesFirewall"})
+        for r in servidor._como_lista(datos["reglas"]):
+            self.assertEqual(set(r), {"nombre", "habilitada", "direccion", "accion", "perfil", "protocolo",
+                                      "puertos", "programa"})
+            self.assertEqual(r["direccion"], "Inbound")
+            self.assertIn(r["accion"], ("Allow", "Block"))
+            # De un Python, o sin programa y nombrando estos puertos (o un rango):
+            # las de la Tienda sin programa ni puerto no tienen que colarse.
+            nombra = any(p in ("8765", "8766") or "-" in p for p in r["puertos"])
+            self.assertTrue("python" in r["programa"].lower() or (nombra and r["programa"] == "Any"), r)
 
 
 # ---------------------------------------------------------------------------

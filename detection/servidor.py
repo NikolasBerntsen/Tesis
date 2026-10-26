@@ -848,6 +848,16 @@ def normalizar_ruta(ruta: str) -> str:
     return os.path.normcase(os.path.normpath(os.path.expandvars(str(ruta))))
 
 
+def rutas_de_programa(*ejecutables: str | None) -> set[str]:
+    """Cómo puede nombrar el firewall a este Python: cada ejecutable tal cual y resuelto.
+
+    El Python que baja uv vive detrás de un junction (cpython-3.12-...) y la
+    regla que crea el aviso de Windows guarda la ruta real del proceso
+    (cpython-3.12.15-...): sin resolverla, ese permiso no contaba.
+    """
+    return {normalizar_ruta(r) for e in ejecutables if e for r in (e, os.path.realpath(e))}
+
+
 def _programa_coincide(programa, programas: set[str]) -> bool:
     if not programa or str(programa).strip().lower() == "any":
         return True
@@ -943,25 +953,33 @@ def avisos_de_firewall(tcp: dict[str, tuple[str, str]], udp: dict[str, tuple[str
 
 
 def _script_firewall(puertos: list[int]) -> str:
-    # Lo que se puede leer sin ser administrador: los filtros de puerto (algunos
-    # dan "Acceso denegado" y se saltean) y de programa, y de ahí las reglas.
-    # Solo se traen las candidatas: las que nombran estos puertos o un Python.
+    # Las reglas salen de la API COM del firewall (HNetCfg.FwPolicy2), que las
+    # da todas sin ser administrador. Get-NetFirewallPortFilter sin filtro se
+    # corta en el primer "Acceso denegado" y pierde las que vienen después, que
+    # son las más nuevas: en una notebook leyó 612 de 859 reglas, no vio las de
+    # iniciar.bat y avisaba que el 8765 estaba cerrado con las reglas puestas.
+    # Solo se traen las candidatas: de entrada, que nombran estos puertos (o un
+    # rango) o son de un Python. Las de un servicio o un paquete de la Tienda no
+    # tocan a este Python; muchas de la Tienda no nombran programa ni puerto.
     lista = ",".join(f"'{p}'" for p in puertos)
     return (
         "[Console]::OutputEncoding = [Text.Encoding]::UTF8\n"
         "$ErrorActionPreference = 'SilentlyContinue'\n"
         f"$puertos = @({lista})\n"
-        "$candidatas = @{}\n"
-        "Get-NetFirewallPortFilter | Where-Object { $lp = @($_.LocalPort | ForEach-Object { [string]$_ });"
-        " ($lp | Where-Object { $puertos -contains $_ -or $_ -like '*-*' }).Count -gt 0 } |"
-        " Get-NetFirewallRule | ForEach-Object { $candidatas[$_.Name] = $_ }\n"
-        "Get-NetFirewallApplicationFilter | Where-Object { $_.Program -like '*python*' } |"
-        " Get-NetFirewallRule | ForEach-Object { $candidatas[$_.Name] = $_ }\n"
-        "$reglas = @(foreach ($r in $candidatas.Values) {\n"
-        "  $pf = $r | Get-NetFirewallPortFilter; $af = $r | Get-NetFirewallApplicationFilter\n"
-        "  @{ nombre = [string]$r.DisplayName; habilitada = [string]$r.Enabled; direccion = [string]$r.Direction;"
-        " accion = [string]$r.Action; perfil = [string]$r.Profile; protocolo = [string]$pf.Protocol;"
-        " puertos = @($pf.LocalPort | ForEach-Object { [string]$_ }); programa = [string]$af.Program }\n"
+        "$reglas = @(foreach ($r in (New-Object -ComObject HNetCfg.FwPolicy2).Rules) {\n"
+        "  if ($r.Direction -ne 1 -or $r.ServiceName -or $r.LocalAppPackageId) { continue }\n"
+        "  $programa = [string]$r.ApplicationName; $lp = [string]$r.LocalPorts\n"
+        "  $lp = @(if (-not $lp -or $lp -eq '*') { 'Any' } else { $lp -split ',' | ForEach-Object { $_.Trim() } })\n"
+        "  $nombraPuerto = @($lp | Where-Object { $puertos -contains $_ -or $_ -like '*-*' }).Count -gt 0\n"
+        "  if ($programa -notlike '*python*' -and -not ($nombraPuerto -and -not $programa)) { continue }\n"
+        "  $bits = [int]$r.Profiles; $enPerfiles = @()\n"
+        "  if ($bits -band 1) { $enPerfiles += 'Domain' }; if ($bits -band 2) { $enPerfiles += 'Private' }\n"
+        "  if ($bits -band 4) { $enPerfiles += 'Public' }\n"
+        "  @{ nombre = [string]$r.Name; habilitada = [string]$r.Enabled; direccion = 'Inbound';"
+        " accion = $(if ($r.Action -eq 1) { 'Allow' } else { 'Block' });"
+        " perfil = $(if ($enPerfiles.Count -eq 3) { 'Any' } else { $enPerfiles -join ', ' });"
+        " protocolo = $(switch ([int]$r.Protocol) { 6 { 'TCP' } 17 { 'UDP' } 256 { 'Any' } default { [string]$r.Protocol } });"
+        " puertos = $lp; programa = $(if ($programa) { $programa } else { 'Any' }) }\n"
         "})\n"
         "$redes = @(Get-NetConnectionProfile | ForEach-Object { @{ categoria = [string]$_.NetworkCategory;"
         " nombre = [string]$_.Name; interfaz = [string]$_.InterfaceAlias } })\n"
@@ -1003,7 +1021,7 @@ def revisar_firewall(puerto_tcp: int, puerto_udp: int = PUERTO_ANUNCIO) -> None:
         log.info("No pude revisar el Firewall de Windows (se sigue igual). Si el teléfono no conecta, mirá el README.")
         return
     datos = {k: _como_lista(datos.get(k)) for k in ("reglas", "perfilesRed", "perfilesFirewall")}
-    programas = {normalizar_ruta(p) for p in (sys.executable, getattr(sys, "_base_executable", sys.executable)) if p}
+    programas = rutas_de_programa(sys.executable, getattr(sys, "_base_executable", None))
     tcp = evaluar_firewall(datos, "TCP", puerto_tcp, programas)
     udp = evaluar_firewall(datos, "UDP", puerto_udp, programas)
     redes = ", ".join(_describir_red(r) for r in datos["perfilesRed"] if isinstance(r, dict))

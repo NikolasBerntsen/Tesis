@@ -220,7 +220,9 @@ clases de 2 clases / VisDrone / COCO, el `detection` con `frameTs`, el "hola" de
 la app, la elección del dispositivo, la evaluación de las reglas del firewall),
 que el hilo del modelo sobreviva a un cuadro que rompe, y el camino de un
 cuadro por el WebSocket real en loopback, con un detector de mentira: no cargan
-ningún modelo ni tocan la GPU. `test_lanzadores.py` prueba las decisiones de
+ningún modelo ni tocan la GPU. En Windows corren además el script que lee las
+reglas del firewall (solo las lee) y revisan que traiga solo las candidatas.
+`test_lanzadores.py` prueba las decisiones de
 `iniciar.ps1` (en Windows) e `iniciar.sh` (donde haya bash; en Windows, el de
 Git for Windows) cargando sus funciones sueltas: qué hacer con cada entorno de
 Python encontrado, cuándo ufw está prendido y de dónde se baja el modelo. No
