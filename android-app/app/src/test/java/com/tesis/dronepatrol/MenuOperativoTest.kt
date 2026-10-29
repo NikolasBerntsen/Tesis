@@ -27,7 +27,7 @@ class MenuOperativoTest {
     @Test
     fun `la url del comando central por defecto es la del servidor`() {
         assertEquals(com.tesis.dronepatrol.Config.URL_COMANDO_CENTRAL_POR_DEFECTO, preferencias().urlComandoCentral)
-        assertEquals("https://tesis.144-22-138-149.sslip.io", com.tesis.dronepatrol.Config.URL_COMANDO_CENTRAL_POR_DEFECTO)
+        assertEquals("https://tesis.nikolasberntsen.com.ar", com.tesis.dronepatrol.Config.URL_COMANDO_CENTRAL_POR_DEFECTO)
     }
 
     @Test

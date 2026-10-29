@@ -34,7 +34,7 @@ class HashDeDronTest {
             "0123456789abcdef0123456789abcdef0", // 33: le sobra uno
             "0123456789abcdef0123456789abcdeg", // la 'g' no es hexadecimal
             "0123456789abcdef 123456789abcdef", // espacio en el medio
-            "https://tesis.144-22-138-149.sslip.io",
+            "https://tesis.nikolasberntsen.com.ar",
             "WIFI:S:Base;T:WPA;P:12345678;;",
             "$HASH\n$HASH", // dos hashes pegados no son uno
         ).forEach { assertNull("tendría que rechazar '$it'", hashDeDronODescartar(it)) }

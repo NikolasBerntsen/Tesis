@@ -35,7 +35,7 @@ class LoginActivityLaunchTest {
 
     private companion object {
         /** La del contrato: es la que tiene que aparecer sola en el campo. */
-        const val URL_POR_DEFECTO = "https://tesis.144-22-138-149.sslip.io"
+        const val URL_POR_DEFECTO = "https://tesis.nikolasberntsen.com.ar"
     }
 
     private val app get() = RuntimeEnvironment.getApplication()

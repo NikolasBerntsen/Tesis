@@ -6,7 +6,7 @@ otros proyectos**, detrás del **Caddy general de la VM**: un Caddy que vive en
 `~/caddy`, fuera de cualquier repo, es el único que publica 80/443 y saca los
 certificados de todos los sitios.
 
-- URL del sistema: **https://tesis.144-22-138-149.sslip.io**
+- URL del sistema: **https://tesis.nikolasberntsen.com.ar**
 
 ## Cómo funciona el despliegue continuo
 
@@ -94,7 +94,7 @@ tiene ningún dato de la VM escrito.
 | `VM_HOST` | IP pública de la VM |
 | `VM_USER` | Usuario SSH (`ubuntu`) |
 | `DEPLOY_PATH` | Carpeta del proyecto en la VM (`/home/ubuntu/tesis`) |
-| `APP_DOMAIN` | Dominio público (`tesis.<ip-con-guiones>.sslip.io`) |
+| `APP_DOMAIN` | Dominio público (`tesis.nikolasberntsen.com.ar`) |
 | `CADDY_CONTAINER` | Contenedor del Caddy general (`caddy`) |
 | `CADDY_SITES_DIR` | Carpeta de sitios del Caddy general (`/home/ubuntu/caddy/conf/sites`) |
 | `DEV_WIPE_DB` | Ver más abajo |
@@ -114,7 +114,7 @@ No hay que tocar ningún otro repo. En cada despliegue, `deploy/deploy.sh` escri
 
 ```caddy
 # ~/caddy/conf/sites/tesis.caddy — lo escribe deploy/deploy.sh; no editar a mano.
-tesis.<ip-con-guiones>.sslip.io {
+tesis.nikolasberntsen.com.ar {
 	encode zstd gzip
 	reverse_proxy comando-central:4000
 }
@@ -124,8 +124,9 @@ Comprueba que el Caddy de verdad lo lee, **valida** la configuración y recién
 entonces recarga; si algo falla, restaura el archivo anterior (un archivo roto
 tiraría todos los sitios de la VM en el próximo reinicio de Caddy).
 
-`sslip.io` resuelve solo cualquier nombre que lleve la IP con guiones, así que no
-hay que configurar DNS. Caddy pide y renueva el certificado por su cuenta, y
+El DNS de `nikolasberntsen.com.ar` está en Cloudflare con un comodín
+`*.nikolasberntsen.com.ar` hacia la IP de la VM, en modo "DNS only" (nube gris),
+así que no hay que configurar DNS. Caddy pide y renueva el certificado por su cuenta, y
 reenvía las conexiones WebSocket (`/ws`) sin configuración extra.
 
 La red compartida `proxy` ya existe en la VM (si faltara, la crea `deploy/deploy.sh`).
