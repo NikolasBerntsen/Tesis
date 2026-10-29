@@ -100,7 +100,7 @@ Central; el cambio se propaga al otro lado.
 
 Abrir `android-app/` en Android Studio, elegir la variante **`mockDebug`** y
 correr. La app arranca con la URL del Comando Central ya cargada
-(`https://tesis.144-22-138-149.sslip.io`); para probar contra un backend local,
+(`https://tesis.nikolasberntsen.com.ar`); para probar contra un backend local,
 cambiarla por la IP de LAN que imprime `start.sh` al arrancar.
 
 El flujo es: **iniciar sesión como operador de campo** → **escanear el QR del

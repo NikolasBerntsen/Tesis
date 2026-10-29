@@ -21,7 +21,7 @@ class PreferenciasEnlaceTest {
 
     @Test
     fun sinNadaGuardadoApuntaAlComandoCentralDeProduccion() {
-        assertEquals("https://tesis.144-22-138-149.sslip.io", preferencias.urlComandoCentral)
+        assertEquals("https://tesis.nikolasberntsen.com.ar", preferencias.urlComandoCentral)
     }
 
     /**
@@ -49,10 +49,10 @@ class PreferenciasEnlaceTest {
     /** Copiar y pegar una URL arrastra espacios que después rompen la conexión. */
     @Test
     fun recortaLosEspaciosAlGuardar() {
-        preferencias.urlComandoCentral = "  https://tesis.144-22-138-149.sslip.io  "
+        preferencias.urlComandoCentral = "  https://tesis.nikolasberntsen.com.ar  "
         preferencias.urlDeteccionRed = " ws://192.168.42.129:8765\n"
 
-        assertEquals("https://tesis.144-22-138-149.sslip.io", preferencias.urlComandoCentral)
+        assertEquals("https://tesis.nikolasberntsen.com.ar", preferencias.urlComandoCentral)
         assertEquals("ws://192.168.42.129:8765", preferencias.urlDeteccionRed)
     }
 
@@ -61,6 +61,14 @@ class PreferenciasEnlaceTest {
     fun sinUrlGuardadaVuelveALaDeProduccion() {
         preferencias.urlComandoCentral = "   "
 
-        assertEquals("https://tesis.144-22-138-149.sslip.io", preferencias.urlComandoCentral)
+        assertEquals("https://tesis.nikolasberntsen.com.ar", preferencias.urlComandoCentral)
+    }
+
+    /** Una app actualizada no puede quedar pegada a la dirección vieja que guardó al loguearse. */
+    @Test
+    fun unaUrlRetiradaPasaALaDeProduccion() {
+        preferencias.urlComandoCentral = "https://tesis.144-22-138-149.sslip.io/"
+
+        assertEquals("https://tesis.nikolasberntsen.com.ar", preferencias.urlComandoCentral)
     }
 }

@@ -8,7 +8,14 @@ import com.tesis.dronepatrol.comms.ModoEnlace
 object Config {
 
     /** Comando Central de producción; el operador puede editarlo en el login. */
-    const val URL_COMANDO_CENTRAL_POR_DEFECTO = "https://tesis.144-22-138-149.sslip.io"
+    const val URL_COMANDO_CENTRAL_POR_DEFECTO = "https://tesis.nikolasberntsen.com.ar"
+
+    /**
+     * Direcciones de producción que ya no existen. Si el teléfono tiene guardada
+     * una (se guarda al iniciar sesión), se usa la de producción: así una app
+     * actualizada no queda apuntando a un servidor que ya no responde.
+     */
+    val URLS_COMANDO_CENTRAL_RETIRADAS = setOf("https://tesis.144-22-138-149.sslip.io")
 
     const val PUERTO_DETECCION = 8765
 
@@ -51,6 +58,7 @@ class PreferenciasEnlace(context: Context) {
 
     var urlComandoCentral: String
         get() = prefs.getString(CLAVE_URL_COMANDO_CENTRAL, null)?.trim().orEmpty()
+            .takeUnless { it.trimEnd('/') in Config.URLS_COMANDO_CENTRAL_RETIRADAS }.orEmpty()
             .ifEmpty { Config.URL_COMANDO_CENTRAL_POR_DEFECTO }
         set(valor) = prefs.edit { putString(CLAVE_URL_COMANDO_CENTRAL, valor.trim()) }
 
