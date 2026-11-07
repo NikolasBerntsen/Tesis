@@ -298,8 +298,8 @@ class DjiDroneController : DroneController {
     @Volatile
     private var baseDistintaDeCero = false
 
-    /** Centro y radio de la órbita en curso: el lazo los relee en cada vuelta (ver [startOrbit]). */
-    private class Orbita(val lat: Double, val lon: Double, val radioM: Double)
+    /** Centro, radio y velocidad de la órbita en curso: el lazo los relee en cada vuelta (ver [startOrbit]). */
+    private class Orbita(val lat: Double, val lon: Double, val radioM: Double, val velocidadMs: Double)
 
     @Volatile
     private var orbita: Orbita? = null
@@ -940,6 +940,10 @@ class DjiDroneController : DroneController {
             // dejado en curso al soltar el control, pisando la que esperaba
             // (que, además, PatrolManager ya mandó tirar al salir de MANUAL).
             apuntarCamara(Telemetry.GIMBAL_PATRULLA)
+            // Un nodo se alcanza entrando en su umbral o pasando al lado (el
+            // retraso del dron y el GPS lo corren unos metros): sin esto el
+            // Mini pasaba a 5 m del nodo y el lazo lo hacía dar la vuelta.
+            val llegada = Navegacion.LlegadaAlNodo()
             while (true) {
                 delay(INTERVALO_MANDO_MS) // Virtual Stick requiere comandos a ~10 Hz
                 // Sin posición válida (se perdió el fix) no se vuela hacia
@@ -950,9 +954,13 @@ class DjiDroneController : DroneController {
                 } ?: continue
                 val wp = route.waypoints[target]
                 val paso = Navegacion.hacia(lat, lon, wp.lat, wp.lon)
-                if (paso.llego) {
+                if (llegada.llego(paso.distanciaM)) {
+                    if (!paso.llego) {
+                        Log.i(TAG, "Nodo ${target + 1} pasado de largo a ${paso.distanciaM.toInt()} m: se da por alcanzado")
+                    }
                     flightEvents.tryEmit(FlightEvent.WaypointReached(target))
                     target = (target + 1) % route.waypoints.size
+                    llegada.reiniciar()
                     continue
                 }
                 enviarVelocidadTerreno(
@@ -1026,6 +1034,8 @@ class DjiDroneController : DroneController {
         relevarLazo(Lazo.GOTO) {
             asegurarVirtualStick()
             val altura = lastAlt
+            // Como en la ruta: llegar es entrar en el umbral o pasar al lado.
+            val llegada = Navegacion.LlegadaAlNodo()
             while (true) {
                 delay(INTERVALO_MANDO_MS)
                 val (aquiLat, aquiLon) = posicion() ?: run {
@@ -1033,7 +1043,7 @@ class DjiDroneController : DroneController {
                     null
                 } ?: continue
                 val paso = Navegacion.hacia(aquiLat, aquiLon, lat, lon)
-                if (paso.llego) {
+                if (llegada.llego(paso.distanciaM)) {
                     flightEvents.tryEmit(FlightEvent.GotoArrived)
                     break
                 }
@@ -1048,14 +1058,15 @@ class DjiDroneController : DroneController {
         }
     }
 
-    override fun startOrbit(centerLat: Double, centerLon: Double, radiusM: Double) {
+    override fun startOrbit(centerLat: Double, centerLon: Double, radiusM: Double, velocidadMs: Double) {
         if (rechazarEnElSuelo("orbitar")) return
         if (rechazarAterrizando("orbitar")) return
         if (rechazarSiElDronTieneElControl("orbitar")) return
-        // El lazo relee el centro en cada vuelta: si ya está orbitando, correr
-        // el centro es solo esto, sin cortar el giro (el objetivo estimado se
-        // corrige con cada detección y la órbita lo acompaña sin saltos).
-        orbita = Orbita(centerLat, centerLon, radiusM)
+        // El lazo relee el centro (y la velocidad) en cada vuelta: si ya está
+        // orbitando, correr el centro o cambiar la velocidad es solo esto, sin
+        // cortar el giro (el objetivo estimado se corrige con cada detección y
+        // la órbita lo acompaña sin saltos).
+        orbita = Orbita(centerLat, centerLon, radiusM, Navegacion.velocidadDeOrbita(velocidadMs))
         synchronized(relevoDeLazo) {
             if (lazoActual == Lazo.ORBITA && navigationJob?.isActive == true) return
             relevarLazo(Lazo.ORBITA) {
@@ -1074,7 +1085,7 @@ class DjiDroneController : DroneController {
                     // Tangencial sobre el círculo con corrección radial, desde
                     // donde esté el dron (sin ir a un punto fijo del círculo) y
                     // con la nariz —y la cámara— apuntadas al centro.
-                    val paso = Navegacion.orbitar(lat, lon, o.lat, o.lon, o.radioM)
+                    val paso = Navegacion.orbitar(lat, lon, o.lat, o.lon, o.radioM, o.velocidadMs)
                     enviarVelocidadTerreno(paso.vNorteMs, paso.vEsteMs, paso.rumboGrados, Navegacion.vertical(lastAlt, altura))
                     // El gimbal baja lo justo para tener al objetivo en el medio del cuadro.
                     gimbal.apuntar(Georreferencia.inclinacionParaOrbitar(lastAlt, paso.distanciaM))

@@ -108,8 +108,14 @@ interface DroneController {
      * órbita lo acompaña sin dar saltos. Arranca desde el punto del círculo más
      * cercano a donde está el dron, no desde uno fijo. Con el dron en el suelo
      * se rechaza ([FlightEvent.Problema]).
+     *
+     * [velocidadMs] es la velocidad tangencial sobre el círculo: la de fábrica
+     * ([Navegacion.VELOCIDAD_ORBITA_MS]) o la que el operador fijó desde la
+     * vista del dron (`ajustes`, docs/PROTOCOLS.md §2), ya recortada por
+     * PatrolManager al rango de [Navegacion.velocidadDeOrbita]. Volver a
+     * pedir la órbita con otra velocidad la cambia sin cortar el giro.
      */
-    fun startOrbit(centerLat: Double, centerLon: Double, radiusM: Double)
+    fun startOrbit(centerLat: Double, centerLon: Double, radiusM: Double, velocidadMs: Double = Navegacion.VELOCIDAD_ORBITA_MS)
 
     /**
      * Sigue a un objetivo que se mueve: se mantiene a una distancia fija de él

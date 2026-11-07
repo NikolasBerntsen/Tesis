@@ -110,8 +110,6 @@ class SimulatedDroneController(
         // Altura a la que deja al dron el despegue en el lugar: la del despegue
         // automático del SDK de DJI.
         const val ALTURA_DESPEGUE_EN_EL_LUGAR_M = 1.2
-        // Velocidad tangencial de la órbita: la misma que el dron real.
-        const val VELOCIDAD_ORBITA_MS = Navegacion.VELOCIDAD_ORBITA_MS
         // Más allá de esto la estimación del objetivo ya no se extrapola.
         const val EXTRAPOLACION_MAXIMA_MS = 3_000L
         // Hasta dónde llega el gimbal simulado: el rango del contrato
@@ -221,6 +219,10 @@ class SimulatedDroneController(
     private var orbitCenterLon = 0.0
     private var orbitRadiusM = 30.0
     private var orbitAngle = 0.0
+
+    /** Velocidad tangencial de la órbita en curso: la que pidió la patrulla (ver DroneController.startOrbit). */
+    @Volatile
+    private var orbitVelocidadMs = Navegacion.VELOCIDAD_ORBITA_MS
 
     /** A dónde va en GOTO (gotoPoint o volarHacia). */
     @Volatile
@@ -460,7 +462,7 @@ class SimulatedDroneController(
         }
     }
 
-    override fun startOrbit(centerLat: Double, centerLon: Double, radiusM: Double) {
+    override fun startOrbit(centerLat: Double, centerLon: Double, radiusM: Double, velocidadMs: Double) {
         synchronized(cerrojo) {
             if (rechazarEnElSuelo("orbitar")) return
             if (rechazarAterrizando("orbitar")) return
@@ -468,6 +470,7 @@ class SimulatedDroneController(
             orbitCenterLat = centerLat
             orbitCenterLon = centerLon
             orbitRadiusM = radiusM
+            orbitVelocidadMs = Navegacion.velocidadDeOrbita(velocidadMs)
             // Arranca (o sigue, si ya orbitaba y solo se corrió el centro) desde el
             // punto del círculo que tiene más cerca: con el ángulo fijo en cero el
             // dron cruzaba por encima del objetivo para ir al punto norte.
@@ -1102,11 +1105,14 @@ class SimulatedDroneController(
             Mode.ORBIT -> {
                 // Círculo alrededor del objetivo a velocidad constante. El
                 // dron va hacia el punto que sigue en el círculo (no salta a
-                // él): si arranca lejos, primero se acerca.
-                orbitAngle += (VELOCIDAD_ORBITA_MS / orbitRadiusM) * dt
+                // él): si arranca lejos, primero se acerca. Sin el umbral de
+                // llegada de la ruta: con él, el dron esperaba a que el punto
+                // se le alejara 6 m para salir a buscarlo, y a 2 m/s la órbita
+                // iba a tirones (a 1 m/s no arrancaba en 6 s).
+                orbitAngle += (orbitVelocidadMs / orbitRadiusM) * dt
                 val tLat = orbitCenterLat + (orbitRadiusM * cos(orbitAngle)) / METERS_PER_DEG_LAT
                 val tLon = orbitCenterLon + (orbitRadiusM * sin(orbitAngle)) / Geo.metrosPorGradoLon(orbitCenterLat)
-                moveToward(tLat, tLon, dt)
+                moveToward(tLat, tLon, dt, umbralM = 0.0)
                 // En órbita la cámara mira al objetivo
                 heading = bearingTo(orbitCenterLat, orbitCenterLon)
                 gimbalPitch = Georreferencia.inclinacionParaOrbitar(
@@ -1208,12 +1214,12 @@ class SimulatedDroneController(
         )
     }
 
-    /** Avanza hacia el punto dado; devuelve true si llegó. */
-    private fun moveToward(tLat: Double, tLon: Double, dt: Double): Boolean {
+    /** Avanza hacia el punto dado; devuelve true si llegó (a menos de [umbralM]). */
+    private fun moveToward(tLat: Double, tLon: Double, dt: Double, umbralM: Double = ARRIVE_THRESHOLD_M): Boolean {
         val dy = (tLat - lat) * METERS_PER_DEG_LAT
         val dx = (tLon - lon) * metersPerDegLon()
         val dist = hypot(dx, dy)
-        if (dist < ARRIVE_THRESHOLD_M) return true
+        if (dist < umbralM || dist == 0.0) return true
         heading = bearingTo(tLat, tLon)
         val step = (modelo.velocidadCruceroMs * dt).coerceAtMost(dist)
         lat += (dy / dist) * step / METERS_PER_DEG_LAT

@@ -59,6 +59,36 @@ class NavegacionTest {
         assertEquals(0.0, paso.vEsteMs, 0.0)
     }
 
+    /**
+     * Frenando en proporción el dron nunca terminaba de llegar: a 5 m se le
+     * pedía 1,3 m/s, a 4,5 m algo menos, y con viento en contra quedaba clavado
+     * afuera del umbral. Por debajo del paso de llegada no se le pide.
+     */
+    @Test
+    fun `cerca del nodo nunca pide menos que el paso de llegada`() {
+        val paso = Navegacion.hacia(LAT, LON, LAT + 5.0 / Geo.METROS_POR_GRADO_LAT, LON)
+
+        assertEquals(Navegacion.VELOCIDAD_MINIMA_DE_APROXIMACION_MS, hypot(paso.vNorteMs, paso.vEsteMs), 1e-6)
+        assertFalse(paso.llego)
+    }
+
+    /** El frenado arranca a 30 m: a 8 m del nodo ya pide 2 m/s, que el retraso del dron no convierte en pasarse. */
+    @Test
+    fun `el frenado arranca lejos y a ocho metros ya va despacio`() {
+        assertEquals(30.0, Navegacion.DISTANCIA_DE_FRENADO_M, 0.0)
+        val paso = Navegacion.hacia(LAT, LON, LAT + 8.0 / Geo.METROS_POR_GRADO_LAT, LON)
+
+        assertEquals(8.0 * 8.0 / 30.0, hypot(paso.vNorteMs, paso.vEsteMs), 1e-6)
+    }
+
+    /** Una velocidad pedida por debajo del paso de llegada se respeta: es la que se pidió. */
+    @Test
+    fun `una velocidad pedida menor que el paso de llegada se respeta`() {
+        val paso = Navegacion.hacia(LAT, LON, LAT + 5.0 / Geo.METROS_POR_GRADO_LAT, LON, vMaxMs = 0.5)
+
+        assertEquals(0.5, hypot(paso.vNorteMs, paso.vEsteMs), 1e-6)
+    }
+
     @Test
     fun `respeta la velocidad maxima que se le pide`() {
         val paso = Navegacion.hacia(LAT, LON, LAT + 1.0, LON, vMaxMs = Navegacion.VELOCIDAD_ORBITA_MS)
@@ -82,6 +112,89 @@ class NavegacionTest {
         assertFalse(Navegacion.aLaAltura(42.0, 40.0))
     }
 
+    // ---- Llegar a un nodo: por el umbral o pasando de largo ----
+
+    /** Entrar en el umbral de llegada es llegar, como siempre. */
+    @Test
+    fun llegaAlEntrarEnElUmbral() {
+        val llegada = Navegacion.LlegadaAlNodo()
+        assertFalse(llegada.llego(20.0))
+        assertFalse(llegada.llego(10.0))
+        assertTrue(llegada.llego(3.9))
+    }
+
+    /**
+     * El caso del campo: el dron pasa a 6 m del nodo, sin pisar los 4, y la
+     * distancia vuelve a crecer. Es haber pasado de largo y el nodo se da por
+     * alcanzado, en vez de dar la vuelta para pisar un punto que quedó atrás.
+     */
+    @Test
+    fun pasarDeLargoCercaDelNodoCuentaComoLlegar() {
+        val llegada = Navegacion.LlegadaAlNodo()
+        for (d in listOf(20.0, 15.0, 11.0, 8.5, 6.5, 6.0)) assertFalse("a $d m todavía no", llegada.llego(d))
+        // Se aleja: 7,5 no supera el margen de 2,5 m sobre los 6; 8,6 y 9,8 sí, dos lecturas seguidas.
+        assertFalse(llegada.llego(7.5))
+        assertFalse("la primera lectura alejándose no alcanza", llegada.llego(8.6))
+        assertTrue("dos lecturas seguidas a más del margen: pasó de largo", llegada.llego(9.8))
+    }
+
+    /** El temblor del GPS (medio metro para arriba y para abajo) no es haber pasado. */
+    @Test
+    fun elTemblorDelGpsNoCuentaComoPasarDeLargo() {
+        val llegada = Navegacion.LlegadaAlNodo()
+        for (d in listOf(14.0, 11.0, 10.4, 10.9, 10.6, 11.1, 10.2, 10.7)) assertFalse("a $d m", llegada.llego(d))
+        assertEquals(10.2, llegada.distanciaMinimaM, 0.0)
+    }
+
+    /** Lejos del nodo alejarse no dice nada: es el viento, o el dron que todavía enfila. */
+    @Test
+    fun alejarseLejosDelNodoNoCuenta() {
+        val llegada = Navegacion.LlegadaAlNodo()
+        for (d in listOf(50.0, 40.0, 45.0, 52.0, 60.0)) assertFalse("a $d m", llegada.llego(d))
+    }
+
+    /** Una lectura suelta del GPS que salta y vuelve no decide nada: hacen falta dos seguidas. */
+    @Test
+    fun unaLecturaSueltaQueSaltaNoDecide() {
+        val llegada = Navegacion.LlegadaAlNodo()
+        for (d in listOf(12.0, 9.0, 7.0)) assertFalse(llegada.llego(d))
+        assertFalse(llegada.llego(10.5)) // salto de 3,5 m: una sola lectura
+        assertFalse(llegada.llego(6.8)) // y vuelve a acercarse: la cuenta arranca de cero
+        assertFalse(llegada.llego(6.5))
+    }
+
+    /** Al cambiar de nodo la memoria arranca de cero: la mínima del nodo anterior no cuenta para el siguiente. */
+    @Test
+    fun reiniciarOlvidaElNodoAnterior() {
+        val llegada = Navegacion.LlegadaAlNodo()
+        for (d in listOf(20.0, 10.0, 6.0)) assertFalse(llegada.llego(d))
+        llegada.reiniciar()
+        assertEquals(Double.POSITIVE_INFINITY, llegada.distanciaMinimaM, 0.0)
+        // Sin el reinicio, 9 y 10 serían dos lecturas alejándose de los 6 m del nodo anterior.
+        assertFalse(llegada.llego(9.0))
+        assertFalse(llegada.llego(10.0))
+        assertFalse(llegada.llego(11.0))
+    }
+
+    @Test
+    fun unaDistanciaQueNoEsNumeroNoDecideNada() {
+        val llegada = Navegacion.LlegadaAlNodo()
+        assertFalse(llegada.llego(Double.NaN))
+        assertFalse(llegada.llego(Double.POSITIVE_INFINITY))
+    }
+
+    // ---- La velocidad de órbita que se puede pedir ----
+
+    @Test
+    fun laVelocidadDeOrbitaSeRecortaAlRangoYSinPedidoEsLaDeFabrica() {
+        assertEquals(4.0, Navegacion.VELOCIDAD_ORBITA_MS, 0.0)
+        assertEquals(Navegacion.VELOCIDAD_ORBITA_MS, Navegacion.velocidadDeOrbita(null), 0.0)
+        assertEquals(Navegacion.VELOCIDAD_ORBITA_MS, Navegacion.velocidadDeOrbita(Double.NaN), 0.0)
+        assertEquals(3.5, Navegacion.velocidadDeOrbita(3.5), 0.0)
+        assertEquals(Navegacion.VELOCIDAD_ORBITA_MINIMA_MS, Navegacion.velocidadDeOrbita(0.2), 0.0)
+        assertEquals(Navegacion.VELOCIDAD_ORBITA_MAXIMA_MS, Navegacion.velocidadDeOrbita(50.0), 0.0)
+    }
+
     // ---- Órbita ----
 
     private val centroLat = -34.6037
@@ -97,6 +210,14 @@ class NavegacionTest {
         assertEquals(Navegacion.VELOCIDAD_ORBITA_MS, paso.vEsteMs, 1e-6)
         assertEquals(180.0, paso.rumboGrados, 1e-6)
         assertEquals(30.0, paso.distanciaM, 0.01)
+    }
+
+    /** La velocidad tangencial es la que se pide: la que el operador fijó desde la consola. */
+    @Test
+    fun sobreElCirculoVaALaVelocidadPedida() {
+        val paso = Navegacion.orbitar(alNorteDelCentro(30.0), centroLon, centroLat, centroLon, 30.0, vTangencialMs = 2.0)
+        assertEquals(2.0, paso.vEsteMs, 1e-6)
+        assertEquals(0.0, paso.vNorteMs, 1e-6)
     }
 
     /** Un poco adentro del círculo, la corrección lo empuja hacia afuera; un poco afuera, hacia adentro. */

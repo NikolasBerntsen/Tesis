@@ -162,8 +162,13 @@ internal class DronEspia(
     @Volatile
     var ultimaOrbita: Pair<Double, Double>? = null
 
-    override fun startOrbit(centerLat: Double, centerLon: Double, radiusM: Double) {
+    /** Velocidad tangencial de la última órbita ordenada (ver DroneController.startOrbit). */
+    @Volatile
+    var ultimaVelocidadDeOrbita = Double.NaN
+
+    override fun startOrbit(centerLat: Double, centerLon: Double, radiusM: Double, velocidadMs: Double) {
         ultimaOrbita = centerLat to centerLon
+        ultimaVelocidadDeOrbita = velocidadMs
         anotar("startOrbit")
     }
     override fun hold() = anotar("hold")

@@ -15,6 +15,7 @@ import com.tesis.dronepatrol.drone.Geo
 import com.tesis.dronepatrol.drone.Georreferencia
 import com.tesis.dronepatrol.drone.LimitadorDeRitmo
 import com.tesis.dronepatrol.drone.MandoVirtual
+import com.tesis.dronepatrol.drone.Navegacion
 import com.tesis.dronepatrol.drone.RastreadorDeObjetivo
 import com.tesis.dronepatrol.drone.UmbralesDelDji
 import com.tesis.dronepatrol.drone.ZonasDescartadas
@@ -558,6 +559,19 @@ class PatrolManager(
 
     private var seguimiento: Seguimiento? = null
 
+    /**
+     * Velocidad tangencial con la que se orbita al objetivo: la de fábrica
+     * ([Navegacion.VELOCIDAD_ORBITA_MS]) hasta que la consola fije otra desde
+     * la vista del dron (`ajustes`, docs/PROTOCOLS.md §2), ya recortada al
+     * rango. Es del dron y no de un vuelo: el hub la guarda y la vuelve a
+     * mandar al conectarse.
+     */
+    @Volatile
+    private var velocidadDeOrbitaMs = Navegacion.VELOCIDAD_ORBITA_MS
+
+    /** La velocidad de órbita vigente, para la pantalla y las pruebas. */
+    val velocidadDeOrbita: Double get() = velocidadDeOrbitaMs
+
     /** El objetivo en seguimiento tal como va en el status; null si no hay. */
     val objetivo: ObjetivoReportado? get() = seguimiento?.let(::reportarObjetivo)
 
@@ -836,6 +850,21 @@ class PatrolManager(
     private var regresoDelDjiCortado = false
 
     /**
+     * En este vuelo la batería ya mandó al dron a casa (el regreso, un desvío,
+     * el §5, o el regreso propio del DJI). Es lo que deja que una persona que
+     * toma el control DURANTE ese regreso lo tenga de verdad: la batería sigue
+     * baja, y sin esta marca la telemetría siguiente volvía a ordenar el regreso
+     * medio segundo después de la toma (la consola veía "control manual" un
+     * instante y el dron no le hacía caso). Con el control tomado en MANUAL no
+     * se vuelve a ordenar; al soltarlo —o en cualquier otro estado— sí, porque
+     * el regreso a tiempo manda (RELEVOS §1). La batería que baja del umbral
+     * por primera vez con el control tomado sigue mandando al dron a casa, como
+     * siempre. Lo limpian el suelo, el despegue y la batería nueva.
+     */
+    @Volatile
+    private var regresoPorBateriaOrdenado = false
+
+    /**
      * Por qué el propio DJI tiene el vuelo ([FlightEvent.ElDronTomoElControl]);
      * null si lo tiene la app. Mientras tanto la app no le da ninguna orden de
      * vuelo por su cuenta —cada una volvería a habilitar el mando virtual y a
@@ -956,6 +985,7 @@ class PatrolManager(
         commandCenter.onControlSoltadoAlReconectar = { by -> scope.launch { onControlSoltadoAlReconectar(by) } }
         commandCenter.onControlResync = { by -> scope.launch { onControlResync(by) } }
         commandCenter.onControlTransferred = { by, de -> scope.launch { onControlTransferred(by, de) } }
+        commandCenter.onAjustes = { velocidad -> scope.launch { onAjustes(velocidad) } }
         // Los relevos, desvíos y emergencias (§2.b) llegan ya validados y con
         // tipo; uno inválido solo queda en el registro local.
         commandCenter.onMensajeDelHub = { mensaje -> scope.launch { alMensajeDelHub(mensaje) } }
@@ -1254,7 +1284,8 @@ class PatrolManager(
      * Tomar el control no cancela ningún relevo (docs/RELEVOS.md §3.9): B en el
      * aire queda en MANUAL y, al soltarlo, retoma el relevo donde estaba. Sí le
      * devuelve el vuelo a la app si el propio DJI lo había tomado: es una
-     * persona la que decide.
+     * persona la que decide. Las únicas tomas que no se hacen son las del DJI
+     * que la app no le discute nunca (ver [porQueNoSeTomaElControl]).
      *
      * Tampoco corta un aterrizaje en curso: tomar el control no es una orden de
      * vuelo, y el vuelo estacionario de acá le cancelaba el aterrizaje al DJI.
@@ -1262,9 +1293,35 @@ class PatrolManager(
      * una orden de vuelo (ver [soltarElAterrizaje]), no las palancas.
      */
     private fun onControlTaken(by: String) = enSerie {
+        porQueNoSeTomaElControl()?.let { motivo ->
+            rechazarLaToma(by, motivo)
+            return@enSerie
+        }
+        // Sin señal con el dron no hay a quién darle el estacionario: el control
+        // queda tomado y, al volver la señal, alRecuperarLaSenial() lo pone en
+        // MANUAL. Pasar a MANUAL acá dejaba al vigía sin su "señal recuperada".
+        if (_state.value == PatrolState.RETURNING_HOME_SIGNAL) {
+            ordenDeUnaPersona()
+            controlTomado = true
+            titularDelControl = by
+            porQueLoSoltoLaApp = null
+            log("$by tomó el control manual con la señal del dron perdida: se aplica cuando vuelva")
+            return@enSerie
+        }
+        val aterrizando = aterrizajeEnCurso != null
+        // Volviendo a base —por una orden del campo, el fin de un relevo, la
+        // batería, o porque el propio DJI arrancó su regreso— el regreso es un
+        // GoHome del dron: con él puesto el DJI no acepta el mando virtual, y el
+        // dron seguía volviendo con la consola en MANUAL y las palancas mudas.
+        // La toma le corta el regreso ANTES del estacionario. En un desvío no
+        // hay GoHome que cortar (lo vuela la app) y pasar a MANUAL lo abandona.
+        // Si el regreso era del propio DJI, este es el único corte del vuelo
+        // (RELEVOS §4): si lo vuelve a arrancar, la toma siguiente se rechaza.
+        val cortarElRegreso = !aterrizando && desvio == null && _state.value in ESTADOS_CON_EL_REGRESO_DE_LA_APP
+        if (cortarElRegreso && dronAlMando) regresoDelDjiCortado = true
         ordenDeUnaPersona()
         if (_state.value == PatrolState.PATROLLING) resumeWaypoint = proximoWaypoint
-        val aterrizando = aterrizajeEnCurso != null
+        if (cortarElRegreso) controller.cancelarRegreso()
         // Acá el orden es el inverso del resto de las transiciones a propósito: esta
         // ABRE la puerta del mando en vez de cerrarla, así que el vuelo estacionario
         // tiene que quedar ordenado ANTES, o el primer mando del operador se lo come.
@@ -1289,6 +1346,54 @@ class PatrolManager(
                     "(lo corta otra orden de vuelo, no las palancas)",
             )
         }
+    }
+
+    /**
+     * Por qué el control manual NO se toma ahora, o null si se toma. La regla
+     * es que la persona manda (RELEVOS §3.9): son solo las tomas del propio DJI
+     * que la app no le discute (RELEVOS §4), el regreso pedido con el botón del
+     * control físico —otra persona, al lado del dron—, el aterrizaje forzado
+     * por batería crítica, y su regreso por batería cuando el único corte del
+     * vuelo ya se gastó. Tomarlo ahí era tomarlo a medias: el estado decía
+     * MANUAL, el dron seguía con lo suyo (el DJI no acepta el mando virtual
+     * con su regreso puesto) y las palancas no hacían nada. Es mejor no tomarlo
+     * y decir por qué —al hub con `control_dropped`, que suelta el lock, y al
+     * registro— que dejar a la consola con una vista de pilotaje de un dron que
+     * no le obedece.
+     */
+    private fun porQueNoSeTomaElControl(): String? = when {
+        tomaDelDron == MotivoDelDron.RTH_DEL_CONTROL ->
+            "alguien pidió el regreso a base desde el control físico, y el que está al lado del dron manda"
+        tomaDelDron == MotivoDelDron.ATERRIZAJE_BATERIA_CRITICA -> "el propio dron aterriza por batería crítica"
+        tomaDelDron == MotivoDelDron.RTH_BATERIA && regresoDelDjiCortado ->
+            "el propio dron volvió a arrancar su regreso por batería y el único corte de este vuelo ya se gastó: se lo deja volver"
+        else -> null
+    }
+
+    /**
+     * La toma del control que no se hizo (ver [porQueNoSeTomaElControl]): el hub
+     * ya le dio el lock a [by] y la consola le abrió la vista de pilotaje, así
+     * que hay que decírselo enseguida. `control_dropped` le suelta el lock sin
+     * reanudar nada, y el `DRONE_PROBLEM` deja el motivo en el registro.
+     */
+    private fun rechazarLaToma(by: String, motivo: String) {
+        porQueLoSoltoLaApp = null
+        report("DRONE_PROBLEM", "No se toma el control manual que pidió $by: $motivo")
+        commandCenter.avisarControlSoltado(by, "no se tomó el control: $motivo")
+    }
+
+    /**
+     * `ajustes` de la consola (docs/PROTOCOLS.md §2): la velocidad de órbita, o
+     * null para volver a la de fábrica. Si el dron está orbitando, la órbita
+     * cambia de velocidad en el acto, sin cortar el giro.
+     */
+    private fun onAjustes(velocidadOrbitaMs: Double?) = enSerie {
+        val nueva = Navegacion.velocidadDeOrbita(velocidadOrbitaMs)
+        if (nueva == velocidadDeOrbitaMs) return@enSerie
+        velocidadDeOrbitaMs = nueva
+        log("Velocidad de órbita: ${"%.1f".format(nueva)} m/s" + if (velocidadOrbitaMs == null) " (la de fábrica)" else "")
+        val s = seguimiento ?: return@enSerie
+        if (_state.value == PatrolState.ORBITING) orbitar(s, s.centroLat, s.centroLon)
     }
 
     /**
@@ -2076,6 +2181,7 @@ class PatrolManager(
         // Sin dato de batería (NaN) no hay cambio que confirmar: sigue por cambiar
         if (t.batteryPct.isNaN() || t.batteryPct < BATERIA_CAMBIADA_PCT) return
         bateriaPorCambiar = false
+        regresoPorBateriaOrdenado = false
         apagarEspera("se cambió la batería")
         if (_state.value == PatrolState.LANDED) pasarA(PatrolState.IDLE)
         report("BATTERY_RECHARGED", "Batería al ${t.batteryPct.toInt()}%: se cambió la batería y el dron queda listo para volar")
@@ -2164,6 +2270,9 @@ class PatrolManager(
         pedirRelevoDeSeguimientoSiHaceFalta(t)
         // NaN no es batería baja: sin dato no se dispara nada (decide el propio dron).
         if (!(t.batteryPct <= Autonomia.umbralDeRegreso(t.pctParaVolver))) return
+        // La batería ya lo mandó a casa y una persona tomó el control en el
+        // medio: el dron es suyo mientras lo tenga (ver regresoPorBateriaOrdenado).
+        if (regresoPorBateriaOrdenado && controlTomado && _state.value == PatrolState.MANUAL) return
         // Siguiendo un objetivo con el relevo en camino, A puede estirar un
         // poco (la ventana de gracia); si no, suelta y vuelve.
         if (sigueEnLaVentana(t)) return
@@ -2211,6 +2320,7 @@ class PatrolManager(
      */
     fun onBatteryRecharged() = enSerie {
         bateriaPorCambiar = false
+        regresoPorBateriaOrdenado = false
         apagarEspera("se cambió la batería")
         if (_state.value == PatrolState.LANDED) pasarA(PatrolState.IDLE)
         report("BATTERY_RECHARGED", "Batería recargada al 100%: el dron queda listo para volar")
@@ -2248,6 +2358,7 @@ class PatrolManager(
                 apagarEspera("el dron despegó")
                 tomaDelDron = null
                 regresoDelDjiCortado = false
+                regresoPorBateriaOrdenado = false
                 olvidarElAterrizaje()
                 val r = relevo
                 // El despegue en el lugar ya quedó registrado con quién lo pidió
@@ -2569,7 +2680,7 @@ class PatrolManager(
         // El estado antes que la orden, como en el resto de las transiciones
         // (ver pasarA()): desde PAUSED o FORCED también se llega acá.
         pasarA(PatrolState.ORBITING)
-        controller.startOrbit(p.lat, p.lon, ORBIT_RADIUS_M)
+        controller.startOrbit(p.lat, p.lon, ORBIT_RADIUS_M, velocidadDeOrbitaMs)
         report("ORBIT_STARTED", "$detectado: el dron pasa a modo órbita sobre el objetivo", lat = p.lat, lon = p.lon)
         // La captura es el cuadro anotado que disparó la detección; si el
         // detector no lo manda (el mock), el último cuadro que vio la consola.
@@ -2641,11 +2752,11 @@ class PatrolManager(
         }
     }
 
-    /** Centra la órbita en (lat, lon); si ya orbitaba, el controlador solo corre el centro. */
+    /** Centra la órbita en (lat, lon); si ya orbitaba, el controlador solo corre el centro (o la velocidad). */
     private fun orbitar(s: Seguimiento, lat: Double, lon: Double) {
         s.centroLat = lat
         s.centroLon = lon
-        controller.startOrbit(lat, lon, ORBIT_RADIUS_M)
+        controller.startOrbit(lat, lon, ORBIT_RADIUS_M, velocidadDeOrbitaMs)
     }
 
     /** Vuelve al objetivo después de un control manual: orbitarlo o seguirlo, según se mueva. */
@@ -3951,7 +4062,10 @@ class PatrolManager(
         // que llega acá lo pidió una persona, y corta el aterrizaje.
         soltarElAterrizaje(motivo)
         val porBateria = estado == PatrolState.RETURNING_HOME_BATTERY
-        if (porBateria) pedirRelevoDePatrullaSiHaceFalta()
+        if (porBateria) {
+            pedirRelevoDePatrullaSiHaceFalta()
+            regresoPorBateriaOrdenado = true
+        }
         val t = lastTelemetry
         val destino = if (porBateria && t != null) evaluarRegreso(t).destino else Autonomia.Destino.BasePropia
         // Si el desvío o el §5 no se pueden (el DJI tiene el vuelo y no se le
@@ -4398,6 +4512,7 @@ class PatrolManager(
         soltando = null
         tomaDelDron = null
         regresoDelDjiCortado = false
+        regresoPorBateriaOrdenado = false
         volverAlRecuperarLaSenial = false
         ultimaUbicacionPostergada = false
         return Llegada(enEmergencia != null, baseDelDesvio)
@@ -4470,6 +4585,7 @@ class PatrolManager(
             }
             MotivoDelDron.RTH_BATERIA -> if (estado != PatrolState.RETURNING_HOME_BATTERY && emergencia == null) {
                 pedirRelevoDePatrullaSiHaceFalta()
+                regresoPorBateriaOrdenado = true
                 pasarA(PatrolState.RETURNING_HOME_BATTERY)
                 report("RTH_LOW_BATTERY", "El propio dron arrancó su regreso por batería baja")
             }
