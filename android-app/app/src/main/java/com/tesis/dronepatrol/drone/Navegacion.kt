@@ -85,6 +85,50 @@ object Navegacion {
     /** Dos lecturas seguidas alejándose, no una sola: una lectura suelta del GPS puede saltar. */
     const val LECTURAS_DE_PASO = 2
 
+    /**
+     * Aceleración máxima en el plano de los modos autónomos. La velocidad que
+     * se manda no salta: de parado a crucero tarda 4 s, y en un nodo la
+     * velocidad hacia el nodo siguiente se arma de a poco en vez de pegar el
+     * volantazo que, con el dron todavía andando hacia el anterior, lo hacía
+     * pasarse del nodo y bandearse. El Mini acelera más que esto; la idea es
+     * no pedírselo, para no forzarlo ni darle a una ráfaga un dron ya inclinado.
+     */
+    const val ACELERACION_MS2 = 2.0
+
+    /**
+     * Giro máximo de la nariz en los modos autónomos, en grados por segundo.
+     * El rumbo pedido se acerca al rumbo al nodo a este ritmo: un giro de 90°
+     * en un nodo lleva dos segundos, no el latigazo con que el DJI cumple un
+     * ángulo nuevo de golpe.
+     */
+    const val GIRO_CRUCERO_GRADOS_S = 45.0
+
+    /**
+     * Más cerca que esto del nodo el rumbo al nodo tiembla con cada lectura del
+     * GPS (un metro de error son muchos grados), así que la nariz no se toca:
+     * sigue en el último rumbo mandado hasta que el nodo cambie.
+     */
+    const val RADIO_SIN_GIRO_M = 8.0
+
+    /** Con la nariz desviada hasta esto del rumbo al nodo se vuela a pleno. */
+    const val ALINEACION_PLENA_GRADOS = 15.0
+
+    /** Desde este desvío la velocidad queda en el mínimo: el dron gira casi en el lugar. */
+    const val ALINEACION_NULA_GRADOS = 90.0
+
+    /**
+     * Fracción de la velocidad que se mantiene con la nariz desalineada. No es
+     * cero para que el dron no quede clavado si la brújula miente un poco, y es
+     * poco para que no vuele de costado: antes la velocidad ya apuntaba al nodo
+     * nuevo mientras la nariz recién empezaba a girar, y el dron iba en diagonal
+     * con la cámara mirando a otro lado.
+     */
+    const val VELOCIDAD_DESALINEADA = 0.15
+
+    /** Lo que se le cree a una vuelta del lazo: ni un dt de cero ni uno de segundos (un salto de velocidad). */
+    const val DT_MINIMO_S = 0.02
+    const val DT_MAXIMO_S = 0.5
+
     /** Lo que hay que mandar en una vuelta del lazo para acercarse a un punto. */
     data class Paso(
         val vNorteMs: Double,
@@ -167,6 +211,110 @@ object Navegacion {
         fun reiniciar() {
             minimaM = Double.POSITIVE_INFINITY
             alejandose = 0
+        }
+    }
+
+    /** Diferencia de [aGrados] respecto de [desdeGrados], plegada a -180..180 (positiva: girar en sentido horario). */
+    fun diferenciaDeRumbo(aGrados: Double, desdeGrados: Double): Double =
+        (((aGrados - desdeGrados + 540.0) % 360.0) + 360.0) % 360.0 - 180.0
+
+    /**
+     * Cuánto de la velocidad se manda según lo que la nariz se desvía del rumbo
+     * al nodo: 1 alineada (hasta [ALINEACION_PLENA_GRADOS]), bajando en recta
+     * hasta [VELOCIDAD_DESALINEADA] en [ALINEACION_NULA_GRADOS] o más.
+     */
+    fun alineacion(desvioGrados: Double): Double {
+        val d = abs(desvioGrados)
+        if (d <= ALINEACION_PLENA_GRADOS) return 1.0
+        if (d >= ALINEACION_NULA_GRADOS) return VELOCIDAD_DESALINEADA
+        val t = (d - ALINEACION_PLENA_GRADOS) / (ALINEACION_NULA_GRADOS - ALINEACION_PLENA_GRADOS)
+        return 1.0 - t * (1.0 - VELOCIDAD_DESALINEADA)
+    }
+
+    private fun plegar(grados: Double): Double = ((grados % 360.0) + 360.0) % 360.0
+
+    /**
+     * La ruta y el salto a un punto, vuelta a vuelta, con las tres suavidades
+     * que [hacia] —pura— no puede dar porque necesitan memoria de la vuelta
+     * anterior:
+     *
+     *  1. **La velocidad va en rampa** ([ACELERACION_MS2]): lo que se manda se
+     *     acerca a lo que [hacia] pide sin saltar. Al cambiar de nodo, la
+     *     velocidad hacia el anterior se deshace de a poco mientras se arma la
+     *     del siguiente: una curva, no un volantazo.
+     *  2. **La nariz gira a su ritmo** ([GIRO_CRUCERO_GRADOS_S]): el rumbo que
+     *     se manda (en modo ángulo) se acerca al rumbo al nodo de a poco, y
+     *     cerca del nodo ([RADIO_SIN_GIRO_M]) no se toca, que ahí el rumbo al
+     *     nodo tiembla con el GPS.
+     *  3. **Se vuela hacia donde se mira** ([alineacion]): mientras la nariz
+     *     real no apunta al nodo la velocidad baja al mínimo, así el dron gira
+     *     casi en el lugar y recién después acelera. Antes la velocidad ya iba
+     *     al nodo nuevo con la nariz todavía girando, y el dron volaba en
+     *     diagonal.
+     *
+     * Uno por lazo; el frenado al llegar y el umbral son los de [hacia]. El
+     * simulador no lo usa: avanza por su cuenta y nunca pasa el punto.
+     */
+    class Crucero(
+        private val aceleracionMs2: Double = ACELERACION_MS2,
+        private val giroGradosS: Double = GIRO_CRUCERO_GRADOS_S,
+    ) {
+        private var vNorte = 0.0
+        private var vEste = 0.0
+        private var rumboMandado = Double.NaN
+
+        /** La velocidad que se mandó en la última vuelta, en m/s. */
+        val velocidadMs: Double get() = hypot(vNorte, vEste)
+
+        /**
+         * Una vuelta del lazo: desde ([lat], [lon]) hacia ([tLat], [tLon]) con
+         * la nariz hoy en [rumboActualGrados] (0..360; NaN si la brújula no dijo
+         * nada: entonces se cree el rumbo que se mandó) y [dtS] segundos desde
+         * la vuelta anterior. El rumbo del [Paso] es el que hay que MANDAR, no
+         * el rumbo al nodo.
+         */
+        fun paso(
+            lat: Double,
+            lon: Double,
+            tLat: Double,
+            tLon: Double,
+            rumboActualGrados: Double,
+            dtS: Double,
+            vMaxMs: Double = VELOCIDAD_CRUCERO_MS,
+        ): Paso {
+            val crudo = hacia(lat, lon, tLat, tLon, vMaxMs)
+            val dt = if (dtS.isFinite()) dtS.coerceIn(DT_MINIMO_S, DT_MAXIMO_S) else DT_MINIMO_S
+            if (rumboMandado.isNaN()) {
+                rumboMandado = if (rumboActualGrados.isFinite()) plegar(rumboActualGrados) else crudo.rumboGrados
+            }
+            if (crudo.distanciaM >= RADIO_SIN_GIRO_M) {
+                val falta = diferenciaDeRumbo(crudo.rumboGrados, rumboMandado)
+                val tope = giroGradosS * dt
+                rumboMandado = plegar(rumboMandado + falta.coerceIn(-tope, tope))
+            }
+            val nariz = if (rumboActualGrados.isFinite()) rumboActualGrados else rumboMandado
+            val factor = if (crudo.distanciaM < RADIO_SIN_GIRO_M) 1.0 else alineacion(diferenciaDeRumbo(crudo.rumboGrados, nariz))
+            acercar(crudo.vNorteMs * factor, crudo.vEsteMs * factor, aceleracionMs2 * dt)
+            return Paso(vNorte, vEste, rumboMandado, crudo.distanciaM)
+        }
+
+        /** El dron quedó quieto por otra orden (se perdió la posición, por ejemplo): la rampa arranca de cero. */
+        fun quieto() {
+            vNorte = 0.0
+            vEste = 0.0
+        }
+
+        private fun acercar(quieroNorte: Double, quieroEste: Double, topeMs: Double) {
+            val dNorte = quieroNorte - vNorte
+            val dEste = quieroEste - vEste
+            val salto = hypot(dNorte, dEste)
+            if (salto <= topeMs) {
+                vNorte = quieroNorte
+                vEste = quieroEste
+                return
+            }
+            vNorte += dNorte * topeMs / salto
+            vEste += dEste * topeMs / salto
         }
     }
 

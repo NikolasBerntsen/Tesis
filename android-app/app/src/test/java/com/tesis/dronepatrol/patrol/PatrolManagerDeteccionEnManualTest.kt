@@ -144,10 +144,10 @@ class PatrolManagerDeteccionEnManualTest {
     fun enManualLasDeteccionesNoAlertanPeroLasCajasSiguenEnElVideo() = runBlocking {
         patrullando()
         tomarElControl()
-        assertTrue(
-            "el teléfono avisa una vez, al tomar el control, que no va a alertar",
-            patrulla.localLog.replayCache.any { it.contains("op tomó el control") && it.contains("no alerta") },
-        )
+        // La toma corre en su corrutina: el aviso se espera, no se lee en el acto.
+        esperarA("el aviso, al tomar el control, de que no va a alertar") {
+            patrulla.localLog.replayCache.any { it.contains("op tomó el control") && it.contains("no alerta") }
+        }
         withTimeout(5_000) { dron.videoFrames.subscriptionCount.first { it > 0 } }
         val cuadro = unJpeg()
         dron.videoFrames.emit(cuadro)

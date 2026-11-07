@@ -191,6 +191,17 @@ dron seguía con lo suyo, con las palancas mudas). Al soltar el control desde la
 consola el dron queda en vuelo estacionario, y la consola pregunta si retoma
 el patrullaje: no sale a la ruta solo.
 
+**Entre nodos** el dron no pega volantazos: la velocidad que se le manda sube
+y baja en rampa (2 m/s²), la nariz gira a 45°/s como mucho y la velocidad se
+achica mientras la nariz no apunta al nodo (`Navegacion.Crucero`), así que
+llega despacio, gira casi en el lugar y recién después acelera, mirando hacia
+donde va. Cerca del nodo el rumbo pedido no se toca (el rumbo al nodo tiembla
+con el GPS). En estacionario y en manual, con la palanca de giro suelta, la
+nariz queda anclada al rumbo que tenía (`AnclaDeRumbo`, yaw en modo ángulo):
+antes iba en «velocidad de giro cero» y una ráfaga la dejaba corrida. En el
+logcat, cada nodo alcanzado dice a qué distancia y velocidad se dio por
+alcanzado y cada cuánto llegó la posición del SDK, para el banco de campo.
+
 ## Tests
 
 ```bash
