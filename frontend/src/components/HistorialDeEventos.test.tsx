@@ -78,7 +78,9 @@ describe('HistorialDeEventos', () => {
         makeEvent({ id: 5, drone_id: 'd1', message: 'del historial' }),
       ],
     });
-    await screen.findByText('del historial');
+    // El 5 ya está en vivo, así que su texto no dice que llegó el historial:
+    // se espera a la cuenta, que recién suma tres con «viejo» puesto.
+    await waitFor(() => expect(info()).toHaveTextContent('Página 1 de 1 · 3 eventos'));
     const mensajes = screen.getAllByRole('button', { name: /^Ver el detalle/ }).map((b) => b.textContent);
     expect(mensajes).toEqual([
       expect.stringContaining('en vivo'),
