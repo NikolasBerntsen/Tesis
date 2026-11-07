@@ -6,7 +6,9 @@ import type { RastroObjetivo } from '../rastro';
 import { avisoDeOrdenesEnRelevo, avisoDeReanudarEnRelevo, duenioDeLaAlerta, participaDeUnRelevo } from '../relevos';
 import type { Alert, Drone, DroneStatus, EventRow, Me, PatrolRoute, Relevo } from '../types';
 import type { DecidirAlerta } from '../useDecisionDeAlerta';
+import AjusteDeOrbita from './AjusteDeOrbita';
 import AlertaEnCurso from './AlertaEnCurso';
+import AlertasDelDron from './AlertasDelDron';
 import { useAvisar } from './AvisosFlotantes';
 import DialogoConfirmacion from './DialogoConfirmacion';
 import DroneStatusCard from './DroneStatusCard';
@@ -15,6 +17,7 @@ import EditableName from './EditableName';
 import HistorialDeEventos from './HistorialDeEventos';
 import {
   IconoAterrizar,
+  IconoCampana,
   IconoDespegar,
   IconoHistorial,
   IconoMando,
@@ -68,9 +71,11 @@ function CabeceraDelDron({
   relevos,
   enElSuelo,
   controlador,
+  pendientes,
   onBack,
   onRename,
   onHistorial,
+  onAlertas,
 }: Readonly<{
   drone: Drone;
   status: DroneStatus | null;
@@ -78,9 +83,13 @@ function CabeceraDelDron({
   relevos: readonly Relevo[];
   enElSuelo: boolean;
   controlador: string | null;
+  /** Cuántas alertas pendientes tiene este dron: la cuenta del botón de alertas. */
+  pendientes: number;
   onBack: () => void;
   onRename: (displayName: string) => void;
   onHistorial: () => void;
+  /** Abre el pop-up de las alertas del dron. */
+  onAlertas: () => void;
 }>) {
   // Conectado no es lo mismo que volando: con el dron apoyado esto decía "En
   // vuelo", y el operador agarraba un mando que no podía mover nada.
@@ -106,6 +115,24 @@ function CabeceraDelDron({
       <span className={`estado pastilla ${drone.online ? 'ok' : 'muted'}`}>{estado}</span>
       {controlador && <span className="badge oro">Control manual: {controlador}</span>}
       <InsigniasDeRelevo droneId={drone.droneId} status={status} relevos={relevos} />
+      {/* Las alertas del dron se abren desde la barra de arriba, como pop-up:
+          la tarjeta de abajo quedaba lejos del video, y con varias iguales
+          seguidas hay que poder decidirlas juntas (AlertasDelDron). */}
+      <button
+        type="button"
+        className={pendientes > 0 ? 'detalle-alertas con-pendientes' : 'detalle-alertas'}
+        onClick={onAlertas}
+        disabled={pendientes === 0}
+        aria-label={
+          pendientes === 0
+            ? 'Alertas: ninguna pendiente'
+            : `Alertas: ${pendientes} ${pendientes === 1 ? 'pendiente' : 'pendientes'}`
+        }
+      >
+        <IconoCampana tamano={18} />
+        Alertas
+        {pendientes > 0 && <span className="badge-count">{pendientes}</span>}
+      </button>
       {/* Arriba a la derecha, sobre la telemetría: el historial es consulta,
           no algo que se mira todo el tiempo, y al pie de la vista quedaba
           debajo de todo, donde en pleno vuelo nadie llegaba. */}
@@ -153,19 +180,23 @@ const ORDEN_EN_CURSO: Record<OrdenDeVuelo, string> = {
 const SIN_RELEVOS: readonly Relevo[] = [];
 
 /**
- * Lo que hace el dron cuando se lo suelta sin darle una orden (`'none'`): con
- * objetivo vuelve a él, y en un relevo sigue con el relevo (RELEVOS §3.9).
- * Sin ninguna de las dos se suelta con `'last'` y vuelve a su ruta.
+ * Lo que hace el dron cuando se lo suelta sin darle una orden (`'none'`), que
+ * es como la consola lo suelta siempre salvo con «Devolver al patrullaje»: con
+ * objetivo vuelve a él, en un relevo sigue con el relevo (RELEVOS §3.9) y, si
+ * no, queda en vuelo estacionario hasta que alguien lo mande a patrullar.
+ * Antes la salida de la vista de pilotaje y «Quitar control» lo soltaban con
+ * `'last'` y el dron retomaba la ruta en el acto, sin pausa ni confirmación.
  */
 function queHaceAlSoltarSinOrden(conObjetivo: boolean, enRelevo: boolean): string {
   if (enRelevo) {
     return conObjetivo ? 'vuelve al objetivo que estaba siguiendo, y el relevo sigue en marcha' : 'sigue con el relevo';
   }
-  // Aterrizando no tiene objetivo (aterrizar lo suelta) y el `resume_patrol`
-  // de un soltar no le corta el aterrizaje (PROTOCOLS §2): sigue bajando.
+  // Aterrizando no tiene objetivo (aterrizar lo suelta) y soltar no le corta
+  // el aterrizaje (PROTOCOLS §2): sigue bajando.
   return conObjetivo
     ? 'vuelve al objetivo que estaba siguiendo'
-    : 'vuelve a patrullar su ruta, o sigue bajando hasta el suelo si está aterrizando';
+    : 'queda en vuelo estacionario donde está (o sigue bajando hasta el suelo si está aterrizando); desde su vista ' +
+        'se lo manda a retomar la ruta';
 }
 
 /** El botón de soltar que no pierde nada: dice a qué vuelve el dron. */
@@ -256,6 +287,15 @@ export default function DroneDetail({
   const [ordenEnCurso, setOrdenEnCurso] = useState<OrdenDeVuelo | null>(null);
   /** La vista de pilotaje a pantalla completa está abierta. */
   const [pilotando, setPilotando] = useState(false);
+  /** El pop-up de las alertas del dron está abierto. */
+  const [viendoAlertas, setViendoAlertas] = useState(false);
+  /**
+   * Se salió de la vista de pilotaje y el dron quedó quieto: se pregunta si
+   * retoma el patrullaje. Antes salir lo mandaba a la ruta en el acto, sin
+   * pausa ni confirmación, y el operador que sólo quería soltar el mando veía
+   * al dron irse.
+   */
+  const [preguntandoReanudar, setPreguntandoReanudar] = useState(false);
   /** Por qué se cerró sola la vista de pilotaje (el control se perdió desde otro lado). */
   const [avisoDePilotaje, setAvisoDePilotaje] = useState('');
   /**
@@ -390,12 +430,10 @@ export default function DroneDetail({
   const avisoAlReanudar = avisoDeReanudarEnRelevo(drone.droneId, status, relevos);
   const idAvisoAlReanudar = useId();
   /**
-   * Con qué se suelta el control cuando no lo elige el operador (la salida de
-   * la vista de pilotaje y el supervisor que lo quita): la regla del hub,
-   * `reanudacionAlSoltar` en ws.ts. Con objetivo o en un relevo, `'none'`: el
-   * dron vuelve a lo que estaba haciendo. Si no, `'last'`: a su ruta.
+   * El dron tiene una ruta a la que volver: es cuando, al soltar el control
+   * sin orden y sin objetivo ni relevo, vale la pena preguntar si la retoma.
    */
-  const reanudacionAlSoltar = objetivo || enRelevo ? 'none' : 'last';
+  const tieneRuta = status?.routeId != null;
 
   // El aviso de "orden en curso" se va solo cuando el dron confirma: en el aire
   // para el despegue, en el suelo para el aterrizaje. También si se suelta el
@@ -583,23 +621,28 @@ export default function DroneDetail({
   async function quitarControl() {
     const otro = controlador;
     // `forzar`: el supervisor eligió sacarle el dron a quien lo tenga, aunque
-    // en el medio haya cambiado de manos.
+    // en el medio haya cambiado de manos. Sin orden: quitarle el control a
+    // alguien no es mandar el dron a patrullar; queda quieto (o vuelve al
+    // objetivo o al relevo), y desde acá se lo manda a retomar la ruta.
     await api(`/drones/${drone.droneId}/control`, {
       method: 'DELETE',
-      body: JSON.stringify({ resume: reanudacionAlSoltar, titular: otro, forzar: true }),
+      body: JSON.stringify({ resume: 'none', titular: otro, forzar: true }),
     });
     avisar(`Se le quitó el control de ${drone.displayName} a ${otro}.`);
   }
   /**
-   * La salida de la vista de pilotaje suelta el control con la misma regla que
-   * el supervisor: con objetivo o en un relevo, el dron vuelve a lo suyo. La
-   * vista se cierra antes de soltar, así la pérdida del control que viene
-   * después no se lee como que se lo sacó otro.
+   * La salida de la vista de pilotaje suelta el control SIN orden: con objetivo
+   * o en un relevo el dron vuelve a lo suyo; si no, queda en vuelo estacionario
+   * y se le pregunta al operador si retoma el patrullaje (antes salía a la ruta
+   * en el acto, sin pausa ni confirmación). La vista se cierra antes de soltar,
+   * así la pérdida del control que viene después no se lee como que se lo sacó
+   * otro.
    */
   const salirDelPilotaje = () => {
     setPilotando(false);
     // llamar() ya atrapa el rechazo y lo deja a la vista: no hay nada que esperar acá.
-    void soltarControl(reanudacionAlSoltar);
+    void soltarControl('none');
+    if (!objetivo && !enRelevo && tieneRuta) setPreguntandoReanudar(true);
   };
   /**
    * «Soltar y reanudar patrullaje». Fuera de un relevo alcanza con soltar con
@@ -723,9 +766,11 @@ export default function DroneDetail({
         relevos={relevos}
         enElSuelo={enElSuelo}
         controlador={controlador}
+        pendientes={pendientes.length}
         onBack={onBack}
         onRename={onRename}
         onHistorial={() => setViendoHistorial(true)}
+        onAlertas={() => setViendoAlertas(true)}
       />
       {/* El error va en su propia línea: dentro del encabezado empujaba el nombre */}
       {error && (
@@ -746,21 +791,9 @@ export default function DroneDetail({
       <DroneStatusCard status={status} base={drone.base} controlTomado={!!controlador} onResumePatrol={retomar} />
 
       {/* Video y ubicación cruzan toda la pantalla: son las dos ventanas de lo
-          que está pasando y se miran juntas. Con una alerta pendiente se mete
-          la captura ENTRE las dos, pegada al video: decidir es comparar lo que
-          vio la detección con lo que el dron está viendo ahora. */}
-      <div className={hayAlerta ? 'par-video-mapa con-alerta' : 'par-video-mapa'}>
-        <LiveVideo frame={frame} senalPerdida={status?.signal === 'LOST'} />
-        {/* Con `key` por dron: al saltar de un dron a otro desde la campana, las
-            alertas del nuevo no son "nuevas" para el carrusel del anterior. */}
-        {hayAlerta && (
-          <AlertaEnCurso
-            key={drone.droneId}
-            alertas={pendientes}
-            seguidas={objetivo ? [objetivo.alertId] : []}
-            onDecidir={onDecidir}
-          />
-        )}
+          que está pasando y se miran juntas. El video se amplía al tocarlo. */}
+      <div className="par-video-mapa">
+        <LiveVideo frame={frame} senalPerdida={status?.signal === 'LOST'} nombre={drone.displayName} />
         <div className="card">
           <div className="mapa-head">
             <h2>
@@ -806,6 +839,10 @@ export default function DroneDetail({
 
       <div className="grid-operacion">
         {objetivo && <PanelObjetivo objetivo={objetivo} />}
+
+        {/* La velocidad con la que orbita a un objetivo: un dato del dron que
+            se cambia desde acá y la app aplica (PROTOCOLS §2, `ajustes`). */}
+        <AjusteDeOrbita drone={drone} puedeAjustar={!!me && me.role !== 'field_operator'} />
 
         <div className="card">
           <h2>
@@ -1042,6 +1079,50 @@ export default function DroneDetail({
           </div>
         )}
       </div>
+
+      {/* Las alertas en curso, debajo de la operación y a todo el ancho: se
+          miran después del video y del control, y para decidirlas con la
+          captura grande, o varias juntas, está el pop-up del botón de arriba.
+          Con `key` por dron: al saltar de un dron a otro desde la campana, las
+          alertas del nuevo no son "nuevas" para el carrusel del anterior. */}
+      {hayAlerta && (
+        <AlertaEnCurso
+          key={drone.droneId}
+          alertas={pendientes}
+          seguidas={objetivo ? [objetivo.alertId] : []}
+          apaisada
+          onDecidir={onDecidir}
+        />
+      )}
+
+      {viendoAlertas && (
+        <AlertasDelDron
+          nombre={drone.displayName}
+          alertas={pendientes}
+          seguidas={objetivo ? [objetivo.alertId] : []}
+          onDecidir={onDecidir}
+          onCerrar={() => setViendoAlertas(false)}
+        />
+      )}
+
+      {/* Después de soltar el control desde la vista de pilotaje: el dron quedó
+          quieto, y retomar la ruta es una decisión aparte. */}
+      {preguntandoReanudar && (
+        <DialogoConfirmacion
+          pedido={{
+            titulo: `¿Retomar el patrullaje de ${drone.displayName}?`,
+            consecuencia:
+              'Soltaste el control y el dron quedó en vuelo estacionario donde está. Si retoma, vuela hacia el ' +
+              'próximo nodo de su ruta.',
+            detalle: 'Si lo dejás quieto, después lo podés mandar con «Retomar ruta» o volver a tomar el control.',
+            confirmar: 'Retomar ruta',
+            cancelar: 'Dejarlo quieto',
+            tono: 'primario',
+            accion: retomar,
+          }}
+          onCerrar={() => setPreguntandoReanudar(false)}
+        />
+      )}
 
       {/* Por dron: el de otro dron es otro historial, que arranca de cero. */}
       {viendoHistorial && (

@@ -478,9 +478,9 @@ describe('integración — relevos entre drones', () => {
       manda(a, { type: 'event', eventType: 'EMERGENCY_RECOVERED', message: 'falso' });
       manda(a, { type: 'event', eventType: 'RTH_DIVERTED', message: 'falso' });
       await wait(200);
-      // lo único que recibe es lo de toda conexión: sus bases, las decisiones
-      // recientes y, sin nadie al mando, el control suelto
-      expect(a.got.filter((m) => m.type !== 'bases' && m.type !== 'alert_decision')).toEqual([
+      // lo único que recibe es lo de toda conexión: sus bases, sus ajustes, las
+      // decisiones recientes y, sin nadie al mando, el control suelto
+      expect(a.got.filter((m) => m.type !== 'bases' && m.type !== 'ajustes' && m.type !== 'alert_decision')).toEqual([
         { type: 'control_released', by: 'Comando Central', resync: true },
       ]);
       expect((await api(srv.base, '/api/events?limit=1000', op)).body.length).toBe(antes);

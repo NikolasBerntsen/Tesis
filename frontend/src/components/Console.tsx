@@ -282,10 +282,18 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
   }
 
   /** El lock cambió de manos. Si el hub lo soltó solo (`motivo`), se avisa: el dron quedó sin nadie al mando. */
-  function alCambiarElControl(msg: { droneId: string; controlledBy: string | null; teniaElControl?: unknown; motivo?: unknown }) {
+  function alCambiarElControl(msg: {
+    droneId: string;
+    controlledBy: string | null;
+    teniaElControl?: unknown;
+    motivo?: unknown;
+    detalle?: unknown;
+  }) {
     setDrones((prev) => prev.map((d) => (d.droneId === msg.droneId ? { ...d, controlledBy: msg.controlledBy } : d)));
     if (msg.controlledBy !== null || typeof msg.teniaElControl !== 'string') return;
-    sumarAvisoDelControl(avisoDeLaLiberacion(msg.motivo, msg.teniaElControl, yo, msg.droneId, nombreDe(msg.droneId)));
+    sumarAvisoDelControl(
+      avisoDeLaLiberacion(msg.motivo, msg.teniaElControl, yo, msg.droneId, nombreDe(msg.droneId), msg.detalle),
+    );
   }
 
   /** Alguien le pidió el control a quien lo tiene: el vencimiento se pasa a este reloj. */

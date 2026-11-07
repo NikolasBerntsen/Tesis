@@ -126,7 +126,13 @@ Todo lo que se puede probar sin dron vive en `main`, con pruebas, y el flavor
 `dji` queda como el pegamento con el SDK:
 
 - `drone/Navegacion.kt`: la cuenta de cada vuelta del lazo (velocidad hacia un
-  punto con frenado proporcional, control de altura, umbrales de llegada).
+  punto con frenado proporcional desde 30 m y un piso de 1,5 m/s para que
+  termine de llegar, control de altura, umbrales de llegada). `LlegadaAlNodo`
+  decide cuándo un nodo se alcanzó: entrando en el umbral de 4 m, o **pasando
+  de largo** —a menos de 12 m del nodo la distancia vuelve a crecer 2,5 m—,
+  que es lo que pasa en el campo con el retraso del dron y el error del GPS;
+  antes el lazo lo hacía dar la vuelta para pisar un punto que ya había
+  dejado atrás.
 - `drone/OrdenVirtualStick.kt`: la traducción a los campos del Virtual Stick
   del MSDK. En modo VELOCITY el SDK usa `roll` para el eje X (norte / adelante)
   y `pitch` para el Y (este / derecha), al revés de lo intuitivo; está tomado
@@ -150,7 +156,13 @@ cajas (normalizadas) y, si vio algo, la captura anotada. La app:
 2. solo **patrullando**, proyecta el centro de la caja más segura al terreno
    con la altura, el rumbo y la inclinación del gimbal
    (`drone/Georreferencia.kt`) y **orbita alrededor del objetivo** a 30 m con
-   la cámara apuntada al centro, para no perderlo de vista;
+   la cámara apuntada al centro, para no perderlo de vista. La velocidad de la
+   órbita es de 4 m/s de fábrica y la fija el operador desde la vista del dron
+   en la consola (`ajustes`, `docs/PROTOCOLS.md` §2), entre 1 y 8 m/s; el
+   Comando Central la guarda y se la vuelve a mandar en cada conexión. Una
+   sola detección, o dos de distinta clase o lejos una de otra, **no** le
+   cambian nada a la ruta: solo la confirmada (dos de la misma clase, en
+   2,5 s y a menos de 25 m) pasa a la órbita;
 3. manda la alerta con el tipo, la **captura anotada**, la posición del objetivo
    y la confianza; y
 4. espera la decisión del operador: *falso positivo* retoma la ruta donde la
@@ -164,6 +176,20 @@ pasa por `PatrolManager.pasarA()`, que frena cuando nadie más le habla al dron.
 
 **Desde el campo**, *Volver a base* y *Aterrizar acá* pisan cualquier orden,
 incluido el control manual de la consola: el que está al lado del dron manda.
+
+**Tomar el control** se toma del todo: la persona manda. Volviendo a base
+(`RETURNING_HOME` o `RETURNING_HOME_BATTERY`, también si el regreso lo arrancó
+el propio DJI) la toma le corta el regreso al dron antes del estacionario,
+porque con el GoHome puesto el DJI no acepta el mando virtual; y mientras la
+persona lo tenga, la batería baja no le vuelve a sacar el dron (al soltarlo,
+sí). Las únicas tomas que la app **no** hace son las del DJI que no se le
+discuten: el regreso pedido desde el botón del control físico, el aterrizaje
+por batería crítica, y su regreso por batería cuando el único corte del vuelo
+ya se gastó (RELEVOS §4). Ahí contesta `control_dropped` con el motivo, el hub
+suelta el lock y la consola lo dice (antes entraba en `MANUAL` a medias y el
+dron seguía con lo suyo, con las palancas mudas). Al soltar el control desde la
+consola el dron queda en vuelo estacionario, y la consola pregunta si retoma
+el patrullaje: no sale a la ruta solo.
 
 ## Tests
 

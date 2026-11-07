@@ -4,6 +4,7 @@ import { LEJOS_M, api, distanciaM, rutasDeBase, traerBases, traerRutas } from '.
 import { CENTRO_POR_DEFECTO, PALETA, iconoBase, useFondo, vestirAtribucion } from '../mapa';
 import type { BaseAsset, Me, PatrolRoute } from '../types';
 import { BotonEditar, BotonEliminar, BotonRestaurar } from './AccionesDeGestion';
+import AsignarDronALaBase from './AsignarDronALaBase';
 import { useAvisar } from './AvisosFlotantes';
 import ConmutadorDeFondo from './ConmutadorDeFondo';
 import DialogoConfirmacion, { type PedidoDeConfirmacion } from './DialogoConfirmacion';
@@ -311,6 +312,10 @@ export default function BasesView({ me }: Readonly<{ me: Me }>) {
   // después de dar de alta una base y a pedido desde la fila de cualquier otra:
   // las rutas de una base cambian mucho después del alta.
   const [asignando, setAsignando] = useState<BaseAsset | null>(null);
+  // El último paso del alta: después de las rutas, asignarle un dron a la base
+  // recién creada (los sin base primero). Sólo en el alta: una base que ya
+  // existe tiene sus drones, que se cambian desde Drones.
+  const [asignandoDron, setAsignandoDron] = useState<BaseAsset | null>(null);
   // El error de la asignación es del diálogo, como el del formulario. Leía el
   // de la página, que tiene su propio aviso: un PUT rechazado se anunciaba dos
   // veces, y la copia de la página quedaba repetida detrás del velo.
@@ -460,7 +465,15 @@ export default function BasesView({ me }: Readonly<{ me: Me }>) {
     }
     setAsignando(null);
     avisar(`Rutas de ${b.name} guardadas.`);
+    if (reciencreada) setAsignandoDron(b);
     await cargar();
+  }
+
+  /** «Después» en las rutas de una base recién creada: se saltea ese paso, pero el del dron sigue. */
+  function saltearRutas() {
+    const b = asignando;
+    setAsignando(null);
+    if (reciencreada && b) setAsignandoDron(b);
   }
 
   /**
@@ -898,7 +911,7 @@ export default function BasesView({ me }: Readonly<{ me: Me }>) {
             </ul>
           </div>
           <div className="modal-pie">
-            <button type="button" onClick={() => setAsignando(null)}>
+            <button type="button" onClick={saltearRutas}>
               {reciencreada ? 'Después' : 'Cancelar'}
             </button>
             <button type="button" className="primario" onClick={() => guardarRutas(asignando)}>
@@ -946,6 +959,8 @@ export default function BasesView({ me }: Readonly<{ me: Me }>) {
           onCerrar={() => setLejana(null)}
         />
       )}
+
+      {asignandoDron && <AsignarDronALaBase base={asignandoDron} onCerrar={() => setAsignandoDron(null)} />}
 
       {pedido && <DialogoConfirmacion pedido={pedido} onCerrar={() => setPedido(null)} />}
     </main>

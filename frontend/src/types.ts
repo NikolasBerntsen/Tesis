@@ -211,6 +211,12 @@ export interface Drone {
   /** Fecha ISO de esa baja; queda como dato de auditoría. */
   deletedAt: string | null;
   base: Base | null;
+  /**
+   * La velocidad con la que orbita a un objetivo, en m/s, fijada desde su
+   * vista (PROTOCOLS §5, `PATCH /drones/:droneId/ajustes`); `null` es la de
+   * fábrica de la app. Falta en la ficha de un hub viejo.
+   */
+  velocidadOrbitaMs?: number | null;
   online: boolean;
   lastStatus: DroneStatus | null;
   controlledBy: string | null;

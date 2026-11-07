@@ -15,8 +15,25 @@ object Navegacion {
     /** Velocidad de crucero de los modos autónomos (ruta, goto). */
     const val VELOCIDAD_CRUCERO_MS = 8.0
 
-    /** Velocidad tangencial en órbita: más lento, para que la cámara siga al objetivo. */
-    const val VELOCIDAD_ORBITA_MS = 5.0
+    /**
+     * Velocidad tangencial en órbita por defecto: más lento que el crucero,
+     * para que la cámara siga al objetivo y la captura no salga barrida. Se
+     * puede cambiar desde la vista del dron en la consola (`ajustes`,
+     * docs/PROTOCOLS.md §2), entre [VELOCIDAD_ORBITA_MINIMA_MS] y
+     * [VELOCIDAD_ORBITA_MAXIMA_MS].
+     */
+    const val VELOCIDAD_ORBITA_MS = 4.0
+
+    /** Menos que esto es casi quedarse quieto sobre el círculo; más que el crucero no tiene sentido. */
+    const val VELOCIDAD_ORBITA_MINIMA_MS = 1.0
+    const val VELOCIDAD_ORBITA_MAXIMA_MS = VELOCIDAD_CRUCERO_MS
+
+    /** La velocidad de órbita que se puede pedir, recortada al rango; sin pedido (null o NaN), la de fábrica. */
+    fun velocidadDeOrbita(pedidaMs: Double?): Double {
+        val v = pedidaMs ?: return VELOCIDAD_ORBITA_MS
+        if (!v.isFinite()) return VELOCIDAD_ORBITA_MS
+        return v.coerceIn(VELOCIDAD_ORBITA_MINIMA_MS, VELOCIDAD_ORBITA_MAXIMA_MS)
+    }
 
     /**
      * Velocidad vertical máxima en los modos autónomos. El Mini 4 Pro sube hasta
@@ -33,10 +50,40 @@ object Navegacion {
 
     /**
      * Debajo de esto el dron frena en proporción a lo que falta, para no pasarse
-     * del punto y volver: a 8 m/s con comandos cada 100 ms se mueve 0,8 m por
-     * vuelta.
+     * del punto y volver. Eran 16 m, y el Mini 4 Pro se pasaba igual: el dron
+     * responde a la velocidad que se le manda con medio segundo o uno de
+     * retraso, y a 8 m/s eso son hasta 8 m de más. Con 30 m la velocidad que
+     * se le pide a 8 m del nodo ya es de 2 m/s, y el retraso se come un metro.
      */
-    const val DISTANCIA_DE_FRENADO_M = 16.0
+    const val DISTANCIA_DE_FRENADO_M = 30.0
+
+    /**
+     * Frenando en proporción el dron nunca termina de llegar: a 5 m del nodo
+     * se le piden 1,3 m/s, a 4,5 m algo menos, y con el viento en contra se
+     * queda clavado justo afuera del umbral de llegada. Por debajo de esto no
+     * se le pide: llega a paso de hombre y entra. Con el frenado de 30 m rige
+     * solo en los últimos metros (a 5 m la proporción ya pide 1,3 m/s).
+     */
+    const val VELOCIDAD_MINIMA_DE_APROXIMACION_MS = 1.5
+
+    /**
+     * Con la distancia al nodo ya por debajo de esto, que empiece a CRECER es
+     * que el dron pasó al lado del nodo sin entrar en el umbral de llegada (el
+     * GPS y el retraso del dron lo corren un par de metros): el nodo se da por
+     * alcanzado y se sigue al siguiente, en vez de dar la vuelta para pisar un
+     * punto que ya quedó atrás (ver [LlegadaAlNodo]).
+     */
+    const val RADIO_DE_PASO_M = 12.0
+
+    /**
+     * Cuánto tiene que crecer la distancia por encima de la mínima que se vio
+     * para contar como "pasó de largo": el GPS tiembla medio metro entre una
+     * lectura y la siguiente, y un temblor no es haber pasado.
+     */
+    const val MARGEN_DE_PASO_M = 2.5
+
+    /** Dos lecturas seguidas alejándose, no una sola: una lectura suelta del GPS puede saltar. */
+    const val LECTURAS_DE_PASO = 2
 
     /** Lo que hay que mandar en una vuelta del lazo para acercarse a un punto. */
     data class Paso(
@@ -61,8 +108,66 @@ object Navegacion {
         val dist = hypot(dx, dy)
         val rumbo = (Math.toDegrees(atan2(dx, dy)) + 360.0) % 360.0
         if (dist < UMBRAL_LLEGADA_M) return Paso(0.0, 0.0, rumbo, dist)
-        val velocidad = vMaxMs * (dist / DISTANCIA_DE_FRENADO_M).coerceIn(0.0, 1.0)
+        // Frena en proporción, pero nunca por debajo del paso de llegada (ni
+        // por encima de lo que se pidió, si se pidió menos que ese paso).
+        val frenada = vMaxMs * (dist / DISTANCIA_DE_FRENADO_M).coerceIn(0.0, 1.0)
+        val velocidad = maxOf(frenada, minOf(VELOCIDAD_MINIMA_DE_APROXIMACION_MS, vMaxMs))
         return Paso(velocidad * dy / dist, velocidad * dx / dist, rumbo, dist)
+    }
+
+    /**
+     * Decide, vuelta a vuelta del lazo, si el dron ya alcanzó el nodo hacia el
+     * que vuela. Hay dos formas de llegar:
+     *
+     *  1. entrar en el umbral de llegada ([UMBRAL_LLEGADA_M]), la de siempre;
+     *  2. pasar de largo: el dron ya estaba a menos de [RADIO_DE_PASO_M] del
+     *     nodo y la distancia volvió a crecer [MARGEN_DE_PASO_M] o más durante
+     *     [LECTURAS_DE_PASO] lecturas seguidas. Es lo que pasa en el campo con
+     *     el retraso del dron y el error del GPS: el Mini pasa a 5 o 6 m del
+     *     nodo sin pisar los 4, y antes el lazo lo hacía dar la vuelta y
+     *     volver a por un punto que ya había dejado atrás.
+     *
+     * Es un objeto con memoria (la distancia mínima vista) y por eso vive
+     * aparte de [hacia], que es puro: uno por nodo, y [reiniciar] al cambiar de
+     * nodo. Lo usan la ruta y el salto a un punto del dron real; el simulado
+     * avanza en pasos que nunca pasan el punto y no lo necesita.
+     */
+    class LlegadaAlNodo(
+        private val umbralM: Double = UMBRAL_LLEGADA_M,
+        private val radioDePasoM: Double = RADIO_DE_PASO_M,
+        private val margenDePasoM: Double = MARGEN_DE_PASO_M,
+        private val lecturasDePaso: Int = LECTURAS_DE_PASO,
+    ) {
+        private var minimaM = Double.POSITIVE_INFINITY
+        private var alejandose = 0
+
+        /** La distancia mínima al nodo que se vio desde el último [reiniciar]; infinita si ninguna. */
+        val distanciaMinimaM: Double get() = minimaM
+
+        /** Una lectura más de la distancia al nodo: true si el nodo se da por alcanzado. */
+        fun llego(distanciaM: Double): Boolean {
+            if (!distanciaM.isFinite()) return false
+            if (distanciaM < umbralM) return true
+            if (distanciaM < minimaM) {
+                minimaM = distanciaM
+                alejandose = 0
+                return false
+            }
+            // Lejos del nodo alejarse no dice nada: es el viento, o el dron que
+            // todavía está enfilando. Solo cuenta si ya estuvo cerca.
+            if (minimaM >= radioDePasoM || distanciaM < minimaM + margenDePasoM) {
+                alejandose = 0
+                return false
+            }
+            alejandose++
+            return alejandose >= lecturasDePaso
+        }
+
+        /** Otro nodo: la memoria arranca de cero. */
+        fun reiniciar() {
+            minimaM = Double.POSITIVE_INFINITY
+            alejandose = 0
+        }
     }
 
     /**

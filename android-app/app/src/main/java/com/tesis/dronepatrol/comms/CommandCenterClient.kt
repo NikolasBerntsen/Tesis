@@ -131,6 +131,13 @@ open class CommandCenterClient(
     var onRenamed: ((displayName: String) -> Unit)? = null
 
     /**
+     * Los ajustes del dron que se fijan desde la consola (`ajustes`, §2): hoy,
+     * la velocidad de órbita en m/s. `null` es "la de fábrica". Llega al
+     * conectarse y cada vez que alguien la cambia en la vista del dron.
+     */
+    var onAjustes: ((velocidadOrbitaMs: Double?) -> Unit)? = null
+
+    /**
      * Un mensaje de relevos, desvíos o emergencias (docs/PROTOCOLS.md §2.b) ya
      * validado y con tipo (ver [LectorDelHub]). Corre en el hilo lector del
      * socket, como el resto de los avisos.
@@ -440,7 +447,24 @@ open class CommandCenterClient(
                 onManualGimbal?.invoke(pitch, msg.optString("by"))
             }
             "renamed" -> onRenamed?.invoke(msg.optString("displayName"))
+            "ajustes" -> ajustes(msg)
         }
+    }
+
+    /**
+     * `ajustes`: la velocidad de órbita que fijó la consola, o null (ausente o
+     * `null` en el JSON) para volver a la de fábrica. Un valor que no es un
+     * número finito descarta el mensaje entero, como la inclinación de la
+     * cámara: nada se convierte, y un cero que nadie escribió sería una órbita
+     * que no gira.
+     */
+    private fun ajustes(msg: JSONObject) {
+        val velocidad = if (!msg.has("velocidadOrbitaMs") || msg.isNull("velocidadOrbitaMs")) {
+            null
+        } else {
+            inclinacionPedida(msg.opt("velocidadOrbitaMs")) ?: return
+        }
+        onAjustes?.invoke(velocidad)
     }
 
     /**

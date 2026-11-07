@@ -192,6 +192,8 @@ export function avisoDeLaLiberacion(
   yo: string,
   droneId: string,
   nombre: string,
+  /** El texto con que la app soltó el control (`control_changed.detalle`, §3): por qué no lo tomó. */
+  detalle?: unknown,
 ): Omit<AvisoDelControl, 'id'> | null {
   // Lo que hace la app al soltarlo así (PROTOCOLS §2): solo el que estaba en
   // vuelo manual queda quieto; el que seguía un objetivo o un relevo vuelve a
@@ -209,10 +211,17 @@ export function avisoDeLaLiberacion(
     };
   }
   if (motivo === 'app') {
+    // Con el texto de la app se dice POR QUÉ: "no se tomó el control: el dron
+    // vuelve a la base por batería baja" es lo que el que pidió el control
+    // necesita leer, no que "la app lo soltó".
+    const porque =
+      typeof detalle === 'string' && detalle.trim() !== ''
+        ? `la app del dron avisó: ${detalle.trim().replace(/\.$/, '')}.`
+        : 'la app del dron avisó que ya no lo tenía tomado.';
     return {
       droneId,
       tono: 'malo',
-      texto: `Se soltó el control de ${nombre} que tenía ${teniaElControl}: la app del dron avisó que ya no lo tenía tomado.`,
+      texto: `Se soltó el control de ${nombre} que tenía ${teniaElControl}: ${porque}`,
     };
   }
   return null;

@@ -136,6 +136,20 @@ describe('control — el control que el hub soltó solo', () => {
     });
   });
 
+  it('con el texto de la app dice por qué no se tomó, en vez de que "la app lo soltó"', () => {
+    const detalle = 'no se tomó el control: alguien pidió el regreso a base desde el control físico, y el que está al lado del dron manda.';
+    expect(avisoDeLaLiberacion('app', 'piloto', 'piloto', 'd1', 'Alfa', detalle)).toEqual({
+      droneId: 'd1',
+      tono: 'malo',
+      texto:
+        'Se soltó el control de Alfa que tenía piloto: la app del dron avisó: no se tomó el control: alguien pidió el ' +
+        'regreso a base desde el control físico, y el que está al lado del dron manda.',
+    });
+    // Un detalle que no es texto (un hub raro) no rompe el aviso.
+    expect(avisoDeLaLiberacion('app', 'piloto', 'piloto', 'd1', 'Alfa', 7)?.texto).toContain('ya no lo tenía tomado');
+    expect(avisoDeLaLiberacion('app', 'piloto', 'piloto', 'd1', 'Alfa', '   ')?.texto).toContain('ya no lo tenía tomado');
+  });
+
   it('un soltar común, o un motivo que la consola no conoce, no avisa nada', () => {
     expect(avisoDeLaLiberacion(undefined, 'piloto', 'piloto', 'd1', 'Alfa')).toBeNull();
     expect(avisoDeLaLiberacion('otra_cosa', 'piloto', 'piloto', 'd1', 'Alfa')).toBeNull();

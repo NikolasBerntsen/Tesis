@@ -10,8 +10,8 @@ import {
   type UserPatch,
 } from '../store';
 import {
-  broadcastDroneUpdated, broadcastOperators, control, droneCard, emergencias, enviarBases, enviarBasesATodos,
-  getController, kickDrone, kickUser, listDroneCards, metaDron, relevos, releaseAllControlledBy, releaseControl,
+  broadcastDroneUpdated, broadcastOperators, control, droneCard, emergencias, enviarAjustes, enviarBases, enviarBasesATodos,
+  getController, getLastStatus, kickDrone, kickUser, listDroneCards, metaDron, relevos, releaseAllControlledBy, releaseControl,
   sendToDrone, takeControl,
 } from '../ws';
 
@@ -405,6 +405,12 @@ apiRouter.patch('/drones/:droneId', requireRoles('field_operator', 'operator', '
   const before = getDrone(droneId);
   if (!before) return res.status(404).json({ error: 'Dron inexistente' });
   if (before.deletedAt) return res.status(409).json({ error: 'El dron está eliminado: restauralo antes de modificarlo' });
+  // La base es a la que vuelve: cambiársela en el aire es cambiarle el destino
+  // de un regreso que puede estar en curso (y la app ya tomó la suya al
+  // despegar). Se le cambia con el dron en tierra.
+  if (patch.baseId !== undefined && patch.baseId !== before.baseId && getLastStatus(droneId)?.flying === true) {
+    return res.status(409).json({ error: 'El dron está en vuelo: la base se le cambia cuando aterrice' });
+  }
 
   const result = updateDrone(droneId, patch)!;
   // El renombre se avisa a los dos lados para que la app muestre el nombre nuevo
@@ -428,6 +434,67 @@ apiRouter.patch('/drones/:droneId', requireRoles('field_operator', 'operator', '
     {
       droneId,
       meta: { drone: metaDron(droneId), antes: estadoDron(result.before), despues: estadoDron(result.after) },
+    },
+  );
+  broadcastOperators({ type: 'event', event: ev });
+  broadcastDroneUpdated(droneId);
+  res.json(droneCard(droneId));
+});
+
+/**
+ * Rango de la velocidad de órbita que se puede fijar desde la consola
+ * (PROTOCOLS §5, `PATCH /drones/:droneId/ajustes`). Es el de la app
+ * (`Navegacion.VELOCIDAD_ORBITA_MINIMA_MS` / `_MAXIMA_MS`): menos que 1 m/s es
+ * quedarse quieto sobre el círculo y más que el crucero no tiene sentido.
+ */
+const VELOCIDAD_ORBITA_MINIMA_MS = 1;
+const VELOCIDAD_ORBITA_MAXIMA_MS = 8;
+
+/**
+ * Los ajustes del dron que fija el operador y la app aplica: hoy, la velocidad
+ * de órbita. `null` vuelve a la de fábrica. Se guarda con el dron (es del
+ * aparato, no del vuelo), se le manda en el acto si está conectado (`ajustes`,
+ * §2) y se le vuelve a mandar cada vez que se conecta.
+ */
+apiRouter.patch('/drones/:droneId/ajustes', requireAuth('operator'), (req: AuthedRequest, res) => {
+  const { droneId } = req.params;
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  if (!('velocidadOrbitaMs' in body)) return res.status(400).json({ error: 'Nada para ajustar: falta velocidadOrbitaMs' });
+  const pedida = body.velocidadOrbitaMs;
+  let velocidad: number | null;
+  if (pedida === null) {
+    velocidad = null;
+  } else if (typeof pedida === 'number' && Number.isFinite(pedida)) {
+    if (pedida < VELOCIDAD_ORBITA_MINIMA_MS || pedida > VELOCIDAD_ORBITA_MAXIMA_MS) {
+      return res.status(400).json({
+        error: `velocidadOrbitaMs tiene que estar entre ${VELOCIDAD_ORBITA_MINIMA_MS} y ${VELOCIDAD_ORBITA_MAXIMA_MS} m/s`,
+      });
+    }
+    velocidad = Math.round(pedida * 10) / 10;
+  } else {
+    // Nada se convierte: un texto no es una velocidad, y un 0 que nadie
+    // escribió sería una órbita que no gira.
+    return res.status(400).json({ error: 'velocidadOrbitaMs tiene que ser un número o null' });
+  }
+
+  const before = getDrone(droneId);
+  if (!before || before.deletedAt) return res.status(404).json({ error: 'Dron inexistente' });
+  const result = updateDrone(droneId, { velocidadOrbitaMs: velocidad })!;
+  enviarAjustes(droneId, req.user!.sub);
+  const texto = velocidad === null ? 'la de fábrica' : `${velocidad} m/s`;
+  const ev = createLog(
+    'drone',
+    'ORBIT_SPEED_SET',
+    req.user!.sub,
+    `${req.user!.sub} fijó la velocidad de órbita de "${result.after.displayName}" en ${texto}`,
+    {
+      droneId,
+      meta: {
+        drone: metaDron(droneId),
+        antes: { velocidadOrbitaMs: result.before.velocidadOrbitaMs },
+        despues: { velocidadOrbitaMs: result.after.velocidadOrbitaMs },
+        detalle: { por: req.user!.sub, velocidadOrbitaMs: velocidad },
+      },
     },
   );
   broadcastOperators({ type: 'event', event: ev });

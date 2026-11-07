@@ -931,8 +931,12 @@ describe('PilotajePantallaCompleta — salir', () => {
     const { onSalir, onCerrar } = montar();
     fireEvent.click(screen.getByRole('button', { name: 'Salir del control manual' }));
     const dialogo = screen.getByRole('dialog', { name: '¿Salir del control manual?' });
-    expect(dialogo).toHaveTextContent('el dron vuelve a patrullar');
-    // el `resume_patrol` de este soltar no le corta un aterrizaje (PROTOCOLS §2)
+    // Sin orden: el dron queda quieto y el detalle pregunta después si retoma.
+    // Antes salir lo mandaba a patrullar en el acto, sin pausa ni confirmación.
+    expect(dialogo).toHaveTextContent('el dron queda en vuelo estacionario donde está');
+    expect(dialogo).toHaveTextContent('Después se te pregunta si retoma el patrullaje');
+    expect(dialogo).not.toHaveTextContent('vuelve a patrullar');
+    // soltar no le corta un aterrizaje (PROTOCOLS §2)
     expect(dialogo).toHaveTextContent('si está aterrizando, sigue bajando hasta el suelo');
     expect(onSalir).not.toHaveBeenCalled();
 

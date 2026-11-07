@@ -196,6 +196,7 @@ class CommandCenterClientTest {
         """{"type":"control_taken","by":"ana","resync":false}""" to "control_taken",
         """{"type":"control_transferred","by":"beto","de":"ana"}""" to "control_transferred",
         """{"type":"renamed","displayName":"Beta"}""" to "renamed",
+        """{"type":"ajustes","velocidadOrbitaMs":3.5,"by":"ana"}""" to "ajustes",
     )
 
     /** Engancha un oyente en cada orden y devuelve la lista donde cada una anota su nombre. */
@@ -220,6 +221,7 @@ class CommandCenterClientTest {
         cliente.onControlResync = { oidas += "control_resync" }
         cliente.onControlTransferred = { _, _ -> oidas += "control_transferred" }
         cliente.onRenamed = { oidas += "renamed" }
+        cliente.onAjustes = { oidas += "ajustes" }
         return oidas
     }
 
@@ -362,6 +364,26 @@ class CommandCenterClientTest {
         cliente.manejarMensaje("""{"type":"manual_move","bearing":270,"distanceM":25.5,"by":"ana"}""")
 
         assertEquals(listOf(270.0, 25.5, "ana"), recibido)
+    }
+
+    /**
+     * `ajustes` (§2): la velocidad de órbita llega como número; `null` o
+     * ausente es "la de fábrica"; un texto o un valor no finito descarta el
+     * mensaje entero (nada se convierte: un cero que nadie escribió sería una
+     * órbita que no gira).
+     */
+    @Test
+    fun losAjustesTraenLaVelocidadDeOrbitaONullParaLaDeFabrica() {
+        val recibidos = mutableListOf<Double?>()
+        cliente.onAjustes = { recibidos += it }
+
+        cliente.manejarMensaje("""{"type":"ajustes","velocidadOrbitaMs":3.5,"by":"ana"}""")
+        cliente.manejarMensaje("""{"type":"ajustes","velocidadOrbitaMs":null,"by":"ana"}""")
+        cliente.manejarMensaje("""{"type":"ajustes","by":"ana"}""")
+        cliente.manejarMensaje("""{"type":"ajustes","velocidadOrbitaMs":"3.5","by":"ana"}""")
+        cliente.manejarMensaje("""{"type":"ajustes","velocidadOrbitaMs":true,"by":"ana"}""")
+
+        assertEquals(listOf(3.5, null, null), recibidos)
     }
 
     /** Un `alertId` en null es lo mismo que ausente: la decisión no trae id. */

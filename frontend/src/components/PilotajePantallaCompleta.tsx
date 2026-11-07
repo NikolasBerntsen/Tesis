@@ -105,9 +105,11 @@ function liberarNavegador(elemento: HTMLElement | null) {
 }
 
 /**
- * Lo que pasa al salir del control manual, dicho en la pregunta de antes. Es
- * lo que manda el detalle al soltar: sin orden con objetivo o en un relevo, y
- * de vuelta a la ruta si no (`reanudacionAlSoltar` en DroneDetail).
+ * Lo que pasa al salir del control manual, dicho en la pregunta de antes. El
+ * detalle suelta siempre SIN orden (`resume: 'none'`, ver `salirDelPilotaje`
+ * en DroneDetail): con objetivo o en un relevo el dron vuelve a eso; si no,
+ * queda en vuelo estacionario y la consola pregunta después si retoma la ruta.
+ * Antes salir lo mandaba a patrullar en el acto, sin pausa ni confirmación.
  */
 function queHaceAlSalir(hayObjetivo: boolean, enRelevo: boolean): string {
   if (enRelevo) {
@@ -115,12 +117,10 @@ function queHaceAlSalir(hayObjetivo: boolean, enRelevo: boolean): string {
       ? 'Se suelta el control y el dron vuelve al objetivo que estaba siguiendo; el relevo sigue en marcha.'
       : 'Se suelta el control sin darle ninguna orden al dron: sigue con el relevo.';
   }
-  // Aterrizando, el `resume_patrol` de este soltar no le corta el aterrizaje
-  // (PROTOCOLS §2): sigue bajando hasta el suelo.
   return hayObjetivo
     ? 'Se suelta el control y el dron vuelve al objetivo que estaba siguiendo.'
-    : 'Se suelta el control y el dron vuelve a patrullar, hacia el próximo nodo de su ruta; si está aterrizando, ' +
-        'sigue bajando hasta el suelo.';
+    : 'Se suelta el control y el dron queda en vuelo estacionario donde está (si está aterrizando, sigue bajando ' +
+        'hasta el suelo). Después se te pregunta si retoma el patrullaje.';
 }
 
 /** El id más alto entre las alertas de este dron: lo que ya estaba al abrir la vista. */

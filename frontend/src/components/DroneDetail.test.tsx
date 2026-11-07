@@ -203,18 +203,19 @@ describe('DroneDetail', () => {
 
     // Le corta el vuelo a otra persona: primero pregunta, con la consecuencia dicha.
     const dialogo = await screen.findByRole('dialog', { name: 'Quitarle el control a oper9' });
+    // Quitarle el control a alguien no es mandar el dron a patrullar: queda quieto.
     expect(dialogo).toHaveTextContent(
-      'oper9 deja de pilotear Alfa en el acto y el dron vuelve a patrullar su ruta, o sigue bajando hasta el suelo si ' +
-        'está aterrizando.',
+      'oper9 deja de pilotear Alfa en el acto y el dron queda en vuelo estacionario donde está (o sigue bajando ' +
+        'hasta el suelo si está aterrizando); desde su vista se lo manda a retomar la ruta.',
     );
     expect(apiMock).not.toHaveBeenCalledWith('/drones/d1/control', expect.anything());
 
     await userEvent.click(within(dialogo).getByRole('button', { name: 'Quitar control' }));
-    // Fuerza: el supervisor eligió sacárselo a quien lo tenga, aunque haya cambiado de manos.
+    // Fuerza: el supervisor eligió sacárselo a quien lo tenga, aunque haya cambiado de manos. Y sin orden.
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', {
         method: 'DELETE',
-        body: JSON.stringify({ resume: 'last', titular: 'oper9', forzar: true }),
+        body: JSON.stringify({ resume: 'none', titular: 'oper9', forzar: true }),
       }),
     );
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
@@ -592,21 +593,48 @@ describe('DroneDetail — salir de la vista de pilotaje', () => {
     fireEvent.click(within(dialogo).getByRole('button', { name: 'Salir del control manual' }));
   }
 
-  it('sin objetivo, salir suelta el control y el dron vuelve a patrullar', async () => {
+  it('sin objetivo, salir suelta el control SIN orden y pregunta si el dron retoma el patrullaje', async () => {
     renderDetail(conControl());
     await confirmarSalida(await abrirPilotaje());
     expect(vistaDePilotaje()).not.toBeInTheDocument();
+    // Antes salía con 'last' y el dron se iba a la ruta en el acto, sin pausa.
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', {
         method: 'DELETE',
-        body: JSON.stringify({ resume: 'last', titular: 'admin1' }),
+        body: JSON.stringify({ resume: 'none', titular: 'admin1' }),
       }),
     );
     // Lo cerró el operador: no hay nada que explicarle.
     expect(screen.queryByTestId('aviso-pilotaje')).not.toBeInTheDocument();
+
+    // El dron quedó quieto: retomar la ruta es una decisión aparte, y es una orden explícita.
+    const pregunta = screen.getByRole('dialog', { name: '¿Retomar el patrullaje de Alfa?' });
+    expect(pregunta).toHaveTextContent('el dron quedó en vuelo estacionario donde está');
+    expect(apiMock).not.toHaveBeenCalledWith('/drones/d1/resume', expect.anything());
+    fireEvent.click(within(pregunta).getByRole('button', { name: 'Retomar ruta' }));
+    await waitFor(() => expect(apiMock).toHaveBeenCalledWith('/drones/d1/resume', { method: 'POST', body: '{}' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '¿Retomar el patrullaje de Alfa?' })).not.toBeInTheDocument());
   });
 
-  it('con objetivo, salir lo devuelve al objetivo', async () => {
+  it('"Dejarlo quieto" no manda nada: el dron se queda en vuelo estacionario', async () => {
+    renderDetail(conControl());
+    await confirmarSalida(await abrirPilotaje());
+    const pregunta = await screen.findByRole('dialog', { name: '¿Retomar el patrullaje de Alfa?' });
+    fireEvent.click(within(pregunta).getByRole('button', { name: 'Dejarlo quieto' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(apiMock).not.toHaveBeenCalledWith('/drones/d1/resume', expect.anything());
+  });
+
+  it('sin una ruta cargada no hay nada que retomar: salir no pregunta', async () => {
+    renderDetail(conControl({ routeId: null }));
+    await confirmarSalida(await abrirPilotaje());
+    await waitFor(() =>
+      expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', expect.objectContaining({ method: 'DELETE' })),
+    );
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('con objetivo, salir lo devuelve al objetivo, sin preguntar nada', async () => {
     renderDetail(conControl({ target: OBJETIVO }));
     await confirmarSalida(await abrirPilotaje());
     await waitFor(() =>
@@ -615,6 +643,7 @@ describe('DroneDetail — salir de la vista de pilotaje', () => {
         body: JSON.stringify({ resume: 'none', titular: 'admin1' }),
       }),
     );
+    expect(screen.queryByRole('dialog', { name: '¿Retomar el patrullaje de Alfa?' })).not.toBeInTheDocument();
   });
 
   it('cerrar la vista sin soltar deja el control y la tarjeta ofrece volver', async () => {
@@ -788,6 +817,11 @@ describe('DroneDetail — el foco al cerrarse la vista de pilotaje', () => {
         name: 'Salir del control manual',
       }),
     );
+    // La pregunta de si retoma la ruta se lleva el foco mientras está abierta;
+    // al cerrarla, vuelve a donde estaba: el botón del control.
+    const pregunta = screen.getByRole('dialog', { name: '¿Retomar el patrullaje de Alfa?' });
+    expect(within(pregunta).getByRole('button', { name: 'Dejarlo quieto' })).toHaveFocus();
+    fireEvent.click(within(pregunta).getByRole('button', { name: 'Dejarlo quieto' }));
     expect(volver()).toHaveFocus();
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith('/drones/d1/control', expect.objectContaining({ method: 'DELETE' })),
@@ -1082,6 +1116,34 @@ const OBJETIVO: ObjetivoEnSeguimiento = {
   decision: 'PENDING',
 };
 
+describe('DroneDetail — la velocidad de órbita', () => {
+  it('la vista trae el ajuste con lo que dice la ficha; el operador de campo sólo lo mira', async () => {
+    const { volverARenderizar } = renderDetail({ drone: makeDrone({ droneId: 'd1', displayName: 'Alfa', velocidadOrbitaMs: 2.5 }) });
+    await esperarCarga();
+    const deslizador = screen.getByRole('slider', { name: 'Velocidad de órbita' });
+    expect(deslizador).toHaveValue('2.5');
+    expect(deslizador).toBeEnabled();
+    expect(screen.getByTestId('velocidad-orbita')).toHaveTextContent('2,5 m/s');
+
+    volverARenderizar({ me: makeMe({ username: 'campo1', role: 'field_operator', canControl: false }) });
+    expect(screen.getByRole('slider', { name: 'Velocidad de órbita' })).toBeDisabled();
+  });
+
+  it('mover el deslizador guarda por el endpoint de ajustes del dron', async () => {
+    renderDetail({ drone: makeDrone({ droneId: 'd1', displayName: 'Alfa', velocidadOrbitaMs: null }) });
+    await esperarCarga();
+    fireEvent.change(screen.getByRole('slider', { name: 'Velocidad de órbita' }), { target: { value: '3' } });
+    await waitFor(
+      () =>
+        expect(apiMock).toHaveBeenCalledWith('/drones/d1/ajustes', {
+          method: 'PATCH',
+          body: JSON.stringify({ velocidadOrbitaMs: 3 }),
+        }),
+      { timeout: 2000 },
+    );
+  });
+});
+
 describe('DroneDetail — alerta en curso', () => {
   it('muestra la pendiente más nueva de ESTE dron al lado del video, y deja recorrer las demás', async () => {
     renderDetail({
@@ -1108,10 +1170,49 @@ describe('DroneDetail — alerta en curso', () => {
     // En la vista del dron no se repite de qué dron es: es éste.
     expect(within(tarjeta).queryByRole('button', { name: 'Alfa' })).not.toBeInTheDocument();
 
-    // Va en el par del video y el mapa, entre los dos.
+    // Ya no se mete entre el video y el mapa: va debajo de la operación, a
+    // todo el ancho (apaisada), y lo que se mira arriba es el botón de alertas.
     const par = document.body.querySelector('.par-video-mapa') as HTMLElement;
-    expect(par).toHaveClass('con-alerta');
-    expect(par.contains(tarjeta)).toBe(true);
+    expect(par).not.toHaveClass('con-alerta');
+    expect(par.contains(tarjeta)).toBe(false);
+    expect(tarjeta).toHaveClass('apaisada');
+    expect(tarjeta.parentElement).toHaveClass('detail-main');
+  });
+
+  it('el botón de alertas de la cabecera cuenta las pendientes de ESTE dron y abre el pop-up con sus dos vistas', async () => {
+    const props = renderDetail({
+      alertas: [
+        makeAlert({ id: 3, drone_id: 'd1', status: 'PENDING', type: 'PERSON' }),
+        makeAlert({ id: 9, drone_id: 'd1', status: 'PENDING', type: 'VEHICLE', snapshot: 'QUFB' }),
+        makeAlert({ id: 20, drone_id: 'otro', status: 'PENDING' }),
+        makeAlert({ id: 15, drone_id: 'd1', status: 'DISMISSED' }),
+      ],
+    });
+    await esperarCarga();
+    const boton = screen.getByRole('button', { name: 'Alertas: 2 pendientes' });
+    expect(boton).toHaveClass('con-pendientes');
+    expect(boton.closest('header')).toHaveClass('detail-head');
+
+    await userEvent.click(boton);
+    const popup = screen.getByRole('dialog', { name: 'Alertas de Alfa' });
+    expect(popup).toHaveTextContent('2 pendientes');
+    // Una por vez: el carrusel, con la más nueva.
+    expect(within(popup).getByTestId('carrusel-cuenta')).toHaveTextContent('1 de 2');
+    // Todas: la grilla con una casilla por alerta, para decidir varias juntas.
+    await userEvent.click(within(popup).getByRole('button', { name: 'Todas' }));
+    expect(within(popup).getByRole('checkbox', { name: 'Seleccionar la alerta #9' })).toBeInTheDocument();
+    expect(within(popup).getByRole('checkbox', { name: 'Seleccionar la alerta #3' })).toBeInTheDocument();
+    await userEvent.click(within(popup).getAllByRole('button', { name: 'Descartar' })[0]);
+    expect(props.onDecidir).toHaveBeenCalledWith(9, 'DISMISSED');
+    await userEvent.click(within(popup).getByRole('button', { name: 'Cerrar las alertas' }));
+    expect(screen.queryByRole('dialog', { name: 'Alertas de Alfa' })).not.toBeInTheDocument();
+  });
+
+  it('sin pendientes el botón de alertas lo dice y está apagado', async () => {
+    renderDetail({ alertas: [makeAlert({ id: 15, drone_id: 'd1', status: 'DISMISSED' })] });
+    await esperarCarga();
+    expect(screen.getByRole('button', { name: 'Alertas: ninguna pendiente' })).toBeDisabled();
+    expect(screen.queryByRole('region', { name: 'Alerta en curso' })).not.toBeInTheDocument();
   });
 
   it('al pasar a otro dron, el carrusel arranca de cero con las alertas de ése', async () => {
@@ -1733,13 +1834,21 @@ describe('DroneDetail — soltar el control de un dron en un relevo (RELEVOS §3
     await soltoCon('none');
   });
 
-  it('un relevo que ya terminó no cuenta: soltar lo devuelve a su ruta, como siempre', async () => {
-    renderDetail({ ...conControl(), relevos: [{ ...VA_A_RELEVAR, estado: 'CANCELADO' }] });
+  it('un relevo que ya terminó no cuenta: soltar es el soltar de siempre, y se pregunta si retoma la ruta', async () => {
+    renderDetail({ ...conControl({ routeId: 1 }), relevos: [{ ...VA_A_RELEVAR, estado: 'CANCELADO' }] });
     await esperarCarga();
     expect(screen.getByRole('button', { name: 'Devolver al patrullaje' })).toBeInTheDocument();
     expect(screen.queryByTestId('aviso-reanudar-en-relevo')).not.toBeInTheDocument();
     await salirDelPilotaje();
-    await soltoCon('last');
+    await soltoCon('none');
+    expect(screen.getByRole('dialog', { name: '¿Retomar el patrullaje de Alfa?' })).toBeInTheDocument();
+  });
+
+  it('en un relevo, salir no pregunta si retoma: el relevo sigue', async () => {
+    renderDetail({ ...conControl({ routeId: 1 }), relevos: [VA_A_RELEVAR] });
+    await salirDelPilotaje();
+    await soltoCon('none');
+    expect(screen.queryByRole('dialog', { name: '¿Retomar el patrullaje de Alfa?' })).not.toBeInTheDocument();
   });
 });
 

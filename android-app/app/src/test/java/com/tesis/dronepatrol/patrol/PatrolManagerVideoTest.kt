@@ -68,7 +68,7 @@ class PatrolManagerVideoTest {
 
         override fun connect() = Unit
         override fun startRoute(route: PatrolRoute, fromWaypoint: Int) = Unit
-        override fun startOrbit(centerLat: Double, centerLon: Double, radiusM: Double) = Unit
+        override fun startOrbit(centerLat: Double, centerLon: Double, radiusM: Double, velocidadMs: Double) = Unit
         override fun hold() = Unit
         override fun gotoPoint(lat: Double, lon: Double) = Unit
         override fun manualStick(pitch: Double, roll: Double, yaw: Double, throttle: Double) = Unit

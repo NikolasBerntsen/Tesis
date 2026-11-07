@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { api, rutasDeBase, traerBases, traerRutas } from '../api';
+import { api, rutasDeBase, traerBases, traerDrones, traerRutas } from '../api';
 import { nombresDeBotones } from '../test/botones';
 import { makeMe } from '../test/fixtures';
 import { estadoMapa, fondosPuestos, limpiarEstadoMapa, pintarComoLeaflet } from '../test/dobleLeaflet';
@@ -14,6 +14,7 @@ vi.mock('../api', async (original) => ({
   traerBases: vi.fn(),
   traerRutas: vi.fn(async () => []),
   rutasDeBase: vi.fn(async () => []),
+  traerDrones: vi.fn(async () => []),
 }));
 vi.mock('leaflet', async () => (await import('../test/dobleLeaflet')).dobleLeaflet());
 
@@ -21,6 +22,7 @@ const apiMock = vi.mocked(api);
 const basesMock = vi.mocked(traerBases);
 const rutasMock = vi.mocked(traerRutas);
 const rutasDeBaseMock = vi.mocked(rutasDeBase);
+const dronesMock = vi.mocked(traerDrones);
 const ADMIN = makeMe({ username: 'admin1', role: 'admin' });
 const CAMPO = makeMe({ username: 'campo1', role: 'field_operator' });
 const OPERADOR = makeMe({ username: 'oper1', role: 'operator' });
@@ -658,14 +660,87 @@ describe('BasesView — asignar rutas apenas se da de alta la base', () => {
     expect(JSON.parse(apiMock.mock.calls.at(-1)![1].body)).toEqual({ routeIds: [1] });
   });
 
-  it('se puede saltear el paso con "Después"', async () => {
+  it('"Después" saltea las rutas pero pasa igual al paso del dron; "Ahora no" lo cierra', async () => {
     await llegarALasRutas();
     await screen.findByText(/quedó dada de alta/i);
 
     await userEvent.click(screen.getByRole('button', { name: 'Después' }));
+    expect(screen.queryByRole('dialog', { name: /rutas de base río/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: '¿Asignar un dron a Base Río?' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Ahora no' }));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
+
+  it('después de guardar las rutas de la base nueva pregunta si se le asigna un dron, los sin base primero', async () => {
+    dronesMock.mockResolvedValue([
+      { ...makeDroneParaBases('a1', 'Alfa', 1, 'Base Norte') },
+      { ...makeDroneParaBases('z9', 'Zulu', null, null) },
+    ]);
+    await llegarALasRutas();
+    await screen.findByText(/quedó dada de alta/i);
+    await userEvent.click(screen.getByRole('option', { name: /Perímetro cercano/ }));
+    await userEvent.click(screen.getByRole('button', { name: /asignar 1 ruta/i }));
+
+    const dialogo = await screen.findByRole('dialog', { name: '¿Asignar un dron a Base Río?' });
+    const opciones = await within(dialogo).findAllByRole('option');
+    expect(opciones[0]).toHaveTextContent('Zulu');
+    expect(opciones[0]).toHaveTextContent('Sin base');
+    expect(opciones[1]).toHaveTextContent('Alfa');
+    expect(opciones[1]).toHaveTextContent('Hoy vuelve a Base Norte');
+
+    // Un dron sin base se asigna en el acto: la base nueva, por PATCH del dron.
+    apiMock.mockResolvedValueOnce({ ...makeDroneParaBases('z9', 'Zulu', 5, 'Base Río') });
+    await userEvent.click(opciones[0]);
+    await waitFor(() =>
+      expect(apiMock).toHaveBeenCalledWith('/drones/z9', { method: 'PATCH', body: JSON.stringify({ baseId: 5 }) }),
+    );
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('uno que ya es de otra base pide confirmación antes de reasignarlo', async () => {
+    dronesMock.mockResolvedValue([makeDroneParaBases('a1', 'Alfa', 1, 'Base Norte')]);
+    await llegarALasRutas();
+    await screen.findByText(/quedó dada de alta/i);
+    await userEvent.click(screen.getByRole('button', { name: 'Después' }));
+    const dialogo = screen.getByRole('dialog', { name: '¿Asignar un dron a Base Río?' });
+    await userEvent.click(await within(dialogo).findByRole('option', { name: /Alfa/ }));
+
+    const confirmacion = screen.getByRole('dialog', { name: 'Reasignar Alfa a Base Río' });
+    expect(confirmacion).toHaveTextContent('Alfa hoy es de la base Base Norte');
+    apiMock.mockResolvedValueOnce({ ...makeDroneParaBases('a1', 'Alfa', 5, 'Base Río') });
+    await userEvent.click(within(confirmacion).getByRole('button', { name: 'Reasignar' }));
+    await waitFor(() =>
+      expect(apiMock).toHaveBeenCalledWith('/drones/a1', { method: 'PATCH', body: JSON.stringify({ baseId: 5 }) }),
+    );
+  });
+
+  it('un dron en vuelo no se puede elegir', async () => {
+    dronesMock.mockResolvedValue([
+      { ...makeDroneParaBases('c3', 'Charlie', 1, 'Base Norte'), online: true, lastStatus: { ...STATUS_VOLANDO } },
+    ]);
+    await llegarALasRutas();
+    await screen.findByText(/quedó dada de alta/i);
+    await userEvent.click(screen.getByRole('button', { name: 'Después' }));
+    const opcion = await screen.findByRole('option', { name: /Charlie/ });
+    expect(opcion).toBeDisabled();
+    expect(opcion).toHaveTextContent('En vuelo: se le cambia la base cuando aterrice');
+  });
 });
+
+/** Un dron del inventario, como lo devuelve GET /drones, con o sin base. */
+function makeDroneParaBases(hash: string, nombre: string, baseId: number | null, baseNombre: string | null) {
+  return {
+    hash, droneId: hash, displayName: nombre, model: 'DJI Mini 4 Pro', inventoryCode: '', active: true, baseId,
+    deleted: false, deletedAt: null,
+    base: baseNombre ? { name: baseNombre, lat: -34.8565, lon: -56.2075 } : null,
+    online: false, lastStatus: null, controlledBy: null,
+  };
+}
+
+const STATUS_VOLANDO = {
+  droneId: 'c3', displayName: 'Charlie', state: 'PATROLLING', battery: 80, lat: -34.6, lon: -58.4, routeId: 1,
+  waypointIndex: 0, waypointTotal: 4, signal: 'OK' as const, signalPct: 90, mode: 'TEST' as const, flying: true,
+};
 
 describe('BasesView — rutas de una base que ya existe', () => {
   beforeEach(() => {
@@ -704,6 +779,13 @@ describe('BasesView — rutas de una base que ya existe', () => {
     expect(opciones[0]).toHaveAttribute('aria-selected', 'true');
     expect(opciones[1]).toHaveAttribute('aria-selected', 'false');
     expect(within(dialogo).getByRole('button', { name: /asignar 1 ruta/i })).toBeInTheDocument();
+  });
+
+  it('guardar las rutas de una base que ya existe no pregunta por ningún dron', async () => {
+    rutasDeBaseMock.mockResolvedValue([CERCA]);
+    const dialogo = await abrirRutas();
+    await userEvent.click(within(dialogo).getByRole('button', { name: /asignar 1 ruta/i }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
   it('desmarcar y guardar le saca la ruta a la base', async () => {

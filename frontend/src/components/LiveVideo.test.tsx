@@ -1,4 +1,5 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import LiveVideo from './LiveVideo';
 
@@ -28,6 +29,28 @@ describe('LiveVideo', () => {
 
     rerender(<LiveVideo frame={null} />);
     expect(screen.queryByText('En vivo')).not.toBeInTheDocument();
+  });
+
+  it('con imagen, el visor es un botón que la amplía; la ampliada sigue al video y dice "En vivo"', async () => {
+    const { rerender } = render(<LiveVideo frame="ZZZ" nombre="Alfa" />);
+    await userEvent.click(screen.getByRole('button', { name: 'Ampliar el video en vivo' }));
+    const ampliado = screen.getByRole('dialog', { name: 'Video en vivo' });
+    expect(ampliado).toHaveTextContent('Alfa');
+    expect(within(ampliado).getByAltText('Transmisión del dron ampliada')).toHaveAttribute('src', 'data:image/jpeg;base64,ZZZ');
+    expect(within(ampliado).getByText('En vivo')).toBeInTheDocument();
+
+    // Llega otro cuadro: la ampliada lo muestra. Y con la señal perdida ya no dice "En vivo".
+    rerender(<LiveVideo frame="YYY" nombre="Alfa" senalPerdida />);
+    expect(within(ampliado).getByAltText('Transmisión del dron ampliada')).toHaveAttribute('src', 'data:image/jpeg;base64,YYY');
+    expect(within(ampliado).queryByText('En vivo')).not.toBeInTheDocument();
+
+    await userEvent.click(within(ampliado).getByRole('button', { name: 'Cerrar la imagen ampliada' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('sin imagen no hay nada que ampliar: el visor no es un botón', () => {
+    render(<LiveVideo frame={null} />);
+    expect(screen.queryByRole('button', { name: 'Ampliar el video en vivo' })).not.toBeInTheDocument();
   });
 
   it('el título lleva el ícono de la cámara, oculto al lector', () => {
