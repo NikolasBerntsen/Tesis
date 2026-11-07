@@ -1,0 +1,125 @@
+/* ============================================================================
+   ALERTAS DEL DRON — el pop-up de las alertas pendientes de un dron (que abre
+   el botón de alertas de su vista), la imagen ampliada (VisorAmpliado), el
+   ajuste de la velocidad de órbita y la lista de drones para asignar a una
+   base. Sin colores literales: todo sale de los tokens, para los dos temas.
+   ========================================================================= */
+
+/* --- El botón de alertas en la cabecera de la vista del dron ------------------
+   Al lado de las pastillas del estado; con pendientes, lleva la cuenta en la
+   placa óxido y el filo de oro para que se vea de lejos. */
+.detalle-alertas {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--e-2);
+  min-height: var(--alto-control);
+}
+.detalle-alertas.con-pendientes { border-color: var(--oro); }
+.detalle-alertas .badge-count { position: static; }
+
+/* --- La tarjeta de la alerta en curso, debajo de la operación ---------------
+   Apaisada y a todo el ancho, como en el tablero. */
+.detail-main > .alerta-en-curso { grid-column: 1 / -1; }
+
+/* --- El pop-up: la cabecera lleva el conmutador de vistas ------------------- */
+.alertas-del-dron .alerta-en-curso {
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+.modal-cabecera > .view-switch { margin-left: auto; }
+
+/* La barra de la selección: elegir todas, la cuenta y los dos verbos. */
+.alertas-seleccion {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--e-3) var(--e-4);
+  padding-bottom: var(--e-3);
+  border-bottom: 1px solid var(--veta);
+}
+.alertas-seleccion > .alert-actions {
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+/* La grilla: cada alerta en su ficha, con la captura chica. */
+.alertas-grilla {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--e-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.alerta-ficha {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-3);
+  padding: var(--e-3);
+  border: 1px solid var(--veta);
+  border-radius: var(--radio-chico);
+  background-color: var(--panel);
+  transition: border-color var(--transicion), box-shadow var(--transicion);
+}
+.alerta-ficha.seleccionada {
+  border-color: var(--oro);
+  box-shadow: 0 0 0 1px var(--oro);
+}
+.alerta-ficha-cabecera {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--e-2) var(--e-3);
+}
+.alerta-ficha-marca {
+  display: inline-flex;
+  align-items: center;
+  min-width: var(--alto-tactil);
+  min-height: var(--alto-tactil);
+  justify-content: center;
+}
+.alerta-ficha-marca input {
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  accent-color: var(--oro);
+}
+.alerta-ficha .snapshot { width: 100%; }
+.alerta-ficha .alert-actions button { flex: 1 1 110px; }
+
+/* --- La imagen ampliada ------------------------------------------------------- */
+.visor-ampliado .visor { width: 100%; }
+.visor-ampliado .video.ampliada {
+  display: block;
+  width: 100%;
+  max-height: 78vh;
+  aspect-ratio: auto;
+  object-fit: contain;
+}
+
+/* --- El ajuste de la velocidad de órbita -------------------------------------- */
+.ajuste-orbita-deslizador {
+  width: 100%;
+  min-height: var(--alto-tactil);
+  accent-color: var(--oro);
+}
+.ajuste-orbita-pie {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--e-3);
+}
+
+/* --- Los drones para asignar a una base --------------------------------------- */
+.lista-drones-para-asignar .inscripcion {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--e-2);
+}
+.lista-drones-para-asignar button.sin-base { border-color: var(--oro); }
+.lista-drones-para-asignar button[aria-disabled='true'] {
+  color: var(--tinta-suave);
+  cursor: default;
+}
