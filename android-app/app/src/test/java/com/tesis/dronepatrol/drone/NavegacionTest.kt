@@ -1,5 +1,6 @@
 package com.tesis.dronepatrol.drone
 
+import kotlin.math.abs
 import kotlin.math.hypot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -249,5 +250,118 @@ class NavegacionTest {
             lon += paso.vEsteMs * 0.1 / Geo.metrosPorGradoLon(centroLat)
             assertEquals(30.0, Geo.distanciaM(centroLat, centroLon, lat, lon), 1.5)
         }
+    }
+
+    // ---- El crucero: la rampa, la nariz y la alineación (Navegacion.Crucero) ----
+
+    private fun aMetros(norteM: Double, esteM: Double) =
+        (LAT + norteM / Geo.METROS_POR_GRADO_LAT) to (LON + esteM / M_POR_GRADO_LON)
+
+    private fun rapidez(p: Navegacion.Paso) = hypot(p.vNorteMs, p.vEsteMs)
+
+    @Test
+    fun deParadoArrancaEnRampaYNoDeGolpe() {
+        val crucero = Navegacion.Crucero()
+        val (tLat, tLon) = aMetros(500.0, 0.0)
+        val paso = crucero.paso(LAT, LON, tLat, tLon, rumboActualGrados = 0.0, dtS = 0.1)
+        assertEquals(Navegacion.ACELERACION_MS2 * 0.1, rapidez(paso), 1e-6)
+        assertEquals(0.0, paso.rumboGrados, 1e-6)
+    }
+
+    @Test
+    fun alineadoYLejosLlegaACruceroEnCuatroSegundos() {
+        val crucero = Navegacion.Crucero()
+        val (tLat, tLon) = aMetros(500.0, 0.0)
+        var paso = crucero.paso(LAT, LON, tLat, tLon, 0.0, 0.1)
+        repeat(39) { paso = crucero.paso(LAT, LON, tLat, tLon, 0.0, 0.1) }
+        assertEquals(Navegacion.VELOCIDAD_CRUCERO_MS, paso.vNorteMs, 1e-6)
+        assertEquals(0.0, paso.vEsteMs, 1e-6)
+    }
+
+    @Test
+    fun conLaNarizCruzadaLaNarizGiraDeAPocoYLaVelocidadQuedaEnElMinimo() {
+        val crucero = Navegacion.Crucero()
+        val (tLat, tLon) = aMetros(0.0, 500.0) // el nodo al este, la nariz al norte
+        val primero = crucero.paso(LAT, LON, tLat, tLon, rumboActualGrados = 0.0, dtS = 0.1)
+        // A 45°/s, en una vuelta el rumbo pedido se corre 4,5°, no los 90.
+        assertEquals(4.5, primero.rumboGrados, 1e-6)
+        var paso = primero
+        repeat(20) { paso = crucero.paso(LAT, LON, tLat, tLon, 0.0, 0.1) }
+        // El rumbo pedido llegó al del nodo y ahí se queda.
+        assertEquals(90.0, paso.rumboGrados, 1e-6)
+        // Con la nariz real todavía al norte, hacia el nodo se va al mínimo: no se sale de costado a 8 m/s.
+        assertEquals(Navegacion.VELOCIDAD_CRUCERO_MS * Navegacion.VELOCIDAD_DESALINEADA, rapidez(paso), 1e-6)
+        assertTrue(paso.vEsteMs > 0 && abs(paso.vNorteMs) < 1e-9)
+    }
+
+    @Test
+    fun cuandoLaNarizSeAlineaAcelera() {
+        val crucero = Navegacion.Crucero()
+        val (tLat, tLon) = aMetros(0.0, 500.0)
+        repeat(10) { crucero.paso(LAT, LON, tLat, tLon, 0.0, 0.1) }
+        // La brújula ya dice 90: la velocidad pedida pasa a crucero, en rampa.
+        var paso = crucero.paso(LAT, LON, tLat, tLon, 90.0, 0.1)
+        val antes = rapidez(paso)
+        repeat(10) { paso = crucero.paso(LAT, LON, tLat, tLon, 90.0, 0.1) }
+        assertEquals(antes + 10 * Navegacion.ACELERACION_MS2 * 0.1, rapidez(paso), 1e-6)
+        assertTrue(rapidez(paso) < Navegacion.VELOCIDAD_CRUCERO_MS)
+    }
+
+    @Test
+    fun cercaDelNodoLaNarizNoTiemblaConElGps() {
+        val crucero = Navegacion.Crucero()
+        // A 6 m al sur del nodo con la nariz al norte; el GPS lo corre 1,5 m al este.
+        val (tLat, tLon) = aMetros(6.0, 0.0)
+        val recto = crucero.paso(LAT, LON, tLat, tLon, 0.0, 0.1)
+        val (lat2, lon2) = aMetros(0.0, 1.5)
+        val corrido = crucero.paso(lat2, lon2, tLat, tLon, 0.0, 0.1)
+        assertEquals(0.0, recto.rumboGrados, 1e-9)
+        assertEquals(recto.rumboGrados, corrido.rumboGrados, 1e-9)
+        assertTrue(corrido.vNorteMs > 0)
+    }
+
+    @Test
+    fun alCambiarDeNodoLaVelocidadNoPegaElVolantazo() {
+        val crucero = Navegacion.Crucero()
+        val (norteLat, norteLon) = aMetros(500.0, 0.0)
+        repeat(40) { crucero.paso(LAT, LON, norteLat, norteLon, 0.0, 0.1) } // a crucero hacia el norte
+        // El nodo siguiente está al este: la velocidad hacia el norte se deshace de a poco.
+        val (esteLat, esteLon) = aMetros(0.0, 500.0)
+        val paso = crucero.paso(LAT, LON, esteLat, esteLon, 0.0, 0.1)
+        assertEquals(Navegacion.VELOCIDAD_CRUCERO_MS - Navegacion.ACELERACION_MS2 * 0.1, paso.vNorteMs, 0.05)
+        assertTrue(paso.vEsteMs >= 0.0 && paso.vEsteMs < 0.2)
+    }
+
+    @Test
+    fun laDiferenciaDeRumboSePliegaYLaAlineacionBajaDeUnoAlMinimo() {
+        assertEquals(-20.0, Navegacion.diferenciaDeRumbo(350.0, 10.0), 1e-9)
+        assertEquals(20.0, Navegacion.diferenciaDeRumbo(10.0, 350.0), 1e-9)
+        assertEquals(-180.0, Navegacion.diferenciaDeRumbo(180.0, 0.0), 1e-9)
+        assertEquals(1.0, Navegacion.alineacion(10.0), 1e-9)
+        assertEquals(1.0, Navegacion.alineacion(-15.0), 1e-9)
+        assertEquals(Navegacion.VELOCIDAD_DESALINEADA, Navegacion.alineacion(90.0), 1e-9)
+        assertEquals(Navegacion.VELOCIDAD_DESALINEADA, Navegacion.alineacion(-170.0), 1e-9)
+        assertEquals((1.0 + Navegacion.VELOCIDAD_DESALINEADA) / 2, Navegacion.alineacion(52.5), 1e-9)
+    }
+
+    @Test
+    fun sinBrujulaLaNarizArrancaEnElRumboAlNodoYUnDtRaroSeRecorta() {
+        val crucero = Navegacion.Crucero()
+        val (tLat, tLon) = aMetros(0.0, 500.0)
+        val paso = crucero.paso(LAT, LON, tLat, tLon, rumboActualGrados = Double.NaN, dtS = 5.0)
+        assertEquals(90.0, paso.rumboGrados, 1e-6)
+        // Un dt de 5 s se recorta a medio segundo: la rampa sube 1 m/s, no 10.
+        assertEquals(Navegacion.ACELERACION_MS2 * Navegacion.DT_MAXIMO_S, rapidez(paso), 1e-6)
+    }
+
+    @Test
+    fun quietoReiniciaLaRampa() {
+        val crucero = Navegacion.Crucero()
+        val (tLat, tLon) = aMetros(500.0, 0.0)
+        repeat(40) { crucero.paso(LAT, LON, tLat, tLon, 0.0, 0.1) }
+        crucero.quieto()
+        assertEquals(0.0, crucero.velocidadMs, 1e-9)
+        val paso = crucero.paso(LAT, LON, tLat, tLon, 0.0, 0.1)
+        assertEquals(Navegacion.ACELERACION_MS2 * 0.1, rapidez(paso), 1e-6)
     }
 }

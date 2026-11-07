@@ -1,6 +1,7 @@
 package com.tesis.dronepatrol.dji
 
 import android.util.Log
+import com.tesis.dronepatrol.drone.AnclaDeRumbo
 import com.tesis.dronepatrol.drone.AutonomiaInformada
 import com.tesis.dronepatrol.drone.ConfirmacionDelAterrizaje
 import com.tesis.dronepatrol.drone.CuadroDeVideo
@@ -64,6 +65,7 @@ import dji.v5.manager.interfaces.ICameraStreamManager
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
 import kotlin.math.abs
@@ -273,6 +275,9 @@ class DjiDroneController : DroneController {
     @Volatile
     private var posicionCruda: Pair<Double, Double>? = null
 
+    /** Cuántas posiciones entregó el SDK, para que el logcat diga cada cuánto llegan (ver [lanzarRuta]). */
+    private val posicionesRecibidas = AtomicInteger()
+
     /**
      * Si el GPS tiene fix según el propio controlador de vuelo (KeyGPSIsValid);
      * null mientras no lo informe. Sin fix el SDK no entrega posición o entrega
@@ -319,6 +324,13 @@ class DjiDroneController : DroneController {
 
     @Volatile
     private var lastHeading = 0.0
+
+    /** La brújula ya informó: antes de eso [lastHeading] es un cero que no es el norte. */
+    @Volatile
+    private var brujulaInformada = false
+
+    /** El rumbo al que se clava la nariz con la palanca de giro suelta (ver [enviarVelocidadCuerpo]). */
+    private val anclaDeRumbo = AnclaDeRumbo()
 
     @Volatile
     private var lastSignal = 100
@@ -675,6 +687,7 @@ class DjiDroneController : DroneController {
         // Posición del dron (la valida [posicion] al usarla)
         escuchar(FlightControllerKey.KeyAircraftLocation3D) { location ->
             posicionCruda = location.latitude to location.longitude
+            posicionesRecibidas.incrementAndGet()
         }
         escuchar(FlightControllerKey.KeyGPSIsValid) { valido ->
             gpsValido = valido
@@ -699,7 +712,10 @@ class DjiDroneController : DroneController {
         }
         // Rumbo real de la brújula. El MSDK lo da en -180..180 y el resto del
         // sistema lo usa en 0..360 (norte = 0, este = 90).
-        escuchar(FlightControllerKey.KeyCompassHeading) { rumbo -> lastHeading = (rumbo + 360.0) % 360.0 }
+        escuchar(FlightControllerKey.KeyCompassHeading) { rumbo ->
+            lastHeading = (rumbo + 360.0) % 360.0
+            brujulaInformada = true
+        }
         // Intensidad del enlace de radio, que es lo que la consola pinta como
         // barritas de señal
         escuchar(AirLinkKey.KeySignalQuality) { calidad -> lastSignal = calidad.coerceIn(0, 100) }
@@ -944,23 +960,50 @@ class DjiDroneController : DroneController {
             // retraso del dron y el GPS lo corren unos metros): sin esto el
             // Mini pasaba a 5 m del nodo y el lazo lo hacía dar la vuelta.
             val llegada = Navegacion.LlegadaAlNodo()
+            // La velocidad en rampa, la nariz girando a su ritmo y el dron
+            // volando hacia donde mira (ver Navegacion.Crucero): sin esto en
+            // cada nodo la velocidad saltaba a 8 m/s hacia el siguiente con el
+            // dron todavía andando hacia el anterior, y se pasaba y bandeaba.
+            val crucero = Navegacion.Crucero()
+            var anteriorNs = System.nanoTime()
+            var posicionesAlSalir = posicionesRecibidas.get()
+            var salidaMs = System.currentTimeMillis()
+            Log.i(
+                TAG,
+                "Ruta de ${route.waypoints.size} nodos desde el ${target + 1}: crucero ${Navegacion.VELOCIDAD_CRUCERO_MS} m/s, " +
+                    "aceleración ${Navegacion.ACELERACION_MS2} m/s², giro ${Navegacion.GIRO_CRUCERO_GRADOS_S}°/s",
+            )
             while (true) {
                 delay(INTERVALO_MANDO_MS) // Virtual Stick requiere comandos a ~10 Hz
+                val ahoraNs = System.nanoTime()
+                val dt = (ahoraNs - anteriorNs) / 1e9
+                anteriorNs = ahoraNs
                 // Sin posición válida (se perdió el fix) no se vuela hacia
                 // ninguna coordenada: estacionario hasta que vuelva.
                 val (lat, lon) = posicion() ?: run {
                     enviarVelocidadCuerpo(MandoVirtual.NEUTRO)
+                    crucero.quieto()
                     null
                 } ?: continue
                 val wp = route.waypoints[target]
-                val paso = Navegacion.hacia(lat, lon, wp.lat, wp.lon)
+                val paso = crucero.paso(lat, lon, wp.lat, wp.lon, rumboDeLaBrujula(), dt)
                 if (llegada.llego(paso.distanciaM)) {
-                    if (!paso.llego) {
-                        Log.i(TAG, "Nodo ${target + 1} pasado de largo a ${paso.distanciaM.toInt()} m: se da por alcanzado")
-                    }
+                    // Para el banco de campo: a qué distancia y velocidad se dio
+                    // por alcanzado, y cada cuánto llegó la posición del SDK.
+                    val posiciones = posicionesRecibidas.get() - posicionesAlSalir
+                    val ms = System.currentTimeMillis() - salidaMs
+                    Log.i(
+                        TAG,
+                        "Nodo ${target + 1} alcanzado a ${"%.1f".format(paso.distanciaM)} m" +
+                            (if (paso.llego) "" else " (pasado de largo)") +
+                            " a ${"%.1f".format(crucero.velocidadMs)} m/s; el SDK dio $posiciones posiciones en $ms ms" +
+                            (if (posiciones > 0) " (cada ${ms / posiciones} ms)" else ""),
+                    )
                     flightEvents.tryEmit(FlightEvent.WaypointReached(target))
                     target = (target + 1) % route.waypoints.size
                     llegada.reiniciar()
+                    posicionesAlSalir = posicionesRecibidas.get()
+                    salidaMs = System.currentTimeMillis()
                     continue
                 }
                 enviarVelocidadTerreno(
@@ -1034,15 +1077,22 @@ class DjiDroneController : DroneController {
         relevarLazo(Lazo.GOTO) {
             asegurarVirtualStick()
             val altura = lastAlt
-            // Como en la ruta: llegar es entrar en el umbral o pasar al lado.
+            // Como en la ruta: llegar es entrar en el umbral o pasar al lado, y
+            // se va en rampa, girando la nariz a su ritmo y mirando hacia donde se va.
             val llegada = Navegacion.LlegadaAlNodo()
+            val crucero = Navegacion.Crucero()
+            var anteriorNs = System.nanoTime()
             while (true) {
                 delay(INTERVALO_MANDO_MS)
+                val ahoraNs = System.nanoTime()
+                val dt = (ahoraNs - anteriorNs) / 1e9
+                anteriorNs = ahoraNs
                 val (aquiLat, aquiLon) = posicion() ?: run {
                     enviarVelocidadCuerpo(MandoVirtual.NEUTRO)
+                    crucero.quieto()
                     null
                 } ?: continue
-                val paso = Navegacion.hacia(aquiLat, aquiLon, lat, lon)
+                val paso = crucero.paso(aquiLat, aquiLon, lat, lon, rumboDeLaBrujula(), dt)
                 if (llegada.llego(paso.distanciaM)) {
                     flightEvents.tryEmit(FlightEvent.GotoArrived)
                     break
@@ -2770,6 +2820,9 @@ class DjiDroneController : DroneController {
             }
             navigationJob?.cancel()
             lazoActual = tipo
+            // El estacionario o el mando que vengan anclan la nariz donde esté,
+            // no donde estaba antes de este lazo.
+            anclaDeRumbo.soltar()
             // Una orden de vuelo nueva: la app ya no espera ningún aterrizaje. Si
             // quedara el de un regreso que esta orden reemplaza, un regreso que
             // después arranque el propio DJI parecería pedido por la app y nadie
@@ -3018,19 +3071,28 @@ class DjiDroneController : DroneController {
     private fun enviarVelocidadCuerpo(v: MandoVirtual.VelocidadesCuerpo) {
         asegurarVirtualStick()
         val p = OrdenVirtualStick.cuerpo(v)
+        // Con la palanca de giro suelta la nariz se clava al rumbo que tenía al
+        // soltarla (yaw en modo ÁNGULO), como con el control físico: "velocidad
+        // de giro cero" amortigua el giro pero no sostiene el rumbo, y una
+        // ráfaga dejaba al dron unos grados corrido, con la cámara mirando a
+        // otro lado. Sin brújula todavía, se sigue con la velocidad de giro.
+        val ancla = anclaDeRumbo.rumbo(giroSuelto = v.giroGradosS == 0.0, rumboActualGrados = rumboDeLaBrujula())
         VirtualStickManager.getInstance().sendVirtualStickAdvancedParam(
             VirtualStickFlightControlParam(
                 p.pitch,
                 p.roll,
-                p.yaw,
+                if (ancla != null) OrdenVirtualStick.rumboAngulo(ancla) else p.yaw,
                 p.verticalThrottle,
                 VerticalControlMode.VELOCITY,
                 RollPitchControlMode.VELOCITY,
-                YawControlMode.ANGULAR_VELOCITY,
+                if (ancla != null) YawControlMode.ANGLE else YawControlMode.ANGULAR_VELOCITY,
                 FlightCoordinateSystem.BODY,
             ),
         )
     }
+
+    /** El rumbo de la brújula en 0..360, o NaN mientras no haya informado: un cero inventado sería el norte. */
+    private fun rumboDeLaBrujula(): Double = if (brujulaInformada) lastHeading else Double.NaN
 
     private companion object {
         /** El Virtual Stick se sostiene con comandos a 10 Hz. */
