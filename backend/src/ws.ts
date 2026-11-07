@@ -188,6 +188,8 @@ export interface DroneCard {
   deletedAt: string | null;
   baseId: number | null;
   base: DroneBase | null;
+  /** La velocidad de órbita fijada desde la consola (m/s), o null si es la de fábrica (PROTOCOLS §6). */
+  velocidadOrbitaMs: number | null;
   online: boolean;
   lastStatus: Record<string, unknown> | null;
   controlledBy: string | null;
@@ -206,6 +208,7 @@ function cardDesdeActivo(d: DroneAssetView): DroneCard {
     active: d.active,
     deletedAt: d.deletedAt,
     base: d.base,
+    velocidadOrbitaMs: d.velocidadOrbitaMs,
     online: isOnline(d.hash),
     lastStatus: getLastStatus(d.hash),
     controlledBy: getController(d.hash),
@@ -328,6 +331,19 @@ export function enviarBasesATodos(): void {
 }
 
 /**
+ * El mensaje `ajustes` para un dron (PROTOCOLS §2): lo que la consola fijó del
+ * dron y la app aplica. Hoy es solo la velocidad de órbita; `null` es "la de
+ * fábrica". Sale al conectarse y cada vez que alguien la cambia.
+ */
+export function mensajeDeAjustes(droneId: string, by = 'Comando Central'): MensajeHub {
+  return { type: 'ajustes', velocidadOrbitaMs: getDrone(droneId)?.velocidadOrbitaMs ?? null, by };
+}
+
+export function enviarAjustes(droneId: string, by = 'Comando Central'): boolean {
+  return sendToDrone(droneId, mensajeDeAjustes(droneId, by));
+}
+
+/**
  * `relevo` y `autonomia` del status (§1): el hub los reenvía tal cual si pasan
  * la validación y, si no, los saca —el status sale igual, porque es lo único
  * que dice si el dron vuela— y anota el motivo. Una app vieja no los manda, y
@@ -412,6 +428,10 @@ export function releaseControl(droneId: string, byUser: string, opts: ReleaseOpt
 
   const detalle = opts.forced ? ` (forzado por ${byUser}, lo tenía ${holder})` : '';
   const motivo = opts.reason ? ` — ${opts.reason}` : '';
+  // Si lo soltó la app (`control_dropped`), la consola necesita el texto: no es
+  // lo mismo "la app se reinició" que "no se tomó el control: el dron vuelve
+  // por batería", y la vista de pilotaje que se abrió tiene que decir cuál.
+  const causaParaLaConsola = opts.motivo === 'app' && opts.reason ? { ...causa, detalle: opts.reason } : causa;
   const ev = createLog(
     'drone',
     'CONTROL_RELEASED',
@@ -426,7 +446,7 @@ export function releaseControl(droneId: string, byUser: string, opts: ReleaseOpt
     },
   );
   broadcastOperators({ type: 'event', event: ev });
-  broadcastOperators({ type: 'control_changed', droneId, controlledBy: null, teniaElControl: holder, ...causa });
+  broadcastOperators({ type: 'control_changed', droneId, controlledBy: null, teniaElControl: holder, ...causaParaLaConsola });
 
   if (opts.resume !== 'none') {
     const msg: Record<string, unknown> = { type: 'resume_patrol', orderedBy: byUser };
@@ -1239,9 +1259,11 @@ export function setupWebSocket(server: Server) {
           : { type: 'control_released', by: 'Comando Central', resync: true },
       );
       reenviarDecisionesRecientes(droneId);
-      // Las bases donde puede bajar (desvío, RELEVOS §4), y el primer status
-      // que llegue decide qué relevo se le reenvía (PROTOCOLS §1.b, "Reconexión").
+      // Las bases donde puede bajar (desvío, RELEVOS §4), los ajustes del dron
+      // (la velocidad de órbita, §2) y el primer status que llegue decide qué
+      // relevo se le reenvía (PROTOCOLS §1.b, "Reconexión").
       enviarBases(droneId);
+      enviarAjustes(droneId);
       relevos.alConectar(droneId);
 
       ws.on('message', (data) => sinTumbarElHub(`el dron ${droneId}`, () => handleDroneMessage(droneId, data.toString())));

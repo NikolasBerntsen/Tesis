@@ -78,6 +78,8 @@ export interface DroneAsset {
   inventory_code: string;
   active: number;
   base_id: number | null;
+  /** Velocidad de órbita fijada desde la consola, en m/s; NULL es la de fábrica de la app. */
+  velocidad_orbita_ms?: number | null;
   /** Nombre y coordenada de la base unida por base_id (LEFT JOIN). */
   b_name?: string | null;
   b_lat?: number | null;
@@ -101,6 +103,11 @@ export interface DroneAssetView {
   active: boolean;
   baseId: number | null;
   base: DroneBase | null;
+  /**
+   * Velocidad con la que orbita a un objetivo, en m/s, fijada desde la vista
+   * del dron (PROTOCOLS §2, `ajustes`); `null` es la de fábrica de la app.
+   */
+  velocidadOrbitaMs: number | null;
   createdAt: string;
   createdBy: string | null;
   deleted: boolean;
@@ -485,6 +492,7 @@ export function toDroneAssetView(d: DroneAsset): DroneAssetView {
     active: !!d.active,
     baseId: d.base_id,
     base: toDroneBase(d),
+    velocidadOrbitaMs: typeof d.velocidad_orbita_ms === 'number' ? d.velocidad_orbita_ms : null,
     createdAt: d.created_at,
     createdBy: d.created_by,
     deleted: !!d.deleted,
@@ -539,6 +547,8 @@ export interface DronePatch {
   active?: boolean;
   /** `null` desasigna la base; `undefined` la deja como está. */
   baseId?: number | null;
+  /** `null` vuelve a la velocidad de órbita de fábrica; `undefined` la deja como está. */
+  velocidadOrbitaMs?: number | null;
 }
 
 /** Aplica el cambio sobre un dron vivo y devuelve el antes y el después, para el log. */
@@ -564,6 +574,10 @@ export function updateDrone(hash: string, patch: DronePatch): { before: DroneAss
   // La base va aparte porque COALESCE no distingue "no la toques" de "desasignala".
   if (patch.baseId !== undefined) {
     db.prepare('UPDATE drones SET base_id = ? WHERE hash = ?').run(patch.baseId, hash);
+  }
+  // La velocidad de órbita, por lo mismo: null es "la de fábrica".
+  if (patch.velocidadOrbitaMs !== undefined) {
+    db.prepare('UPDATE drones SET velocidad_orbita_ms = ? WHERE hash = ?').run(patch.velocidadOrbitaMs, hash);
   }
 
   return { before, after: getDrone(hash)! };

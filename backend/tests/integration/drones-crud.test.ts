@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { seed, startServer, login, api, connectWs, crearBase, crearDron, limpiarBase, CREDS, DRON, type TestServer, type WsClient } from '../helpers';
+import { seed, startServer, login, api, connectWs, crearBase, crearDron, limpiarBase, mkStatus, tokenDeDron, wait, CREDS, DRON, type TestServer, type WsClient } from '../helpers';
 
 // Los drones como activos: alta desde el campo, edición, borrado lógico y
 // restauración, con la ficha (`DroneCard`) que consume la consola.
@@ -168,6 +168,30 @@ describe('integración — ABM de drones', () => {
     expect(meta.despues).toEqual({ displayName: 'Comparable-2', model: 'M1', inventario: '', operativo: true, eliminado: false, base: 'Base Sur Nueva' });
   });
 
+  it('PATCH baseId con el dron en vuelo da 409; en tierra se cambia', async () => {
+    const d = await crearDron(srv.base, sup, { displayName: 'Volando', baseId: oeste.id });
+    const app = await connectWs(srv.wsUrl, tokenDeDron(d.hash));
+    try {
+      app.ws.send(mkStatus({ flying: true }));
+      await operWs.waitFor((m) => m.type === 'status' && m.droneId === d.hash && m.flying === true);
+      const enElAire = await api(srv.base, `/api/drones/${d.hash}`, sup, { method: 'PATCH', body: JSON.stringify({ baseId: sur.id }) });
+      expect(enElAire.status).toBe(409);
+      expect(enElAire.body.error).toMatch(/en vuelo/);
+      expect((await api(srv.base, `/api/drones/${d.hash}`, sup)).body).toBeDefined();
+      // La misma base que ya tiene no es un cambio: pasa aunque vuele.
+      expect((await api(srv.base, `/api/drones/${d.hash}`, sup, { method: 'PATCH', body: JSON.stringify({ baseId: oeste.id, model: 'M2' }) })).status).toBe(200);
+
+      app.ws.send(mkStatus({ flying: false }));
+      await operWs.waitFor((m) => m.type === 'status' && m.droneId === d.hash && m.flying === false);
+      await wait(20);
+      const enTierra = await api(srv.base, `/api/drones/${d.hash}`, sup, { method: 'PATCH', body: JSON.stringify({ baseId: sur.id }) });
+      expect(enTierra.status).toBe(200);
+      expect(enTierra.body.baseId).toBe(sur.id);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('PATCH con baseId:null desasigna la base del dron', async () => {
     const d = await crearDron(srv.base, sup, { displayName: 'SinBaseLuego', baseId: oeste.id });
     const r = await api(srv.base, `/api/drones/${d.hash}`, sup, { method: 'PATCH', body: JSON.stringify({ baseId: null }) });
@@ -293,6 +317,7 @@ describe('integración — listado de drones', () => {
       deletedAt: null,
       baseId: expect.any(Number),
       base: { name: 'Base Norte', lat: -34.8565, lon: -56.2075, aterrizajeLat: null, aterrizajeLon: null },
+      velocidadOrbitaMs: null,
       online: false,
       lastStatus: null,
       controlledBy: null,

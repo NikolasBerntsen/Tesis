@@ -265,6 +265,10 @@ const droneCols = (db.prepare('PRAGMA table_info(drones)').all() as { name: stri
 for (const [col, def] of [
   ['inventory_code', "TEXT NOT NULL DEFAULT ''"],
   ['base_id', 'INTEGER REFERENCES bases(id)'],
+  // La velocidad con la que el dron orbita a un objetivo (PROTOCOLS §2,
+  // `ajustes`): NULL es la de fábrica de la app. Es del dron y no de un
+  // vuelo, por eso vive acá y se le vuelve a mandar al conectarse.
+  ['velocidad_orbita_ms', 'REAL'],
 ]) {
   if (!droneCols.includes(col)) db.exec(`ALTER TABLE drones ADD COLUMN ${col} ${def}`);
 }

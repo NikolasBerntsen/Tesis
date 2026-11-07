@@ -647,7 +647,11 @@ describe('integración — control manual exclusivo', () => {
 
         c.ws.send(JSON.stringify({ type: 'control_dropped', by: 'operador', motivo: '  la app estuvo 30 s sin el Comando Central  ' }));
         const cambio = await operWs.waitFor((m) => m.type === 'control_changed' && m.controlledBy === null);
-        expect(cambio).toMatchObject({ controlledBy: null, teniaElControl: 'operador', motivo: 'app' });
+        // Con el texto de la app: la consola tiene que poder decir POR QUÉ no se
+        // tomó (el dron vuelve por batería) y no solo que la app lo soltó.
+        expect(cambio).toMatchObject({
+          controlledBy: null, teniaElControl: 'operador', motivo: 'app', detalle: 'la app estuvo 30 s sin el Comando Central',
+        });
         const ev = await operWs.waitFor((m) => m.type === 'event' && m.event.type === 'CONTROL_RELEASED');
         expect(JSON.parse(ev.event.meta).detalle.motivo).toBe('la app estuvo 30 s sin el Comando Central');
         expect(await c.waitFor((m) => m.type === 'control_released')).toMatchObject({ motivo: 'app' });
