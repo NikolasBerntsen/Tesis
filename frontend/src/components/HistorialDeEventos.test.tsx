@@ -92,10 +92,12 @@ describe('HistorialDeEventos', () => {
   it('pagina de a veinte y no pasa de cien, aunque lleguen más en vivo', async () => {
     apiMock.mockResolvedValue(eventos(100));
     montar({ liveEvents: [makeEvent({ id: 101, drone_id: 'd1', message: 'evento 101' })] });
-    await screen.findByText('evento 101');
+    // El que ya estaba en vivo se pinta antes de que conteste el historial: la
+    // página se mira recién cuando están los cien.
+    await waitFor(() => expect(info()).toHaveTextContent('Página 1 de 5 · 100 eventos'));
 
+    expect(fila('evento 101')).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /^Ver el detalle/ })).toHaveLength(EVENTOS_POR_PAGINA);
-    expect(info()).toHaveTextContent('Página 1 de 5 · 100 eventos');
     // El más viejo quedó afuera: el título promete cien.
     const anterior = screen.getByRole('button', { name: 'Anterior' });
     const siguiente = screen.getByRole('button', { name: 'Siguiente' });
