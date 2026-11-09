@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { api, pedirControl, rutasDeBase } from '../api';
-import { PLAZO_DE_RESPUESTA_MS, type PedidoDeControl } from '../control';
+import { marcaDeEventos, seCortoElAterrizaje } from '../aterrizaje';
+import { PLAZO_DE_RESPUESTA_MS, quienTeQuitoElControl, type Liberacion, type PedidoDeControl } from '../control';
 import { posicionDelDron, stateLabel } from '../format';
 import type { RastroObjetivo } from '../rastro';
 import { avisoDeOrdenesEnRelevo, avisoDeReanudarEnRelevo, duenioDeLaAlerta, participaDeUnRelevo } from '../relevos';
@@ -213,6 +214,28 @@ function queHaceAlSoltarSinOrden(conObjetivo: boolean, enRelevo: boolean): strin
         'se lo manda a retomar la ruta';
 }
 
+/**
+ * Por qué se cerró sola la vista de pilotaje, con el motivo más probable: otro
+ * tomó el control, el dron se fue, se cortó el canal de esta consola, otra
+ * persona se lo quitó a la fuerza (con el porqué: «supervisor te quitó el
+ * control: ordenó volver a la base»), o lo soltó la misma cuenta desde otra
+ * sesión.
+ */
+function porQueSeCerroLaVista(
+  controlador: string | null,
+  enLinea: boolean,
+  seCortoElEnlace: boolean,
+  quitado: string | null,
+): string {
+  if (controlador) return `${controlador} tomó el control del dron: se cerró la vista de pilotaje.`;
+  if (!enLinea) return 'El dron se desconectó del Comando Central y el control manual se soltó: se cerró la vista de pilotaje.';
+  if (seCortoElEnlace) {
+    return 'Se cortó la conexión con el Comando Central y el control manual se soltó solo: se cerró la vista de pilotaje.';
+  }
+  if (quitado) return `${quitado}. Se cerró la vista de pilotaje.`;
+  return 'El control manual se soltó desde otra sesión: se cerró la vista de pilotaje.';
+}
+
 /** El botón de soltar que no pierde nada: dice a qué vuelve el dron. */
 function etiquetaDeSoltarSinOrden(conObjetivo: boolean, enRelevo: boolean): string {
   if (!enRelevo) return 'Soltar control (el dron vuelve al objetivo)';
@@ -231,6 +254,7 @@ export default function DroneDetail({
   relevos = SIN_RELEVOS,
   rastro = null,
   pedidoDeControl = null,
+  liberacion = null,
   onDecidir,
   onBack,
   onRename,
@@ -254,6 +278,8 @@ export default function DroneDetail({
   rastro?: RastroObjetivo | null;
   /** El pedido de control de este dron que espera la respuesta del titular, si hay uno. */
   pedidoDeControl?: PedidoDeControl | null;
+  /** Cómo se soltó por última vez el control de este dron (`control_changed`, §3), si se vio. */
+  liberacion?: Liberacion | null;
   onDecidir: DecidirAlerta;
   onBack: () => void;
   onRename: (displayName: string) => void;
@@ -299,6 +325,11 @@ export default function DroneDetail({
    * operador cree que el botón no anduvo y lo vuelve a apretar.
    */
   const [ordenEnCurso, setOrdenEnCurso] = useState<OrdenDeVuelo | null>(null);
+  /**
+   * El evento más nuevo al dar esa orden: lo que la app diga después habla de
+   * ella (un aterrizaje que una palanca cortó, o que no se pudo o no se da).
+   */
+  const [desdeLaOrden, setDesdeLaOrden] = useState(0);
   /** La vista de pilotaje a pantalla completa está abierta. */
   const [pilotando, setPilotando] = useState(false);
   /** El pop-up de las alertas del dron está abierto. */
@@ -452,12 +483,17 @@ export default function DroneDetail({
   const tieneRuta = status?.routeId != null;
 
   // El aviso de "orden en curso" se va solo cuando el dron confirma: en el aire
-  // para el despegue, en el suelo para el aterrizaje. También si se suelta el
-  // control, porque la orden deja de ser de este operador.
+  // para el despegue, en el suelo para el aterrizaje. El del aterrizaje,
+  // también cuando la app dice que no sigue: una palanca lo cortó
+  // (`LANDING_CANCELLED`), no se pudo o no se da; sin esto el HUD seguía
+  // diciendo «Aterrizando» con el dron estacionario en manos del piloto. Y si
+  // se suelta el control, porque la orden deja de ser de este operador.
+  const aterrizajeCortado =
+    ordenEnCurso === 'aterrizar' && seCortoElAterrizaje(liveEvents, drone.droneId, desdeLaOrden);
   useEffect(() => {
     if (ordenEnCurso === 'despegar' && enElAire) setOrdenEnCurso(null);
-    if (ordenEnCurso === 'aterrizar' && enElSuelo) setOrdenEnCurso(null);
-  }, [ordenEnCurso, enElAire, enElSuelo]);
+    if (ordenEnCurso === 'aterrizar' && (enElSuelo || aterrizajeCortado)) setOrdenEnCurso(null);
+  }, [ordenEnCurso, enElAire, enElSuelo, aterrizajeCortado]);
   // Lo mismo con la orden que espera confirmación: sin el control ya no es de
   // este operador (el backend la rechazaría), y confirmarla después, si el
   // control vuelve, sería despegar con una pregunta vieja. Cubre también la
@@ -699,11 +735,12 @@ export default function DroneDetail({
   }
 
   // El control se puede perder sin que este operador haga nada: un supervisor
-  // que se lo saca, la misma cuenta que lo suelta desde otra pestaña, quien lo
-  // pidió y se lo cedieron (o no contestó a tiempo), o el canal de esta consola
-  // que se corta (el hub lo suelta a los 30 s sin señales). Seguir
-  // mostrando la vista sería dejarlo apretando teclas que el backend ya no
-  // acepta; se cierra y se dice por qué, con el motivo más probable.
+  // que se lo saca (con «Quitar control» o con una orden de llegada), la misma
+  // cuenta que lo suelta desde otra pestaña, quien lo pidió y se lo cedieron
+  // (o no contestó a tiempo), o el canal de esta consola que se corta (el hub
+  // lo suelta a los 30 s sin señales). Seguir mostrando la vista sería dejarlo
+  // apretando teclas que el backend ya no acepta; se cierra y se dice por qué,
+  // con el motivo más probable (`porQueSeCerroLaVista`).
   useEffect(() => {
     if (!pilotando) {
       controlVistoAlPilotear.current = false;
@@ -732,23 +769,22 @@ export default function DroneDetail({
     }
     if (!controlVistoAlPilotear.current) return;
     setPilotando(false);
-    setAvisoDePilotaje(
-      controlador
-        ? `${controlador} tomó el control del dron: se cerró la vista de pilotaje.`
-        : !drone.online
-          ? 'El dron se desconectó del Comando Central y el control manual se soltó: se cerró la vista de pilotaje.'
-          : fichaAlCortarseElEnlace.current !== null
-            ? 'Se cortó la conexión con el Comando Central y el control manual se soltó solo: se cerró la vista de pilotaje.'
-            : 'El control manual se soltó desde otra sesión: se cerró la vista de pilotaje.',
-    );
-  }, [pilotando, soyControlador, controlador, conectado, drone]);
+    const quitado = liberacion && me ? quienTeQuitoElControl(liberacion, me.username) : null;
+    setAvisoDePilotaje(porQueSeCerroLaVista(controlador, drone.online, fichaAlCortarseElEnlace.current !== null, quitado));
+  }, [pilotando, soyControlador, controlador, conectado, drone, liberacion, me]);
   const mover = (bearing: number) => () =>
     llamar(`/drones/${drone.droneId}/manual_move`, { method: 'POST', body: JSON.stringify({ bearing, distanceM: 25 }) });
 
   async function confirmarOrden(orden: OrdenDeVuelo) {
     setAConfirmar(null);
     const ruta = orden === 'despegar' ? 'takeoff' : 'land';
-    if (await llamar(`/drones/${drone.droneId}/${ruta}`, { method: 'POST' })) setOrdenEnCurso(orden);
+    // La marca, antes del pedido: la respuesta de la app (un aterrizaje que no
+    // se da) puede llegar por el canal en vivo antes que la del POST.
+    const desde = marcaDeEventos(liveEvents);
+    if (await llamar(`/drones/${drone.droneId}/${ruta}`, { method: 'POST' })) {
+      setDesdeLaOrden(desde);
+      setOrdenEnCurso(orden);
+    }
   }
 
   // La ruta que se dibuja: la activa, o la elegida en el selector si no hay
@@ -923,7 +959,14 @@ export default function DroneDetail({
             acá, sin el control manual y por encima de la ruta y del objetivo.
             Con `key` por dron: el aviso de una orden en curso es de ese dron. */}
         {me && puedeOrdenarLlegada && (
-          <TarjetaDeVuelo key={`vuelo-${drone.droneId}`} me={me} drone={drone} status={status} controlador={controlador} />
+          <TarjetaDeVuelo
+            key={`vuelo-${drone.droneId}`}
+            me={me}
+            drone={drone}
+            status={status}
+            controlador={controlador}
+            eventos={liveEvents}
+          />
         )}
 
         {puedeControlar && (

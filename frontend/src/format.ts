@@ -300,6 +300,10 @@ export const ETIQUETAS_DE_EVENTO: Record<string, string> = {
   LANDING_ORDERED: 'Aterrizaje ordenado',
   LANDING_CANCELLED: 'Aterrizaje cortado por las palancas',
   RTH_ORDERED: 'Volver a la base ordenado',
+  // La app lo deja cuando alguien mueve las palancas del RC-N3 durante un
+  // regreso de la app: el DJI deja el GoHome y el dron queda en manos de quien
+  // lo vuela al lado (VUELO §7.3).
+  RTH_INTERRUPTED: 'Regreso cortado desde el control físico',
   ORBIT_SPEED_SET: 'Velocidad de órbita fijada',
   DETECTION_REACTION_SET: 'Reacción ante una detección fijada',
   RESUME_SILENCE_SET: 'Silencio al retomar fijado',
@@ -327,10 +331,11 @@ const TONO_DE_EVENTO: Record<string, 'bad' | 'warn'> = {
   RELAY_FAILED: 'bad',
   RELAY_UNAVAILABLE: 'warn',
   RTH_DIVERTED: 'warn',
-  // Una persona trajo el dron, o le cortó el aterrizaje con las palancas: la
-  // ronda sigue sin ese dron, y conviene mirar por qué.
+  // Una persona trajo el dron, o le cortó el aterrizaje o el regreso con las
+  // palancas: la ronda sigue sin ese dron, y conviene mirar por qué.
   RTH_ORDERED: 'warn',
   LANDING_CANCELLED: 'warn',
+  RTH_INTERRUPTED: 'warn',
 };
 
 /** El tono de un tipo de evento en la lista, o '' si va con la tinta de siempre. */

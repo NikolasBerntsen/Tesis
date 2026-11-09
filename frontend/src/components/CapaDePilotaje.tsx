@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode, type RefObject } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 
 /**
  * Dónde se cuelga lo que tiene que verse ENCIMA de la vista de pilotaje: el
@@ -29,9 +29,25 @@ const SIN_VISTA: VistaAbierta = { capa: null, dron: null };
 // van al body, que es lo de siempre.
 const ContextoDeLaCapa = createContext<Capa>({ ...SIN_VISTA, anotar: () => {} });
 
-export function ProveedorDeCapaDePilotaje({ children }: Readonly<{ children: ReactNode }>) {
+export function ProveedorDeCapaDePilotaje({
+  children,
+  alCambiarLaVista,
+}: Readonly<{
+  children: ReactNode;
+  /**
+   * El dron de la vista que se abre, o `null` al cerrarse: para quien lo
+   * necesita fuera del árbol, en el momento en que llega un mensaje (la
+   * consola, que decide si un aviso lo da ella o la vista que se cierra).
+   */
+  alCambiarLaVista?: (dron: string | null) => void;
+}>) {
   const [vista, setVista] = useState<VistaAbierta>(SIN_VISTA);
-  const anotar = useCallback((capa: HTMLElement | null, dron: string | null) => setVista({ capa, dron }), []);
+  const avisar = useRef(alCambiarLaVista);
+  avisar.current = alCambiarLaVista;
+  const anotar = useCallback((capa: HTMLElement | null, dron: string | null) => {
+    setVista({ capa, dron });
+    avisar.current?.(capa === null ? null : dron);
+  }, []);
   const valor = useMemo(() => ({ ...vista, anotar }), [vista, anotar]);
   return <ContextoDeLaCapa.Provider value={valor}>{children}</ContextoDeLaCapa.Provider>;
 }

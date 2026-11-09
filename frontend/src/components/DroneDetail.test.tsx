@@ -660,6 +660,31 @@ describe('DroneDetail — salir de la vista de pilotaje', () => {
     expect(screen.getByRole('button', { name: 'Volver a la vista de pilotaje' })).toBeInTheDocument();
   });
 
+  it('si otra persona le quita el control con una orden de llegada, la vista se cierra y dice quién y por qué', async () => {
+    const usados = renderDetail(conControl());
+    await abrirPilotaje();
+    usados.volverARenderizar({
+      drone: makeDrone({ controlledBy: null, online: true }),
+      status: makeStatus({ state: 'RETURNING_HOME', controlledBy: null }),
+      liberacion: { teniaElControl: 'admin1', por: 'super1', forzado: true, motivo: null, detalle: 'super1 ordenó volver a la base' },
+    });
+    expect(vistaDePilotaje()).not.toBeInTheDocument();
+    expect(screen.getByTestId('aviso-pilotaje')).toHaveTextContent(
+      'super1 te quitó el control: ordenó volver a la base. Se cerró la vista de pilotaje.',
+    );
+  });
+
+  it('si lo soltó la misma cuenta (sin forzar), sigue siendo «desde otra sesión»', async () => {
+    const usados = renderDetail(conControl());
+    await abrirPilotaje();
+    usados.volverARenderizar({
+      drone: makeDrone({ controlledBy: null, online: true }),
+      status: makeStatus({ state: 'RETURNING_HOME', controlledBy: null }),
+      liberacion: { teniaElControl: 'admin1', por: 'admin1', forzado: false, motivo: null, detalle: 'admin1 ordenó volver a la base' },
+    });
+    expect(screen.getByTestId('aviso-pilotaje')).toHaveTextContent('El control manual se soltó desde otra sesión');
+  });
+
   it('si un supervisor se lleva el control, la vista se cierra y dice quién', async () => {
     const usados = renderDetail(conControl());
     await abrirPilotaje();
@@ -923,6 +948,39 @@ describe('DroneDetail — despegar y aterrizar desde la vista de pilotaje', () =
     expect(await within(vista).findByTestId('pilotaje-orden-en-curso')).toHaveTextContent(
       'Aterrizando: una palanca o el pad cortan el aterrizaje y te devuelven el mando.',
     );
+  });
+
+  it('el «Aterrizando» del HUD se va cuando una palanca corta el aterrizaje: el dron queda a mano del piloto', async () => {
+    const usados = renderDetail({ ...conControl({ flying: true }), liveEvents: [makeEvent({ id: 30, drone_id: 'd1' })] });
+    const vista = await abrirPilotaje();
+    fireEvent.click(within(vista).getByRole('button', { name: 'Aterrizar' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Aterrizar Alfa' })).getByRole('button', { name: 'Aterrizar' }));
+    expect(await within(vista).findByTestId('pilotaje-orden-en-curso')).toHaveTextContent('Aterrizando');
+    // Lo de otro dron no cuenta; lo de este, después de la orden, sí.
+    const cortado = makeEvent({
+      id: 31, type: 'LANDING_CANCELLED', drone_id: 'd2', message: 'oper2 movió las palancas: el aterrizaje se corta',
+    });
+    usados.volverARenderizar({ liveEvents: [cortado] });
+    expect(within(vista).getByTestId('pilotaje-orden-en-curso')).toBeInTheDocument();
+    usados.volverARenderizar({ liveEvents: [{ ...cortado, id: 32, drone_id: 'd1', message: 'admin1 movió las palancas: el aterrizaje se corta' }] });
+    await waitFor(() => expect(within(vista).queryByTestId('pilotaje-orden-en-curso')).not.toBeInTheDocument());
+  });
+
+  it('el aviso de la tarjeta se va si la app no aterriza en ese estado («No se aterriza»)', async () => {
+    const usados = renderDetail(conControl({ flying: true }));
+    await esperarCarga();
+    fireEvent.click(screen.getByRole('button', { name: 'Aterrizar' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Aterrizar Alfa' })).getByRole('button', { name: 'Aterrizar' }));
+    expect(await screen.findByTestId('orden-en-curso')).toHaveTextContent(/Aterrizaje ordenado/);
+    usados.volverARenderizar({
+      liveEvents: [
+        makeEvent({
+          id: 9, type: 'DRONE_PROBLEM', drone_id: 'd1',
+          message: 'No se aterriza (admin1 ordenó aterrizar desde la consola): sin señal con el dron, el DJI vuelve solo',
+        }),
+      ],
+    });
+    await waitFor(() => expect(screen.queryByTestId('orden-en-curso')).not.toBeInTheDocument());
   });
 
   it('si el backend rechaza el despegue, el motivo se lee adentro de la vista', async () => {

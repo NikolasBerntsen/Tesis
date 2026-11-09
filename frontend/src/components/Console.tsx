@@ -28,10 +28,12 @@ import {
   esFinDelPedido,
   esPedidoDelHub,
   GRACIA_DEL_PEDIDO_MS,
+  liberacionDe,
   pedidoLocal,
   sinLosVencidos,
   type AvisoDelControl,
   type FinDelPedido,
+  type Liberacion,
   type PedidoDeControl,
 } from '../control';
 import { sumarAlRastro, type RastroObjetivo } from '../rastro';
@@ -152,6 +154,16 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
   const [pedidosDeControl, setPedidosDeControl] = useState<Record<string, PedidoDeControl>>({});
   const [avisosDelControl, setAvisosDelControl] = useState<AvisoDelControl[]>([]);
   const idDelAviso = useRef(0);
+  // Cómo se soltó por última vez el control de cada dron: la vista de pilotaje
+  // que se cierra por eso dice quién se lo quitó y por qué (DroneDetail).
+  const [liberaciones, setLiberaciones] = useState<Record<string, Liberacion>>({});
+  // El dron de la vista de pilotaje abierta, o null. Con ella abierta, el que
+  // pierde el control lo lee en la vista que se cierra, y el aviso flotante con
+  // lo mismo sobra (ver avisoDeLaLiberacion).
+  const pilotandoA = useRef<string | null>(null);
+  const alCambiarLaVista = useCallback((dron: string | null) => {
+    pilotandoA.current = dron;
+  }, []);
 
   // El rol de la sesión sirve para pintar la barra sin esperar a /me; el que
   // manda es el que informa el backend, y si difieren la sección se corrige sola.
@@ -281,19 +293,26 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
     setAvisosDelControl((prev) => [...prev, nuevo].slice(-MAX_AVISOS_DEL_CONTROL));
   }
 
-  /** El lock cambió de manos. Si el hub lo soltó solo (`motivo`), se avisa: el dron quedó sin nadie al mando. */
+  /**
+   * El lock cambió de manos. Si se soltó, se anota cómo, y se avisa lo que
+   * haga falta: que el hub lo soltó solo (`motivo`) —el dron quedó sin nadie
+   * al mando— o, al que lo tenía, quién se lo quitó y por qué.
+   */
   function alCambiarElControl(msg: {
     droneId: string;
     controlledBy: string | null;
     teniaElControl?: unknown;
+    por?: unknown;
+    forzado?: unknown;
     motivo?: unknown;
     detalle?: unknown;
   }) {
     setDrones((prev) => prev.map((d) => (d.droneId === msg.droneId ? { ...d, controlledBy: msg.controlledBy } : d)));
-    if (msg.controlledBy !== null || typeof msg.teniaElControl !== 'string') return;
-    sumarAvisoDelControl(
-      avisoDeLaLiberacion(msg.motivo, msg.teniaElControl, yo, msg.droneId, nombreDe(msg.droneId), msg.detalle),
-    );
+    const liberacion = liberacionDe(msg);
+    if (!liberacion) return;
+    setLiberaciones((prev) => ({ ...prev, [msg.droneId]: liberacion }));
+    const enLaVista = pilotandoA.current === msg.droneId;
+    sumarAvisoDelControl(avisoDeLaLiberacion(liberacion, yo, msg.droneId, nombreDe(msg.droneId), enLaVista));
   }
 
   /** Alguien le pidió el control a quien lo tiene: el vencimiento se pasa a este reloj. */
@@ -493,7 +512,7 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
     // cambiar de sección no los corta ni los duplica. Los del control manual,
     // también, y encima de la vista de pilotaje si está abierta.
     <ProveedorDeAvisos>
-      <ProveedorDeCapaDePilotaje>
+      <ProveedorDeCapaDePilotaje alCambiarLaVista={alCambiarLaVista}>
         {/* Lo que el pop-up de una alerta lee en vivo, abierto desde donde sea.
             El operador de campo no recibe alertas ni puede decidirlas. */}
         <ProveedorDeAlertas
@@ -607,6 +626,7 @@ export default function Console({ onLogout }: { onLogout: () => void }) {
                   relevos={relevos}
                   rastro={rastros[selected.droneId] ?? null}
                   pedidoDeControl={pedidosDeControl[selected.droneId] ?? null}
+                  liberacion={liberaciones[selected.droneId] ?? null}
                   onDecidir={decidirAlerta}
                   onBack={() => setSelectedId(null)}
                   onRename={(name) => rename(selected.droneId, name)}

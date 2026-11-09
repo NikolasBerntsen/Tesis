@@ -78,8 +78,19 @@ const CLAVES_OCULTAS = new Set(['relevoHash']);
 /** La unidad de los números que la tienen, para no leer "38" a secas. */
 const UNIDAD: Record<string, string> = { alt: 'm', bateria: '%', velocidadOrbitaMs: 'm/s', silencioAlRetomarS: 's' };
 
-/** Los ajustes del dron: ahí `null` no es un dato que falta, es «lo de fábrica de la app». */
-const CLAVES_DE_AJUSTE = new Set(['velocidadOrbitaMs', 'reaccionADeteccion', 'silencioAlRetomarS']);
+/**
+ * Las claves en las que `null` es un dato y no uno que falta: en los ajustes
+ * del dron es «lo de fábrica de la app», y en el `teniaElControl` de
+ * `RTH_ORDERED` (PROTOCOLS §7) que nadie tenía el control manual al
+ * ordenarlo. Con la raya, el que lee el registro no sabe si el dron volaba
+ * solo o si el dato se perdió.
+ */
+const NULL_QUE_DICE_ALGO: ReadonlyMap<string, string> = new Map([
+  ['velocidadOrbitaMs', 'De fábrica'],
+  ['reaccionADeteccion', 'De fábrica'],
+  ['silencioAlRetomarS', 'De fábrica'],
+  ['teniaElControl', 'Nadie (volaba solo)'],
+]);
 
 /**
  * Valores que son enumeraciones del backend. Se traducen sólo en las claves que
@@ -133,7 +144,8 @@ function etiquetaCampo(clave: string): string {
 }
 
 function valorLegible(clave: string, valor: ValorMeta | undefined): string {
-  if (valor === null && CLAVES_DE_AJUSTE.has(clave)) return 'De fábrica';
+  const nulo = valor === null ? NULL_QUE_DICE_ALGO.get(clave) : undefined;
+  if (nulo) return nulo;
   if (valor === undefined || valor === null || valor === '') return '—';
   if (typeof valor === 'boolean') return valor ? 'Sí' : 'No';
   if (typeof valor === 'number') return UNIDAD[clave] ? `${valor} ${UNIDAD[clave]}` : String(valor);

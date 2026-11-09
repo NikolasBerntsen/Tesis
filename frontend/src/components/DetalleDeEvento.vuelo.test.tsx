@@ -7,15 +7,32 @@ import LogDetailModal from './LogDetailModal';
 
 vi.mock('leaflet', async () => (await import('../test/dobleLeaflet')).dobleLeaflet());
 
-/** Un evento de ajuste del dron (PROTOCOLS §7, VUELO §11): antes, después y quién. */
+const ALFA = { hash: 'a1', displayName: 'Alfa', model: 'DJI Mini 4 Pro' };
+
+/**
+ * Un evento de ajuste del dron (PROTOCOLS §7, VUELO §11): antes, después y
+ * quién. Como los deja el hub: `source` es el usuario que lo fijó.
+ */
 function eventoDeAjuste(type: string, antes: Record<string, unknown>, despues: Record<string, unknown>, detalle: Record<string, unknown>) {
   return makeEvent({
     id: 80,
     type,
-    source: 'backend',
+    source: 'oper1',
     message: `Evento ${type}`,
     drone_id: 'a1',
-    meta: JSON.stringify({ drone: { hash: 'a1', displayName: 'Alfa', model: 'DJI Mini 4 Pro' }, antes, despues, detalle }),
+    meta: JSON.stringify({ drone: ALFA, antes, despues, detalle }),
+  });
+}
+
+/** Un `RTH_ORDERED` como lo deja el hub: `teniaElControl` es un usuario, o `null` si el dron volaba solo. */
+function regresoOrdenado(teniaElControl: string | null) {
+  return makeEvent({
+    id: 81,
+    type: 'RTH_ORDERED',
+    source: 'oper1',
+    message: 'oper1 ordenó el regreso a la base del dron "Alfa"',
+    drone_id: 'a1',
+    meta: JSON.stringify({ drone: ALFA, detalle: { por: 'oper1', teniaElControl } }),
   });
 }
 
@@ -74,19 +91,17 @@ describe('el detalle de los eventos de los ajustes del dron', () => {
     expect(dialogo).toHaveTextContent('Velocidad de órbita fijada');
   });
 
-  it('volver a la base ordenado desde la consola: quién, y si tenía el control', () => {
-    const dialogo = abrir(
-      makeEvent({
-        id: 81,
-        type: 'RTH_ORDERED',
-        source: 'backend',
-        message: 'oper1 ordenó volver a la base',
-        drone_id: 'a1',
-        meta: JSON.stringify({ drone: { hash: 'a1', displayName: 'Alfa', model: 'DJI Mini 4 Pro' }, detalle: { por: 'oper1', teniaElControl: true } }),
-      }),
-    );
+  it('volver a la base ordenado desde la consola: quién, y a quién se le soltó el control', () => {
+    const dialogo = abrir(regresoOrdenado('oper9'));
     expect(dialogo).toHaveTextContent('Volver a la base ordenado');
     const detalle = within(dialogo).getByText('Tenía el control', { selector: 'dt' }).nextElementSibling;
-    expect(detalle).toHaveTextContent('Sí');
+    expect(detalle).toHaveTextContent('oper9');
+  });
+
+  it('con el dron volando solo, `teniaElControl: null` se lee «Nadie (volaba solo)» y no la raya', () => {
+    const dialogo = abrir(regresoOrdenado(null));
+    const detalle = within(dialogo).getByText('Tenía el control', { selector: 'dt' }).nextElementSibling;
+    expect(detalle).toHaveTextContent('Nadie (volaba solo)');
+    expect(within(dialogo).getByText('Por', { selector: 'dt' }).nextElementSibling).toHaveTextContent('oper1');
   });
 });

@@ -19,6 +19,14 @@ export interface AjusteEnEdicion<C extends ClaveDeAjuste> {
   cambiar: (valor: AjustesDelDron[C] | null) => void;
   /** Vuelve a lo de fábrica en el acto. */
   restablecer: () => void;
+  /**
+   * Guarda en el acto lo que esperaba la mano quieta y devuelve la promesa de
+   * ese guardado, o la del que ya viaja; `null` si no hay nada que esperar. No
+   * se rechaza nunca: un rechazo queda en `error`, como siempre. Es para lo que
+   * no puede salir antes que el ajuste (un descarte, con el silencio recién
+   * movido).
+   */
+  guardarYa: () => Promise<void> | null;
 }
 
 /**
@@ -49,6 +57,8 @@ export function useAjusteDelDron<C extends ClaveDeAjuste>(drone: Drone, clave: C
   const temporizador = useRef<ReturnType<typeof setTimeout>>();
   /** Lo que espera su turno para guardarse, si hay algo. */
   const pendiente = useRef<{ valor: Valor | null } | null>(null);
+  /** El guardado que está viajando, si hay uno: lo que `guardarYa` hace esperar. */
+  const enVuelo = useRef<Promise<void> | null>(null);
   const droneId = drone.droneId;
 
   // Cuando la ficha cambia, manda: es lo guardado (lo que otra consola fijó, o
@@ -61,10 +71,14 @@ export function useAjusteDelDron<C extends ClaveDeAjuste>(drone: Drone, clave: C
   // silencio, se decidió la alerta), el cambio sale igual: lo que la persona
   // eligió último es lo que prometió guardar. Sin estado: ya no hay nada que
   // pintar.
+  // El pendiente se olvida al salir: si el dron cambia sin desmontar (la alerta
+  // pasa de A a B en un relevo), el que sale es el de A, una sola vez, y a B no
+  // le llega después un valor que nadie eligió para él.
   useEffect(
     () => () => {
       clearTimeout(temporizador.current);
       const ultimo = pendiente.current;
+      pendiente.current = null;
       if (ultimo) void ajustarDron(droneId, { [clave]: ultimo.valor }).catch(() => {});
     },
     [droneId, clave],
@@ -88,21 +102,42 @@ export function useAjusteDelDron<C extends ClaveDeAjuste>(drone: Drone, clave: C
     [droneId, clave],
   );
 
+  /** Guarda y deja anotado el viaje, para que `guardarYa` lo pueda esperar. */
+  const lanzar = useCallback(
+    (valor: Valor | null): Promise<void> => {
+      const viaje = guardar(valor);
+      enVuelo.current = viaje;
+      // `guardar` no se rechaza nunca (el rechazo queda en `error`).
+      void viaje.finally(() => {
+        if (enVuelo.current === viaje) enVuelo.current = null;
+      });
+      return viaje;
+    },
+    [guardar],
+  );
+
   const cambiar = useCallback(
     (valor: Valor | null) => {
       setElegido(valor);
       clearTimeout(temporizador.current);
       pendiente.current = { valor };
-      temporizador.current = setTimeout(() => void guardar(valor), ESPERA_PARA_GUARDAR_MS);
+      temporizador.current = setTimeout(() => void lanzar(valor), ESPERA_PARA_GUARDAR_MS);
     },
-    [guardar],
+    [lanzar],
   );
 
   const restablecer = useCallback(() => {
     clearTimeout(temporizador.current);
     setElegido(null);
-    void guardar(null);
-  }, [guardar]);
+    void lanzar(null);
+  }, [lanzar]);
+
+  const guardarYa = useCallback((): Promise<void> | null => {
+    const ultimo = pendiente.current;
+    if (!ultimo) return enVuelo.current;
+    clearTimeout(temporizador.current);
+    return lanzar(ultimo.valor);
+  }, [lanzar]);
 
   return {
     valor: elegido ?? AJUSTES_DE_FABRICA[clave],
@@ -111,5 +146,6 @@ export function useAjusteDelDron<C extends ClaveDeAjuste>(drone: Drone, clave: C
     error,
     cambiar,
     restablecer,
+    guardarYa,
   };
 }
