@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { acotarEje } from '../pilotaje';
 import { EJES_EN_CERO, type Ejes } from './MandoVirtual';
 
@@ -370,6 +370,18 @@ export function useTecladoDeVuelo({
 
   const comandando = hayComando(ejes);
 
+  /**
+   * Suelta todo lo sostenido y manda un cero en el acto, haya o no algo
+   * comandado: es lo que hace «Aterrizar» antes de la orden (VUELO §8), para
+   * que una tecla sostenida de antes no cuente como la palanca deliberada que
+   * corta el aterrizaje. El emisor manda su propio cero al quedar sin comando;
+   * uno de más no mueve nada.
+   */
+  const soltarTodo = useCallback(() => {
+    setTeclas(NINGUNA_TECLA);
+    setUltimoSalio(onMandoRef.current(EJES_EN_CERO));
+  }, []);
+
   useEffect(() => {
     if (!comandando) return;
     const emitir = (aEmitir: Ejes) => setUltimoSalio(onMandoRef.current(aEmitir));
@@ -386,5 +398,5 @@ export function useTecladoDeVuelo({
   }, [comandando]);
 
   // "Rápido" es lo que el dron recibe, no la tecla: Shift sin efecto no lo es.
-  return { ejes, rapido: esRapido(teclas) && shiftAcelera(velocidades), ultimoSalio };
+  return { ejes, rapido: esRapido(teclas) && shiftAcelera(velocidades), ultimoSalio, soltarTodo };
 }

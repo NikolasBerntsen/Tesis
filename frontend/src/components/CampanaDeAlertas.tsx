@@ -109,6 +109,8 @@ export default function CampanaDeAlertas({
             // El nombre lleva al dron que sigue al objetivo ahora (un relevo
             // se la pudo pasar a otro): es ahí donde está el video para decidir.
             const duenio = duenioDeLaAlerta(a);
+            // Su ficha, para el engranaje del silencio al lado de Descartar.
+            const dron = drones.find((d) => d.droneId === duenio) ?? null;
             return (
               <div key={a.id} className="campana-alerta">
                 <div className="campana-alerta-head">
@@ -155,7 +157,7 @@ export default function CampanaDeAlertas({
                 )}
                 {/* El mismo par de la tarjeta del tablero, con el tilde y el tacho:
                     se reconoce igual en los dos lugares. */}
-                <BotonesDeDecision ocupado={decidiendo(a.id)} tamanoIcono={18} onDecidir={(d) => decidir(a.id, d)} />
+                <BotonesDeDecision ocupado={decidiendo(a.id)} tamanoIcono={18} dron={dron} onDecidir={(d) => decidir(a.id, d)} />
                 {/* Pegado a los botones de ESA alerta: con tres pendientes en la
                     lista, un aviso suelto arriba no diría cuál falló. */}
                 {errorDe(a.id) && (

@@ -444,6 +444,59 @@ describe('integración — relevos entre drones', () => {
     await consola2.close();
   });
 
+  it('volver a la base desde la consola cancela el relevo como cualquier orden del operador (VUELO §7.1)', async () => {
+    const consola = await conn(op);
+    const a = await dron(A);
+    const b = await dron(B);
+    bEnEspera(b);
+    await consola.waitFor((m) => m.type === 'status' && m.droneId === B);
+    manda(a, { type: 'landing_at_base', ref: 'rth', relayId: null, baseId: 1, ...NORTE, routeId: 1, fromIndex: 0 });
+    const { relayId: id } = await b.waitFor((m) => m.type === 'relay_start');
+    manda(b, { type: 'relay_accept', relayId: id });
+    await a.waitFor((m) => m.type === 'relay_status' && m.estado === 'EN_CAMINO');
+
+    // B en camino: traerlo a la base lo saca del relevo sin relay_cancel (la
+    // orden que sigue ya le dice a la app qué hacer), igual que /resume
+    const r = await api(srv.base, `/api/drones/${B}/return_home`, op, { method: 'POST' });
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ ok: true, delivered: true });
+    expect(await b.waitFor((m) => m.type === 'return_home')).toEqual({ type: 'return_home', by: 'operador' });
+    const fin = await a.waitFor((m) => m.type === 'relay_status' && m.relayId === id && m.estado === 'CANCELADO');
+    expect(fin.motivoFin).toBe('orden_del_operador');
+    expect(await relevoPorApi(id)).toMatchObject({ estado: 'CANCELADO', motivoFin: 'orden_del_operador' });
+    expect(b.got.some((m) => m.type === 'relay_cancel')).toBe(false);
+    const ev = await consola.waitFor((m) => m.type === 'event' && m.event.type === 'RTH_ORDERED');
+    expect(ev.event.drone_id).toBe(B);
+  });
+
+  it('aterrizar desde la consola termina el relevo igual que volver a la base: CANCELADO orden_del_operador', async () => {
+    const consola = await conn(op);
+    const a = await dron(A);
+    const b = await dron(B);
+    bEnEspera(b);
+    await consola.waitFor((m) => m.type === 'status' && m.droneId === B);
+    manda(a, { type: 'landing_at_base', ref: 'land', relayId: null, baseId: 1, ...NORTE, routeId: 1, fromIndex: 0 });
+    const { relayId: id } = await b.waitFor((m) => m.type === 'relay_start');
+    manda(b, { type: 'relay_accept', relayId: id });
+    await a.waitFor((m) => m.type === 'relay_status' && m.estado === 'EN_CAMINO');
+
+    // Las dos órdenes de llegada de la consola terminan el relevo del mismo
+    // modo: antes, la de aterrizar dejaba que la app lo abortara sola
+    // (FALLIDO) y la de volver lo cancelaba el hub.
+    const r = await api(srv.base, `/api/drones/${B}/land`, op, { method: 'POST' });
+    expect(r.status).toBe(200);
+    expect(await b.waitFor((m) => m.type === 'land')).toEqual({ type: 'land', by: 'operador' });
+    const fin = await a.waitFor((m) => m.type === 'relay_status' && m.relayId === id && m.estado === 'CANCELADO');
+    expect(fin.motivoFin).toBe('orden_del_operador');
+    expect(await relevoPorApi(id)).toMatchObject({ estado: 'CANCELADO', motivoFin: 'orden_del_operador' });
+    expect(b.got.some((m) => m.type === 'relay_cancel')).toBe(false);
+    // El relevo se resuelve ANTES de reenviar la orden (RELEVOS §3.9), como con las demás.
+    const ev = await consola.waitFor((m) => m.type === 'event' && m.event.type === 'LANDING_ORDERED');
+    expect(ev.event.drone_id).toBe(B);
+    const cancelado = await consola.waitFor((m) => m.type === 'event' && m.event.type === 'RELAY_CANCELLED');
+    expect(consola.got.indexOf(cancelado)).toBeLessThan(consola.got.indexOf(ev));
+  });
+
   it('caso D: rth_diverted deja RTH_DIVERTED y despacha a B en el acto', async () => {
     const consola = await conn(op);
     const a = await dron(A);

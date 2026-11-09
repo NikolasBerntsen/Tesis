@@ -381,4 +381,15 @@ class PatrolManagerDesvioTest {
         telemetria(bateria = 21.0, alt = 60.0)
         esperarA("la salida hacia la base") { "volarHacia" in dron.ordenes }
     }
+
+    /** Un desvío no es un GoHome: el aviso de un regreso cortado con las palancas no lo deja. */
+    @Test
+    fun elAvisoDeUnRegresoCortadoConLasPalancasNoDejaElDesvio() = runBlocking {
+        desviado()
+        banco.evento(FlightEvent.Problema("${DroneController.REGRESO_CORTADO_EN_EL_CONTROL}: prueba"))
+        delay(100)
+        assertEquals(PatrolState.RETURNING_HOME_BATTERY, patrulla.state.value)
+        assertFalse("failsafeAterrizar(false)" in dron.ordenes)
+        assertTrue(banco.comando.eventos("RTH_INTERRUPTED").isEmpty())
+    }
 }

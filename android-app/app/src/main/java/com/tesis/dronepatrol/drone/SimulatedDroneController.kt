@@ -133,9 +133,10 @@ class SimulatedDroneController(
      * STICK es el mando virtual del operador; el resto los ordena la patrulla.
      * IDLE con altura cero es "en el suelo, motores apagados"; con altura es
      * vuelo estacionario sin orden (como queda el dron real después de despegar
-     * a mano).
+     * a mano). WATCH es la vigilancia de [vigilar]: quieto, con la nariz y la
+     * cámara en el objetivo.
      */
-    private enum class Mode { IDLE, TAKING_OFF, FLY_ROUTE, ORBIT, FOLLOW, RTH, HOLD, GOTO, STICK, LANDING }
+    private enum class Mode { IDLE, TAKING_OFF, FLY_ROUTE, ORBIT, FOLLOW, RTH, HOLD, GOTO, STICK, LANDING, WATCH }
 
     /**
      * Qué hace el dron al terminar el despegue: la ruta que lo pidió, quedar
@@ -246,6 +247,10 @@ class SimulatedDroneController(
 
     @Volatile
     private var objetivoSeguido: ObjetivoSeguido? = null
+
+    /** El punto al que mira en WATCH ([vigilar]): la última estimación que mandó la patrulla. */
+    @Volatile
+    private var objetivoVigilado: Punto? = null
 
     @Volatile
     private var despuesDelDespegue = DespuesDelDespegue.RUTA
@@ -400,6 +405,28 @@ class SimulatedDroneController(
      */
     fun simularTomaDelDron(motivo: MotivoDelDron) {
         synchronized(cerrojo) { tomarElControl(motivo) }
+    }
+
+    /**
+     * Gancho de prueba: alguien movió las palancas del control físico con un
+     * regreso de la app en curso ([returnHome]) y el dron lo dejó, como el real
+     * con `GoHomeExitCode` JOYSTICK_*: sale del regreso estacionario a la altura
+     * que tiene —el simulado no tiene palancas que lo muevan después— y avisa
+     * con el [FlightEvent.Problema] de
+     * [DroneController.REGRESO_CORTADO_EN_EL_CONTROL]. Sin un regreso de la app
+     * en curso no pasa nada: el propio del dron o el del botón del control no
+     * son de la app, y el real no los informa así.
+     */
+    fun simularRegresoCortadoEnElControl() {
+        synchronized(cerrojo) {
+            if (mode != Mode.RTH || !regresoDeLaApp) return
+            regresoDeLaApp = false
+            alturaObjetivo = altM
+            alturaPedida = null
+            rumboPedido = null
+            mode = Mode.HOLD
+            emitEvent(FlightEvent.Problema("${DroneController.REGRESO_CORTADO_EN_EL_CONTROL}: se movieron las palancas del control simulado"))
+        }
     }
 
     /** Base real del dron que inició sesión (la simulación arranca y vuelve ahí). */
@@ -764,6 +791,29 @@ class SimulatedDroneController(
         }
     }
 
+    /**
+     * Vigila al objetivo desde donde está (la reacción `detenerse`, ver
+     * DroneController.vigilar): se queda quieto a la altura que tiene, gira la
+     * nariz hacia el objetivo a [VELOCIDAD_GIRO_GRADOS_S] y baja la cámara lo
+     * justo para tenerlo en el centro del cuadro. Volver a pedirlo solo corre el
+     * punto al que mira, sin cortar el estacionario. Se rechaza en el suelo,
+     * aterrizando o con el vuelo tomado por el propio dron, como el resto de la
+     * navegación; una posición inválida se ignora.
+     */
+    override fun vigilar(lat: Double, lon: Double) {
+        synchronized(cerrojo) {
+            if (rechazarEnElSuelo("vigilar al objetivo")) return
+            if (rechazarAterrizando("vigilar al objetivo")) return
+            if (rechazarSiElDronTieneElControl("vigilar al objetivo")) return
+            if (!Geo.esPosicionValida(lat, lon)) return
+            objetivoVigilado = Punto(lat, lon)
+            if (mode == Mode.WATCH) return
+            alturaObjetivo = altM
+            alturaPedida = null
+            mode = Mode.WATCH
+        }
+    }
+
     /** Como [inclinarCamara], pero para la app: nunca por arriba del horizonte. */
     override fun apuntarCamara(pitchGrados: Double) {
         if (!pitchGrados.isFinite()) return
@@ -1011,6 +1061,7 @@ class SimulatedDroneController(
         alturaPedida = null
         destino = null
         destinoAlcanzado = null
+        objetivoVigilado = null
         volandoHacia = false
         despuesDelDespegue = DespuesDelDespegue.RUTA
     }
@@ -1072,11 +1123,13 @@ class SimulatedDroneController(
         // vuelve a volar solo (ruta, órbita, goto o estacionario) sube o baja
         // a la de la orden, así el operador no lo deja a ras del suelo.
         if (mode == Mode.FLY_ROUTE || mode == Mode.ORBIT || mode == Mode.FOLLOW || mode == Mode.GOTO || mode == Mode.HOLD ||
-            (mode == Mode.RTH && !llegoABase())
+            mode == Mode.WATCH || (mode == Mode.RTH && !llegoABase())
         ) {
             acercarAltura(alturaObjetivo, dt, MandoVirtual.MAX_VERTICAL_MS)
         }
-        if (mode != Mode.HOLD) rumboPedido = null
+        // El rumbo pedido vive en el estacionario (girarEnElLugar) y en la
+        // vigilancia, que lo renueva en cada tick hacia el objetivo.
+        if (mode != Mode.HOLD && mode != Mode.WATCH) rumboPedido = null
 
         // En el aire gasta, haga lo que haga (también suspendido sin orden).
         val autonomia = modelo.estimar(battery, Geo.distanciaM(lat, lon, homeLat, homeLon), altM)
@@ -1131,6 +1184,7 @@ class SimulatedDroneController(
             }
             // Vuelo estacionario: quieto, salvo que esté girando en el lugar.
             Mode.HOLD -> rumboPedido?.let { pedido -> heading = girarHacia(heading, pedido, VELOCIDAD_GIRO_GRADOS_S * dt) }
+            Mode.WATCH -> vigilarElObjetivo(dt)
             Mode.RTH -> volverABase(dt)
             Mode.LANDING -> {
                 acercarAltura(0.0, dt, modelo.velocidadDescensoMs)
@@ -1168,6 +1222,19 @@ class SimulatedDroneController(
         despuesDelDespegue = DespuesDelDespegue.RUTA
         ultimoRechazo = null
         emitEvent(FlightEvent.EnElAire)
+    }
+
+    /**
+     * Quieto donde está, con la nariz girando hacia el objetivo por el lado más
+     * corto y la cámara bajada a él: la misma cuenta que apunta la cámara en la
+     * órbita, con la distancia al objetivo en vez del radio.
+     */
+    private fun vigilarElObjetivo(dt: Double) {
+        val o = objetivoVigilado ?: return
+        val rumbo = bearingTo(o.lat, o.lon)
+        rumboPedido = rumbo
+        heading = girarHacia(heading, rumbo, VELOCIDAD_GIRO_GRADOS_S * dt)
+        gimbalPitch = Georreferencia.inclinacionParaOrbitar(altM, distanciaA(o))
     }
 
     private fun seguir(dt: Double) {

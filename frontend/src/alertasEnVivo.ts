@@ -1,4 +1,5 @@
 import { createContext, useContext } from 'react';
+import { duenioDeLaAlerta } from './relevos';
 import type { Alert, Drone, DroneStatus } from './types';
 import type { DecidirAlerta } from './useDecisionDeAlerta';
 
@@ -48,4 +49,16 @@ export const ContextoDeAlertas = createContext<AlertasEnVivo>(SIN_CONSOLA);
 
 export function useAlertasEnVivo(): AlertasEnVivo {
   return useContext(ContextoDeAlertas);
+}
+
+/**
+ * La ficha del dron que sigue al objetivo de una alerta (`duenioDeLaAlerta`),
+ * si la consola la tiene; `null` si el dron ya no está en la flota o si la
+ * pieza está montada suelta. Es lo que el engranaje del silencio y las
+ * consecuencias de decidir necesitan saber de una alerta.
+ */
+export function useDronDeLaAlerta(alerta: Pick<Alert, 'drone_id' | 'seguidaPor'>): Drone | null {
+  const { drones } = useAlertasEnVivo();
+  const duenio = duenioDeLaAlerta(alerta);
+  return duenio === null ? null : (drones.find((d) => d.droneId === duenio) ?? null);
 }

@@ -93,6 +93,7 @@ class MainActivity : AppCompatActivity() {
             PatrolState.FORCED to R.string.estado_forzado,
             PatrolState.RELEVANDO to R.string.estado_relevando,
             PatrolState.ATERRIZAJE_EMERGENCIA to R.string.estado_aterrizaje_emergencia,
+            PatrolState.VIGILANDO to R.string.estado_vigilando,
         )
 
         /** Estados en los que "Detener" tiene algo que detener (un relevo en camino también: lo aborta). */
@@ -100,13 +101,15 @@ class MainActivity : AppCompatActivity() {
             PatrolState.PATROLLING,
             PatrolState.ORBITING,
             PatrolState.FOLLOWING,
+            PatrolState.VIGILANDO,
             PatrolState.FORCED,
             PatrolState.MANUAL,
             PatrolState.RELEVANDO,
         )
 
         /** Estados desde los que "Reanudar" retoma la ruta. */
-        private val ESTADOS_REANUDABLES = setOf(PatrolState.PAUSED, PatrolState.ORBITING, PatrolState.FOLLOWING, PatrolState.MANUAL)
+        private val ESTADOS_REANUDABLES =
+            setOf(PatrolState.PAUSED, PatrolState.ORBITING, PatrolState.FOLLOWING, PatrolState.VIGILANDO, PatrolState.MANUAL)
 
         /** Volumen de los pitidos de la cuenta regresiva de un relevo (0..100). */
         private const val VOLUMEN_CUENTA = 80

@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "contrato": "docs/PROTOCOLS.md §2 (`ajustes`), §5 (PATCH /api/drones/:droneId/ajustes) y §6 (ficha). Diseño: docs/VUELO.md §5, §6 y §10.",
+  "uso": "Los ajustes de un dron que fija la consola y aplica la app, con sus rangos y sus valores de fábrica. Lo leen las pruebas del backend (fs, relativo a la raíz del repo), las de la consola y las de la app (File('../../docs/contrato/ajustes.json'), relativo a android-app/app): el backend valida con estos números, la consola arma sus controles con ellos y la app valida con ellos el mensaje `ajustes` (sin convertir ni recortar: un valor inválido, o un mensaje sin ninguna de las tres claves, lo descarta entero), así que si cambia un rango cambian juntos el documento, este archivo y las tres puntas. Forma: ajustes.<clave>.{tipo, minimo, maximo, paso, porDefecto} o {tipo: 'enum', valores, porDefecto}; ejemplos.validos[].{caso, cuerpo} e invalidos[].{caso, porque, cuerpo}, cuerpos del PATCH. `null` en cualquier clave es «el de fábrica de la app». El mensaje `ajustes` del hub a la app lleva las mismas claves (más `by`).",
+  "ajustes": {
+    "velocidadOrbitaMs": { "tipo": "numero", "minimo": 1, "maximo": 8, "paso": 0.5, "decimales": 1, "porDefecto": 4 },
+    "reaccionADeteccion": {
+      "tipo": "enum",
+      "valores": ["seguir_y_orbitar", "orbitar", "seguir", "detenerse"],
+      "porDefecto": "seguir_y_orbitar",
+      "rotulos": {
+        "seguir_y_orbitar": "Seguimiento y órbita",
+        "orbitar": "Órbita en el lugar",
+        "seguir": "Seguimiento",
+        "detenerse": "Detenerse y vigilar"
+      }
+    },
+    "silencioAlRetomarS": { "tipo": "entero", "minimo": 0, "maximo": 30, "paso": 5, "porDefecto": 15 }
+  },
+  "ejemplos": {
+    "validos": [
+      { "caso": "solo la velocidad de órbita", "cuerpo": { "velocidadOrbitaMs": 2.5 } },
+      { "caso": "volver la órbita a la de fábrica", "cuerpo": { "velocidadOrbitaMs": null } },
+      { "caso": "detenerse y vigilar", "cuerpo": { "reaccionADeteccion": "detenerse" } },
+      { "caso": "los tres a la vez", "cuerpo": { "velocidadOrbitaMs": 4, "reaccionADeteccion": "seguir", "silencioAlRetomarS": 30 } },
+      { "caso": "sin silencio", "cuerpo": { "silencioAlRetomarS": 0 } },
+      { "caso": "la reacción vuelve a la de fábrica", "cuerpo": { "reaccionADeteccion": null } }
+    ],
+    "invalidos": [
+      { "caso": "cuerpo vacío", "porque": "no hay nada para ajustar", "cuerpo": {} },
+      { "caso": "clave desconocida sola", "porque": "no es un ajuste", "cuerpo": { "velocidad": 3 } },
+      { "caso": "velocidad como texto", "porque": "nada se convierte", "cuerpo": { "velocidadOrbitaMs": "3" } },
+      { "caso": "velocidad fuera de rango", "porque": "más que el crucero", "cuerpo": { "velocidadOrbitaMs": 9 } },
+      { "caso": "reacción inexistente", "porque": "no está en la lista", "cuerpo": { "reaccionADeteccion": "perseguir" } },
+      { "caso": "reacción en mayúsculas", "porque": "los valores son exactos", "cuerpo": { "reaccionADeteccion": "SEGUIR" } },
+      { "caso": "silencio fuera de rango", "porque": "más de 30 s", "cuerpo": { "silencioAlRetomarS": 45 } },
+      { "caso": "silencio negativo", "porque": "menos de 0", "cuerpo": { "silencioAlRetomarS": -5 } },
+      { "caso": "silencio que no es múltiplo de 5", "porque": "va de a 5", "cuerpo": { "silencioAlRetomarS": 12 } },
+      { "caso": "silencio con decimales", "porque": "es un entero", "cuerpo": { "silencioAlRetomarS": 10.5 } },
+      { "caso": "silencio como booleano", "porque": "nada se convierte", "cuerpo": { "silencioAlRetomarS": true } },
+      { "caso": "uno bien y uno mal", "porque": "el cuerpo entero se rechaza: no se aplica a medias", "cuerpo": { "velocidadOrbitaMs": 3, "silencioAlRetomarS": 7 } }
+    ]
+  }
+}

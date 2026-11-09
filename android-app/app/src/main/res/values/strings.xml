@@ -228,13 +228,14 @@
     <string name="estado_siguiendo">Siguiendo objetivo</string>
     <string name="estado_rth_senal">Volviendo a base (pérdida de señal)</string>
     <string name="estado_rth_bateria">Volviendo a base (batería baja)</string>
-    <string name="estado_rth_manual">Volviendo a base (orden de campo)</string>
+    <string name="estado_rth_manual">Volviendo a base (por orden)</string>
     <string name="estado_aterrizado">Aterrizado</string>
     <string name="estado_pausado">Patrulla interrumpida</string>
     <string name="estado_manual">Control manual</string>
     <string name="estado_forzado">Desvío a nodo</string>
     <string name="estado_relevando">Relevando a otro dron</string>
     <string name="estado_aterrizaje_emergencia">Aterrizaje de emergencia</string>
+    <string name="estado_vigilando">Vigilando objetivo (detenido)</string>
 
     <plurals name="main_rutas_conectado">
         <item quantity="one">Comando Central: conectado · %1$d ruta</item>

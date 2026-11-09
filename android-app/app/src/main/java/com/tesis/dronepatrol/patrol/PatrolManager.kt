@@ -16,9 +16,11 @@ import com.tesis.dronepatrol.drone.Georreferencia
 import com.tesis.dronepatrol.drone.LimitadorDeRitmo
 import com.tesis.dronepatrol.drone.MandoVirtual
 import com.tesis.dronepatrol.drone.Navegacion
+import com.tesis.dronepatrol.drone.Persecucion
 import com.tesis.dronepatrol.drone.RastreadorDeObjetivo
 import com.tesis.dronepatrol.drone.UmbralesDelDji
 import com.tesis.dronepatrol.drone.ZonasDescartadas
+import com.tesis.dronepatrol.model.AjustesDelDron
 import com.tesis.dronepatrol.model.Caja
 import com.tesis.dronepatrol.model.Deteccion
 import com.tesis.dronepatrol.model.EstadoDelDron
@@ -27,6 +29,7 @@ import com.tesis.dronepatrol.model.MotivoDelDron
 import com.tesis.dronepatrol.model.ObjetivoReportado
 import com.tesis.dronepatrol.model.PatrolRoute
 import com.tesis.dronepatrol.model.PatrolState
+import com.tesis.dronepatrol.model.ReaccionADeteccion
 import com.tesis.dronepatrol.model.Telemetry
 import java.util.UUID
 import kotlin.math.abs
@@ -50,14 +53,24 @@ import org.json.JSONObject
 /**
  * Máquina de estados del patrullaje. Toda la lógica de la entrega vive acá:
  *
- *   IDLE → PATROLLING → (detección) → ORBITING ⇄ FOLLOWING → (decisión/reanudar) → PATROLLING
+ *   IDLE → PATROLLING → (detección) → ORBITING ⇄ FOLLOWING | VIGILANDO → (decisión/reanudar) → PATROLLING
  *                     → (señal perdida) → RETURNING_HOME_SIGNAL → (señal vuelve) → PATROLLING
  *                     → (batería baja)  → RETURNING_HOME_BATTERY → LANDED
  *
+ * Las prioridades entre todo esto —qué corta qué— están en docs/VUELO.md: el
+ * propio DJI, después la persona al mando, después las órdenes de llegada
+ * (volver, aterrizar), después el vuelo autónomo y al final las detecciones,
+ * que solo informan y nunca mueven al dron desde un regreso o un aterrizaje.
+ *
  * El seguimiento de un objetivo (docs/PROTOCOLS.md §4, "Qué hace la app con
- * una detección") vive entre ORBITING —el objetivo está quieto y el dron lo
- * orbita— y FOLLOWING —se mueve y el dron lo sigue—; el operador puede tomar el
- * control en el medio (MANUAL) y al soltarlo el dron vuelve al objetivo.
+ * una detección") depende de la reacción configurada ([reaccion], VUELO §5):
+ * de fábrica vive entre ORBITING —el objetivo está quieto y el dron lo orbita—
+ * y FOLLOWING —se mueve y el dron lo sigue—; con `orbitar` orbita el lugar de
+ * la detección sin seguirlo, con `seguir` lo sigue sin orbitar y con
+ * `detenerse` queda VIGILANDO donde estaba, con la nariz y la cámara en él. El
+ * operador puede tomar el control en el medio (MANUAL) y al soltarlo el dron
+ * vuelve al objetivo con la reacción vigente. Al dejar un objetivo para volver
+ * a volar solo empieza el silencio al retomar ([silencioAlRetomarMs], VUELO §6).
  *
  * Los relevos entre drones, el desvío a otra base y el protocolo de última
  * ubicación (docs/RELEVOS.md) se suman así:
@@ -183,8 +196,35 @@ class PatrolManager(
         const val CONFIRMACION_VENTANA_MS = 2_500L
         const val CONFIRMACION_DISTANCIA_M = 25.0
 
-        /** Después de retomar la ruta por un descarte, este tiempo sin alertar. */
-        const val SILENCIO_TRAS_DESCARTE_MS = 10_000L
+        /**
+         * El silencio al retomar de fábrica (docs/VUELO.md §6): después de dejar
+         * un objetivo para volver a volar solo —un descarte, reanudar, otra ruta
+         * o un desvío con un objetivo en curso— este tiempo sin alertar. La
+         * consola lo fija entre 0 y 30 s de a 5 (`ajustes.silencioAlRetomarS`,
+         * ver [silencioAlRetomarMs]). Antes eran 10 s fijos y solo para el
+         * descarte, y en una playa de estacionamiento el dron no llegaba a pasar
+         * de largo el segundo auto.
+         */
+        const val SILENCIO_AL_RETOMAR_MS = AjustesDelDron.SILENCIO_DE_FABRICA_S * 1_000L
+
+        /**
+         * Durante un aterrizaje sostenido con el control tomado, una palanca
+         * deliberada que llegue antes de esto desde la orden de aterrizar no lo
+         * corta (docs/VUELO.md §8): es la palanca que el operador todavía tenía
+         * sostenida al apretar «Aterrizar», o el cero con que la consola la
+         * suelta, no una persona retomando el dron.
+         */
+        const val GRACIA_DEL_ATERRIZAJE_MS = 1_500L
+
+        /**
+         * Por qué no se cumple una orden de vuelo de una persona con el dron ya
+         * bajando en el aterrizaje de emergencia (docs/VUELO.md §4, la última
+         * fila): va en el `DRONE_PROBLEM` «No se cumple la orden (…): …».
+         */
+        const val ATERRIZANDO_DE_EMERGENCIA = "el dron está aterrizando de emergencia en su última ubicación"
+
+        /** Lo mismo con la señal perdida: la orden no le llega, y el DJI ya vuelve por su cuenta. */
+        const val SIN_SENIAL_VUELVE_SOLO = "sin señal con el dron, el DJI vuelve solo"
 
         /**
          * Por debajo de esta altura no se orbita ni se sigue al objetivo: la
@@ -266,6 +306,7 @@ class PatrolManager(
             PatrolState.PATROLLING,
             PatrolState.ORBITING,
             PatrolState.FOLLOWING,
+            PatrolState.VIGILANDO,
             PatrolState.PAUSED,
             PatrolState.MANUAL,
             PatrolState.FORCED,
@@ -369,6 +410,7 @@ class PatrolManager(
         val ESTADOS_REANUDABLES = setOf(
             PatrolState.ORBITING,
             PatrolState.FOLLOWING,
+            PatrolState.VIGILANDO,
             PatrolState.RETURNING_HOME_SIGNAL,
             PatrolState.PAUSED,
             PatrolState.MANUAL,
@@ -383,8 +425,12 @@ class PatrolManager(
             PatrolState.IDLE,
         )
 
-        /** Los dos estados en los que el dron está ocupándose del objetivo por su cuenta. */
-        val ESTADOS_DE_SEGUIMIENTO = setOf(PatrolState.ORBITING, PatrolState.FOLLOWING)
+        /**
+         * Los estados en los que el dron está ocupándose del objetivo por su
+         * cuenta, uno por reacción (docs/VUELO.md §2 y §5): orbitándolo,
+         * siguiéndolo o vigilándolo detenido.
+         */
+        val ESTADOS_DE_SEGUIMIENTO = setOf(PatrolState.ORBITING, PatrolState.FOLLOWING, PatrolState.VIGILANDO)
 
         /**
          * Los regresos que arrancan con un `returnHome` de la app (regresar()):
@@ -461,10 +507,14 @@ class PatrolManager(
          * configuración.
          */
         internal fun textoDelProblema(motivo: String): String =
-            // El aterrizaje que no se pudo tampoco lleva el prefijo: no siempre
-            // es un rechazo (puede haberlo aceptado y no bajar), y "No se pudo
-            // aterrizar" es lo que el operador tiene que leer primero.
-            if (motivo.startsWith(UmbralesDelDji.MAL_CONFIGURADOS) || motivo.startsWith(DroneController.NO_SE_PUDO_ATERRIZAR)) {
+            // El aterrizaje y el regreso que no se pudieron tampoco llevan el
+            // prefijo: no siempre son un rechazo (puede haber aceptado y no
+            // bajar, o no salir de IDLE), y "No se pudo aterrizar" o "No se pudo
+            // volver a la base" es lo que el operador tiene que leer primero.
+            if (motivo.startsWith(UmbralesDelDji.MAL_CONFIGURADOS) ||
+                motivo.startsWith(DroneController.NO_SE_PUDO_ATERRIZAR) ||
+                motivo.startsWith(DroneController.NO_SE_PUDO_VOLVER)
+            ) {
                 // Empieza con un prefijo: nunca está vacío.
                 motivo.substring(0, 1).uppercase() + motivo.substring(1)
             } else {
@@ -552,9 +602,26 @@ class PatrolManager(
         var decision = "PENDING"
         /** Ya se avisó TARGET_LOST y no se volvió a ver. */
         var perdidoAvisado = false
+
+        /**
+         * Lo último que se avisó del movimiento del objetivo (TARGET_MOVING con
+         * true, TARGET_STOPPED con false): los avisos salen por el CAMBIO de la
+         * estimación y en todas las reacciones, también en las que el dron no
+         * cambia de estado por eso (docs/VUELO.md §5).
+         */
+        var enMovimientoAvisado = false
+
         /** Centro de la órbita que se le pidió al dron por última vez. */
         var centroLat = origenLat
         var centroLon = origenLon
+
+        /**
+         * La reacción con la que salió la última orden por este objetivo (ver
+         * [reaccionar]). Perdido de vista, la orden sale una sola vez; si la
+         * consola cambia la reacción mientras tanto, esto es lo que dice que hay
+         * que volver a darla con la nueva (ver [evaluarSeguimiento]).
+         */
+        var reaccionAplicada: ReaccionADeteccion? = null
     }
 
     private var seguimiento: Seguimiento? = null
@@ -572,6 +639,34 @@ class PatrolManager(
     /** La velocidad de órbita vigente, para la pantalla y las pruebas. */
     val velocidadDeOrbita: Double get() = velocidadDeOrbitaMs
 
+    /**
+     * Qué hace el dron con un objetivo confirmado y mientras lo tenga
+     * (docs/VUELO.md §5): la de fábrica hasta que la consola fije otra
+     * (`ajustes.reaccionADeteccion`). Se aplica al confirmar
+     * ([iniciarSeguimiento]), en cada evaluación ([evaluarSeguimiento]: un
+     * cambio con un objetivo en curso se aplica en la siguiente, a lo sumo
+     * medio segundo después), al volver al objetivo tras el control manual y en
+     * la toma de un relevo ([volverAlObjetivo]). La escribe el hilo del
+     * WebSocket por [onAjustes] y la leen las corrutinas: de ahí el volátil.
+     */
+    @Volatile
+    private var reaccion = ReaccionADeteccion.DE_FABRICA
+
+    /** La reacción vigente, para las pruebas y la pantalla. */
+    val reaccionADeteccion: ReaccionADeteccion get() = reaccion
+
+    /**
+     * Cuánto dura el silencio al retomar (docs/VUELO.md §6): lo que la consola
+     * fijó (`ajustes.silencioAlRetomarS`, de 0 a 30 s de a 5) o
+     * [SILENCIO_AL_RETOMAR_MS]. Con 0 no hay silencio; las zonas descartadas
+     * siguen valiendo igual.
+     */
+    @Volatile
+    private var silencioAlRetomarMs = SILENCIO_AL_RETOMAR_MS
+
+    /** El silencio al retomar vigente, en milisegundos, para las pruebas y la pantalla. */
+    val silencioAlRetomar: Long get() = silencioAlRetomarMs
+
     /** El objetivo en seguimiento tal como va en el status; null si no hay. */
     val objetivo: ObjetivoReportado? get() = seguimiento?.let(::reportarObjetivo)
 
@@ -582,7 +677,11 @@ class PatrolManager(
 
     private val zonasDescartadas = ZonasDescartadas()
 
-    /** Hasta cuándo no se alerta, después de retomar la ruta por un descarte. */
+    /**
+     * Hasta cuándo no se alerta después de dejar un objetivo para volver a volar
+     * solo (ver [silenciarAlDejarElObjetivo]): mientras dure, las detecciones
+     * solo dibujan sus cajas, sin candidata ni alerta.
+     */
     private var silencioHastaMs = 0L
 
     /** Cuándo salió la última alerta sin seguimiento (ver [ENTRE_ALERTAS_SIN_SEGUIMIENTO_MS]). */
@@ -680,18 +779,44 @@ class PatrolManager(
 
     /**
      * El dron quedó en vuelo estacionario con el mando en las palancas del
-     * RC-N3 ([devolverAlControlFisico]): el control manual se soltó sin nadie al
-     * mando, y el que está al lado lo puede estar volando. Mientras dure, la app
-     * no le da al dron ninguna orden de vuelo por su cuenta —cada una vuelve a
-     * habilitar el Virtual Stick y le saca el dron de las manos, y ni el botón
-     * de pausa del control se lo devuelve—: una detección alerta sin
-     * seguimiento, y perder o recuperar la señal no lo frena ni le retoma la
-     * ruta. Lo apagan una orden de una persona ([ordenDeUnaPersona]: tomar el
+     * RC-N3: el control manual se soltó sin nadie al mando
+     * ([devolverAlControlFisico]), o el que está al lado cortó con las palancas
+     * un regreso de la app ([alCortarseElRegresoConLasPalancas]), y lo puede
+     * estar volando. Mientras dure, la app no le da al dron ninguna orden de
+     * vuelo por su cuenta —cada una vuelve a habilitar el Virtual Stick y le
+     * saca el dron de las manos, y ni el botón de pausa del control se lo
+     * devuelve—: una detección alerta sin seguimiento, y perder o recuperar la
+     * señal no lo frena ni le retoma la ruta. Lo apagan una orden de una
+     * persona ([ordenDeUnaPersona]: tomar el
      * control, una ruta, reanudar, un desvío, aterrizar, volver a base), una
      * toma del propio DJI y cualquier salida de la pausa (ver [pasarA]).
      * Lo tocan solo los caminos que pasan por [enSerie].
      */
     private var mandoEnElControlFisico = false
+
+    /**
+     * La persona al lado del dron cortó un regreso de la app con las palancas
+     * del RC-N3 (DroneController.REGRESO_CORTADO_EN_EL_CONTROL): el dron es
+     * suyo, como el de la consola con el control tomado. Si ese regreso ya era
+     * el de la batería ([regresoPorBateriaOrdenado]), la batería no se lo
+     * vuelve a sacar ([checkLowBattery]): el DJI deja el GoHome con cada
+     * palanca, y volver a pedirlo en cada telemetría era pelearle el dron en
+     * lazo a quien lo vuela al lado. Lo siguen cuidando el propio DJI (su
+     * regreso por batería, su aterrizaje por batería crítica) y el §5. Vive lo
+     * que [mandoEnElControlFisico].
+     */
+    private var regresoCortadoConLasPalancas = false
+
+    /**
+     * El regreso de la app no arrancó (DroneController.NO_SE_PUDO_VOLVER) y el
+     * dron quedó estacionario en la pausa, a la espera de la orden de una
+     * persona (docs/VUELO.md §7.2). Mientras tanto una detección alerta sin
+     * seguimiento, como con el mando en el control físico: sin esto el auto
+     * siguiente lo ponía a orbitar, y el dron que no supo volver se iba a
+     * ocupar de otra cosa sin que nadie se lo pidiera. Lo apagan una orden de
+     * una persona ([ordenDeUnaPersona]) y cualquier salida de la pausa ([pasarA]).
+     */
+    private var esperandoOrdenTrasElRegreso = false
 
     /**
      * true mientras corre un desplazamiento puntual pedido con `manual_move`.
@@ -705,9 +830,11 @@ class PatrolManager(
      * Un aterrizaje que se ordenó y todavía no tocó el suelo. [alAceptarse] es
      * el `LANDING` que sale cuando el dron lo acepta
      * ([FlightEvent.AterrizajeAceptado]); null si ese aterrizaje no se anuncia
-     * (el de la base de un desvío, el del final del §5).
+     * (el de la base de un desvío, el del final del §5). [ordenadoMs] es cuándo
+     * se ordenó, con [reloj]: una palanca deliberada lo corta recién pasada la
+     * gracia de [GRACIA_DEL_ATERRIZAJE_MS] (ver [elMandoCortaElAterrizaje]).
      */
-    private class AterrizajeEnCurso(val alAceptarse: String?) {
+    private class AterrizajeEnCurso(val alAceptarse: String?, val ordenadoMs: Long) {
         var aceptado = false
     }
 
@@ -850,6 +977,21 @@ class PatrolManager(
     private var regresoDelDjiCortado = false
 
     /**
+     * Un regreso de la app (un GoHome, [ESTADOS_CON_EL_REGRESO_DE_LA_APP]) que
+     * una persona cortó para dar su orden (docs/VUELO.md §4): tomar el control
+     * ([porLaToma]), aterrizar, otra ruta o un desvío a un nodo. [regreso] es el
+     * estado de ese regreso. Si el dron avisa que no se cortó
+     * (DroneController.NO_SE_CORTO_EL_REGRESO), sigue volviendo y la orden quedó
+     * descartada: la app vuelve a ese regreso en vez de quedar en el estado de
+     * la orden ([alNoCortarseElRegreso]). Antes quedaba en MANUAL, con la
+     * consola pilotando un dron que se iba a su casa.
+     */
+    private class CorteDelRegreso(val regreso: PatrolState, val porLaToma: Boolean)
+
+    /** El último corte del regreso, si lo pidió una persona; null si lo pidió la app o no hubo (ver [cortarElRegreso]). */
+    private var corteDelRegreso: CorteDelRegreso? = null
+
+    /**
      * En este vuelo la batería ya mandó al dron a casa (el regreso, un desvío,
      * el §5, o el regreso propio del DJI). Es lo que deja que una persona que
      * toma el control DURANTE ese regreso lo tenga de verdad: la batería sigue
@@ -891,11 +1033,34 @@ class PatrolManager(
     private var volverAlRecuperarLaSenial = false
 
     /** El protocolo de última ubicación en curso: el `ref` de la emergencia y si la app tiene el vuelo. */
-    private class EmergenciaEnCurso(val ref: String, @Volatile var conControl: Boolean)
+    private class EmergenciaEnCurso(val ref: String, @Volatile var conControl: Boolean) {
+        /**
+         * Los `seq` de las fotos que ya salieron: si una persona corta la
+         * secuencia y la batería la vuelve a armar, sigue con las que faltan
+         * (ver [iniciarUltimaUbicacion]). Repetirlas gastaría la batería que el
+         * protocolo cuida en fotos que la cola descarta (ya tiene ese `seq`).
+         * La escribe la puerta de la patrulla y la lee la secuencia, en su
+         * corrutina: un conjunto nuevo por foto, volátil.
+         */
+        @Volatile
+        var sacadas: Set<Int> = emptySet()
+    }
 
     /** La lee también la secuencia de fotos, que corre en su propia corrutina: de ahí el volátil. */
     @Volatile
     private var emergencia: EmergenciaEnCurso? = null
+
+    /**
+     * El aterrizaje de emergencia del §5 ya en su descenso final (docs/VUELO.md
+     * §1 y §4, la última fila): hay una emergencia y un aterrizaje en curso, el
+     * del final de la secuencia o el que una persona ordenó en sus fotos. Ahí
+     * no se discute: no se toma el control, no se vuelve a la base y no sale
+     * otra orden de vuelo, y cada una se rechaza diciéndolo. La emergencia sola
+     * no alcanza: la que una persona cortó en sus fotos queda abierta con el
+     * dron en otro estado, hasta que la batería la vuelve a armar
+     * ([iniciarUltimaUbicacion]).
+     */
+    private val enElDescensoDeEmergencia: Boolean get() = emergencia != null && aterrizajeEnCurso != null
 
     /** El Job de la secuencia de fotos; [pasarA] lo cancela al salir de ATERRIZAJE_EMERGENCIA. */
     private var tareaDeEmergencia: Job? = null
@@ -956,6 +1121,7 @@ class PatrolManager(
         commandCenter.onAlertAck = { ref, alertId -> scope.launch { onAlertAck(ref, alertId) } }
         commandCenter.onTakeoff = { by -> scope.launch { onTakeoff(by) } }
         commandCenter.onLand = { by -> scope.launch { onLand(by) } }
+        commandCenter.onReturnHome = { by -> scope.launch { onReturnHome(by) } }
         commandCenter.onResumePatrol = { fromIndex -> scope.launch { onResumePatrol(fromIndex) } }
         commandCenter.onReanudacionAlSoltar = { fromIndex -> scope.launch { onReanudacionAlSoltar(fromIndex) } }
         commandCenter.onStartRoute = { routeId, fromIndex, orderedBy ->
@@ -972,8 +1138,8 @@ class PatrolManager(
         // A diferencia del resto de las órdenes, esta no se lanza en una
         // corrutina: llegan diez por segundo y no hace nada que pueda bloquear,
         // así que abrir una corrutina por mensaje sería puro costo.
-        commandCenter.onManualStick = { pitch, roll, yaw, throttle, _ ->
-            onManualStick(pitch, roll, yaw, throttle)
+        commandCenter.onManualStick = { pitch, roll, yaw, throttle, by ->
+            onManualStick(pitch, roll, yaw, throttle, by)
         }
         // Igual que el mando y por lo mismo: hasta diez por segundo mientras el
         // operador arrastra la cámara. Además, en el mismo hilo lector del socket
@@ -985,7 +1151,7 @@ class PatrolManager(
         commandCenter.onControlSoltadoAlReconectar = { by -> scope.launch { onControlSoltadoAlReconectar(by) } }
         commandCenter.onControlResync = { by -> scope.launch { onControlResync(by) } }
         commandCenter.onControlTransferred = { by, de -> scope.launch { onControlTransferred(by, de) } }
-        commandCenter.onAjustes = { velocidad -> scope.launch { onAjustes(velocidad) } }
+        commandCenter.onAjustes = { ajustes -> scope.launch { onAjustes(ajustes) } }
         // Los relevos, desvíos y emergencias (§2.b) llegan ya validados y con
         // tipo; uno inválido solo queda en el registro local.
         commandCenter.onMensajeDelHub = { mensaje -> scope.launch { alMensajeDelHub(mensaje) } }
@@ -1061,14 +1227,21 @@ class PatrolManager(
         // pero solo si el dron está en condiciones: sin GPS o sin punto de retorno
         // un despegue automático es un dron que no sabe volver.
         if (!puedeArrancarUnaRuta()) return@enSerie
+        // Las guardas y el corte del regreso de `start_route` (ver arrancarRuta()):
+        // la pantalla solo lo ofrece en reposo, pero la orden es la misma.
+        val orden = "el operador de campo ordenó patrullar la ruta \"${route.name}\""
+        if (!seCumpleLaOrden(orden, capaUno = true, sinSenial = true)) return@enSerie
+        val corte = corteParaLaOrden()
         ordenDeUnaPersona()
         soltarElAterrizaje("El operador de campo arrancó un patrullaje")
+        silenciarAlDejarElObjetivo("El operador de campo arrancó un patrullaje con un objetivo en curso")
         terminarSeguimiento("empezó otro patrullaje")
         this.route = route
         patrullaEnCurso = true
         lastReachedWaypoint = 0
         proximoWaypoint = 0
         resumeWaypoint = 0
+        corte?.let(::cortarElRegreso)
         // Primero el estado y después la orden, como manda pasarA(): si no, un
         // mando que viene en camino se cuela entre las dos, pasa la puerta de
         // onManualStick() y le releva el lazo de la ruta recién ordenada.
@@ -1093,7 +1266,9 @@ class PatrolManager(
         scope.launch {
             enSerie {
                 ordenDeCampo("ordenó reanudar")
-                if (!volverSiNoTieneRutaPropia("el operador de campo ordenó reanudar")) resumePatrol("orden del operador de campo")
+                val orden = "el operador de campo ordenó reanudar"
+                if (!seCumpleLaOrden(orden, sinSenial = true)) return@enSerie
+                if (!volverSiNoTieneRutaPropia(orden)) resumePatrol("orden del operador de campo")
             }
         }
     }
@@ -1108,6 +1283,7 @@ class PatrolManager(
             return@enSerie
         }
         ordenDeCampo("ordenó volver a la base")
+        if (!seCumpleLaOrden("el operador de campo ordenó volver a la base", sinSenial = true)) return@enSerie
         ordenDeUnaPersona()
         soltarElAterrizaje("El operador de campo ordenó volver a la base")
         if (_state.value == PatrolState.PATROLLING) resumeWaypoint = proximoWaypoint
@@ -1155,7 +1331,8 @@ class PatrolManager(
 
     /**
      * Aterriza donde está y lo sostiene hasta el suelo (ver [ordenarAterrizaje]).
-     * Al tocarlo (FlightEvent.Aterrizado) queda en base.
+     * Al tocarlo (FlightEvent.Aterrizado) queda en base. Pisa el control manual
+     * de la consola (`control_dropped`): el que está al lado del dron manda.
      */
     fun aterrizar() = enSerie {
         if (!controller.estado.value.enVuelo) {
@@ -1163,12 +1340,10 @@ class PatrolManager(
             return@enSerie
         }
         ordenDeCampo("ordenó aterrizar")
-        ordenDeUnaPersona()
-        if (_state.value == PatrolState.PATROLLING) resumeWaypoint = proximoWaypoint
+        val orden = "el operador de campo ordenó aterrizar"
+        if (!sePuedeAterrizarAca(orden)) return@enSerie
         soltarDesdeElCampo("ordenó aterrizar")
-        terminarSeguimiento("el operador de campo ordenó aterrizar")
-        pasarA(PatrolState.PAUSED)
-        ordenarAterrizaje("El operador de campo ordenó aterrizar: el dron aceptó y desciende donde está")
+        aterrizarDondeEsta(orden, "orden_de_campo", "El operador de campo ordenó aterrizar: el dron aceptó y desciende donde está")
     }
 
     /**
@@ -1210,17 +1385,26 @@ class PatrolManager(
 
     private fun arrancarRuta(r: PatrolRoute, fromIndex: Int, orderedBy: String) {
         ordenDelOperador()
+        val orden = "$orderedBy ordenó patrullar la ruta \"${r.name}\""
+        // Ni con una toma del DJI que no se discute, ni sin señal, ni en el
+        // descenso de una emergencia (docs/VUELO.md §4): se dice por qué.
+        if (!seCumpleLaOrden(orden, capaUno = true, sinSenial = true)) return
         // Desde la consola también se puede ordenar con el dron en el suelo
         if (!puedeArrancarUnaRuta()) return
+        // Volviendo con el GoHome de la app, la ruta lo corta antes: con el
+        // GoHome puesto el DJI no acepta otra orden (como al aterrizar).
+        val corte = corteParaLaOrden()
         ordenDeUnaPersona()
-        soltarElAterrizaje("$orderedBy ordenó patrullar la ruta \"${r.name}\"")
+        soltarElAterrizaje(orden)
         val desde = fromIndex.coerceIn(0, r.waypoints.size - 1)
+        silenciarAlDejarElObjetivo("$orden con un objetivo en curso")
         terminarSeguimiento("se ordenó patrullar otra ruta")
         route = r
         patrullaEnCurso = true
         lastReachedWaypoint = desde
         proximoWaypoint = desde
         resumeWaypoint = desde
+        corte?.let(::cortarElRegreso)
         // El estado antes que la orden (ver pasarA()): esta transición es
         // alcanzable desde MANUAL —el operador puede pedir otra ruta sin soltar
         // el control— y al revés un mando en camino le relevaba la ruta.
@@ -1235,11 +1419,26 @@ class PatrolManager(
     }
 
     private fun detener(orderedBy: String) {
+        val orden = "$orderedBy ordenó detenerse"
+        // El descenso de una emergencia no se detiene, y se dice: antes de la
+        // guarda del estado, que en ese descenso lo callaba (o, en MANUAL, le
+        // cortaba el aterrizaje con el estacionario).
+        if (!seCumpleLaOrden(orden)) return
         if (_state.value !in ESTADOS_EN_VUELO || _state.value == PatrolState.PAUSED) return
         ordenDeUnaPersona()
         // Quedar estacionario es una orden de vuelo: corta un aterrizaje en curso.
-        soltarElAterrizaje("$orderedBy ordenó detenerse")
+        soltarElAterrizaje(orden)
         if (_state.value == PatrolState.PATROLLING) resumeWaypoint = proximoWaypoint
+        // Detenerse sobre un objetivo es dejarlo, como descartarlo: en la pausa
+        // las detecciones vuelven a seguir, y sin la zona y el silencio el mismo
+        // auto lo ponía a orbitar otra vez en un segundo.
+        seguimiento?.let { s ->
+            val ahora = reloj()
+            val e = s.rastreador.estimar(ahora)
+            zonasDescartadas.agregar(e.lat, e.lon, ahora)
+            zonasDescartadas.agregar(s.origenLat, s.origenLon, ahora)
+            silenciarAlDejarElObjetivo("$orden con un objetivo en curso")
+        }
         terminarSeguimiento("se interrumpió el patrullaje (orden de $orderedBy)")
         // Primero el estado y después la orden, como en pasarA(): si no, un
         // mando que viene en camino se cuela entre las dos y lo vuelve a mover.
@@ -1262,6 +1461,9 @@ class PatrolManager(
     }
 
     private fun desviarAlNodo(lat: Double, lon: Double, index: Int, orderedBy: String) {
+        val orden = "$orderedBy ordenó ir al nodo ${index + 1}"
+        // Las mismas guardas que una ruta (ver arrancarRuta()).
+        if (!seCumpleLaOrden(orden, capaUno = true, sinSenial = true)) return
         // Un resume posterior retoma el patrullaje normal hacia el nodo que tenía
         // por delante: si se sale de PATROLLING se anota ese nodo, como en todas
         // las demás salidas. Sin anotarlo, resumeWaypoint quedaba con un valor
@@ -1269,10 +1471,14 @@ class PatrolManager(
         // primer nodo a repetir la ruta entera. Desde otro estado (MANUAL, un
         // desvío anterior) el nodo ya quedó anotado al salir del patrullaje.
         if (_state.value == PatrolState.PATROLLING) resumeWaypoint = proximoWaypoint
+        // Con el GoHome de la app puesto, el desvío lo corta antes (ver arrancarRuta()).
+        val corte = corteParaLaOrden()
         ordenDeUnaPersona()
-        soltarElAterrizaje("$orderedBy ordenó ir al nodo ${index + 1}")
+        soltarElAterrizaje(orden)
+        silenciarAlDejarElObjetivo("$orden con un objetivo en curso")
         terminarSeguimiento("desvío forzado a un nodo (orden de $orderedBy)")
         forcedIndex = index
+        corte?.let(::cortarElRegreso)
         // El estado antes que la orden (ver pasarA()): también se llega acá desde
         // MANUAL, y un mando colado en el medio abandona el desvío recién pedido.
         pasarA(PatrolState.FORCED)
@@ -1290,11 +1496,21 @@ class PatrolManager(
      * Tampoco corta un aterrizaje en curso: tomar el control no es una orden de
      * vuelo, y el vuelo estacionario de acá le cancelaba el aterrizaje al DJI.
      * El control queda tomado y el dron sigue bajando hasta el suelo; lo corta
-     * una orden de vuelo (ver [soltarElAterrizaje]), no las palancas.
+     * otra orden de vuelo (ver [soltarElAterrizaje]), o una palanca deliberada
+     * 1,5 s o más después de la orden (ver [elMandoCortaElAterrizaje]). El
+     * descenso final de una emergencia es la excepción: ahí no se toma.
      */
     private fun onControlTaken(by: String) = enSerie {
         porQueNoSeTomaElControl()?.let { motivo ->
             rechazarLaToma(by, motivo)
+            return@enSerie
+        }
+        // El descenso final de una emergencia no se discute (docs/VUELO.md §1 y
+        // §4): el dron baja donde la batería lo deja. Tomarlo ahí era abrirle a
+        // la consola una vista de pilotaje de un dron que no le iba a obedecer;
+        // como con las tomas del DJI, no se toma y se dice por qué.
+        if (enElDescensoDeEmergencia) {
+            rechazarLaToma(by, "el dron está aterrizando de emergencia (última ubicación): no se toma el control")
             return@enSerie
         }
         // Sin señal con el dron no hay a quién darle el estacionario: el control
@@ -1317,11 +1533,11 @@ class PatrolManager(
         // hay GoHome que cortar (lo vuela la app) y pasar a MANUAL lo abandona.
         // Si el regreso era del propio DJI, este es el único corte del vuelo
         // (RELEVOS §4): si lo vuelve a arrancar, la toma siguiente se rechaza.
-        val cortarElRegreso = !aterrizando && desvio == null && _state.value in ESTADOS_CON_EL_REGRESO_DE_LA_APP
-        if (cortarElRegreso && dronAlMando) regresoDelDjiCortado = true
+        // Si el dron no lo corta, la toma se deshace (ver alNoCortarseElRegreso()).
+        val corte = if (aterrizando) null else corteParaLaOrden(porLaToma = true)
         ordenDeUnaPersona()
         if (_state.value == PatrolState.PATROLLING) resumeWaypoint = proximoWaypoint
-        if (cortarElRegreso) controller.cancelarRegreso()
+        corte?.let(::cortarElRegreso)
         // Acá el orden es el inverso del resto de las transiciones a propósito: esta
         // ABRE la puerta del mando en vez de cerrarla, así que el vuelo estacionario
         // tiene que quedar ordenado ANTES, o el primer mando del operador se lo come.
@@ -1343,7 +1559,7 @@ class PatrolManager(
         if (aterrizando) {
             log(
                 "El dron está aterrizando: el control queda tomado, pero sigue bajando hasta el suelo " +
-                    "(lo corta otra orden de vuelo, no las palancas)",
+                    "(lo corta otra orden de vuelo, o una palanca deliberada 1,5 s o más después de la orden)",
             )
         }
     }
@@ -1383,16 +1599,86 @@ class PatrolManager(
     }
 
     /**
-     * `ajustes` de la consola (docs/PROTOCOLS.md §2): la velocidad de órbita, o
-     * null para volver a la de fábrica. Si el dron está orbitando, la órbita
-     * cambia de velocidad en el acto, sin cortar el giro.
+     * Si una orden de vuelo de una persona ([orden], para el aviso) se cumple
+     * ahora (docs/VUELO.md §4). Nunca con el dron ya bajando en el aterrizaje
+     * de emergencia, que no se discute. Con [sinSenial], tampoco sin señal con
+     * el dron: la orden no le llega y el DJI ya vuelve solo, y cumplirla a
+     * ciegas dejaba el estado en la orden con el dron haciendo otra cosa. Con
+     * [capaUno], tampoco con una toma del propio DJI que la app no discute (ver
+     * [porQueNoSeTomaElControl]): la orden le devolvía el vuelo a la app con el
+     * DJI rechazándole todo. Cuando no se cumple la consola se entera, con un
+     * `DRONE_PROBLEM` «No se cumple la orden (…): …», y devuelve false.
      */
-    private fun onAjustes(velocidadOrbitaMs: Double?) = enSerie {
+    private fun seCumpleLaOrden(orden: String, capaUno: Boolean = false, sinSenial: Boolean = false): Boolean {
+        val porque = (if (capaUno) porQueNoSeTomaElControl() else null) ?: when {
+            enElDescensoDeEmergencia -> ATERRIZANDO_DE_EMERGENCIA
+            sinSenial && _state.value == PatrolState.RETURNING_HOME_SIGNAL -> SIN_SENIAL_VUELVE_SOLO
+            else -> return true
+        }
+        report("DRONE_PROBLEM", "No se cumple la orden ($orden): $porque")
+        return false
+    }
+
+    /**
+     * El corte del regreso que necesita la orden de una persona que está por
+     * darse (docs/VUELO.md §4), o null si no hay regreso que cortar: volviendo
+     * con el GoHome de la app el DJI no acepta otra orden, así que quien llama
+     * lo corta ANTES de la suya ([cortarElRegreso]). Un desvío no tiene GoHome
+     * (lo vuela la app) y su estado lo abandona al salir. Va ANTES de
+     * [ordenDeUnaPersona], que suelta la toma del DJI: en un regreso propio
+     * del DJI por batería este es el único corte del vuelo (RELEVOS §4).
+     */
+    private fun corteParaLaOrden(porLaToma: Boolean = false): CorteDelRegreso? {
+        if (desvio != null || _state.value !in ESTADOS_CON_EL_REGRESO_DE_LA_APP) return null
+        if (dronAlMando) regresoDelDjiCortado = true
+        return CorteDelRegreso(_state.value, porLaToma)
+    }
+
+    /**
+     * Corta el regreso a base en curso ([DroneController.cancelarRegreso]) y
+     * anota quién lo pidió: [corte] si fue la orden de una persona, null si fue
+     * la propia app (el desvío, el §5, el único corte del regreso del DJI). Si
+     * el dron avisa que no se cortó, con eso se sabe qué deshacer
+     * ([alNoCortarseElRegreso]).
+     */
+    private fun cortarElRegreso(corte: CorteDelRegreso?) {
+        corteDelRegreso = corte
+        controller.cancelarRegreso()
+    }
+
+    /**
+     * `ajustes` de la consola (docs/PROTOCOLS.md §2, docs/VUELO.md §10), ya
+     * validados por el cliente: cada uno null es el de fábrica. La velocidad de
+     * órbita cambia en el acto si el dron está orbitando, sin cortar el giro; la
+     * reacción se aplica en la próxima evaluación del seguimiento (medio segundo
+     * como mucho) o en el próximo objetivo; el silencio vale desde el próximo
+     * objetivo que se deje (uno que ya corre no se acorta ni se alarga).
+     */
+    private fun onAjustes(ajustes: AjustesDelDron) = enSerie {
+        aplicarLaVelocidadDeOrbita(ajustes.velocidadOrbitaMs)
+        val reaccionNueva = ajustes.reaccionADeteccion ?: ReaccionADeteccion.DE_FABRICA
+        if (reaccionNueva != reaccion) {
+            reaccion = reaccionNueva
+            log(
+                "Reacción a una detección: ${reaccionNueva.enElProtocolo}" +
+                    (if (ajustes.reaccionADeteccion == null) " (la de fábrica)" else "") +
+                    if (seguimiento != null && _state.value in ESTADOS_DE_SEGUIMIENTO) ": se aplica al objetivo en curso" else "",
+            )
+        }
+        val silencioNuevoMs = AjustesDelDron.silencioAlRetomarS(ajustes.silencioAlRetomarS) * 1_000L
+        if (silencioNuevoMs != silencioAlRetomarMs) {
+            silencioAlRetomarMs = silencioNuevoMs
+            log("Silencio al retomar: ${silencioNuevoMs / 1_000} s" + if (ajustes.silencioAlRetomarS == null) " (el de fábrica)" else "")
+        }
+    }
+
+    /** La velocidad de órbita del ajuste (null, la de fábrica); orbitando, la órbita en curso la toma en el acto. */
+    private fun aplicarLaVelocidadDeOrbita(velocidadOrbitaMs: Double?) {
         val nueva = Navegacion.velocidadDeOrbita(velocidadOrbitaMs)
-        if (nueva == velocidadDeOrbitaMs) return@enSerie
+        if (nueva == velocidadDeOrbitaMs) return
         velocidadDeOrbitaMs = nueva
         log("Velocidad de órbita: ${"%.1f".format(nueva)} m/s" + if (velocidadOrbitaMs == null) " (la de fábrica)" else "")
-        val s = seguimiento ?: return@enSerie
+        val s = seguimiento ?: return
         if (_state.value == PatrolState.ORBITING) orbitar(s, s.centroLat, s.centroLon)
     }
 
@@ -1420,9 +1706,12 @@ class PatrolManager(
         val rad = Math.toRadians(bearing)
         val dLat = distanceM * cos(rad) / METERS_PER_DEG_LAT
         val dLon = distanceM * sin(rad) / (METERS_PER_DEG_LAT * cos(Math.toRadians(t.lat)))
+        // Un salto del pad es tan deliberado como una palanca: pasada la gracia,
+        // corta el aterrizaje que se sostenía con el control tomado (VUELO §8).
+        if (elMandoCortaElAterrizaje(estacionario = false)) cortarElAterrizajeConElMando(by)
         synchronized(cerrojoDelMando) {
             if (_state.value != PatrolState.MANUAL) return
-            // Aterrizando, el salto no sale: le cancelaría el aterrizaje.
+            // Aterrizando (dentro de la gracia), el salto no sale: le cancelaría el aterrizaje.
             if (aterrizajeEnCurso != null) {
                 log("Movimiento manual de $by ignorado: el dron está aterrizando")
                 return
@@ -1453,9 +1742,21 @@ class PatrolManager(
      * Con un aterrizaje en curso tampoco pasa (ver [aterrizajeEnCurso]): el cero
      * que la consola manda al soltar la palanca viaja por el socket y el `land`
      * por REST, así que puede llegar DESPUÉS, y en el DJI le cancelaba el
-     * aterrizaje. Tampoco arma el watchdog: no hay velocidad que cortar.
+     * aterrizaje. Tampoco arma el watchdog: no hay velocidad que cortar. La
+     * excepción es la palanca DELIBERADA de quien tiene el control, pasada la
+     * gracia desde la orden (docs/VUELO.md §8): esa corta el aterrizaje, deja al
+     * dron estacionario a su mando y recién después se aplica como cualquier
+     * otra (ver [elMandoCortaElAterrizaje]).
      */
-    private fun onManualStick(pitch: Double, roll: Double, yaw: Double, throttle: Double) {
+    private fun onManualStick(pitch: Double, roll: Double, yaw: Double, throttle: Double, by: String) {
+        // Se mira el mando ya traducido: una palanca apenas movida cae en la
+        // zona muerta y es vuelo estacionario, no una velocidad que cortar ni
+        // una persona retomando el dron.
+        val v = MandoVirtual.velocidades(pitch, roll, yaw, throttle)
+        // El corte va por la puerta de la patrulla, FUERA del cerrojo del mando:
+        // las transiciones toman los dos cerrojos en ese orden, y tomarlos al
+        // revés acá sería la receta de un interbloqueo.
+        if (elMandoCortaElAterrizaje(v.estacionario)) cortarElAterrizajeConElMando(by)
         synchronized(cerrojoDelMando) {
             if (_state.value != PatrolState.MANUAL) return@synchronized
             if (aterrizajeEnCurso != null) return@synchronized
@@ -1464,9 +1765,6 @@ class PatrolManager(
             // y no en el controlador, que lo avisaría como un rechazo: la
             // consola ya muestra "despegalo primero" mirando `flying`.
             if (!controller.estado.value.enVuelo) return@synchronized
-            // Se mira el mando ya traducido: una palanca apenas movida cae en la
-            // zona muerta y es vuelo estacionario, no una velocidad que cortar.
-            val v = MandoVirtual.velocidades(pitch, roll, yaw, throttle)
             ultimoMandoMs = System.currentTimeMillis()
             ultimoMandoEstacionario = v.estacionario
             // Regla: manda el último comando DELIBERADO. Un mensaje con los cuatro
@@ -1481,6 +1779,46 @@ class PatrolManager(
             saltoManualEnCurso = false
             controller.manualStick(pitch, roll, yaw, throttle)
         }
+    }
+
+    /**
+     * Si este mando —una palanca fuera de la zona muerta o un salto del pad—
+     * corta el aterrizaje en curso (docs/VUELO.md §8): el control está tomado,
+     * el dron está en MANUAL o en la pausa de un aterrizaje que la consola
+     * ordenó sin estar en MANUAL, la app sigue teniendo el vuelo (ni un
+     * failsafe del DJI ni el descenso final de una emergencia, que no se
+     * discuten), y pasó la gracia de [GRACIA_DEL_ATERRIZAJE_MS] desde la orden.
+     * Las palancas en cero —las que manda la consola al soltar, el watchdog—
+     * nunca cuentan; sin señal con el dron tampoco, que la orden no le llega.
+     *
+     * Se decide con el cerrojo del mando, donde vive el aterrizaje, y nada más:
+     * el corte lo hace [cortarElAterrizajeConElMando] por la puerta de la
+     * patrulla, con el cerrojo ya soltado.
+     */
+    private fun elMandoCortaElAterrizaje(estacionario: Boolean): Boolean = synchronized(cerrojoDelMando) {
+        val aterrizaje = aterrizajeEnCurso ?: return false
+        if (estacionario || !controlTomado) return false
+        if (_state.value != PatrolState.MANUAL && _state.value != PatrolState.PAUSED) return false
+        if (enElDescensoDeEmergencia || dronAlMando) return false
+        reloj() - aterrizaje.ordenadoMs >= GRACIA_DEL_ATERRIZAJE_MS
+    }
+
+    /**
+     * La palanca deliberada de [by] corta el aterrizaje (docs/VUELO.md §8): se
+     * cancela en el controlador, el dron queda estacionario a su mando en MANUAL
+     * y la consola se entera con `LANDING_CANCELLED`. El mando que lo cortó se
+     * aplica después, como cualquier otro. Se vuelve a mirar TODO lo de
+     * [elMandoCortaElAterrizaje] con la puerta de la patrulla tomada: entre la
+     * decisión y acá el aterrizaje pudo terminar (el suelo, un problema), el
+     * control soltarse, el estado cambiar, el propio DJI tomar el vuelo o una
+     * emergencia pasar a su descenso final.
+     */
+    private fun cortarElAterrizajeConElMando(by: String) = enSerie {
+        if (!elMandoCortaElAterrizaje(estacionario = false)) return@enSerie
+        soltarElAterrizaje("$by movió las palancas")
+        if (_state.value != PatrolState.MANUAL) pasarA(PatrolState.MANUAL)
+        controller.hold()
+        report("LANDING_CANCELLED", "$by movió las palancas: el aterrizaje se corta y el dron queda a su mando")
     }
 
     /**
@@ -1570,7 +1908,12 @@ class PatrolManager(
         }
         // Salir de la pausa con el mando en el control físico es que otro lo
         // tiene ahora: una orden, el regreso por batería o el suelo.
-        if (nuevo !in ESTADOS_DEL_MANDO_FISICO) mandoEnElControlFisico = false
+        if (nuevo !in ESTADOS_DEL_MANDO_FISICO) {
+            mandoEnElControlFisico = false
+            regresoCortadoConLasPalancas = false
+        }
+        // Salir de la pausa de un regreso que no arrancó es que otra cosa manda ahora.
+        if (nuevo != PatrolState.PAUSED) esperandoOrdenTrasElRegreso = false
         synchronized(cerrojoDelMando) {
             val salimosDeManual = _state.value == PatrolState.MANUAL && nuevo != PatrolState.MANUAL
             _state.value = nuevo
@@ -1898,24 +2241,147 @@ class PatrolManager(
         )
     }
 
-    /** Aterrizaje pedido desde la consola por el titular del control. */
+    /** Aterrizaje pedido desde la consola (`land`, docs/PROTOCOLS.md §2). */
     private fun onLand(by: String) = enSerie { aterrizarPorLaConsola(by) }
 
+    /**
+     * `land` de la consola (docs/VUELO.md §9): aterriza desde cualquier estado
+     * de vuelo, con o sin el control tomado —quién puede lo decide el hub, que
+     * también decide qué pasa con el lock—. Con el control tomado por quien
+     * ordena, el control sigue tomado en el suelo (MANUAL), como siempre; sin el
+     * control, el dron queda en la pausa del aterrizaje, como con el del
+     * teléfono. Antes exigía el control tomado en MANUAL, y la consola no tenía
+     * forma de bajar un dron que patrullaba o volvía.
+     */
     private fun aterrizarPorLaConsola(by: String) {
-        if (!controlTomado || _state.value != PatrolState.MANUAL) {
-            log("$by pidió aterrizar sin el control manual tomado: se ignora")
-            return
-        }
         if (!controller.estado.value.enVuelo) {
             log("$by pidió aterrizar pero el dron ya está en el suelo")
             return
         }
+        val orden = "$by ordenó aterrizar desde la consola"
+        if (!sePuedeAterrizarAca(orden)) return
+        aterrizarDondeEsta(orden, "orden_del_operador", "Aterrizaje ordenado por $by desde el Comando Central: el dron aceptó y desciende donde está")
+    }
+
+    /**
+     * Si un aterrizaje donde está ([orden], de una persona) se puede dar ahora
+     * (docs/VUELO.md §4): no con un failsafe del DJI que la app no discute, no
+     * sin señal con el dron (la orden no le llega, y el dron ya vuelve solo) y
+     * no en el descenso final de una emergencia, que ya aterriza. Ese último se
+     * mira por [enElDescensoDeEmergencia] y no por el estado: con el control
+     * tomado en el descenso el estado es MANUAL, y un `land` repetido le
+     * volvería a empezar la secuencia del aterrizaje al DJI. Cuando no se puede
+     * la consola se entera siempre, con un `DRONE_PROBLEM` «No se aterriza
+     * (…): …», como la toma del control que no se hace: antes dos de los tres
+     * casos quedaban en el registro del teléfono y el que apretó «Aterrizar»
+     * no sabía por qué no pasaba nada. Devuelve false.
+     */
+    private fun sePuedeAterrizarAca(orden: String): Boolean {
+        val porque = porQueNoSeTomaElControl() ?: when {
+            _state.value == PatrolState.RETURNING_HOME_SIGNAL -> "no hay señal con el dron: la orden no le llega, y vuelve solo"
+            enElDescensoDeEmergencia -> "el dron ya está bajando en el aterrizaje de emergencia"
+            else -> return true
+        }
+        report("DRONE_PROBLEM", "No se aterriza ($orden): $porque")
+        return false
+    }
+
+    /**
+     * El aterrizaje donde está que pide una persona, desde el teléfono
+     * ([aterrizar]) o desde la consola ([aterrizarPorLaConsola]), ya con el dron
+     * en el aire y pasadas las guardas de [sePuedeAterrizarAca]. Corta lo de la
+     * capa 4 (docs/VUELO.md §4): el objetivo, el relevo de B (`relay_abort`) o
+     * el pedido de A (`relay_abandon` con [motivoDelAbandono]), y un regreso de
+     * la app en curso —con el GoHome puesto el DJI no acepta otra orden, así
+     * que se lo corta ANTES, igual que al tomar el control—. Un desvío lo
+     * abandona la salida del regreso por batería ([pasarA]); las fotos de una
+     * emergencia las corta la salida de su estado, y el `emergency_landed` sale
+     * igual al tocar el suelo. El estado queda en MANUAL solo si el control está
+     * tomado y el dron ya estaba ahí: si no, en la pausa del aterrizaje.
+     */
+    private fun aterrizarDondeEsta(orden: String, motivoDelAbandono: String, alAceptarse: String) {
+        // En un regreso del propio DJI por batería este es el único corte del vuelo (RELEVOS §4).
+        val corte = corteParaLaOrden()
         ordenDeUnaPersona()
+        if (_state.value == PatrolState.PATROLLING) resumeWaypoint = proximoWaypoint
         // Bajar a B en medio de un relevo lo termina; a A, es soltar el objetivo antes de tiempo.
-        relevo?.let { abortarRelevo(it, "otro", "$by ordenó aterrizar desde la consola") }
-        abandonarRelevoDeSeguimiento("orden_del_operador")
-        terminarSeguimiento("$by ordenó aterrizar")
-        ordenarAterrizaje("Aterrizaje ordenado por $by desde el Comando Central: el dron aceptó y desciende donde está")
+        relevo?.let { abortarRelevo(it, "otro", orden) }
+        abandonarRelevoDeSeguimiento(motivoDelAbandono)
+        terminarSeguimiento(orden)
+        corte?.let(::cortarElRegreso)
+        if (!(controlTomado && _state.value == PatrolState.MANUAL)) pasarA(PatrolState.PAUSED)
+        ordenarAterrizaje(alAceptarse)
+    }
+
+    /** Volver a la base pedido desde la consola (`return_home`, docs/PROTOCOLS.md §2). */
+    private fun onReturnHome(by: String) = enSerie { volverABasePorLaConsola(by) }
+
+    /**
+     * `return_home` de la consola (docs/VUELO.md §7.1): como el «Volver a base»
+     * del teléfono ([volverABase]), corta todo lo de la capa 4 y el dron vuelve
+     * con `RETURNING_HOME`. Las diferencias son del lado del hub: la orden ya
+     * canceló el relevo como cualquier orden del operador ([ordenDelOperador]),
+     * y si el que ordena tenía el control el hub ya soltó su lock, así que la
+     * app lo suelta sola y SIN `control_dropped` (un aviso de más haría que el
+     * hub buscara un lock que ya no existe), aunque la orden no se cumpla: el
+     * hub lo soltó igual. Ya volviendo, en el suelo o sin señal no cambia nada
+     * más: solo queda en el registro. Con el dron bajando en el aterrizaje de
+     * emergencia no se cumple, y la consola se entera.
+     */
+    private fun volverABasePorLaConsola(by: String) {
+        // La orden cancela el relevo aunque no se pueda cumplir, como las demás de la consola.
+        ordenDelOperador()
+        val orden = "$by ordenó volver a la base desde el Comando Central"
+        // Antes de cualquier salida: si la app se quedara con el control, la
+        // consola seguiría pilotando un dron que el hub ya da por suelto.
+        soltarPorLaOrdenDeLaConsola(orden)
+        if (!controller.estado.value.enVuelo) {
+            // El registro antes que el estado: quien ve el reposo ya encuentra
+            // el porqué escrito.
+            log("${orden.replaceFirstChar { it.uppercase() }}, pero el dron está en el suelo: no hay a dónde volver")
+            // Suelto en el suelo, MANUAL ya no es de nadie: queda en reposo, como
+            // al soltar el control ahí (con la batería baja, por cambiar).
+            if (_state.value == PatrolState.MANUAL) {
+                if (bateriaParaDespegar() != null) bateriaPorCambiar = true
+                pasarA(enReposo())
+            }
+            return
+        }
+        if (enElDescensoDeEmergencia) {
+            // Suelto bajando, queda en la pausa del aterrizaje, como al soltarlo ahí.
+            if (_state.value == PatrolState.MANUAL) pasarA(PatrolState.PAUSED)
+            seCumpleLaOrden(orden)
+            return
+        }
+        if (_state.value in ESTADOS_DE_REGRESO) {
+            log("${orden.replaceFirstChar { it.uppercase() }}, pero el dron ya está volviendo (${_state.value}): no cambia nada")
+            return
+        }
+        ordenDeUnaPersona()
+        if (_state.value == PatrolState.PATROLLING) resumeWaypoint = proximoWaypoint
+        terminarSeguimiento(orden)
+        regresar("Volver a la base ordenado por $by desde el Comando Central", PatrolState.RETURNING_HOME)
+    }
+
+    /**
+     * El control manual se suelta por una orden de la consola que ya soltó el
+     * lock del lado del hub (`return_home`, docs/VUELO.md §7.1): sin
+     * `control_dropped`, que es para cuando el hub todavía cree que alguien lo
+     * tiene. Las marcas del mando se limpian acá aunque [pasarA] lo haga al
+     * salir de MANUAL: el control puede estar tomado con el dron en otro estado.
+     * Si el hub pregunta igual al reconectarse, [porQueLoSoltoLaApp] le cuenta.
+     */
+    private fun soltarPorLaOrdenDeLaConsola(orden: String) {
+        if (!controlTomado) return
+        controlTomado = false
+        titularDelControl = null
+        porQueLoSoltoLaApp = orden
+        synchronized(cerrojoDelMando) {
+            ultimoMandoMs = 0L
+            ultimoMandoEstacionario = true
+            saltoManualEnCurso = false
+        }
+        log("El control manual queda suelto: el Comando Central ya soltó el lock con la orden")
     }
 
     /**
@@ -1931,7 +2397,7 @@ class PatrolManager(
      */
     private fun ordenarAterrizaje(alAceptarse: String?) {
         synchronized(cerrojoDelMando) {
-            aterrizajeEnCurso = AterrizajeEnCurso(alAceptarse)
+            aterrizajeEnCurso = AterrizajeEnCurso(alAceptarse, reloj())
             ultimoMandoMs = 0L
             ultimoMandoEstacionario = true
             saltoManualEnCurso = false
@@ -1966,7 +2432,7 @@ class PatrolManager(
             return
         }
         synchronized(cerrojoDelMando) {
-            aterrizajeEnCurso = AterrizajeEnCurso(null).also { it.aceptado = true }
+            aterrizajeEnCurso = AterrizajeEnCurso(null, reloj()).also { it.aceptado = true }
         }
         log("El dron aceptó el aterrizaje de emergencia: desciende donde está")
     }
@@ -1980,8 +2446,7 @@ class PatrolManager(
      */
     private fun alNoPoderAterrizar(motivo: String) {
         olvidarElAterrizaje()
-        anotarElAviso(motivo, System.currentTimeMillis())
-        report("DRONE_PROBLEM", textoDelProblema(motivo))
+        avisarSiempre(motivo)
     }
 
     /** El aterrizaje terminó (o lo tomó el propio dron): la app vuelve a tener el mando. */
@@ -2273,6 +2738,9 @@ class PatrolManager(
         // La batería ya lo mandó a casa y una persona tomó el control en el
         // medio: el dron es suyo mientras lo tenga (ver regresoPorBateriaOrdenado).
         if (regresoPorBateriaOrdenado && controlTomado && _state.value == PatrolState.MANUAL) return
+        // Lo mismo si la persona al lado del dron le cortó ese regreso con las
+        // palancas del control: pedirlo otra vez era pelearle el dron en lazo.
+        if (regresoPorBateriaOrdenado && regresoCortadoConLasPalancas) return
         // Siguiendo un objetivo con el relevo en camino, A puede estirar un
         // poco (la ventana de gracia); si no, suelta y vuelve.
         if (sigueEnLaVentana(t)) return
@@ -2357,6 +2825,7 @@ class PatrolManager(
                 // una sola vez, y lo que el DJI hizo en el vuelo anterior ya no cuenta.
                 apagarEspera("el dron despegó")
                 tomaDelDron = null
+                corteDelRegreso = null
                 regresoDelDjiCortado = false
                 regresoPorBateriaOrdenado = false
                 olvidarElAterrizaje()
@@ -2435,23 +2904,133 @@ class PatrolManager(
      * TRANSICIÓN y no por intento: el controlador reintenta en cada vuelta de su
      * lazo de 10 Hz y el mismo rechazo llegaba diez veces por segundo, cada una
      * una fila en `events` y un broadcast a cada consola (ver
-     * hayQueAvisarElProblema()). La excepción es el aterrizaje que no se pudo,
-     * que sale siempre ([alNoPoderAterrizar]).
+     * hayQueAvisarElProblema()). Las excepciones son las respuestas definitivas
+     * a una orden —el aterrizaje, el regreso y el corte del regreso que no se
+     * pudieron—, que salen siempre ([alNoPoderAterrizar], [alNoPoderVolver],
+     * [alNoCortarseElRegreso]), y el regreso que la persona al lado del dron
+     * cortó con las palancas, que no es un problema sino su aviso propio
+     * ([alCortarseElRegresoConLasPalancas]).
      */
     private fun alAvisarUnProblema(motivo: String) {
         if (motivo.startsWith(DroneController.NO_SE_PUDO_ATERRIZAR)) {
             alNoPoderAterrizar(motivo)
             return
         }
+        if (motivo.startsWith(DroneController.NO_SE_PUDO_VOLVER)) {
+            alNoPoderVolver(motivo)
+            return
+        }
+        if (motivo.startsWith(DroneController.REGRESO_CORTADO_EN_EL_CONTROL)) {
+            alCortarseElRegresoConLasPalancas(motivo)
+            return
+        }
         // B despegando para un relevo: un rechazo es la subida que falló.
         // Salvo con el control tomado: ahí lo rechazado puede ser una
         // palanca de la persona, y aterrizarlo sería sacarle el dron.
         relevo?.let { if (it.fase == FaseDelRelevo.DESPEGANDO && !controlTomado) fallaLaSubida(it, motivo) }
-        if (motivo.startsWith(DroneController.NO_SE_CORTO_EL_REGRESO)) alNoCortarseElRegreso()
+        if (motivo.startsWith(DroneController.NO_SE_CORTO_EL_REGRESO)) {
+            avisarSiempre(motivo)
+            alNoCortarseElRegreso()
+            return
+        }
         val ahora = System.currentTimeMillis()
         if (!hayQueAvisarElProblema(motivo, ultimoProblemaAvisado, ahora, ultimoProblemaAvisadoMs, problemasEnLaVentana)) return
         anotarElAviso(motivo, ahora)
         report("DRONE_PROBLEM", textoDelProblema(motivo))
+    }
+
+    /**
+     * El regreso a base no arrancó (DroneController.NO_SE_PUDO_VOLVER,
+     * docs/VUELO.md §7.2): el GoHome no salió de IDLE después de los reintentos
+     * del controlador. El aviso sale SIEMPRE, como el del aterrizaje: es la
+     * respuesta definitiva a una orden, y en el campo un GoHome pisado quedaba
+     * mudo. Si el regreso era el de la app y la app sigue con el vuelo, el dron
+     * pasa a PAUSED estacionario, a la espera de otra orden —nadie sabe por qué
+     * no volvió, y seguir mandándole la misma orden a ciegas no es volver—. Con
+     * la batería en el umbral la telemetría siguiente lo vuelve a mandar a casa
+     * (el regreso a tiempo manda, RELEVOS §1), así que el intento se repite al
+     * ritmo de los reintentos del controlador, con su aviso cada vez. Un desvío
+     * o una emergencia en curso no usan el GoHome, y con una toma de la capa 1
+     * ([dronAlMando]: su regreso, el del botón del control, su aterrizaje por
+     * batería crítica) el vuelo no es de la app: ahí solo se avisa, sin
+     * estacionario ni cambio de estado. En la pausa, el auto siguiente no lo
+     * pone a orbitar ([esperandoOrdenTrasElRegreso]): espera a una persona.
+     *
+     * Con el control tomado —el regreso por batería que saltó en MANUAL— el
+     * dron vuelve a manos de la persona, en MANUAL: en PAUSED la vista de
+     * pilotaje seguiría abierta con las palancas mudas, que es justo lo que
+     * pasó en el campo (VUELO §0). Mientras lo tenga, la batería no se lo
+     * vuelve a sacar ([regresoPorBateriaOrdenado]); al soltarlo, sí.
+     */
+    private fun alNoPoderVolver(motivo: String) {
+        avisarSiempre(motivo)
+        // La emergencia en curso ya la excluye el estado (ATERRIZAJE_EMERGENCIA no
+        // es un regreso de la app); una que una persona cortó en sus fotos no
+        // cuenta: el GoHome que no arrancó es el de ahora.
+        if (!controller.estado.value.enVuelo || dronAlMando || desvio != null) return
+        if (_state.value !in ESTADOS_CON_EL_REGRESO_DE_LA_APP) return
+        if (controlTomado) {
+            // El estacionario antes de abrir la puerta del mando, como al tomar
+            // el control: si no, el primer mando del operador se lo come.
+            controller.hold()
+            pasarA(PatrolState.MANUAL)
+            log("El regreso a la base no arrancó: el dron queda estacionario y en manos de ${titularDelControl ?: "quien tiene el control"}")
+            return
+        }
+        pasarA(PatrolState.PAUSED)
+        controller.hold()
+        esperandoOrdenTrasElRegreso = true
+        log("El regreso a la base no arrancó: el dron queda en vuelo estacionario a la espera de otra orden")
+    }
+
+    /**
+     * Una respuesta definitiva a una orden (un aterrizaje, un regreso o el corte
+     * de un regreso que no se pudieron): sale siempre, sin el filtro de
+     * repetidos ni el techo por minuto, que son para los rechazos de 10 Hz.
+     * Queda anotada igual, así la ventana del filtro la cuenta.
+     */
+    private fun avisarSiempre(motivo: String) {
+        anotarElAviso(motivo, System.currentTimeMillis())
+        report("DRONE_PROBLEM", textoDelProblema(motivo))
+    }
+
+    /**
+     * Alguien movió las palancas del RC-N3 con un regreso de la app en curso y
+     * el DJI lo dejó (DroneController.REGRESO_CORTADO_EN_EL_CONTROL): es la
+     * persona al lado del dron tomándolo, la capa 2 de docs/VUELO.md §1, no una
+     * falla del regreso. La app no le da ninguna orden —un estacionario es el
+     * Virtual Stick, y se lo sacaría de las manos—: queda en la pausa con el
+     * mando en el control físico, sin objetivo, y la consola se entera siempre
+     * (`RTH_INTERRUPTED`, sin el filtro de repetidos). Desde acá una detección
+     * alerta sin seguimiento ([mandoEnElControlFisico]) y la batería no le
+     * vuelve a pelear ese regreso ([regresoCortadoConLasPalancas]). Si la
+     * consola tenía el control tomado lo pierde, como con el botón de regreso
+     * del control: manda el que está al lado del dron.
+     *
+     * Un aviso que llega sin un regreso de la app en curso (en el suelo, o con
+     * el estado ya en otra orden que cortó el GoHome antes) no cambia nada: el
+     * dron ya está haciendo otra cosa que alguien pidió.
+     */
+    private fun alCortarseElRegresoConLasPalancas(motivo: String) {
+        if (!controller.estado.value.enVuelo || desvio != null || _state.value !in ESTADOS_CON_EL_REGRESO_DE_LA_APP) {
+            log("El dron avisa que se cortó un regreso con las palancas del control ($motivo), pero no hay uno de la app en curso: no cambia nada")
+            return
+        }
+        log("El dron avisa: $motivo")
+        if (controlTomado) {
+            val motivoDelSoltar = "alguien tomó el dron con las palancas del control físico"
+            titularDelControl?.let { commandCenter.avisarControlSoltado(it, motivoDelSoltar) }
+            controlTomado = false
+            titularDelControl = null
+            // Si el hub igual pregunta al reconectarse, este es el porqué.
+            porQueLoSoltoLaApp = motivoDelSoltar
+        }
+        terminarSeguimiento("se cortó el regreso con las palancas del control físico")
+        // Sin frenar: la pausa de acá no es un estacionario de la app.
+        pasarA(PatrolState.PAUSED)
+        mandoEnElControlFisico = true
+        regresoCortadoConLasPalancas = true
+        report("RTH_INTERRUPTED", "El regreso a base se cortó con las palancas del control físico: el dron queda en manos de quien lo vuela al lado")
     }
 
     /**
@@ -2558,9 +3137,12 @@ class PatrolManager(
         val dron = controller.estado.value
         // Aterrizando no se sigue a nadie: la órbita le cortaría el aterrizaje.
         // Con el mando en el control físico tampoco: la órbita es el Virtual
-        // Stick, y le sacaría el dron a quien lo vuela con las palancas.
+        // Stick, y le sacaría el dron a quien lo vuela con las palancas. Ni con
+        // el vuelo en manos del propio DJI (le rechaza la órbita), ni en la pausa
+        // de un regreso que no arrancó, que espera la orden de una persona.
         val conSeguimiento = dron.enVuelo && !mejor.sinPosicion && pose.altM >= ALTURA_MINIMA_PARA_ALERTAR_M &&
-            estado in ESTADOS_QUE_SIGUEN && aterrizajeEnCurso == null && !mandoEnElControlFisico
+            estado in ESTADOS_QUE_SIGUEN && aterrizajeEnCurso == null && !mandoEnElControlFisico &&
+            !dronAlMando && !esperandoOrdenTrasElRegreso
         if (conSeguimiento) {
             iniciarSeguimiento(mejor, d, pose, ahora)
         } else {
@@ -2589,6 +3171,8 @@ class PatrolManager(
             !enVuelo -> "con el dron en el suelo"
             aterrizajeEnCurso != null -> "con el dron aterrizando"
             mandoEnElControlFisico -> "con el mando en el control físico"
+            dronAlMando -> "con el vuelo en manos del propio dron"
+            esperandoOrdenTrasElRegreso -> "con el dron a la espera de una orden tras el regreso que no arrancó"
             !pose.tienePosicion -> "sin GPS"
             pose.altM < ALTURA_MINIMA_PARA_ALERTAR_M -> "a baja altura (${pose.altM.toInt()} m)"
             p.sinPosicion -> "sin poder ubicarlo en el terreno (la cámara mira al horizonte o más arriba)"
@@ -2663,9 +3247,12 @@ class PatrolManager(
     private fun poseEn(ms: Long): Telemetry? = poses.minByOrNull { abs(it.ts - ms) }
 
     /**
-     * Arranca el seguimiento del objetivo [p]: orbitarlo, alertar al Comando
-     * Central con la captura anotada y quedar a la espera del alert_ack y de
-     * la decisión.
+     * Arranca el seguimiento del objetivo [p] con la reacción vigente
+     * (docs/VUELO.md §5: orbitarlo, orbitar el lugar, seguirlo o vigilarlo
+     * detenido), alertar al Comando Central con la captura anotada y quedar a
+     * la espera del alert_ack y de la decisión. El evento es `ORBIT_STARTED`
+     * en las cuatro reacciones —es el que el contrato nombra como el arranque
+     * del seguimiento— y el texto dice qué hace el dron.
      */
     private fun iniciarSeguimiento(p: Punto, d: Deteccion, pose: Telemetry, ahora: Long) {
         val nuevo = Seguimiento(RastreadorDeObjetivo(p.clase, p.lat, p.lon, ahora), UUID.randomUUID().toString(), p.lat, p.lon)
@@ -2675,13 +3262,20 @@ class PatrolManager(
         val distancia = Geo.distanciaM(pose.lat, pose.lon, p.lat, p.lon)
         val detectado = "Detección de ${p.clase} (confianza ${"%.2f".format(p.confianza)}) a ${distancia.toInt()} m"
         // En MANUAL no se llega acá (ver ESTADOS_SIN_ALERTAS): el dron está
-        // patrullando, en pausa o en un desvío, que son de la app, y pasa a orbitar.
+        // patrullando, en pausa o en un desvío, que son de la app, y pasa a
+        // ocuparse del objetivo.
         if (_state.value == PatrolState.PATROLLING) resumeWaypoint = proximoWaypoint
         // El estado antes que la orden, como en el resto de las transiciones
-        // (ver pasarA()): desde PAUSED o FORCED también se llega acá.
-        pasarA(PatrolState.ORBITING)
-        controller.startOrbit(p.lat, p.lon, ORBIT_RADIUS_M, velocidadDeOrbitaMs)
-        report("ORBIT_STARTED", "$detectado: el dron pasa a modo órbita sobre el objetivo", lat = p.lat, lon = p.lon)
+        // (ver pasarA()): desde PAUSED o FORCED también se llega acá. Lo hace
+        // reaccionar() con la estimación recién nacida (quieto, donde se lo vio).
+        val queHace = when (reaccion) {
+            ReaccionADeteccion.SEGUIR_Y_ORBITAR -> "el dron pasa a modo órbita sobre el objetivo"
+            ReaccionADeteccion.ORBITAR -> "el dron pasa a orbitar el lugar de la detección, sin seguirlo"
+            ReaccionADeteccion.SEGUIR -> "el dron pasa a seguirlo a ${Persecucion.DISTANCIA_M.toInt()} m, sin orbitar"
+            ReaccionADeteccion.DETENERSE -> "el dron se detiene donde está y lo vigila con la cámara"
+        }
+        reaccionar(nuevo, nuevo.rastreador.estimar(ahora))
+        report("ORBIT_STARTED", "$detectado: $queHace", lat = p.lat, lon = p.lon)
         // La captura es el cuadro anotado que disparó la detección; si el
         // detector no lo manda (el mock), el último cuadro que vio la consola.
         val snapshot = d.snapshotBase64 ?: lastFrame?.let { Base64.encodeToString(it, Base64.NO_WRAP) }
@@ -2709,46 +3303,159 @@ class PatrolManager(
     }
 
     /**
-     * Decide qué hace el dron con el objetivo: seguir orbitándolo, pasar a
-     * seguirlo porque se mueve, volver a orbitarlo porque se detuvo, o
-     * buscarlo donde se lo vio por última vez. Corre con cada detección y,
-     * por si dejan de llegar, cada [INTERVALO_SEGUIMIENTO_MS]. En MANUAL no
-     * comanda nada: el dron es del operador.
+     * Decide qué hace el dron con el objetivo según la reacción vigente
+     * ([reaccionar]) y avisa lo que le pasa al objetivo —se mueve, se detuvo, se
+     * perdió— en todas las reacciones: la consola cuenta con esos eventos para
+     * la historia de la alerta y para mandar gente, también cuando el dron no
+     * cambia de estado por ellos (docs/VUELO.md §5). Corre con cada detección
+     * y, por si dejan de llegar, cada [INTERVALO_SEGUIMIENTO_MS]; por eso un
+     * cambio de reacción con un objetivo en curso se aplica solo. En MANUAL (y
+     * en cualquier estado que no sea de seguimiento) no comanda nada: el dron
+     * es del operador, o de un regreso.
      */
     private fun evaluarSeguimiento(ahora: Long) {
         val s = seguimiento ?: return
-        val estado = _state.value
-        if (estado !in ESTADOS_DE_SEGUIMIENTO) return
+        if (_state.value !in ESTADOS_DE_SEGUIMIENTO) return
         val e = s.rastreador.estimar(ahora)
-        when {
-            e.perdido -> if (!s.perdidoAvisado) {
-                s.perdidoAvisado = true
-                if (estado == PatrolState.FOLLOWING) pasarA(PatrolState.ORBITING)
-                orbitar(s, e.lat, e.lon)
-                report(
-                    "TARGET_LOST",
-                    "Se perdió de vista al objetivo (${s.rastreador.clase}): el dron orbita su última posición " +
-                        "conocida, ${coordenadas(e.lat, e.lon)}",
-                    s.alertId, e.lat, e.lon,
-                )
+        if (e.perdido) {
+            // Perdido, una sola orden y un solo aviso: lo que siga lo decide volver
+            // a verlo, o un cambio de la reacción, que vuelve a dar la orden del
+            // perdido con la nueva (sin otro TARGET_LOST: sigue perdido).
+            when {
+                !s.perdidoAvisado -> perderDeVista(s, e)
+                s.reaccionAplicada != reaccion ->
+                    log("Reacción nueva con el objetivo perdido de vista (${reaccion.enElProtocolo}): ${ordenarSinElObjetivo(s, e)}")
             }
-            estado == PatrolState.ORBITING && e.enMovimiento -> {
-                pasarA(PatrolState.FOLLOWING)
-                controller.seguirObjetivo(e.lat, e.lon, e.vNorteMs, e.vEsteMs)
-                report(
-                    "TARGET_MOVING",
-                    "El objetivo se mueve (${"%.1f".format(e.velocidadMs)} m/s, rumbo ${e.rumboGrados.toInt()}°): " +
-                        "el dron deja la órbita y lo sigue",
-                    s.alertId, e.lat, e.lon,
-                )
+            return
+        }
+        val cambioElMovimiento = e.enMovimiento != s.enMovimientoAvisado
+        s.enMovimientoAvisado = e.enMovimiento
+        reaccionar(s, e)
+        if (cambioElMovimiento) avisarElMovimiento(s, e)
+    }
+
+    /**
+     * El estado y la orden que le corresponden a la estimación [e] con la
+     * reacción vigente (la tabla de docs/VUELO.md §5). Es idempotente: si el
+     * dron ya está en el estado que toca, solo renueva la orden que lo necesita
+     * (seguir y vigilar se piden con cada estimación; la órbita, cuando el
+     * centro se corre). Por eso sirve igual para la confirmación, para cada
+     * evaluación y para volver al objetivo: el estado que haya es el punto de
+     * partida, sea de una reacción anterior, de MANUAL o de un relevo.
+     *
+     *  - `seguir_y_orbitar` (lo de siempre): lo orbita; si se mueve lo sigue, si
+     *    se detiene vuelve a orbitarlo donde quedó, y la órbita acompaña una
+     *    estimación quieta que se corre más de [DERIVA_DE_ORBITA_M].
+     *  - `orbitar`: orbita el lugar de la detección, con el centro FIJO en el
+     *    origen; nunca lo sigue, y un centro que una reacción anterior hubiera
+     *    corrido vuelve al origen.
+     *  - `seguir`: lo sigue a [Persecucion.DISTANCIA_M], quieto o en movimiento;
+     *    nunca orbita.
+     *  - `detenerse`: queda VIGILANDO donde está, con la nariz y la cámara en la
+     *    estimación, sin desplazarse.
+     */
+    private fun reaccionar(s: Seguimiento, e: RastreadorDeObjetivo.Estimacion) {
+        when (reaccion) {
+            ReaccionADeteccion.SEGUIR_Y_ORBITAR -> when {
+                e.enMovimiento -> seguirA(e)
+                _state.value != PatrolState.ORBITING -> orbitarEn(s, e.lat, e.lon)
+                Geo.distanciaM(s.centroLat, s.centroLon, e.lat, e.lon) > DERIVA_DE_ORBITA_M -> orbitar(s, e.lat, e.lon)
             }
-            estado == PatrolState.FOLLOWING && !e.enMovimiento -> {
-                pasarA(PatrolState.ORBITING)
-                orbitar(s, e.lat, e.lon)
-                report("TARGET_STOPPED", "El objetivo se detuvo: el dron vuelve a orbitarlo donde quedó", s.alertId, e.lat, e.lon)
+            ReaccionADeteccion.ORBITAR ->
+                if (_state.value != PatrolState.ORBITING || s.centroLat != s.origenLat || s.centroLon != s.origenLon) {
+                    orbitarEn(s, s.origenLat, s.origenLon)
+                }
+            ReaccionADeteccion.SEGUIR -> seguirA(e)
+            ReaccionADeteccion.DETENERSE -> vigilarA(e)
+        }
+        s.reaccionAplicada = reaccion
+    }
+
+    /** Pasa a ORBITING (si no estaba) y centra la órbita en (lat, lon). El estado antes que la orden, como siempre. */
+    private fun orbitarEn(s: Seguimiento, lat: Double, lon: Double) {
+        if (_state.value != PatrolState.ORBITING) pasarA(PatrolState.ORBITING)
+        orbitar(s, lat, lon)
+    }
+
+    /** Pasa a FOLLOWING (si no estaba) y le da al dron la estimación a seguir. */
+    private fun seguirA(e: RastreadorDeObjetivo.Estimacion) {
+        if (_state.value != PatrolState.FOLLOWING) pasarA(PatrolState.FOLLOWING)
+        controller.seguirObjetivo(e.lat, e.lon, e.vNorteMs, e.vEsteMs)
+    }
+
+    /** Pasa a VIGILANDO (si no estaba) y le da al dron el punto al que mirar, sin moverse. */
+    private fun vigilarA(e: RastreadorDeObjetivo.Estimacion) {
+        if (_state.value != PatrolState.VIGILANDO) pasarA(PatrolState.VIGILANDO)
+        controller.vigilar(e.lat, e.lon)
+    }
+
+    /**
+     * Hace [RastreadorDeObjetivo.SIN_VER_PARA_PERDIDO_MS] que no se ve al
+     * objetivo: según la reacción, el dron orbita su última posición conocida,
+     * sigue orbitando el lugar, se queda a la distancia de seguimiento de la
+     * última estimación (sin la velocidad: extrapolarla sería irse) o queda
+     * mirándola; y se avisa `TARGET_LOST` con esa posición.
+     */
+    private fun perderDeVista(s: Seguimiento, e: RastreadorDeObjetivo.Estimacion) {
+        s.perdidoAvisado = true
+        val queHace = ordenarSinElObjetivo(s, e)
+        report(
+            "TARGET_LOST",
+            "Se perdió de vista al objetivo (${s.rastreador.clase}): $queHace, ${coordenadas(e.lat, e.lon)}",
+            s.alertId, e.lat, e.lon,
+        )
+    }
+
+    /**
+     * La orden con el objetivo perdido de vista según la reacción vigente (la
+     * última columna de la tabla de docs/VUELO.md §5), anotada como la
+     * aplicada; devuelve qué hace el dron, para el aviso.
+     */
+    private fun ordenarSinElObjetivo(s: Seguimiento, e: RastreadorDeObjetivo.Estimacion): String {
+        val queHace = when (reaccion) {
+            ReaccionADeteccion.SEGUIR_Y_ORBITAR -> {
+                orbitarEn(s, e.lat, e.lon)
+                "el dron orbita su última posición conocida"
             }
-            estado == PatrolState.FOLLOWING -> controller.seguirObjetivo(e.lat, e.lon, e.vNorteMs, e.vEsteMs)
-            Geo.distanciaM(s.centroLat, s.centroLon, e.lat, e.lon) > DERIVA_DE_ORBITA_M -> orbitar(s, e.lat, e.lon)
+            ReaccionADeteccion.ORBITAR -> {
+                reaccionar(s, e)
+                "el dron sigue orbitando el lugar de la detección"
+            }
+            ReaccionADeteccion.SEGUIR -> {
+                seguirA(e.copy(vNorteMs = 0.0, vEsteMs = 0.0))
+                "el dron se queda a ${Persecucion.DISTANCIA_M.toInt()} m de su última posición conocida"
+            }
+            ReaccionADeteccion.DETENERSE -> {
+                vigilarA(e)
+                "el dron queda mirando su última posición conocida"
+            }
+        }
+        s.reaccionAplicada = reaccion
+        return queHace
+    }
+
+    /** El objetivo empezó a moverse o se detuvo: `TARGET_MOVING` o `TARGET_STOPPED`, con lo que hace el dron según la reacción. */
+    private fun avisarElMovimiento(s: Seguimiento, e: RastreadorDeObjetivo.Estimacion) {
+        if (e.enMovimiento) {
+            val queHace = when (reaccion) {
+                ReaccionADeteccion.SEGUIR_Y_ORBITAR -> "el dron deja la órbita y lo sigue"
+                ReaccionADeteccion.ORBITAR -> "el dron sigue orbitando el lugar de la detección, sin seguirlo"
+                ReaccionADeteccion.SEGUIR -> "el dron lo sigue a ${Persecucion.DISTANCIA_M.toInt()} m"
+                ReaccionADeteccion.DETENERSE -> "el dron lo vigila con la nariz y la cámara desde donde está, sin moverse"
+            }
+            report(
+                "TARGET_MOVING",
+                "El objetivo se mueve (${"%.1f".format(e.velocidadMs)} m/s, rumbo ${e.rumboGrados.toInt()}°): $queHace",
+                s.alertId, e.lat, e.lon,
+            )
+        } else {
+            val queHace = when (reaccion) {
+                ReaccionADeteccion.SEGUIR_Y_ORBITAR -> "el dron vuelve a orbitarlo donde quedó"
+                ReaccionADeteccion.ORBITAR -> "el dron sigue orbitando el lugar de la detección"
+                ReaccionADeteccion.SEGUIR -> "el dron se queda a ${Persecucion.DISTANCIA_M.toInt()} m, quieto"
+                ReaccionADeteccion.DETENERSE -> "el dron sigue vigilándolo desde donde está"
+            }
+            report("TARGET_STOPPED", "El objetivo se detuvo: $queHace", s.alertId, e.lat, e.lon)
         }
     }
 
@@ -2759,17 +3466,43 @@ class PatrolManager(
         controller.startOrbit(lat, lon, ORBIT_RADIUS_M, velocidadDeOrbitaMs)
     }
 
-    /** Vuelve al objetivo después de un control manual: orbitarlo o seguirlo, según se mueva. */
+    /**
+     * Vuelve al objetivo después de un control manual, o lo toma al completar
+     * un relevo (RELEVOS §3.5): con la reacción vigente ([reaccionar]). Un
+     * objetivo perdido de vista mientras tanto se toma como quieto en su última
+     * estimación —extrapolarle una velocidad vieja sería irse—; el `TARGET_LOST`
+     * lo avisa la evaluación siguiente, como siempre. Lo que se sabe de su
+     * movimiento ya no es noticia: no sale un `TARGET_MOVING` por volver.
+     */
     private fun volverAlObjetivo(s: Seguimiento, motivo: String) {
         val e = s.rastreador.estimar(reloj())
-        if (e.enMovimiento && !e.perdido) {
-            pasarA(PatrolState.FOLLOWING)
-            controller.seguirObjetivo(e.lat, e.lon, e.vNorteMs, e.vEsteMs)
-        } else {
-            pasarA(PatrolState.ORBITING)
-            orbitar(s, e.lat, e.lon)
-        }
+        s.enMovimientoAvisado = e.enMovimiento
+        reaccionar(s, if (e.perdido) e.copy(enMovimiento = false, vNorteMs = 0.0, vEsteMs = 0.0) else e)
         report("TRACKING_RESUMED", motivo, s.alertId, e.lat, e.lon)
+    }
+
+    /**
+     * El dron deja un objetivo para volver a volar solo (docs/VUELO.md §6): un
+     * descarte, reanudar, otra ruta o un desvío con un objetivo en curso. Desde
+     * acá y durante [silencioAlRetomarMs] las detecciones solo dibujan sus
+     * cajas: ni candidata ni alerta (ver [detectar]), así el dron pasa de largo
+     * la playa de estacionamiento en vez de parar en cada auto. Se llama ANTES
+     * de [terminarSeguimiento], que es el que borra el objetivo; sin objetivo
+     * —una ruta nueva desde la pausa, la señal que vuelve— no hay nada que
+     * dejar y no empieza. Con 0 s no hay silencio (las zonas descartadas siguen
+     * valiendo). Un regreso o un aterrizaje no pasan por acá: ahí no se alerta
+     * de todos modos, y el silencio es para el que sigue volando solo.
+     */
+    private fun silenciarAlDejarElObjetivo(porque: String) {
+        if (seguimiento == null && _state.value !in ESTADOS_DE_SEGUIMIENTO) return
+        val duracion = silencioAlRetomarMs
+        if (duracion <= 0L) return
+        val hasta = reloj() + duracion
+        // El descarte arranca el silencio y enseguida reanuda la ruta con el
+        // estado todavía en el seguimiento: el mismo silencio no se anota dos veces.
+        if (silencioHastaMs >= hasta) return
+        silencioHastaMs = hasta
+        log("$porque: durante ${duracion / 1_000} s lo que vea el detector solo se marca en el video, sin alertar")
     }
 
     /**
@@ -2859,7 +3592,9 @@ class PatrolManager(
             // la estimación vuelven a alertar por un rato (ver ZonasDescartadas).
             zonasDescartadas.agregar(e.lat, e.lon, ahora)
             zonasDescartadas.agregar(s.origenLat, s.origenLon, ahora)
-            silencioHastaMs = ahora + SILENCIO_TRAS_DESCARTE_MS
+            // El silencio es para el que vuelve a volar solo: B, que no tiene
+            // ruta y vuelve a su base, no alerta de todos modos.
+            if (!s.adoptado) silenciarAlDejarElObjetivo("Alerta descartada por $decidedBy")
             // El hub cancela por su cuenta el relevo de una alerta descartada:
             // A solo lo olvida (no hay nada que abandonar).
             pedidos.remove(PedidoDeRelevo.SEGUIMIENTO)
@@ -2877,6 +3612,13 @@ class PatrolManager(
             // Con el control tomado el dron sigue siendo del operador; si no,
             // retoma la ruta hacia el nodo que tenía por delante.
             if (_state.value in ESTADOS_DE_SEGUIMIENTO) resumePatrol("alerta descartada por $decidedBy")
+            // Sin un patrullaje en curso que retomar (el de un «Despegar aquí»,
+            // uno que ya terminó) el dron seguía orbitando, siguiendo o mirando el
+            // auto descartado sin un objetivo que lo explicara: queda quieto ahí.
+            if (_state.value in ESTADOS_DE_SEGUIMIENTO) {
+                pasarA(PatrolState.PAUSED, frenar = true)
+                report("PATROL_STOPPED", "La alerta se descartó y no hay un patrullaje en curso que retomar: el dron queda en vuelo estacionario")
+            }
         } else if (decision == "VALIDATED") {
             // Alerta real: el dron sigue sobre el objetivo hasta que el
             // operador ordene reanudar desde la consola
@@ -2912,7 +3654,9 @@ class PatrolManager(
 
     private fun reanudarPorLaConsola(fromIndex: Int?) {
         ordenDelOperador()
-        if (!volverSiNoTieneRutaPropia("el operador ordenó reanudar")) resumePatrol("orden del operador", fromIndex)
+        val orden = "el operador ordenó reanudar"
+        if (!seCumpleLaOrden(orden, sinSenial = true)) return
+        if (!volverSiNoTieneRutaPropia(orden)) resumePatrol("orden del operador", fromIndex)
     }
 
     /**
@@ -2946,6 +3690,10 @@ class PatrolManager(
         // Los caminos automáticos (la señal que vuelve, una alerta descartada)
         // no llegan acá con un aterrizaje en curso: el que llega es una persona.
         soltarElAterrizaje("Se reanudó el patrullaje ($reason)")
+        // Reanudar con un objetivo en curso —validado o sin decidir— es dejarlo
+        // para volver a volar solo: empieza el silencio (el descarte ya lo
+        // arrancó antes de llegar acá, con el objetivo ya cerrado).
+        silenciarAlDejarElObjetivo("Se reanudó el patrullaje con un objetivo en curso ($reason)")
         terminarSeguimiento("se reanudó el patrullaje ($reason)")
         val desde = (fromIndex ?: resumeWaypoint).coerceIn(0, r.waypoints.size - 1)
         resumeWaypoint = desde
@@ -3140,6 +3888,8 @@ class PatrolManager(
         tomaDelDron = null
         // La orden es de una persona que eligió volver a darle órdenes al dron.
         mandoEnElControlFisico = false
+        regresoCortadoConLasPalancas = false
+        esperandoOrdenTrasElRegreso = false
     }
 
     /** Fuera de un desvío o de una emergencia, el DJI conserva su regreso propio y su failsafe de fábrica. */
@@ -4103,7 +4853,10 @@ class PatrolManager(
      * cualquier otro: el regreso a tiempo manda.
      */
     private fun revisarRegreso(t: Telemetry) {
-        if (emergencia != null || !controller.estado.value.enVuelo) return
+        // Sin mirar la emergencia: una en curso tiene su estado, que no es un
+        // regreso; una que una persona cortó en sus fotos tiene que poder volver
+        // a armarse si la batería sigue sin alcanzar (ver iniciarUltimaUbicacion()).
+        if (!controller.estado.value.enVuelo) return
         when (_state.value) {
             PatrolState.RETURNING_HOME_BATTERY -> Unit
             PatrolState.RETURNING_HOME -> if (!(t.batteryPct <= Autonomia.umbralDeRegreso(t.pctParaVolver))) return
@@ -4142,7 +4895,7 @@ class PatrolManager(
         if (toma != MotivoDelDron.RTH_BATERIA || regresoDelDjiCortado) return null
         regresoDelDjiCortado = true
         tomaDelDron = null
-        controller.cancelarRegreso()
+        cortarElRegreso(null)
         log("El dron venía en su propio regreso por batería: se lo corta, una sola vez, para elegir dónde bajar")
         return true
     }
@@ -4168,7 +4921,7 @@ class PatrolManager(
         if (primero) {
             controller.permitirRthPropioPorBateria(false)
             // El regreso que pidió la app (el del DJI, si hacía falta, ya se cortó).
-            if (!cortadoRecien) controller.cancelarRegreso()
+            if (!cortadoRecien) cortarElRegreso(null)
             controller.fijarFailsafeAterrizar(true)
         }
         val (lat, lon) = Autonomia.puntoDeVisitantes(base)
@@ -4291,8 +5044,15 @@ class PatrolManager(
      * del DJI, el desvío se deja (vuelve el failsafe de fábrica: el dron va para
      * su casa de todos modos) y la secuencia de la emergencia sigue solo con la
      * cámara. Si no llega, su aterrizaje forzado corre el §5 sin vuelo.
+     *
+     * Si el corte lo pidió una persona para su orden ([corteDelRegreso]), esa
+     * orden tampoco corre: la app vuelve al regreso que había
+     * ([volverAlRegresoQueNoSeCorto]). El `DRONE_PROBLEM` ya salió, siempre
+     * (ver [alAvisarUnProblema]).
      */
     private fun alNoCortarseElRegreso() {
+        val corte = corteDelRegreso
+        corteDelRegreso = null
         if (!controller.estado.value.enVuelo) return
         regresoDelDjiCortado = true
         // El vuelo es del dron hasta tocar tierra o hasta una orden de una
@@ -4301,7 +5061,28 @@ class PatrolManager(
         tomaDelDron = MotivoDelDron.RTH_BATERIA
         aviso("El dron no aceptó cortar su regreso a base: sigue volviendo y la app no le da más órdenes de vuelo")
         abandonarElDesvio("No se cortó el regreso")
+        corte?.let(::volverAlRegresoQueNoSeCorto)
         emergencia?.let { iniciarUltimaUbicacion("autonomia", conControl = false) }
+    }
+
+    /**
+     * El regreso que una persona cortó para su orden ([corte]) sigue: la orden
+     * quedó descartada y el estado vuelve a decir lo que hace el dron. Si la
+     * orden era tomar el control, la toma se deshace como cualquier toma que no
+     * se hace —`control_dropped` y `DRONE_PROBLEM`—: dejarla era dejar a la
+     * consola en MANUAL con las palancas mudas y el dron yéndose a su casa
+     * (docs/VUELO.md §0). Un aterrizaje ordenado desde el corte (el del `land`
+     * que lo pidió, o uno con el control tomado) tampoco va a salir.
+     */
+    private fun volverAlRegresoQueNoSeCorto(corte: CorteDelRegreso) {
+        if (corte.porLaToma && controlTomado) {
+            titularDelControl?.let { rechazarLaToma(it, "el dron no aceptó cortar el regreso: sigue volviendo") }
+            controlTomado = false
+            titularDelControl = null
+        }
+        olvidarElAterrizaje()
+        if (_state.value != corte.regreso) pasarA(corte.regreso)
+        log("La orden que cortaba el regreso queda descartada: el dron sigue volviendo (${corte.regreso})")
     }
 
     // ---- El protocolo de última ubicación (RELEVOS §5) ----
@@ -4327,7 +5108,7 @@ class PatrolManager(
             return false
         }
         if (!cortadoRecien && desvio == null && _state.value in ESTADOS_CON_EL_REGRESO_DE_LA_APP) {
-            controller.cancelarRegreso()
+            cortarElRegreso(null)
             log("La batería ya no alcanza para ninguna base: se corta el regreso para bajar acá")
         }
         iniciarUltimaUbicacion("autonomia", conControl = true)
@@ -4340,10 +5121,18 @@ class PatrolManager(
      * (`rth_diverted` con `emergencia`, y `emergency_landing` por la cola
      * persistente), fija la posición en la pantalla y corre la secuencia de
      * fotos: con el vuelo si la app lo tiene, solo la cámara si no.
+     *
+     * Una emergencia que una persona cortó en sus fotos —tomó el control,
+     * aterrizó, dio otra orden de vuelo— queda abierta con el dron en otro
+     * estado; si la batería (o el propio DJI) la vuelve a pedir, es la MISMA:
+     * con su `ref` y su cola, vuelve a su estado y sigue con las fotos que
+     * faltaban ([EmergenciaEnCurso.sacadas]). Antes esto volvía sin hacer
+     * nada, [regresar] la daba por resuelta y el dron se quedaba en la pausa
+     * con la batería en el piso.
      */
     private fun iniciarUltimaUbicacion(motivo: String, conControl: Boolean) {
         val actual = emergencia
-        if (actual != null) {
+        if (actual != null && _state.value == PatrolState.ATERRIZAJE_EMERGENCIA) {
             // Ya en curso: si el DJI tomó el vuelo, sigue solo con la cámara.
             if (!conControl && actual.conControl) {
                 actual.conControl = false
@@ -4363,22 +5152,30 @@ class PatrolManager(
         desvio = null
         val p = pedidos[PedidoDeRelevo.PATRULLA]
         p?.fase = FaseDelOrigen.DESVIADO
+        // Retomada, también: el hub tiene que saber que vuelve a bajar acá.
         val desviado = MensajesDeLaApp.rthDiverted(p?.relayId, null, lat, lon, "emergencia")
         rthDivertedVigente = desviado
         commandCenter.enviar(desviado)
-        val e = EmergenciaEnCurso(UUID.randomUUID().toString(), conControl)
-        emergencia = e
-        cola.abrir(
-            MensajesDeLaApp.emergencyLanding(e.ref, motivo, lat, lon, alt, lastTelemetry?.batteryPct ?: 0.0, horaDelTelefono()),
-        )
-        enviarLaCola()
+        val e = actual ?: EmergenciaEnCurso(UUID.randomUUID().toString(), conControl).also {
+            emergencia = it
+            cola.abrir(
+                MensajesDeLaApp.emergencyLanding(it.ref, motivo, lat, lon, alt, lastTelemetry?.batteryPct ?: 0.0, horaDelTelefono()),
+            )
+            enviarLaCola()
+        }
+        e.conControl = conControl
         val conPosicion = Geo.esPosicionValida(lat, lon)
         if (conPosicion) _ultimaUbicacion.value = UbicacionFijada(lat, lon, alt, aterrizado = false)
         pasarA(PatrolState.ATERRIZAJE_EMERGENCIA)
+        val donde = if (conPosicion) coordenadas(lat, lon) else "una posición sin GPS"
         report(
             "LANDING",
             (if (porAutonomia) "La batería ya no alcanza para ninguna base" else "El propio dron fuerza el aterrizaje por batería crítica") +
-                ": aterrizaje de emergencia en ${if (conPosicion) coordenadas(lat, lon) else "una posición sin GPS"}, con fotos del lugar",
+                if (actual == null) {
+                    ": aterrizaje de emergencia en $donde, con fotos del lugar"
+                } else {
+                    ": se retoma el aterrizaje de emergencia en $donde, con las fotos que faltaban"
+                },
             lat = lat.takeIf { conPosicion },
             lon = lon.takeIf { conPosicion },
         )
@@ -4400,6 +5197,8 @@ class PatrolManager(
             dron = controller,
             telemetria = { lastTelemetry },
             sigue = sigue,
+            // Retomada después de que una persona la cortó: las que ya salieron no se repiten.
+            yaSacada = { it in e.sacadas },
             alcanzaParaOtroPaso = ::alcanzaParaOtroPaso,
             alFotografiar = { foto -> enSerie { alFotografiar(e, foto) } },
             reloj = reloj,
@@ -4441,6 +5240,7 @@ class PatrolManager(
                 t?.lat ?: Double.NaN, t?.lon ?: Double.NaN, t?.altM ?: 0.0, jpeg, horaDelTelefono(),
             ),
         )
+        e.sacadas = e.sacadas + foto.seq
         log("Foto ${foto.tipo} (${foto.seq + 1}) del lugar del aterrizaje de emergencia")
         enviarLaCola()
     }
@@ -4511,6 +5311,7 @@ class PatrolManager(
         cerrarLaVentana()
         soltando = null
         tomaDelDron = null
+        corteDelRegreso = null
         regresoDelDjiCortado = false
         regresoPorBateriaOrdenado = false
         volverAlRecuperarLaSenial = false
@@ -4544,7 +5345,7 @@ class PatrolManager(
         val d = desvio
         if (motivo == MotivoDelDron.RTH_BATERIA && d != null && !d.llego && !regresoDelDjiCortado && !dronAlMando) {
             regresoDelDjiCortado = true
-            controller.cancelarRegreso()
+            cortarElRegreso(null)
             log("Durante el desvío el dron arrancó su propio regreso: se lo corta una sola vez y sigue hacia \"${d.base.nombre}\"")
             // Su regreso pudo haberlo subido o bajado: vuelve a la de tránsito antes de seguir.
             subirYIrAlDesvio(d)
@@ -4553,6 +5354,7 @@ class PatrolManager(
         tomaDelDron = motivo
         // El vuelo es del DJI hasta el suelo, y ahí ya no se respeta un mando físico.
         mandoEnElControlFisico = false
+        regresoCortadoConLasPalancas = false
         // Su regreso (por batería o el del botón del control) ya no es el
         // aterrizaje que se sostenía: el dron vuelve, y es suyo hasta el suelo.
         // Su aterrizaje por batería crítica sigue siendo un aterrizaje.

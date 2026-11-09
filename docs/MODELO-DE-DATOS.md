@@ -49,6 +49,9 @@ erDiagram
         TEXT inventory_code "no viaja dentro del QR"
         INTEGER active
         INTEGER base_id FK "base donde está dispuesto el dron"
+        REAL velocidad_orbita_ms "ajuste del dron: m/s de la órbita; NULL es el de fábrica de la app"
+        TEXT reaccion_deteccion "ajuste del dron: seguir_y_orbitar, orbitar, seguir o detenerse; NULL es el de fábrica"
+        INTEGER silencio_al_retomar_s "ajuste del dron: segundos de silencio al retomar, de 0 a 30 de a 5; NULL es el de fábrica"
         TEXT created_at
         TEXT created_by
         INTEGER deleted "marca de baja lógica: es lo que consulta el código"
@@ -183,6 +186,18 @@ de baja y el registro tiene que seguir diciendo quién fue.
   guarda ya validado y se vuelve a leer clave por clave (PROTOCOLS §5,
   "Preferencias de la persona"). La baja de una cuenta es lógica: sus
   preferencias quedan y vuelven si se la restaura.
+- **Los ajustes del dron viven con el activo, y en `NULL` hasta que alguien
+  los fija.** La velocidad de órbita, la reacción a una detección y el silencio
+  al retomar (`velocidad_orbita_ms`, `reaccion_deteccion`,
+  `silencio_al_retomar_s`; docs/VUELO.md §10) son del aparato y no de un vuelo
+  ni de una persona: el hub se los manda a la app en cada conexión y cada vez
+  que cambian (PROTOCOLS §2, `ajustes`). `NULL` quiere decir «el de fábrica de
+  la app», y el hub nunca copia ese valor de fábrica en la fila: si la app
+  cambia el suyo, los drones que nadie tocó lo siguen sin migrar nada. Son
+  columnas y no un JSON, como las preferencias, porque son tres datos con tipo
+  propio que la ficha del dron lee uno por uno y el registro compara antes y
+  después. Los rangos están en `docs/contrato/ajustes.json`, que validan el
+  backend (`backend/src/ajustes.ts`), la consola y la app.
 
 ---
 

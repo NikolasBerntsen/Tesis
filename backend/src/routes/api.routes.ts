@@ -1,7 +1,9 @@
 import bcrypt from 'bcryptjs';
 import { Router, type Response } from 'express';
+import { CLAVES_DE_AJUSTE, leerAjustes, textoDelAjuste, type ClaveDeAjuste } from '../ajustes';
 import { ROLE_RANK, SESION_DE_OTRO_ROL, requireAuth, requireRoles, signDroneToken, type AuthedRequest } from '../auth';
 import { posicionValida } from '../contrato';
+import { nombreDeDron } from '../meta';
 import {
   asignarRutas, contarDronesEnBase, createBase, createDrone, createLog, createRoute, createUser, generarContrasenia, getBase, restoreRoute, rutasDeBase, softDeleteRoute, updateRoute, listBases, restoreBase, softDeleteBase, updateBase, decideAlert, getAlert, getDrone, getDroneIdentity, getRoute, getRoutes,
   getUser, listAlerts, listEvents, listLogs, listUsers, normalizarDni, restoreDrone, restoreUser, setWaypointLabel,
@@ -441,63 +443,56 @@ apiRouter.patch('/drones/:droneId', requireRoles('field_operator', 'operator', '
   res.json(droneCard(droneId));
 });
 
-/**
- * Rango de la velocidad de órbita que se puede fijar desde la consola
- * (PROTOCOLS §5, `PATCH /drones/:droneId/ajustes`). Es el de la app
- * (`Navegacion.VELOCIDAD_ORBITA_MINIMA_MS` / `_MAXIMA_MS`): menos que 1 m/s es
- * quedarse quieto sobre el círculo y más que el crucero no tiene sentido.
- */
-const VELOCIDAD_ORBITA_MINIMA_MS = 1;
-const VELOCIDAD_ORBITA_MAXIMA_MS = 8;
+/** Qué evento deja cada ajuste del dron cuando cambia (PROTOCOLS §7) y cómo lo nombra el texto. */
+const EVENTOS_DE_AJUSTE: Readonly<Record<ClaveDeAjuste, { evento: string; nombre: string }>> = {
+  velocidadOrbitaMs: { evento: 'ORBIT_SPEED_SET', nombre: 'la velocidad de órbita' },
+  reaccionADeteccion: { evento: 'DETECTION_REACTION_SET', nombre: 'la reacción a una detección' },
+  silencioAlRetomarS: { evento: 'RESUME_SILENCE_SET', nombre: 'el silencio al retomar' },
+};
 
 /**
- * Los ajustes del dron que fija el operador y la app aplica: hoy, la velocidad
- * de órbita. `null` vuelve a la de fábrica. Se guarda con el dron (es del
- * aparato, no del vuelo), se le manda en el acto si está conectado (`ajustes`,
- * §2) y se le vuelve a mandar cada vez que se conecta.
+ * Los ajustes del dron que fija el operador y la app aplica (ajustes.ts, VUELO
+ * §10): la velocidad de órbita, la reacción a una detección y el silencio al
+ * retomar, cualquier subconjunto; `null` vuelve al de fábrica. Se guardan con
+ * el dron (son del aparato, no del vuelo), se le mandan ENTEROS en el acto si
+ * está conectado (`ajustes`, §2) y otra vez cada vez que se conecta. Un valor
+ * inválido rechaza el cuerpo completo: no se aplica a medias.
+ *
+ * Deja un evento por cada ajuste que CAMBIÓ, no por cada uno que vino: fijar
+ * lo que ya estaba no es una novedad para el registro. La ficha y el mensaje
+ * salen igual, porque son baratos y la consola que pidió el cambio espera la
+ * ficha de vuelta.
  */
 apiRouter.patch('/drones/:droneId/ajustes', requireAuth('operator'), (req: AuthedRequest, res) => {
   const { droneId } = req.params;
-  const body = (req.body ?? {}) as Record<string, unknown>;
-  if (!('velocidadOrbitaMs' in body)) return res.status(400).json({ error: 'Nada para ajustar: falta velocidadOrbitaMs' });
-  const pedida = body.velocidadOrbitaMs;
-  let velocidad: number | null;
-  if (pedida === null) {
-    velocidad = null;
-  } else if (typeof pedida === 'number' && Number.isFinite(pedida)) {
-    if (pedida < VELOCIDAD_ORBITA_MINIMA_MS || pedida > VELOCIDAD_ORBITA_MAXIMA_MS) {
-      return res.status(400).json({
-        error: `velocidadOrbitaMs tiene que estar entre ${VELOCIDAD_ORBITA_MINIMA_MS} y ${VELOCIDAD_ORBITA_MAXIMA_MS} m/s`,
-      });
-    }
-    velocidad = Math.round(pedida * 10) / 10;
-  } else {
-    // Nada se convierte: un texto no es una velocidad, y un 0 que nadie
-    // escribió sería una órbita que no gira.
-    return res.status(400).json({ error: 'velocidadOrbitaMs tiene que ser un número o null' });
-  }
+  const lectura = leerAjustes(req.body);
+  if (!lectura.ok) return res.status(400).json({ error: lectura.error });
 
   const before = getDrone(droneId);
   if (!before || before.deletedAt) return res.status(404).json({ error: 'Dron inexistente' });
-  const result = updateDrone(droneId, { velocidadOrbitaMs: velocidad })!;
+  const result = updateDrone(droneId, lectura.ajustes)!;
   enviarAjustes(droneId, req.user!.sub);
-  const texto = velocidad === null ? 'la de fábrica' : `${velocidad} m/s`;
-  const ev = createLog(
-    'drone',
-    'ORBIT_SPEED_SET',
-    req.user!.sub,
-    `${req.user!.sub} fijó la velocidad de órbita de "${result.after.displayName}" en ${texto}`,
-    {
-      droneId,
-      meta: {
-        drone: metaDron(droneId),
-        antes: { velocidadOrbitaMs: result.before.velocidadOrbitaMs },
-        despues: { velocidadOrbitaMs: result.after.velocidadOrbitaMs },
-        detalle: { por: req.user!.sub, velocidadOrbitaMs: velocidad },
+  for (const clave of CLAVES_DE_AJUSTE) {
+    const despues = result.after[clave];
+    if (lectura.ajustes[clave] === undefined || result.before[clave] === despues) continue;
+    const { evento, nombre } = EVENTOS_DE_AJUSTE[clave];
+    const ev = createLog(
+      'drone',
+      evento,
+      req.user!.sub,
+      `${req.user!.sub} fijó ${nombre} de "${result.after.displayName}" en ${textoDelAjuste(clave, despues)}`,
+      {
+        droneId,
+        meta: {
+          drone: metaDron(droneId),
+          antes: { [clave]: result.before[clave] },
+          despues: { [clave]: despues },
+          detalle: { por: req.user!.sub, [clave]: despues },
+        },
       },
-    },
-  );
-  broadcastOperators({ type: 'event', event: ev });
+    );
+    broadcastOperators({ type: 'event', event: ev });
+  }
   broadcastDroneUpdated(droneId);
   res.json(droneCard(droneId));
 });
@@ -766,54 +761,159 @@ apiRouter.post('/drones/:droneId/manual_move', requireAuth('operator'), (req: Au
   res.json({ ok: true, delivered });
 });
 
-/** Las dos órdenes de vuelo en el lugar (§2): qué evento dejan y cómo se cuentan. */
-const ORDENES_EN_EL_LUGAR = {
+/**
+ * Las órdenes de vuelo que la consola da por fuera de una ruta (§2): la que
+ * pasa al dron del suelo al aire y las dos de llegada (VUELO §1, capa 3). Qué
+ * evento dejan y cómo se cuentan.
+ */
+const ORDENES_DE_VUELO = {
   takeoff: { evento: 'TAKEOFF_ORDERED', accion: 'el despegue' },
   land: { evento: 'LANDING_ORDERED', accion: 'el aterrizaje' },
+  return_home: { evento: 'RTH_ORDERED', accion: 'el regreso a la base' },
 } as const;
 
+type OrdenDeVuelo = keyof typeof ORDENES_DE_VUELO;
+type OrdenDeLlegada = Exclude<OrdenDeVuelo, 'takeoff'>;
+
 /**
- * Despegar y aterrizar donde está el dron. Sin el despegue, un dron apoyado
- * solo se levantaba arrancando una ruta, que exige GPS: en interior, o antes de
- * fijar satélites, la consola no tenía forma de ponerlo en el aire para
- * pilotearlo con el mando.
+ * Por qué se suelta el lock con cada orden de llegada. Es lo que lee el
+ * registro (`CONTROL_RELEASED`) y lo que se le dice al que esperaba el control
+ * (`liberado`), detrás del nombre de quien ordenó.
+ */
+const MOTIVO_DE_LLEGADA: Readonly<Record<OrdenDeLlegada, string>> = {
+  return_home: 'ordenó volver a la base',
+  land: 'ordenó aterrizar',
+};
+
+/**
+ * Manda la orden al dron, la registra con su evento y contesta `{ok,
+ * delivered}`. Que el dron esté en el suelo (o en el aire) lo comprueba la app,
+ * que es la única que lo sabe en el momento: el hub no se fía del último
+ * status, que puede tener un segundo de viejo; por eso una orden a un dron
+ * desconectado también queda registrada, con `delivered: false`.
+ */
+function darOrdenDeVuelo(req: AuthedRequest, res: Response, tipo: OrdenDeVuelo, detalle: Record<string, string | null>) {
+  const { droneId } = req.params;
+  const { evento, accion } = ORDENES_DE_VUELO[tipo];
+  const delivered = sendToDrone(droneId, { type: tipo, by: req.user!.sub });
+  const ev = createLog('drone', evento, req.user!.sub, `${req.user!.sub} ordenó ${accion} del dron "${nombreDeDron(droneId)}"`, {
+    droneId,
+    meta: { drone: metaDron(droneId), detalle: { por: req.user!.sub, ...detalle } },
+  });
+  broadcastOperators({ type: 'event', event: ev });
+  res.json({ ok: true, delivered });
+}
+
+/**
+ * Despegar donde está el dron. Sin esto, un dron apoyado solo se levantaba
+ * arrancando una ruta, que exige GPS: en interior, o antes de fijar satélites,
+ * la consola no tenía forma de ponerlo en el aire para pilotearlo con el mando.
  *
- * Piden lo mismo que pilotear y un poco más, porque son las órdenes que pasan
- * al dron del suelo al aire y del aire al suelo:
+ * Pide lo mismo que pilotear y un poco más, porque es la orden que pasa al dron
+ * del suelo al aire:
  * - `canControl`, leído de la base en cada request (requireAuth lo relee): el
  *   que no está autorizado a controlar drones no los despega.
  * - el lock: solo el TITULAR del control manual. A diferencia de route/start,
- *   acá un supervisor tampoco pasa por encima: que un dron despegue o aterrice
- *   lo decide el que lo está piloteando, no alguien que mira el tablero; el
- *   supervisor que quiera hacerlo primero le quita el control a ese usuario.
- *
- * Que el dron esté en el suelo (o en el aire) lo comprueba la app, que es la
- * única que lo sabe en el momento: el hub no se fía del último status, que
- * puede tener un segundo de viejo.
+ *   acá un supervisor tampoco pasa por encima: que un dron despegue lo decide
+ *   el que lo está piloteando, no alguien que mira el tablero; el supervisor
+ *   que quiera hacerlo primero le quita el control a ese usuario. Aterrizar y
+ *   volver a la base ya no lo piden: son órdenes de llegada (abajo).
  */
-function ordenEnElLugar(tipo: keyof typeof ORDENES_EN_EL_LUGAR) {
-  const { evento, accion } = ORDENES_EN_EL_LUGAR[tipo];
-  return (req: AuthedRequest, res: Response) => {
-    if (!req.user!.canControl) return res.status(403).json({ error: 'No estás autorizado a controlar drones' });
-    const { droneId } = req.params;
-    const identidad = getDroneIdentity(droneId);
-    if (!identidad) return res.status(404).json({ error: 'Dron inexistente' });
-    if (getController(droneId) !== req.user!.sub) {
-      return res.status(409).json({ error: 'No tenés el control manual de este dron' });
-    }
+apiRouter.post('/drones/:droneId/takeoff', requireAuth('operator'), (req: AuthedRequest, res) => {
+  if (!req.user!.canControl) return res.status(403).json({ error: 'No estás autorizado a controlar drones' });
+  const { droneId } = req.params;
+  if (!getDroneIdentity(droneId)) return res.status(404).json({ error: 'Dron inexistente' });
+  if (getController(droneId) !== req.user!.sub) {
+    return res.status(409).json({ error: 'No tenés el control manual de este dron' });
+  }
+  darOrdenDeVuelo(req, res, 'takeoff', {});
+});
 
-    const delivered = sendToDrone(droneId, { type: tipo, by: req.user!.sub });
-    const ev = createLog('drone', evento, req.user!.sub, `${req.user!.sub} ordenó ${accion} del dron "${identidad.displayName}"`, {
-      droneId,
-      meta: { drone: metaDron(droneId), detalle: { por: req.user!.sub } },
-    });
-    broadcastOperators({ type: 'event', event: ev });
-    res.json({ ok: true, delivered });
-  };
+type PermisoDeLlegada =
+  | { ok: true; teniaElControl: string | null; forzado: boolean }
+  | { ok: false; status: 403 | 404 | 409; error: string };
+
+/**
+ * Quién puede dar una orden de llegada —volver a la base o aterrizar— (VUELO
+ * §7.1 y §11). Son órdenes de la capa 3: no exigen tener el control manual,
+ * porque el que mira el tablero tiene que poder traer un dron que vuela solo,
+ * pero tampoco pasan por encima de una persona al mando (capa 2) sin decirlo:
+ * - operador o más con `canControl`, leído de la base en cada request;
+ * - si el control lo tiene OTRO, `409` «El control lo tiene X». Solo un
+ *   supervisor con `forzar: true` —la consola lo manda explícito, como en
+ *   «Quitar control»— se lo quita antes (`forzado`).
+ * Acá solo se decide: qué pasa con el lock, y en qué orden se entera la app,
+ * lo resuelve cada orden con `soltarParaLlegar`.
+ */
+function autorizarOrdenDeLlegada(req: AuthedRequest): PermisoDeLlegada {
+  if (!req.user!.canControl) return { ok: false, status: 403, error: 'No estás autorizado a controlar drones' };
+  const { droneId } = req.params;
+  if (!getDroneIdentity(droneId)) return { ok: false, status: 404, error: 'Dron inexistente' };
+  const titular = getController(droneId);
+  if (titular === null || titular === req.user!.sub) return { ok: true, teniaElControl: titular, forzado: false };
+  if (!esSupervisorOMas(req.user!.role) || req.body?.forzar !== true) {
+    return { ok: false, status: 409, error: `El control lo tiene ${titular}` };
+  }
+  return { ok: true, teniaElControl: titular, forzado: true };
 }
 
-apiRouter.post('/drones/:droneId/takeoff', requireAuth('operator'), ordenEnElLugar('takeoff'));
-apiRouter.post('/drones/:droneId/land', requireAuth('operator'), ordenEnElLugar('land'));
+/**
+ * Suelta el lock con una orden de llegada, con `resume: 'none'` y SIN
+ * `control_released` a la app: lo que hace la app lo dice la orden que sale a
+ * continuación. El registro (`CONTROL_RELEASED` «X ordenó volver a la base»),
+ * las consolas (`control_changed`, con quién y si fue a la fuerza) y el que
+ * esperaba el control (`liberado`) se enteran igual, y antes que la orden.
+ */
+function soltarParaLlegar(req: AuthedRequest, orden: OrdenDeLlegada, forzado: boolean) {
+  const quien = req.user!.sub;
+  releaseControl(req.params.droneId, quien, {
+    resume: 'none',
+    forced: forzado,
+    reason: `${quien} ${MOTIVO_DE_LLEGADA[orden]}`,
+    sinAvisarALaApp: true,
+  });
+}
+
+/**
+ * Aterrizar donde está, desde cualquier estado de vuelo (VUELO §9): la app lo
+ * acepta sin el control tomado; acá se decide quién puede. Con el control de
+ * quien ordena, el lock SIGUE: el dron queda en MANUAL en el suelo (§2
+ * `land`). El que un supervisor le quita a otro se suelta antes de la orden
+ * para las consolas y el registro, pero a la app el `control_released` le
+ * llega DESPUÉS del `land`: soltar con el aterrizaje en curso no lo frena (§2),
+ * y al revés la app quedaba estacionaria —o volvía al objetivo— un instante
+ * antes de bajar. Cancela el relevo como `return_home` y las demás órdenes del
+ * operador (RELEVOS §3.9).
+ */
+apiRouter.post('/drones/:droneId/land', requireAuth('operator'), (req: AuthedRequest, res) => {
+  const permiso = autorizarOrdenDeLlegada(req);
+  if (!permiso.ok) return res.status(permiso.status).json({ error: permiso.error });
+  const { droneId } = req.params;
+  if (permiso.forzado) soltarParaLlegar(req, 'land', true);
+  relevos.ordenDelOperador(droneId);
+  darOrdenDeVuelo(req, res, 'land', {});
+  if (permiso.forzado) sendToDrone(droneId, { type: 'control_released', by: req.user!.sub });
+});
+
+/**
+ * Volver a la base desde la consola (VUELO §7.1): la app lo cumple como el
+ * «Volver a base» del teléfono y corta todo lo de la capa 4. Con el control
+ * tomado —el de quien ordena, o el que un supervisor le quita a otro— el lock
+ * se suelta SIN `control_released`: la app suelta el control sola con
+ * `return_home` (§2), y un `control_released` antes la hacía volver al
+ * objetivo (una orden de órbita al de antes) justo antes del regreso. Una
+ * orden del operador manda sobre un relevo (RELEVOS §3.9): se resuelve antes
+ * de reenviarla, como en /resume y /route/stop. `teniaElControl` queda en el
+ * registro porque no es lo mismo traer un dron que volaba solo que sacárselo
+ * a quien lo estaba piloteando.
+ */
+apiRouter.post('/drones/:droneId/return_home', requireAuth('operator'), (req: AuthedRequest, res) => {
+  const permiso = autorizarOrdenDeLlegada(req);
+  if (!permiso.ok) return res.status(permiso.status).json({ error: permiso.error });
+  if (permiso.teniaElControl !== null) soltarParaLlegar(req, 'return_home', permiso.forzado);
+  relevos.ordenDelOperador(req.params.droneId);
+  darOrdenDeVuelo(req, res, 'return_home', { teniaElControl: permiso.teniaElControl });
+});
 
 // ---- Bases ----
 

@@ -51,6 +51,29 @@ interface DroneController {
          * repetidos ni el techo por minuto que frenan a los rechazos de 10 Hz.
          */
         const val NO_SE_PUDO_ATERRIZAR = "no se pudo aterrizar"
+
+        /**
+         * Con qué empieza el [FlightEvent.Problema] de un [returnHome] que no
+         * arrancó (docs/VUELO.md §7.2): el dron no aceptó `KeyStartGoHome`
+         * después de sus reintentos, o lo aceptó y el regreso no salió de IDLE.
+         * Como [NO_SE_PUDO_ATERRIZAR], es la respuesta DEFINITIVA a una orden,
+         * y PatrolManager la avisa siempre y deja al dron estacionario a la
+         * espera de otra orden. En el campo un GoHome pisado por una vuelta
+         * tardía del lazo de la órbita no dejaba ni una pista.
+         */
+        const val NO_SE_PUDO_VOLVER = "no se pudo volver a la base"
+
+        /**
+         * Con qué empieza el [FlightEvent.Problema] de un regreso a base de la
+         * app que el DJI dejó porque alguien movió las palancas del control
+         * físico (`GoHomeExitCode` JOYSTICK_*): el que está al lado del dron lo
+         * está volando, que es la capa 2 de docs/VUELO.md §1. No es una falla
+         * del regreso como [NO_SE_PUDO_VOLVER]: PatrolManager no le da ninguna
+         * orden —un estacionario habilitaría el Virtual Stick y se lo sacaría
+         * de las manos— y lo deja en pausa con el mando en el control físico,
+         * avisando `RTH_INTERRUPTED`.
+         */
+        const val REGRESO_CORTADO_EN_EL_CONTROL = "el regreso se cortó con las palancas del control físico"
     }
     /**
      * Enlace, modelo, GPS, punto de retorno y si está en el aire. Es un
@@ -245,7 +268,15 @@ interface DroneController {
      * [volarHacia], [girarEnElLugar]) se rechazan con [FlightEvent.Problema].
      * Lo cortan [returnHome], [startRoute] y [cancelarAterrizaje] (que quien
      * llama da antes de la orden que sigue). Un [land] repetido vuelve a
-     * empezar la secuencia.
+     * empezar la secuencia. Mientras baja con el control tomado, la primera
+     * palanca deliberada de la persona lo corta (PatrolManager da
+     * [cancelarAterrizaje] y [hold], docs/VUELO.md §8); las palancas en cero
+     * nunca llegan acá.
+     *
+     * Con un regreso de la app en curso ([returnHome]), PatrolManager corta el
+     * regreso ([cancelarRegreso]) ANTES de dar esta orden, igual que al tomar
+     * el control: con el GoHome puesto el DJI no acepta otra (docs/VUELO.md
+     * §4). El controlador no tiene que cortarlo por su cuenta.
      *
      * Es también la forma de abortar un despegue (un relevo cancelado mientras B
      * todavía está en la plataforma, RELEVOS §2 y §3): si no dejó el suelo, no
@@ -386,6 +417,24 @@ interface DroneController {
     }
 
     /**
+     * Vigila al objetivo en (lat, lon) desde donde está: vuelo estacionario con
+     * la nariz girada hacia él y el gimbal bajado lo justo para tenerlo en el
+     * centro del cuadro, sin desplazarse. Es la reacción `detenerse`
+     * ([com.tesis.dronepatrol.model.ReaccionADeteccion.DETENERSE],
+     * docs/VUELO.md §5): el dron avisa y se queda mirando, y es una persona la
+     * que decide si va. Se llama con cada estimación nueva del objetivo; si ya
+     * vigila, solo corre el punto al que mira, sin cortar el estacionario. Con
+     * el dron en el suelo se rechaza ([FlightEvent.Problema]), y aterrizando
+     * también, como el resto de la navegación.
+     *
+     * Por defecto es [hold]: el dron se detiene, aunque la cámara no lo siga.
+     * Real: un lazo propio (velocidad cero, rumbo al objetivo, altura
+     * sostenida, gimbal al objetivo). Simulado: estacionario con el rumbo y el
+     * gimbal al objetivo.
+     */
+    fun vigilar(lat: Double, lon: Double) = hold()
+
+    /**
      * Apunta la cámara a [pitchGrados] en ángulo ABSOLUTO (0 horizonte, −90
      * derecho al suelo) para un modo autónomo: las fotos del protocolo de
      * última ubicación (−90 la cenital, −30 la panorámica, RELEVOS §5). No es
@@ -406,7 +455,10 @@ interface DroneController {
      * donde está, listo para otra orden. Es el primer paso de un desvío a otra
      * base (RELEVOS §4).
      *
-     * Real: `KeyStopGoHome` y esperar `GoHomeState = IDLE`, con un tope de 3 s.
+     * Real: `KeyStopGoHome` y esperar a que el dron deje de volver —ni
+     * `GoHomeState` en regreso (o `LANDING` a menos de 30 m de la base) ni
+     * `KeyFlightMode = GO_HOME`—, con lecturas cada 500 ms y un tope de 3 s; si
+     * el GoHome vuelve a arrancar en esos 3 s, se reenvía el corte una vez.
      * Es UN intento por vuelo para un regreso del propio DJI: si lo vuelve a
      * arrancar, se lo deja seguir y se avisa con
      * [FlightEvent.ElDronTomoElControl] (no se pelea en lazo con él). El que
@@ -415,7 +467,7 @@ interface DroneController {
      * nunca, y tampoco un aterrizaje forzado por batería crítica.
      *
      * Si no se corta —se rechaza por lo de arriba, el dron no acepta la orden o
-     * no vuelve a IDLE a tiempo— avisa SIEMPRE un [FlightEvent.Problema] que
+     * no deja de volver a tiempo— avisa SIEMPRE un [FlightEvent.Problema] que
      * empieza con [NO_SE_CORTO_EL_REGRESO]: el dron sigue volviendo, y lo que
      * quien llama haya ordenado desde el corte se descarta (no se le pelea el
      * regreso). Simulado: sale de su modo de regreso. Sin un regreso en curso

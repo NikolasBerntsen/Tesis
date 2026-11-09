@@ -41,6 +41,10 @@ import kotlinx.coroutines.delay
  * un `seq` repetido se perdería (la cola no la agrega y el hub la acusa sin
  * guardarla).
  *
+ * Una secuencia retomada (una persona la cortó en sus fotos y la batería la
+ * volvió a armar) saltea los pasos cuya foto ya salió ([yaSacada]): repetirlos
+ * gastaría la batería en fotos que la cola descarta, porque ya tiene ese `seq`.
+ *
  * El tiempo lo dan [reloj] y [pausa], para probar la secuencia entera sin
  * esperar sus 20 segundos. Las órdenes salen por [ordenar], que las da solo si
  * el protocolo sigue en curso: PatrolManager lo hace bajo la misma puerta que
@@ -60,6 +64,7 @@ class SecuenciaDeUltimaUbicacion(
         if (puede) dron.orden()
         puede
     },
+    private val yaSacada: (Int) -> Boolean = { false },
 ) {
     companion object {
         const val TOPE_MS = 20_000L
@@ -112,6 +117,7 @@ class SecuenciaDeUltimaUbicacion(
         }
         for (p in pasos) {
             if (!sigue()) return Final.CORTADA
+            if (yaSacada(p.seq)) continue
             if (reloj() - inicioMs >= TOPE_MS || !alcanzaParaOtroPaso()) break
             if (p.rumbo != null && !puedeGirar()) break
             val girado = fotografiar(p)
@@ -130,6 +136,7 @@ class SecuenciaDeUltimaUbicacion(
         )
         for (p in pasos) {
             if (!sigue()) return Final.CORTADA
+            if (yaSacada(p.seq)) continue
             if (reloj() - inicioMs >= TOPE_MS) break
             fotografiar(p)
         }

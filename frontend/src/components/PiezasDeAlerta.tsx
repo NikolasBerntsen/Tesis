@@ -1,7 +1,9 @@
+import { consecuenciasDeDecidir } from '../ajustesDelDron';
 import { time, tipoDeAlerta } from '../format';
-import type { Alert } from '../types';
+import type { Alert, Drone } from '../types';
 import type { Decision } from '../useDecisionDeAlerta';
 import { IconoCamara, IconoCheck, IconoInfo, IconoPersona, IconoTacho, IconoVehiculo } from './Iconos';
+import { ConSilencioAlRetomar } from './SilencioAlRetomar';
 
 /**
  * Las piezas con que se dice una alerta, en todos lados igual: la tarjeta del
@@ -106,44 +108,67 @@ export function ChipDeTipo({
  * Validar y Descartar, el par de la decisión, con el tilde y el tacho. Pesan
  * lo mismo a propósito: ninguno de los dos es "la" respuesta. Mientras la
  * decisión viaja se apagan los dos, para que un segundo clic no decida dos
- * veces (o la alerta que vino a ocupar el lugar de la decidida).
+ * veces (o la alerta que vino a ocupar el lugar de la decidida). Con la ficha
+ * del dron a mano, al lado de Descartar va el engranaje del silencio al
+ * retomar (VUELO §6): cuánto va a callar el dron después de este descarte; y
+ * Descartar espera que se guarde el silencio recién movido (ver
+ * SilencioAlRetomar), con el par apagado mientras tanto.
  */
 export function BotonesDeDecision({
   ocupado,
   tamanoIcono,
+  dron = null,
   onDecidir,
 }: Readonly<{
   ocupado: boolean;
   /** Los íconos de la campana van un escalón más chicos, como sus botones. */
   tamanoIcono?: number;
+  /**
+   * La ficha del dron que sigue al objetivo, si la consola la tiene: es el
+   * dron al que se le ajusta el silencio. Sin ella no hay engranaje.
+   */
+  dron?: Drone | null;
   onDecidir: (decision: Decision) => void;
 }>) {
   return (
-    <div className="alert-actions">
-      <button type="button" className="validate" disabled={ocupado} onClick={() => onDecidir('VALIDATED')}>
-        <IconoCheck tamano={tamanoIcono} />
-        Validar
-      </button>
-      <button type="button" className="dismiss" disabled={ocupado} onClick={() => onDecidir('DISMISSED')}>
-        <IconoTacho tamano={tamanoIcono} />
-        Descartar
-      </button>
-    </div>
+    <ConSilencioAlRetomar dron={dron} tamanoIcono={tamanoIcono} onDecidir={onDecidir}>
+      {({ decidir, esperando }) => (
+        <>
+          <button type="button" className="validate" disabled={ocupado || esperando} onClick={() => decidir('VALIDATED')}>
+            <IconoCheck tamano={tamanoIcono} />
+            Validar
+          </button>
+          <button
+            type="button"
+            className="dismiss"
+            disabled={ocupado || esperando}
+            aria-busy={esperando || undefined}
+            onClick={() => decidir('DISMISSED')}
+          >
+            <IconoTacho tamano={tamanoIcono} />
+            Descartar
+          </button>
+        </>
+      )}
+    </ConSilencioAlRetomar>
   );
 }
 
 /**
  * Lo que hace cada botón con el dron, dicho antes de apretarlo: validar no lo
- * "libera", y descartar lo saca de encima del objetivo.
+ * "libera", y descartar lo saca de encima del objetivo. Con la ficha del dron
+ * dice además cómo se queda sobre el objetivo (su reacción, VUELO §5) y cuánto
+ * calla al retomar la ruta (su silencio, §6); sin ella, lo de siempre.
  */
-export function ConsecuenciasDeDecidir() {
+export function ConsecuenciasDeDecidir({ dron = null }: Readonly<{ dron?: Drone | null }>) {
+  const { validar, descartar } = consecuenciasDeDecidir(dron);
   return (
     <div className="alerta-consecuencias">
       <IconoInfo tamano={18} />
       <p>
-        Validar: el dron se queda sobre el objetivo hasta que lo mandes a patrullar.
+        {validar}
         <br />
-        Descartar: retoma la ruta hacia el próximo nodo.
+        {descartar}
       </p>
     </div>
   );

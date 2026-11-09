@@ -180,21 +180,93 @@ function avisoParaElTitular(fin: FinDelPedido, nombre: string): Omit<AvisoDelCon
 }
 
 /**
- * Lo que se dice cuando el hub soltó el control solo (`control_changed` con
- * `motivo`, §3): el titular estuvo 30 s sin dar señales, o la app del dron
- * avisó que no lo tenía tomado. Se le dice a toda consola que lo reciba: el
- * dron quedó sin nadie al mando y en un estado que no es el de siempre. `null`
+ * Cómo se soltó el control de un dron (`control_changed` con `controlledBy:
+ * null`, PROTOCOLS §3): quién lo tenía, quién lo soltó, si fue a la fuerza y
+ * por qué. `motivo` va solo cuando lo soltó el hub por su cuenta
+ * (`inactividad`, `app`); `detalle` es el porqué en texto, el del registro.
+ */
+export interface Liberacion {
+  teniaElControl: string;
+  por: string | null;
+  forzado: boolean;
+  motivo: string | null;
+  detalle: string | null;
+}
+
+/** Un texto con algo adentro, sin los blancos de las puntas; `null` si no lo es. */
+function textoCon(valor: unknown): string | null {
+  return typeof valor === 'string' && valor.trim() !== '' ? valor.trim() : null;
+}
+
+/**
+ * La liberación que trae un `control_changed`, o `null` si no lo es: una toma,
+ * un traspaso, o un hub viejo que no dice quién lo tenía. Lo que no es del
+ * tipo esperado (un hub raro) se toma como que no vino.
+ */
+export function liberacionDe(msg: {
+  controlledBy: string | null;
+  teniaElControl?: unknown;
+  por?: unknown;
+  forzado?: unknown;
+  motivo?: unknown;
+  detalle?: unknown;
+}): Liberacion | null {
+  if (msg.controlledBy !== null || typeof msg.teniaElControl !== 'string') return null;
+  return {
+    teniaElControl: msg.teniaElControl,
+    por: textoCon(msg.por),
+    forzado: msg.forzado === true,
+    motivo: textoCon(msg.motivo),
+    detalle: textoCon(msg.detalle),
+  };
+}
+
+/** Quién firma lo que el hub suelta por su cuenta (el barrido de señales, el aviso de la app). */
+const EL_COMANDO_CENTRAL = 'Comando Central';
+
+/** Si a `yo` le soltó el control a la fuerza otra persona: ni él mismo, ni el hub por su cuenta. */
+function teLoQuitoOtro(l: Liberacion, yo: string): l is Liberacion & { por: string } {
+  if (!l.forzado || l.teniaElControl !== yo) return false;
+  return l.por !== null && l.por !== yo && l.por !== EL_COMANDO_CENTRAL;
+}
+
+/**
+ * «X te quitó el control de Alfa: ordenó volver a la base», si a `yo` se lo
+ * quitó OTRA persona a la fuerza: un supervisor que trae el dron o lo aterriza
+ * (VUELO §7.1), «Quitar control», una baja del dron o de la cuenta. `null` en
+ * cualquier otro caso: lo soltó él (desde otra sesión, también), lo soltó el
+ * hub solo, o lo tenía otro. El porqué es el del registro sin el nombre de
+ * quien lo dio, que ya va adelante; sin porqué («Quitar control»), la frase
+ * termina en el control. Sin `nombre`, «te quitó el control» a secas: es la
+ * vista de ese dron la que lo dice.
+ */
+export function quienTeQuitoElControl(l: Liberacion, yo: string, nombre?: string): string | null {
+  if (!teLoQuitoOtro(l, yo)) return null;
+  const porque = l.detalle?.startsWith(`${l.por} `) ? l.detalle.slice(l.por.length + 1) : l.detalle;
+  const que = nombre ? `el control de ${nombre}` : 'el control';
+  return porque ? `${l.por} te quitó ${que}: ${porque.replace(/\.$/, '')}` : `${l.por} te quitó ${que}`;
+}
+
+/**
+ * Lo que se dice cuando se suelta el control y hay algo que avisar
+ * (`control_changed`, §3). Cuando el hub lo soltó solo (`motivo`): el titular
+ * estuvo 30 s sin dar señales, o la app del dron avisó que no lo tenía tomado;
+ * se le dice a toda consola que lo reciba, porque el dron quedó sin nadie al
+ * mando y en un estado que no es el de siempre. Cuando otra persona se lo
+ * quitó a la fuerza, al que lo tenía (ver `quienTeQuitoElControl`); con la
+ * vista de pilotaje de ese dron abierta, no: lo lee en la vista que se cierra
+ * (DroneDetail), y dos avisos con lo mismo serían ruido. `null` en lo demás, o
  * con un motivo que la consola no conoce (un hub más nuevo).
  */
 export function avisoDeLaLiberacion(
-  motivo: unknown,
-  teniaElControl: string,
+  liberacion: Liberacion,
   yo: string,
   droneId: string,
   nombre: string,
-  /** El texto con que la app soltó el control (`control_changed.detalle`, §3): por qué no lo tomó. */
-  detalle?: unknown,
+  /** La vista de pilotaje de ese dron está abierta en esta consola. */
+  enLaVistaDePilotaje = false,
 ): Omit<AvisoDelControl, 'id'> | null {
+  const { motivo, teniaElControl, detalle } = liberacion;
   // Lo que hace la app al soltarlo así (PROTOCOLS §2): solo el que estaba en
   // vuelo manual queda quieto; el que seguía un objetivo o un relevo vuelve a
   // eso, y el que aterrizaba sigue bajando.
@@ -214,15 +286,16 @@ export function avisoDeLaLiberacion(
     // Con el texto de la app se dice POR QUÉ: "no se tomó el control: el dron
     // vuelve a la base por batería baja" es lo que el que pidió el control
     // necesita leer, no que "la app lo soltó".
-    const porque =
-      typeof detalle === 'string' && detalle.trim() !== ''
-        ? `la app del dron avisó: ${detalle.trim().replace(/\.$/, '')}.`
-        : 'la app del dron avisó que ya no lo tenía tomado.';
+    const porque = detalle
+      ? `la app del dron avisó: ${detalle.replace(/\.$/, '')}.`
+      : 'la app del dron avisó que ya no lo tenía tomado.';
     return {
       droneId,
       tono: 'malo',
       texto: `Se soltó el control de ${nombre} que tenía ${teniaElControl}: ${porque}`,
     };
   }
-  return null;
+  if (motivo !== null) return null;
+  const quitado = enLaVistaDePilotaje ? null : quienTeQuitoElControl(liberacion, yo, nombre);
+  return quitado ? { droneId, tono: 'malo', texto: `${quitado}.` } : null;
 }

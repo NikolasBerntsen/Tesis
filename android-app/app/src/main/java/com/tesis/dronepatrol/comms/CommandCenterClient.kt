@@ -1,10 +1,13 @@
 package com.tesis.dronepatrol.comms
 
+import com.tesis.dronepatrol.drone.Navegacion
+import com.tesis.dronepatrol.model.AjustesDelDron
 import com.tesis.dronepatrol.model.DroneBase
 import com.tesis.dronepatrol.model.DroneProfile
 import com.tesis.dronepatrol.model.Emparejamiento
 import com.tesis.dronepatrol.model.ObjetivoReportado
 import com.tesis.dronepatrol.model.PatrolRoute
+import com.tesis.dronepatrol.model.ReaccionADeteccion
 import com.tesis.dronepatrol.model.SesionOperador
 import com.tesis.dronepatrol.model.Waypoint
 import java.util.concurrent.TimeUnit
@@ -74,8 +77,19 @@ open class CommandCenterClient(
     /** Despegue en el lugar pedido desde la consola por el titular del control. */
     var onTakeoff: ((by: String) -> Unit)? = null
 
-    /** Aterrizaje pedido desde la consola por el titular del control. */
+    /**
+     * Aterrizaje pedido desde la consola (`land`, §2). Ya no exige el control
+     * tomado: quién puede lo decide el hub, y la app aterriza desde cualquier
+     * estado de vuelo (docs/VUELO.md §9).
+     */
     var onLand: ((by: String) -> Unit)? = null
+
+    /**
+     * Volver a la base pedido desde la consola (`return_home`, §2, docs/VUELO.md
+     * §7.1): como el «Volver a base» del teléfono, pero el hub ya soltó el lock
+     * del que ordenó, así que la app suelta el control sola sin avisarlo.
+     */
+    var onReturnHome: ((by: String) -> Unit)? = null
     /** Reanudar el patrullaje; [fromIndex] nulo = desde el último nodo alcanzado. */
     var onResumePatrol: ((fromIndex: Int?) -> Unit)? = null
 
@@ -131,11 +145,14 @@ open class CommandCenterClient(
     var onRenamed: ((displayName: String) -> Unit)? = null
 
     /**
-     * Los ajustes del dron que se fijan desde la consola (`ajustes`, §2): hoy,
-     * la velocidad de órbita en m/s. `null` es "la de fábrica". Llega al
-     * conectarse y cada vez que alguien la cambia en la vista del dron.
+     * Los ajustes del dron que se fijan desde la consola (`ajustes`, §2,
+     * docs/VUELO.md §10): la velocidad de órbita, la reacción a una detección y
+     * el silencio al retomar, cada uno `null` si es el de fábrica. Llegan ya
+     * validados contra el contrato (ver [ajustes]): un valor inválido en
+     * cualquiera descarta el mensaje entero y este oyente no se entera. Llega al
+     * conectarse y cada vez que alguien cambia algo en la vista del dron.
      */
-    var onAjustes: ((velocidadOrbitaMs: Double?) -> Unit)? = null
+    var onAjustes: ((AjustesDelDron) -> Unit)? = null
 
     /**
      * Un mensaje de relevos, desvíos o emergencias (docs/PROTOCOLS.md §2.b) ya
@@ -416,6 +433,7 @@ open class CommandCenterClient(
             }
             "takeoff" -> onTakeoff?.invoke(msg.optString("by"))
             "land" -> onLand?.invoke(msg.optString("by"))
+            "return_home" -> onReturnHome?.invoke(msg.optString("by"))
             "resume_patrol" -> reanudar(msg)
             "start_route" -> onStartRoute?.invoke(
                 msg.optInt("routeId"),
@@ -452,19 +470,51 @@ open class CommandCenterClient(
     }
 
     /**
-     * `ajustes`: la velocidad de órbita que fijó la consola, o null (ausente o
-     * `null` en el JSON) para volver a la de fábrica. Un valor que no es un
-     * número finito descarta el mensaje entero, como la inclinación de la
-     * cámara: nada se convierte, y un cero que nadie escribió sería una órbita
-     * que no gira.
+     * `ajustes` (§2, docs/VUELO.md §10 y `docs/contrato/ajustes.json`): los tres
+     * ajustes del dron, cada uno ausente o `null` para volver al de fábrica. La
+     * validación es la del hub, estricta y sin convertir nada: la velocidad es
+     * un número finito entre 1 y 8, la reacción uno de los textos exactos del
+     * protocolo (ni mayúsculas ni espacios) y el silencio un entero de 0 a 30
+     * múltiplo de 5. Un valor inválido en CUALQUIERA descarta el mensaje entero
+     * —no se aplica a medias, igual que el `PATCH` del hub rechaza el cuerpo
+     * entero—, y un mensaje sin ninguno de los tres no trae nada que ajustar y
+     * también se descarta. Lo descartado queda en el registro local
+     * ([onMensajeInvalido]), como los mensajes de §2.b.
      */
     private fun ajustes(msg: JSONObject) {
-        val velocidad = if (!msg.has("velocidadOrbitaMs") || msg.isNull("velocidadOrbitaMs")) {
-            null
-        } else {
-            inclinacionPedida(msg.opt("velocidadOrbitaMs")) ?: return
+        if (CLAVES_DE_LOS_AJUSTES.none { msg.has(it) }) {
+            onMensajeInvalido?.invoke("ajustes sin ningún ajuste: no hay nada para aplicar")
+            return
         }
-        onAjustes?.invoke(velocidad)
+        val velocidad = ajuste(msg, VELOCIDAD_ORBITA) { v ->
+            numeroFinito(v)?.takeIf { it in Navegacion.VELOCIDAD_ORBITA_MINIMA_MS..Navegacion.VELOCIDAD_ORBITA_MAXIMA_MS }
+        }
+        val reaccion = ajuste(msg, REACCION_A_DETECCION) { v -> (v as? String)?.let(ReaccionADeteccion::desdeElProtocolo) }
+        val silencio = ajuste(msg, SILENCIO_AL_RETOMAR) { v ->
+            LectorDelHub.enteroValido(v, AjustesDelDron.SILENCIO_MINIMO_S.toLong(), AjustesDelDron.SILENCIO_MAXIMO_S.toLong())
+                ?.takeIf(AjustesDelDron::esUnSilencioValido)?.toInt()
+        }
+        if (velocidad == null || reaccion == null || silencio == null) {
+            val malos = listOf(VELOCIDAD_ORBITA to velocidad, REACCION_A_DETECCION to reaccion, SILENCIO_AL_RETOMAR to silencio)
+                .filter { it.second == null }
+                .joinToString { "${it.first}=${msg.opt(it.first)}" }
+            onMensajeInvalido?.invoke("ajustes con un valor fuera del contrato ($malos): no se aplica ninguno")
+            return
+        }
+        onAjustes?.invoke(AjustesDelDron(velocidad.valor, reaccion.valor, silencio.valor))
+    }
+
+    /** Un ajuste leído: [valor] null es «el de fábrica» (la clave venía ausente o en `null`). */
+    private class Ajuste<T>(val valor: T?)
+
+    /**
+     * Lee un ajuste de [msg]: ausente o `null` es de fábrica; si no, [leer] lo
+     * convierte o devuelve null, y entonces el ajuste es inválido (se devuelve
+     * null, distinto de un [Ajuste] con valor null).
+     */
+    private fun <T : Any> ajuste(msg: JSONObject, campo: String, leer: (Any) -> T?): Ajuste<T>? {
+        if (!msg.has(campo) || msg.isNull(campo)) return Ajuste(null)
+        return leer(msg.get(campo))?.let { Ajuste(it) }
     }
 
     /**
@@ -521,12 +571,18 @@ open class CommandCenterClient(
     internal companion object {
         /** El `motivo` de un `control_released` que el hub mandó porque el titular dejó de dar señales (§2). */
         const val MOTIVO_INACTIVIDAD = "inactividad"
+
+        /** Las claves del mensaje `ajustes` (§2), con los nombres del contrato (`docs/contrato/ajustes.json`). */
+        const val VELOCIDAD_ORBITA = "velocidadOrbitaMs"
+        const val REACCION_A_DETECCION = "reaccionADeteccion"
+        const val SILENCIO_AL_RETOMAR = "silencioAlRetomarS"
+        val CLAVES_DE_LOS_AJUSTES = listOf(VELOCIDAD_ORBITA, REACCION_A_DETECCION, SILENCIO_AL_RETOMAR)
     }
 
-    internal fun inclinacionPedida(valor: Any?): Double? {
-        val grados = (valor as? Number)?.toDouble() ?: return null
-        return grados.takeIf { it.isFinite() }
-    }
+    internal fun inclinacionPedida(valor: Any?): Double? = numeroFinito(valor)
+
+    /** Un número finito del JSON, o null: un texto, un booleano o un infinito no lo son (nada se convierte). */
+    private fun numeroFinito(valor: Any?): Double? = (valor as? Number)?.toDouble()?.takeIf { it.isFinite() }
 
     private fun scheduleReconnect() {
         if (!wantConnected) return

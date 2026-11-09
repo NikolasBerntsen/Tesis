@@ -307,6 +307,66 @@ class SeguidorDelRegresoTest {
         assertEquals(Corte.LO_PIDIO_EL_CONTROL, seguidor.corte())
     }
 
+    /** Las órdenes, fases y cortes que distingue, y nada más: los dos controladores cuentan con estos. */
+    @Test
+    fun loQueDistingue() {
+        assertEquals(listOf(Orden.NINGUNA, Orden.REGRESO, Orden.ATERRIZAJE), Orden.entries.toList())
+        assertEquals(listOf(Fase.INACTIVO, Fase.VOLVIENDO, Fase.DESCENDIENDO, Fase.OTRA), Fase.entries.toList())
+        assertEquals(listOf(Corte.SE_PUEDE, Corte.YA_SE_CORTO, Corte.LO_PIDIO_EL_CONTROL), Corte.entries.toList())
+    }
+
+    // ---- Un enlace nuevo (connect) ----
+
+    /**
+     * La pantalla se recreó en pleno vuelo: el corte del regreso propio que ya
+     * se gastó sigue gastado, porque es POR VUELO (RELEVOS §4). Antes el enlace
+     * nuevo lo reponía y el DJI quedaba expuesto a un segundo corte.
+     */
+    @Test
+    fun reconectarEnElAireConservaElCorteGastado() {
+        seguidor.alCambiarFase(Fase.VOLVIENDO, Orden.NINGUNA, MotivoDelDron.RTH_BATERIA)
+        seguidor.alCortar()
+        seguidor.alCambiarFase(Fase.INACTIVO, Orden.NINGUNA, MotivoDelDron.OTRO)
+
+        seguidor.alReconectar(enVuelo = true)
+
+        // El DJI lo vuelve a arrancar: la toma se avisa, pero no se corta otra vez.
+        assertEquals(
+            toma(MotivoDelDron.RTH_BATERIA),
+            seguidor.alCambiarFase(Fase.VOLVIENDO, Orden.NINGUNA, MotivoDelDron.RTH_BATERIA),
+        )
+        assertEquals(Corte.YA_SE_CORTO, seguidor.corte())
+    }
+
+    /** En el aire, lo del enlace anterior no vale: los avisos se repiten para quien escucha ahora. */
+    @Test
+    fun reconectarEnElAireOlvidaLoDelEnlaceAnterior() {
+        seguidor.alArrancarRegresoPropio(MotivoDelDron.RTH_BATERIA)
+        seguidor.alTomarElControl(MotivoDelDron.ATERRIZAJE_BATERIA_CRITICA)
+
+        seguidor.alReconectar(enVuelo = true)
+
+        assertFalse("la fase la vuelven a traer los oyentes", seguidor.volviendo)
+        assertEquals(toma(MotivoDelDron.RTH_BATERIA), seguidor.alArrancarRegresoPropio(MotivoDelDron.RTH_BATERIA))
+        assertEquals(
+            toma(MotivoDelDron.ATERRIZAJE_BATERIA_CRITICA),
+            seguidor.alTomarElControl(MotivoDelDron.ATERRIZAJE_BATERIA_CRITICA),
+        )
+    }
+
+    /** En el suelo, conectar es empezar de cero: el vuelo siguiente tiene su corte entero. */
+    @Test
+    fun reconectarEnElSueloArrancaDeCero() {
+        seguidor.alArrancarRegresoPropio(MotivoDelDron.RTH_BATERIA)
+        seguidor.alCortar()
+
+        seguidor.alReconectar(enVuelo = false)
+
+        assertFalse(seguidor.volviendo)
+        assertEquals(toma(MotivoDelDron.RTH_BATERIA), seguidor.alArrancarRegresoPropio(MotivoDelDron.RTH_BATERIA))
+        assertEquals(Corte.SE_PUEDE, seguidor.corte())
+    }
+
     /** Al tocar el suelo todo vuelve a empezar: el vuelo siguiente tiene su corte y sus avisos. */
     @Test
     fun alAterrizarElVueloSiguienteArrancaDeCero() {

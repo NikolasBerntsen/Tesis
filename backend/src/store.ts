@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { esReaccionADeteccion, type ReaccionADeteccion } from './ajustes';
 import { db } from './db';
 import { dniParaBuscar } from './dni';
 
@@ -80,6 +81,10 @@ export interface DroneAsset {
   base_id: number | null;
   /** Velocidad de órbita fijada desde la consola, en m/s; NULL es la de fábrica de la app. */
   velocidad_orbita_ms?: number | null;
+  /** Qué hace con un objetivo confirmado (ajustes.ts); NULL es la de fábrica. */
+  reaccion_deteccion?: string | null;
+  /** Segundos que no se detiene por una detección tras dejar un objetivo; NULL es el de fábrica. */
+  silencio_al_retomar_s?: number | null;
   /** Nombre y coordenada de la base unida por base_id (LEFT JOIN). */
   b_name?: string | null;
   b_lat?: number | null;
@@ -108,6 +113,10 @@ export interface DroneAssetView {
    * del dron (PROTOCOLS §2, `ajustes`); `null` es la de fábrica de la app.
    */
   velocidadOrbitaMs: number | null;
+  /** Qué hace con un objetivo confirmado (VUELO §5, `ajustes`); `null` es la de fábrica. */
+  reaccionADeteccion: ReaccionADeteccion | null;
+  /** Segundos que no se detiene por una detección después de dejar un objetivo (VUELO §6); `null` es el de fábrica. */
+  silencioAlRetomarS: number | null;
   createdAt: string;
   createdBy: string | null;
   deleted: boolean;
@@ -493,6 +502,11 @@ export function toDroneAssetView(d: DroneAsset): DroneAssetView {
     baseId: d.base_id,
     base: toDroneBase(d),
     velocidadOrbitaMs: typeof d.velocidad_orbita_ms === 'number' ? d.velocidad_orbita_ms : null,
+    // Un valor que no está en la lista (una fila tocada a mano, una reacción
+    // que dejó de existir) es "la de fábrica": la app no lo aceptaría de todos
+    // modos, y mandárselo descartaría el mensaje `ajustes` entero (§2).
+    reaccionADeteccion: esReaccionADeteccion(d.reaccion_deteccion) ? d.reaccion_deteccion : null,
+    silencioAlRetomarS: typeof d.silencio_al_retomar_s === 'number' ? d.silencio_al_retomar_s : null,
     createdAt: d.created_at,
     createdBy: d.created_by,
     deleted: !!d.deleted,
@@ -549,7 +563,22 @@ export interface DronePatch {
   baseId?: number | null;
   /** `null` vuelve a la velocidad de órbita de fábrica; `undefined` la deja como está. */
   velocidadOrbitaMs?: number | null;
+  /** `null` vuelve a la reacción de fábrica; `undefined` la deja como está. */
+  reaccionADeteccion?: ReaccionADeteccion | null;
+  /** `null` vuelve al silencio de fábrica; `undefined` lo deja como está. */
+  silencioAlRetomarS?: number | null;
 }
+
+/**
+ * Los ajustes del dron y su columna (ajustes.ts). Van aparte del UPDATE con
+ * COALESCE de abajo porque ahí `null` es "no lo toques" y acá es "el de
+ * fábrica": hay que poder escribir NULL a propósito.
+ */
+const COLUMNA_DEL_AJUSTE = {
+  velocidadOrbitaMs: 'velocidad_orbita_ms',
+  reaccionADeteccion: 'reaccion_deteccion',
+  silencioAlRetomarS: 'silencio_al_retomar_s',
+} as const;
 
 /** Aplica el cambio sobre un dron vivo y devuelve el antes y el después, para el log. */
 export function updateDrone(hash: string, patch: DronePatch): { before: DroneAssetView; after: DroneAssetView } | undefined {
@@ -575,9 +604,10 @@ export function updateDrone(hash: string, patch: DronePatch): { before: DroneAss
   if (patch.baseId !== undefined) {
     db.prepare('UPDATE drones SET base_id = ? WHERE hash = ?').run(patch.baseId, hash);
   }
-  // La velocidad de órbita, por lo mismo: null es "la de fábrica".
-  if (patch.velocidadOrbitaMs !== undefined) {
-    db.prepare('UPDATE drones SET velocidad_orbita_ms = ? WHERE hash = ?').run(patch.velocidadOrbitaMs, hash);
+  // Los ajustes del dron, por lo mismo: null es "el de fábrica".
+  for (const [campo, columna] of Object.entries(COLUMNA_DEL_AJUSTE) as [keyof typeof COLUMNA_DEL_AJUSTE, string][]) {
+    const valor = patch[campo];
+    if (valor !== undefined) db.prepare(`UPDATE drones SET ${columna} = ? WHERE hash = ?`).run(valor, hash);
   }
 
   return { before, after: getDrone(hash)! };

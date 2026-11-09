@@ -563,3 +563,42 @@ describe('AlertaEnCurso — abrir la alerta en su pop-up', () => {
     expect(verDetalle).toHaveFocus();
   });
 });
+
+describe('AlertaEnCurso — el dron de la alerta y sus ajustes', () => {
+  it('con la ficha del dron, las consecuencias hablan de su reacción y de su silencio, y el engranaje va al lado de Descartar', () => {
+    montar({
+      alertas: [makeAlert({ id: 1, drone_id: 'd1' })],
+      drones: [makeDrone({ droneId: 'd1', displayName: 'Alfa', reaccionADeteccion: 'orbitar', silencioAlRetomarS: 20 })],
+    });
+    expect(screen.getByText(/Validar: .*sigue orbitando el lugar\./)).toBeInTheDocument();
+    expect(screen.getByText(/Descartar: .*durante 20 s\./)).toBeInTheDocument();
+    const engranaje = screen.getByRole('button', { name: 'Silencio al retomar' });
+    expect(engranaje).toHaveAttribute('title', 'Silencio al retomar: 20 s');
+    expect(engranaje.parentElement).toBe(screen.getByRole('button', { name: 'Descartar' }).parentElement);
+  });
+
+  it('las flechas sobre el deslizador del silencio son del deslizador: el carrusel no pasa de alerta', () => {
+    montar({
+      alertas: [makeAlert({ id: 1, drone_id: 'd1' }), makeAlert({ id: 2, drone_id: 'd1' })],
+      drones: [makeDrone({ droneId: 'd1', displayName: 'Alfa', silencioAlRetomarS: 20 })],
+    });
+    expect(cuenta()).toHaveTextContent('1 de 2');
+    fireEvent.click(screen.getByRole('button', { name: 'Silencio al retomar' }));
+    const deslizador = screen.getByRole('slider', { name: 'Silencio al retomar' });
+    deslizador.focus();
+    // `fireEvent` devuelve false sólo si alguien llamó a preventDefault: la
+    // flecha le queda al deslizador, que es el que mueve los segundos.
+    expect(fireEvent.keyDown(deslizador, { key: 'ArrowRight' })).toBe(true);
+    expect(fireEvent.keyDown(deslizador, { key: 'ArrowLeft' })).toBe(true);
+    expect(cuenta()).toHaveTextContent('1 de 2');
+    // Con el foco en un botón de la misma diapositiva, las flechas siguen siendo del carrusel.
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Descartar' }), { key: 'ArrowRight' });
+    expect(cuenta()).toHaveTextContent('2 de 2');
+  });
+
+  it('sin la ficha del dron (la pieza suelta, sin la consola alrededor) dice lo de siempre y no ofrece el engranaje', () => {
+    montar({ alertas: [makeAlert({ id: 1, drone_id: 'd1' })] });
+    expect(screen.getByText(/Descartar: retoma la ruta hacia el próximo nodo\./)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Silencio al retomar' })).not.toBeInTheDocument();
+  });
+});

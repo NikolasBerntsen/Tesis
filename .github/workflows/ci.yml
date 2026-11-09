@@ -145,18 +145,23 @@ jobs:
             android-app/app/build/reports/coverage/test/mock/debug/report.xml
             android-app/app/build/test-results/testMockDebugUnitTest
 
-  # El despliegue arranca apenas las tres suites están en verde, en PARALELO con
-  # el análisis de SonarQube y no atrás.
+  # El despliegue arranca apenas las suites del hub y de la consola están en
+  # verde, en PARALELO con la de la app Android y con el análisis de SonarQube.
+  #
+  # A la VM va solo eso, el hub y la consola: la app no se despliega (el rsync
+  # de deploy.yml la excluye), así que su suite —la más larga del CI— no dice
+  # nada sobre lo que se está por publicar, y esperarla dejaba la VM vieja casi
+  # diez minutos después de cada merge. La suite de la app igual corre en main y
+  # queda en rojo si algo se rompió; solo que ya no está en el camino crítico.
   #
   # Antes colgaba del workflow entero (`workflow_run` en deploy.yml), así que
   # esperaba también al análisis: 6 minutos de medición de calidad entre el
-  # merge y la VM actualizada. El análisis igual corre y igual publica; lo que
-  # cambia es que ya no está en el camino crítico, porque no dice nada sobre si
-  # el código anda — eso lo dicen los tests, que son de quienes sí depende esto.
+  # merge y la VM actualizada. El análisis tampoco dice nada sobre si el código
+  # anda — eso lo dicen los tests, que son de quienes sí depende esto.
   desplegar:
     name: Desplegar
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [backend, frontend, android]
+    needs: [backend, frontend]
     uses: ./.github/workflows/deploy.yml
     secrets: inherit
 

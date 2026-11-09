@@ -4,10 +4,11 @@ name: Deploy a la VM
 # Copia el código por rsync y la VM construye y levanta los contenedores (deploy/deploy.sh). No hay
 # registry de imágenes ni agente en el servidor.
 #
-# Lo llama el CI de main apenas las TRES suites están en verde (ver el job `desplegar` de ci.yml):
-# un commit que rompe los tests nunca llega a la VM. Antes se disparaba con `workflow_run` al
-# terminar TODO el CI, y eso incluía el análisis de SonarQube: el despliegue quedaba esperando
-# ~6 minutos a una medición de calidad que no dice nada sobre si el código anda.
+# Lo llama el CI de main apenas las suites del hub y de la consola están en verde (ver el job
+# `desplegar` de ci.yml): un commit que rompe esos tests nunca llega a la VM. La de la app Android
+# no se espera, porque la app no se despliega acá (el rsync la excluye). Antes se disparaba con
+# `workflow_run` al terminar TODO el CI, y eso incluía el análisis de SonarQube: el despliegue
+# quedaba esperando ~6 minutos a una medición de calidad que no dice nada sobre si el código anda.
 #
 # También se lanza a mano (Actions → "Deploy a la VM" → Run workflow); con "ref" despliega una
 # versión anterior (rollback).

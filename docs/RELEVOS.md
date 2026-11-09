@@ -209,8 +209,13 @@ Reglas que se agregan:
    recién con A lejos o en tierra (§3.5): un A que se fue porque un operador lo
    detuvo puede seguir quieto sobre su órbita.
 9. **Órdenes del operador durante un relevo.** `start_route`, `stop_patrol`,
-   `force_goto` y `resume` hacia B cancelan el relevo (`CANCELADO`, `motivoFin:
-   "orden_del_operador"`). Las mismas hacia A en un relevo de seguimiento
+   `force_goto`, `resume` y las dos órdenes de llegada de la consola
+   (`return_home` y `land`, VUELO §7.1 y §9) hacia B cancelan el relevo
+   (`CANCELADO`, `motivoFin: "orden_del_operador"`): el hub lo resuelve antes
+   de reenviar la orden, sin `relay_cancel`, porque la orden que sigue ya le
+   dice a la app qué hacer. Antes, volver a la base lo cancelaba el hub y
+   aterrizar lo abortaba la app (`FALLIDO`): dos finales distintos para dos
+   órdenes de la misma persona. Las mismas hacia A en un relevo de seguimiento
    cuentan como `relay_abandon`. Tomar el control de B no cancela nada; al
    soltarlo, `reanudacionAlSoltar` devuelve `none` si el dron participa de un
    relevo activo.
@@ -247,8 +252,11 @@ el desvío se dispare tarde, no temprano.
   con la misma confirmación sostenida. El destino comprometido se mantiene
   aunque la base salga de la lista.
 - **Cómo se desvía** (dron real): `permitirRthPropioPorBateria(false)`,
-  `cancelarRegreso()` (`KeyStopGoHome` y esperar `GoHomeState = IDLE`, tope
-  3 s), `fijarFailsafeAterrizar(true)` (`KeyFailsafeAction = LANDING`: si se
+  `cancelarRegreso()` (`KeyStopGoHome` y leer cada 500 ms, hasta 3 s, que el
+  dron deje de volver —ni `GoHomeState` en `RETURNING_TO_HOME`, ni en
+  `LANDING` a menos de 30 m de casa, ni `KeyFlightMode` en `GO_HOME`, VUELO
+  §7.2—, con un segundo Stop si el GoHome vuelve a arrancar),
+  `fijarFailsafeAterrizar(true)` (`KeyFailsafeAction = LANDING`: si se
   corta el enlace, aterriza donde está en vez de volver a una casa
   inalcanzable), subir a `ALTURA_TRANSITO_M`, `volarHacia(punto de visitantes)`,
   y al llegar `fijarPuntoDeRetornoAqui()` + `land()`. Se intenta además

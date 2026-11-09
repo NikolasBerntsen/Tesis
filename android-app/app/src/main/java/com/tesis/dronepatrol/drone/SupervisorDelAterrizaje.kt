@@ -29,8 +29,11 @@ import kotlin.math.min
  *  - si deja de aterrizar y SUBE [SUBIDA_QUE_CORTA_M] por encima de lo más
  *    bajo que llegó, lo subió una persona con las palancas del control:
  *    [Accion.LO_SUBIERON], y la app no se lo pelea;
- *  - sin enlace con la aeronave el reloj no corre: no hay lectura nueva, y el
- *    dron sigue con lo suyo.
+ *  - sin enlace con la aeronave el reloj no corre y las órdenes no cuentan: no
+ *    hay lectura nueva, la que salió no le llegó al dron (o su respuesta no
+ *    dice nada) y el dron sigue con lo suyo. Sin enlace nunca hay
+ *    [Accion.NO_SE_PUDO]; cuando vuelve, si el dron está bajando se da por
+ *    aceptado, y si no, el plazo para que baje cuenta desde ahí.
  *
  * Vive en `main`, sin el MSDK, para poder probar cada borde sin dron; el
  * controlador real hace las lecturas y las órdenes.
@@ -69,11 +72,14 @@ class SupervisorDelAterrizaje(private val reloj: () -> Long = System::currentTim
         val alturaM: Double,
     )
 
-    /** Cuántas órdenes salieron desde [empezar]. */
+    /** Cuántas órdenes salieron, con enlace, desde [empezar]. */
     var ordenes = 0
         private set
 
-    /** El dron aceptó alguna de las órdenes de este aterrizaje (el aviso sale una vez). */
+    /**
+     * El dron aceptó alguna de las órdenes de este aterrizaje, o se lo vio
+     * bajando con enlace después de una que salió sin él (el aviso sale una vez).
+     */
     var aceptado = false
         private set
 
@@ -105,8 +111,16 @@ class SupervisorDelAterrizaje(private val reloj: () -> Long = System::currentTim
      * [motivo]), null no contestó a tiempo. [lectura] es lo que se leyó después.
      */
     fun alContestar(aceptada: Boolean?, lectura: Lectura, motivo: String? = null): Accion {
-        ordenes++
+        // Sin enlace la orden no le llegó al dron, o su respuesta no dice nada:
+        // no gasta ninguna de las tres.
+        if (lectura.conEnlace) ordenes++
         if (!lectura.enVuelo) return Accion.EN_EL_SUELO
+        if (!lectura.conEnlace) {
+            // Tampoco cuenta como aceptada: lo que diga la lectura es lo último
+            // que llegó antes del corte. El plazo arranca acá (ver alLeer).
+            anclar(lectura, reloj())
+            return Accion.SEGUIR
+        }
         if (aceptada == true || lectura.bajando == true || lectura.pideConfirmar) {
             aceptado = true
             anclar(lectura, reloj())
@@ -116,7 +130,7 @@ class SupervisorDelAterrizaje(private val reloj: () -> Long = System::currentTim
         return if (ordenes >= MAXIMO_DE_ORDENES) Accion.NO_SE_PUDO else Accion.ORDENAR
     }
 
-    /** Una vuelta de la secuencia con el aterrizaje ya aceptado. */
+    /** Una vuelta de la secuencia con la orden ya contestada (aceptada, o sin enlace). */
     fun alLeer(lectura: Lectura): Accion {
         val ahora = reloj()
         if (!lectura.enVuelo) return Accion.EN_EL_SUELO
@@ -124,6 +138,9 @@ class SupervisorDelAterrizaje(private val reloj: () -> Long = System::currentTim
             anclar(lectura, ahora)
             return Accion.SEGUIR
         }
+        // Con enlace, bajando o pidiendo confirmar es que el dron tomó el
+        // aterrizaje: también el que se ordenó mientras no había enlace.
+        if (lectura.bajando == true || lectura.pideConfirmar) aceptado = true
         if (loSubieron(lectura)) return Accion.LO_SUBIERON
         anotarIndicios(lectura, ahora)
         val sinIndicios = ahora - ultimoIndicioMs >= VERIFICACION_MS

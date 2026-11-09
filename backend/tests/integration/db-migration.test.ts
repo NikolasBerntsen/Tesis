@@ -667,6 +667,66 @@ describe('integración — los DNI guardados pasan a su forma canónica', () => 
   });
 });
 
+// Los ajustes del dron (VUELO §10) sobre una base que ya tenía la velocidad de
+// órbita y nada más: se suman las otras dos columnas, en NULL (el de fábrica),
+// sin tocar la velocidad que cada dron tenía.
+describe('integración — migración: los ajustes del dron', () => {
+  let tmpFile = '';
+  let db: DbLike;
+
+  const ajustesDe = (hash: string) =>
+    db.prepare('SELECT velocidad_orbita_ms, reaccion_deteccion, silencio_al_retomar_s FROM drones WHERE hash = ?').get(hash);
+
+  beforeAll(async () => {
+    tmpFile = archivoTemporal('migracion-ajustes');
+    const old = new Database(tmpFile);
+    old.exec(`
+      CREATE TABLE drones (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL,
+        model TEXT NOT NULL DEFAULT '', inventory_code TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1,
+        base_id INTEGER, velocidad_orbita_ms REAL, created_at TEXT NOT NULL, created_by TEXT,
+        deleted INTEGER NOT NULL DEFAULT 0, deleted_at TEXT, deleted_by TEXT
+      );
+    `);
+    old.prepare("INSERT INTO drones (hash, display_name, velocidad_orbita_ms, created_at) VALUES ('aaaa', 'Alfa', 2.5, '2024-01-01')").run();
+    old.prepare("INSERT INTO drones (hash, display_name, created_at) VALUES ('bbbb', 'Bravo', '2024-01-01')").run();
+    old.close();
+    db = await abrirConMigraciones(tmpFile);
+  });
+
+  afterAll(() => {
+    try {
+      db.close();
+    } catch {
+      /* ignorar */
+    }
+    borrarBase(tmpFile);
+  });
+
+  it('suma reaccion_deteccion y silencio_al_retomar_s, vacías, y deja la velocidad como estaba', () => {
+    expect(columnas(db, 'drones')).toEqual(expect.arrayContaining(['velocidad_orbita_ms', 'reaccion_deteccion', 'silencio_al_retomar_s']));
+    expect(ajustesDe('aaaa')).toEqual({ velocidad_orbita_ms: 2.5, reaccion_deteccion: null, silencio_al_retomar_s: null });
+    expect(ajustesDe('bbbb')).toEqual({ velocidad_orbita_ms: null, reaccion_deteccion: null, silencio_al_retomar_s: null });
+  });
+
+  it('las columnas admiten lo que guarda el hub: un texto de la lista y un entero', () => {
+    expect(() =>
+      db.prepare("UPDATE drones SET reaccion_deteccion = 'detenerse', silencio_al_retomar_s = 30 WHERE hash = 'aaaa'").run(),
+    ).not.toThrow();
+    expect(ajustesDe('aaaa')).toEqual({ velocidad_orbita_ms: 2.5, reaccion_deteccion: 'detenerse', silencio_al_retomar_s: 30 });
+  });
+
+  it('correr las migraciones de nuevo no cambia nada', async () => {
+    db.close();
+    const otra = await abrirConMigraciones(tmpFile);
+    expect(otra.prepare('SELECT hash, reaccion_deteccion, silencio_al_retomar_s FROM drones ORDER BY hash').all()).toEqual([
+      { hash: 'aaaa', reaccion_deteccion: 'detenerse', silencio_al_retomar_s: 30 },
+      { hash: 'bbbb', reaccion_deteccion: null, silencio_al_retomar_s: null },
+    ]);
+    db = otra;
+  });
+});
+
 // Relevos, desvíos y emergencias (RELEVOS.md) sobre una base que ya tiene
 // alertas y bases: se suman las columnas y las tablas sin tocar lo que había.
 describe('integración — migración: relevos y emergencias', () => {
