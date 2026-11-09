@@ -293,6 +293,44 @@ enum class PatrolState {
      * Es un regreso: los failsafes no lo pisan y no se alerta.
      */
     ATERRIZAJE_EMERGENCIA,
+    /**
+     * Se detuvo donde estaba al confirmar una detección y vigila al objetivo
+     * con la nariz y la cámara, sin moverse (la reacción `detenerse`,
+     * docs/VUELO.md §5). Es un estado de seguimiento como ORBITING y FOLLOWING:
+     * hay un objetivo con su alerta esperando la decisión.
+     */
+    VIGILANDO,
+}
+
+/**
+ * Qué hace el dron con un objetivo confirmado (docs/VUELO.md §5): un ajuste
+ * del dron que fija la consola (`ajustes.reaccionADeteccion`,
+ * docs/PROTOCOLS.md §2) y la app aplica al confirmar, mientras lo sigue, al
+ * volver a él tras el control manual y en la toma de un relevo. Los nombres del
+ * protocolo son los de [enElProtocolo]; el de fábrica es [SEGUIR_Y_ORBITAR],
+ * que es lo que el dron hacía antes de que existiera el ajuste.
+ */
+enum class ReaccionADeteccion(val enElProtocolo: String) {
+    /** Orbita al objetivo; si se mueve lo sigue, si se detiene vuelve a orbitarlo. */
+    SEGUIR_Y_ORBITAR("seguir_y_orbitar"),
+    /** Orbita el lugar de la detección, con el centro fijo: nunca lo sigue. */
+    ORBITAR("orbitar"),
+    /** Se pone a 25 m del objetivo y se queda ahí, quieto o siguiéndolo: nunca orbita. */
+    SEGUIR("seguir"),
+    /** Se detiene donde estaba y lo vigila con la nariz y la cámara ([PatrolState.VIGILANDO]). */
+    DETENERSE("detenerse"),
+    ;
+
+    companion object {
+        val DE_FABRICA = SEGUIR_Y_ORBITAR
+
+        /**
+         * La reacción que nombra el protocolo, o null si el texto no es ninguna
+         * (nada se convierte: ni mayúsculas ni espacios). Un `null` del JSON es
+         * la de fábrica, y eso lo decide quien lee el mensaje.
+         */
+        fun desdeElProtocolo(texto: String?): ReaccionADeteccion? = entries.firstOrNull { it.enElProtocolo == texto }
+    }
 }
 
 sealed class FlightEvent {

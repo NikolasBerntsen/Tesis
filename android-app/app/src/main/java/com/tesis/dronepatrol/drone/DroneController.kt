@@ -51,6 +51,17 @@ interface DroneController {
          * repetidos ni el techo por minuto que frenan a los rechazos de 10 Hz.
          */
         const val NO_SE_PUDO_ATERRIZAR = "no se pudo aterrizar"
+
+        /**
+         * Con qué empieza el [FlightEvent.Problema] de un [returnHome] que no
+         * arrancó (docs/VUELO.md §7.2): el dron no aceptó `KeyStartGoHome`
+         * después de sus reintentos, o lo aceptó y el regreso no salió de IDLE.
+         * Como [NO_SE_PUDO_ATERRIZAR], es la respuesta DEFINITIVA a una orden,
+         * y PatrolManager la avisa siempre y deja al dron estacionario a la
+         * espera de otra orden. En el campo un GoHome pisado por una vuelta
+         * tardía del lazo de la órbita no dejaba ni una pista.
+         */
+        const val NO_SE_PUDO_VOLVER = "no se pudo volver a la base"
     }
     /**
      * Enlace, modelo, GPS, punto de retorno y si está en el aire. Es un
@@ -384,6 +395,24 @@ interface DroneController {
     fun girarEnElLugar(rumboGrados: Double) {
         // Sin implementación el dron no gira: la panorámica sale incompleta.
     }
+
+    /**
+     * Vigila al objetivo en (lat, lon) desde donde está: vuelo estacionario con
+     * la nariz girada hacia él y el gimbal bajado lo justo para tenerlo en el
+     * centro del cuadro, sin desplazarse. Es la reacción `detenerse`
+     * ([com.tesis.dronepatrol.model.ReaccionADeteccion.DETENERSE],
+     * docs/VUELO.md §5): el dron avisa y se queda mirando, y es una persona la
+     * que decide si va. Se llama con cada estimación nueva del objetivo; si ya
+     * vigila, solo corre el punto al que mira, sin cortar el estacionario. Con
+     * el dron en el suelo se rechaza ([FlightEvent.Problema]), y aterrizando
+     * también, como el resto de la navegación.
+     *
+     * Por defecto es [hold]: el dron se detiene, aunque la cámara no lo siga.
+     * Real: un lazo propio (velocidad cero, rumbo al objetivo, altura
+     * sostenida, gimbal al objetivo). Simulado: estacionario con el rumbo y el
+     * gimbal al objetivo.
+     */
+    fun vigilar(lat: Double, lon: Double) = hold()
 
     /**
      * Apunta la cámara a [pitchGrados] en ángulo ABSOLUTO (0 horizonte, −90
