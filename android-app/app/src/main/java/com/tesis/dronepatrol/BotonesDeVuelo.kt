@@ -46,10 +46,12 @@ internal object BotonesDeVuelo {
      * "Volver a base": en el aire y sin otro regreso en curso. El aterrizaje de
      * emergencia también es uno —el que baja donde está porque la batería no
      * alcanza para ninguna base—, y mandarlo a volver sería tirarlo en el camino.
+     * Sin señal con el dron tampoco: la orden no le llega, y el DJI ya vuelve
+     * solo (la patrulla la rechaza igual, docs/VUELO.md §4).
      */
     fun volverABaseHabilitado(estado: PatrolState, dron: EstadoDelDron): Boolean =
         dron.enVuelo && estado != PatrolState.RETURNING_HOME && estado != PatrolState.RETURNING_HOME_BATTERY &&
-            estado != PatrolState.ATERRIZAJE_EMERGENCIA
+            estado != PatrolState.RETURNING_HOME_SIGNAL && estado != PatrolState.ATERRIZAJE_EMERGENCIA
 
     /**
      * «En espera para relevos» (docs/RELEVOS.md §0): se prende con el dron en

@@ -275,4 +275,100 @@ class PatrolManagerRegresoPorLaConsolaTest {
         assertEquals(PatrolState.RETURNING_HOME_BATTERY, patrulla.state.value)
         assertEquals(emptyList<String>(), desde(i))
     }
+
+    /** Con su aterrizaje por batería crítica (capa 1), tampoco: solo el aviso, sin estacionario ni cambio de estado. */
+    @Test
+    fun conSuAterrizajePorBateriaCriticaSoloSeAvisa() = runBlocking {
+        patrullando()
+        banco.evento(FlightEvent.ElDronTomoElControl(MotivoDelDron.ATERRIZAJE_BATERIA_CRITICA))
+        esperarA("el aterrizaje del DJI") { patrulla.state.value != PatrolState.PATROLLING }
+        val estado = patrulla.state.value
+        val i = dron.ordenes.size
+
+        banco.evento(FlightEvent.Problema(NO_ARRANCO))
+        esperarA("el aviso") { eventos("DRONE_PROBLEM").any { it.getString("message").startsWith("No se pudo volver a la base") } }
+        delay(200)
+
+        assertEquals(estado, patrulla.state.value)
+        assertFalse("ni estacionario: ${desde(i)}", desde(i).any { it == "hold" })
+    }
+
+    /** En la pausa del regreso que no arrancó el dron espera a una persona: el auto siguiente alerta, sin ponerlo a orbitar. */
+    @Test
+    fun enLaPausaDelRegresoQueNoArrancoUnaDeteccionAlertaSinSeguimiento() = runBlocking {
+        patrullando()
+        volverPorLaConsola()
+        esperarA("el regreso") { patrulla.state.value == PatrolState.RETURNING_HOME }
+        banco.evento(FlightEvent.Problema(NO_ARRANCO))
+        esperarA("la pausa, estacionario") { patrulla.state.value == PatrolState.PAUSED && dron.ultimaOrden == "hold" }
+        val i = dron.ordenes.size
+
+        detectar()
+        detectar()
+        esperarA("la alerta") { banco.comando.alertas.isNotEmpty() }
+        assertEquals(PatrolState.PAUSED, patrulla.state.value)
+        assertEquals("ni órbita ni seguimiento: ${desde(i)}", emptyList<String>(), desde(i))
+        assertTrue(
+            eventos("DETECTION").single().getString("message").contains("con el dron a la espera de una orden tras el regreso que no arrancó"),
+        )
+
+        // La orden de una persona termina la espera: retomada la ruta, una detección se sigue como siempre.
+        consola("""{"type":"resume_patrol","orderedBy":"op"}""")
+        esperarA("la ruta retomada") { patrulla.state.value == PatrolState.PATROLLING }
+        detectar()
+        detectar()
+        esperarA("la órbita") { patrulla.state.value == PatrolState.ORBITING }
+    }
+
+    // ---- El lock que el hub ya soltó, se cumpla o no la orden ----
+
+    /** En el suelo con el control tomado: no hay a dónde volver, pero el control queda suelto y el dron en reposo. */
+    @Test
+    fun enElSueloConElControlTomadoLoSueltaYQuedaEnReposo() = runBlocking {
+        banco.enElSuelo()
+        banco.arrancar()
+        banco.telemetria(alt = 0.0)
+        consola("""{"type":"control_taken","by":"op"}""")
+        esperarA("el control manual") { patrulla.state.value == PatrolState.MANUAL }
+
+        volverPorLaConsola()
+        esperarA("el reposo") { patrulla.state.value == PatrolState.IDLE }
+
+        assertTrue(registro("El control manual queda suelto: el Comando Central ya soltó el lock con la orden"))
+        assertTrue(registro("pero el dron está en el suelo: no hay a dónde volver"))
+        assertTrue("el hub ya soltó el lock", banco.mensajes("control_dropped").isEmpty())
+        assertFalse("returnHome" in dron.ordenes)
+    }
+
+    /** Lo mismo con la batería baja: queda por cambiar, como al soltar el control en el suelo. */
+    @Test
+    fun enElSueloConLaBateriaBajaQuedaPorCambiar() = runBlocking {
+        banco.enElSuelo()
+        banco.arrancar()
+        banco.telemetria(alt = 0.0, bateria = 20.0)
+        consola("""{"type":"control_taken","by":"op"}""")
+        esperarA("el control manual") { patrulla.state.value == PatrolState.MANUAL }
+
+        volverPorLaConsola()
+        esperarA("la batería por cambiar") { patrulla.state.value == PatrolState.LANDED }
+    }
+
+    /** Ya volviendo con el control tomado (la batería lo mandó en MANUAL): no cambia el regreso, pero el control queda suelto. */
+    @Test
+    fun yaVolviendoConElControlTomadoIgualLoSuelta() = runBlocking {
+        patrullando()
+        consola("""{"type":"control_taken","by":"op"}""")
+        esperarA("el control manual") { patrulla.state.value == PatrolState.MANUAL }
+        banco.telemetria(norteM = 100.0, bateria = 20.0)
+        esperarA("el regreso por batería") { patrulla.state.value == PatrolState.RETURNING_HOME_BATTERY }
+
+        volverPorLaConsola()
+        esperarA("el registro") { registro("ya está volviendo (RETURNING_HOME_BATTERY): no cambia nada") }
+
+        assertTrue(registro("El control manual queda suelto: el Comando Central ya soltó el lock con la orden"))
+        assertTrue(banco.mensajes("control_dropped").isEmpty())
+        consola("""{"type":"control_taken","by":"op","resync":true}""")
+        esperarA("el aviso al hub") { banco.mensajes("control_dropped").isNotEmpty() }
+        assertTrue(banco.mensajes("control_dropped").single().getString("motivo").contains("ordenó volver a la base desde el Comando Central"))
+    }
 }

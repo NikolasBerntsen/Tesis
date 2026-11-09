@@ -1,11 +1,15 @@
 package com.tesis.dronepatrol.patrol
 
+import com.tesis.dronepatrol.drone.DroneController
 import com.tesis.dronepatrol.model.Caja
 import com.tesis.dronepatrol.model.Deteccion
 import com.tesis.dronepatrol.model.FlightEvent
 import com.tesis.dronepatrol.model.MotivoDelDron
 import com.tesis.dronepatrol.model.PatrolState
 import com.tesis.dronepatrol.patrol.BancoDeRelevos.Companion.RUTA
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -193,7 +197,9 @@ class PatrolManagerAterrizajeDeLaConsolaTest {
         val i = dron.ordenes.size
 
         aterrizarPorLaConsola()
-        esperarA("el registro") { registro("pero no hay señal con el dron: la orden no le llega") }
+        // La consola se entera, como de cualquier aterrizaje que no se cumple.
+        val texto = "No se aterriza (op ordenó aterrizar desde la consola): no hay señal con el dron: la orden no le llega, y vuelve solo"
+        esperarA("el aviso a la consola") { eventos("DRONE_PROBLEM").any { it.getString("message") == texto } }
 
         assertEquals(emptyList<String>(), desde(i))
         assertEquals(PatrolState.RETURNING_HOME_SIGNAL, patrulla.state.value)
@@ -305,12 +311,14 @@ class PatrolManagerAterrizajeDeLaConsolaTest {
     }
 
     /**
-     * El descenso final de una emergencia no se discute (VUELO §1 y §4): ni el
-     * `land` de la consola (ya aterriza: un `land` repetido le volvería a
-     * empezar la secuencia al DJI) ni, con el control tomado, la palanca.
+     * El descenso final de una emergencia no se discute (VUELO §1 y §4), y la
+     * consola se entera de cada rechazo: el `land` (ya aterriza: uno repetido
+     * le volvería a empezar la secuencia al DJI) y la toma del control, que no
+     * se hace —`control_dropped`: nada de una vista de pilotaje de un dron que
+     * no le obedecería—, así que la palanca que llega después no es de nadie.
      */
     @Test
-    fun enElDescensoDeUnaEmergenciaNiElLandNiLaPalancaLoTocan() = runBlocking {
+    fun enElDescensoDeUnaEmergenciaNiElLandNiLaTomaSeCumplenYLaPalancaNoLoToca() = runBlocking {
         dron.estado.value = dron.estado.value.copy(umbralCriticoPct = 10.0)
         dron.confirmarCamaraYRumbo = true
         banco.arrancar()
@@ -325,24 +333,68 @@ class PatrolManagerAterrizajeDeLaConsolaTest {
         val i = dron.ordenes.size
 
         aterrizarPorLaConsola()
-        esperarA("el rechazo") { registro("pero el dron ya está bajando en el aterrizaje de emergencia") }
+        val noAterriza = "No se aterriza (op ordenó aterrizar desde la consola): el dron ya está bajando en el aterrizaje de emergencia"
+        esperarA("el rechazo del land") { eventos("DRONE_PROBLEM").any { it.getString("message") == noAterriza } }
         assertEquals(PatrolState.ATERRIZAJE_EMERGENCIA, patrulla.state.value)
 
         tomarElControl()
-        esperarA("el control manual") { patrulla.state.value == PatrolState.MANUAL }
+        esperarA("el rechazo de la toma") { banco.mensajes("control_dropped").isNotEmpty() }
+        assertEquals(
+            "no se tomó el control: el dron está aterrizando de emergencia (última ubicación): no se toma el control",
+            banco.mensajes("control_dropped").single().getString("motivo"),
+        )
+        assertTrue(
+            eventos("DRONE_PROBLEM").any {
+                it.getString("message") ==
+                    "No se toma el control manual que pidió op: el dron está aterrizando de emergencia (última ubicación): no se toma el control"
+            },
+        )
         banco.reloj.adelantar(PatrolManager.GRACIA_DEL_ATERRIZAJE_MS + 1_000)
         palanca(1.0)
-        aterrizarPorLaConsola()
-        esperarA("el segundo rechazo") {
-            patrulla.localLog.replayCache.count { it.contains("pero el dron ya está bajando en el aterrizaje de emergencia") } == 2
-        }
         delay(200)
 
-        // Tomar el control aterrizando no frena (no hay estacionario) y entrar a MANUAL no toca la cámara.
+        // Ni estacionario ni palanca: el dron sigue bajando, en su estado.
+        assertEquals(PatrolState.ATERRIZAJE_EMERGENCIA, patrulla.state.value)
         assertEquals("sigue bajando, sin una orden más: ${desde(i)}", emptyList<String>(), desde(i))
         assertTrue(cancelados().isEmpty())
         assertFalse("cancelarAterrizaje" in dron.ordenes)
         assertTrue("ningún LANDING de la consola", eventos("LANDING").none { it.getString("message").contains("desde el Comando Central") })
+    }
+
+    /**
+     * La palanca decide cortar con el cerrojo del mando y corta por la puerta de
+     * la patrulla (VUELO §8): si en el medio el vuelo pasó a ser del propio DJI
+     * —acá, un corte del regreso que no salió—, con la puerta tomada ya no
+     * corta. Antes se volvía a mirar solo el aterrizaje y el control, y le
+     * cancelaba al DJI el aterrizaje con un estacionario.
+     */
+    @Test
+    fun siEntreLaDecisionYElCorteElVueloPasaAlDjiLaPalancaYaNoCorta() = runBlocking {
+        val i = aterrizandoConElControl()
+        banco.reloj.adelantar(PatrolManager.GRACIA_DEL_ATERRIZAJE_MS)
+        val enElAviso = CountDownLatch(1)
+        val seguir = CountDownLatch(1)
+        // El aviso del corte que no salió se para adentro de la puerta de la
+        // patrulla, antes de que el vuelo pase a ser del DJI.
+        banco.comando.alEnviar = { m ->
+            if (m.optString("eventType") == "DRONE_PROBLEM" && m.optString("message").contains(DroneController.NO_SE_CORTO_EL_REGRESO)) {
+                enElAviso.countDown()
+                seguir.await(5, TimeUnit.SECONDS)
+            }
+        }
+        dron.flightEvents.emit(FlightEvent.Problema("${DroneController.NO_SE_CORTO_EL_REGRESO}: prueba"))
+        assertTrue("el aviso no salió", enElAviso.await(5, TimeUnit.SECONDS))
+
+        // La palanca pasa la decisión (el vuelo todavía es de la app) y queda esperando la puerta.
+        val mando = thread { palanca(1.0) }
+        esperarA("la palanca en la puerta") { mando.state == Thread.State.BLOCKED }
+        seguir.countDown()
+        mando.join(5_000)
+        delay(200)
+
+        assertEquals("ni corte ni estacionario ni palanca: ${desde(i)}", emptyList<String>(), desde(i))
+        assertTrue(cancelados().isEmpty())
+        assertEquals(PatrolState.MANUAL, patrulla.state.value)
     }
 
     /** Con el control tomado y el dron bajando en la pausa (una ruta sin soltar y después «Aterrizar»), la palanca lo corta y pasa a MANUAL. */

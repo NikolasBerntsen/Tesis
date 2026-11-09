@@ -112,6 +112,10 @@ class BotonesDeVueloTest {
         assertFalse(BotonesDeVuelo.volverABaseHabilitado(PatrolState.RETURNING_HOME, enElAire))
         assertFalse(BotonesDeVuelo.volverABaseHabilitado(PatrolState.RETURNING_HOME_BATTERY, enElAire))
         assertFalse(
+            "sin señal la orden no le llega, y el DJI ya vuelve solo",
+            BotonesDeVuelo.volverABaseHabilitado(PatrolState.RETURNING_HOME_SIGNAL, enElAire),
+        )
+        assertFalse(
             "el aterrizaje de emergencia baja donde está: mandarlo a volver es tirarlo en el camino",
             BotonesDeVuelo.volverABaseHabilitado(PatrolState.ATERRIZAJE_EMERGENCIA, enElAire),
         )

@@ -215,11 +215,12 @@ class PatrolManagerUltimaUbicacionTest {
 
     /**
      * El aterrizaje del final de la secuencia lo ordena la secuencia, no una
-     * persona: aceptado, se sostiene igual hasta el suelo. Tomar el control ahí
-     * no lo frena con un estacionario, y el mando no le llega.
+     * persona: aceptado, se sostiene igual hasta el suelo. Es el descenso final
+     * de la emergencia (docs/VUELO.md §4): el control no se toma —la consola se
+     * entera con `control_dropped`— y ni el estacionario ni el mando le llegan.
      */
     @Test
-    fun elAterrizajeDelFinalDeLaSecuenciaSeSostieneAunqueTomenElControl() = runBlocking {
+    fun elAterrizajeDelFinalDeLaSecuenciaSeSostieneYElControlNoSeToma() = runBlocking {
         enEmergencia(bateria = 10.2)
         esperarA("el aterrizaje") { "land" in dron.ordenes }
         esperarA("el aterrizaje aceptado") {
@@ -228,12 +229,14 @@ class PatrolManagerUltimaUbicacionTest {
         val desde = dron.ordenes.size
 
         banco.comando.recibir(JSONObject().put("type", "control_taken").put("by", "op"))
-        esperarA("el control manual") { patrulla.state.value == PatrolState.MANUAL }
+        esperarA("el rechazo de la toma") { banco.mensajes("control_dropped").isNotEmpty() }
         banco.comando.recibir(
             JSONObject().put("type", "manual_stick").put("pitch", 1.0).put("roll", 0.0).put("yaw", 0.0).put("throttle", 0.0).put("by", "op"),
         )
         delay(300)
 
+        assertEquals(PatrolState.ATERRIZAJE_EMERGENCIA, patrulla.state.value)
+        assertTrue(banco.mensajes("control_dropped").single().getString("motivo").contains("aterrizando de emergencia"))
         assertTrue("le frenaron el aterrizaje: ${dron.ordenes.drop(desde)}", dron.ordenes.drop(desde).none { it == "hold" || it.startsWith("stick(") })
     }
 

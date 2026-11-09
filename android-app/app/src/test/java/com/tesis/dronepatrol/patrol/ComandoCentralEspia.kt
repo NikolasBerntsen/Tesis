@@ -29,7 +29,17 @@ internal class ComandoCentralEspia(alcance: CoroutineScope) : CommandCenterClien
     /** Lo que el Comando Central le manda a la app: pasa por la misma validación que el socket. */
     fun recibir(mensaje: JSONObject) = manejarMensaje(mensaje.toString())
 
+    /**
+     * Gancho que corre con cada mensaje ANTES de anotarlo, como
+     * DronEspia.alRecibirLaOrden: una prueba de carrera se para ahí, con la
+     * puerta de la patrulla tomada por quien lo manda. Se invoca fuera del
+     * candado de [enviados], por lo mismo que el del dron.
+     */
+    @Volatile
+    var alEnviar: ((JSONObject) -> Unit)? = null
+
     override fun send(obj: JSONObject) {
+        alEnviar?.invoke(obj)
         synchronized(enviados) { enviados += JSONObject(obj.toString()) }
     }
 
