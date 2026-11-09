@@ -166,6 +166,69 @@ class SupervisorDelAterrizajeTest {
         assertEquals("cuenta desde que volvió el enlace", Accion.SEGUIR, supervisor.alLeer(lectura(bajando = false)))
     }
 
+    /**
+     * Sin enlace la orden no le llega al dron: no gasta ninguno de los tres
+     * intentos y nunca termina en «no se pudo aterrizar», que dejaba a la app
+     * soltando un aterrizaje que el dron quizás estaba haciendo.
+     */
+    @Test
+    fun sinEnlaceNuncaSaleNoSePudo() {
+        supervisor.empezar()
+        repeat(10) {
+            assertEquals(Accion.SEGUIR, supervisor.alContestar(false, lectura(bajando = false, enlace = false), "aircraft not connected"))
+            assertEquals(Accion.SEGUIR, supervisor.alContestar(null, lectura(bajando = null, enlace = false)))
+            pasar(60_000)
+            assertEquals(Accion.SEGUIR, supervisor.alLeer(lectura(bajando = null, enlace = false)))
+        }
+        assertEquals("sin enlace las órdenes no cuentan", 0, supervisor.ordenes)
+        assertFalse("lo que diga una lectura sin enlace no es una respuesta", supervisor.aceptado)
+    }
+
+    /** El enlace vuelve: el plazo para que baje cuenta desde ahí, y las órdenes siguen donde estaban. */
+    @Test
+    fun elEnlaceQueVuelveReanudaLasOrdenes() {
+        supervisor.empezar()
+        assertEquals(Accion.ORDENAR, supervisor.alContestar(false, lectura(bajando = false), "landing not allowed"))
+        assertEquals(Accion.ORDENAR, supervisor.alContestar(null, lectura(bajando = false)))
+        // Se corta el enlace: la tercera no cuenta, aunque la lectura vieja diga que baja.
+        assertEquals(Accion.SEGUIR, supervisor.alContestar(true, lectura(bajando = true, enlace = false)))
+        assertEquals(2, supervisor.ordenes)
+        assertFalse(supervisor.aceptado)
+        pasar(30_000)
+        assertEquals(Accion.SEGUIR, supervisor.alLeer(lectura(bajando = null, enlace = false)))
+        pasar(SupervisorDelAterrizaje.VERIFICACION_MS - 1)
+        assertEquals(Accion.SEGUIR, supervisor.alLeer(lectura(bajando = false)))
+        pasar(1)
+        assertEquals(Accion.ORDENAR, supervisor.alLeer(lectura(bajando = false)))
+        assertEquals(
+            "recién la tercera con enlace agota las órdenes",
+            Accion.NO_SE_PUDO,
+            supervisor.alContestar(false, lectura(bajando = false), "landing not allowed"),
+        )
+        assertEquals(3, supervisor.ordenes)
+    }
+
+    /** Ordenado sin enlace y, al volver, el dron se ve bajando: lo tomó, y recién ahí se da por aceptado. */
+    @Test
+    fun alVolverElEnlaceBajandoQuedaAceptado() {
+        supervisor.empezar()
+        assertEquals(Accion.SEGUIR, supervisor.alContestar(null, lectura(enlace = false)))
+        assertFalse(supervisor.aceptado)
+        pasar(SupervisorDelAterrizaje.INTERVALO_MS)
+        assertEquals(Accion.SEGUIR, supervisor.alLeer(lectura(alt = 19.0, bajando = true)))
+        assertTrue(supervisor.aceptado)
+    }
+
+    /** Lo mismo si al volver el enlace pide confirmar: está en el último medio metro. */
+    @Test
+    fun alVolverElEnlacePidiendoConfirmarQuedaAceptado() {
+        supervisor.empezar()
+        assertEquals(Accion.SEGUIR, supervisor.alContestar(null, lectura(enlace = false)))
+        pasar(SupervisorDelAterrizaje.INTERVALO_MS)
+        assertEquals(Accion.SEGUIR, supervisor.alLeer(lectura(alt = 0.5, bajando = false, pide = true)))
+        assertTrue(supervisor.aceptado)
+    }
+
     // ---- Una persona que lo sube con las palancas ----
 
     @Test
@@ -219,6 +282,15 @@ class SupervisorDelAterrizajeTest {
         val avisos = (1..8).map { supervisor.alConfirmar() }
         assertEquals(listOf(false, false, false, false, true, false, false, false), avisos)
         assertEquals(8, supervisor.confirmaciones)
+    }
+
+    /** Lo que puede decidir la secuencia, y nada más: cada una tiene su camino en el controlador. */
+    @Test
+    fun lasAccionesDeLaSecuencia() {
+        assertEquals(
+            listOf(Accion.SEGUIR, Accion.ORDENAR, Accion.EN_EL_SUELO, Accion.NO_SE_PUDO, Accion.LO_SUBIERON),
+            Accion.entries.toList(),
+        )
     }
 
     // ---- El modo de vuelo ----

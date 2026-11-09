@@ -178,6 +178,22 @@ class SeguidorDelRegreso {
         regresoPropio = null
     }
 
+    /**
+     * Un enlace nuevo con el dron (`connect`): lo del enlace anterior no vale
+     * —los oyentes traen el estado actual apenas se registran, y los avisos se
+     * tienen que poder repetir para quien escucha ahora—, salvo el corte del
+     * regreso propio, que es POR VUELO (RELEVOS §4): con el dron en el aire (la
+     * pantalla se recreó en pleno vuelo) el que ya se gastó sigue gastado, y el
+     * DJI no vuelve a quedar expuesto a un segundo corte. En el suelo es
+     * [alAterrizar].
+     */
+    @Synchronized
+    fun alReconectar(enVuelo: Boolean) {
+        val cortes = cortesDeRegresoPropio
+        alAterrizar()
+        if (enVuelo) cortesDeRegresoPropio = cortes
+    }
+
     /** Tocó el suelo: todo vuelve a empezar para el vuelo siguiente. */
     @Synchronized
     fun alAterrizar() {
