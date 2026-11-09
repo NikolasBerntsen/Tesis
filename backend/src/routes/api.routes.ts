@@ -830,68 +830,87 @@ apiRouter.post('/drones/:droneId/takeoff', requireAuth('operator'), (req: Authed
 });
 
 type PermisoDeLlegada =
-  | { ok: true; teniaElControl: string | null }
+  | { ok: true; teniaElControl: string | null; forzado: boolean }
   | { ok: false; status: 403 | 404 | 409; error: string };
 
 /**
- * Quién puede dar una orden de llegada —volver a la base o aterrizar— y qué
- * pasa con el lock (VUELO §7.1 y §11). Son órdenes de la capa 3: no exigen
- * tener el control manual, porque el que mira el tablero tiene que poder traer
- * un dron que vuela solo, pero tampoco pasan por encima de una persona al mando
- * (capa 2) sin decirlo:
+ * Quién puede dar una orden de llegada —volver a la base o aterrizar— (VUELO
+ * §7.1 y §11). Son órdenes de la capa 3: no exigen tener el control manual,
+ * porque el que mira el tablero tiene que poder traer un dron que vuela solo,
+ * pero tampoco pasan por encima de una persona al mando (capa 2) sin decirlo:
  * - operador o más con `canControl`, leído de la base en cada request;
  * - si el control lo tiene OTRO, `409` «El control lo tiene X». Solo un
  *   supervisor con `forzar: true` —la consola lo manda explícito, como en
- *   «Quitar control»— se lo quita antes, con `resume: 'none'`: la app recibe
- *   `control_released` y la orden a continuación;
- * - si lo tiene quien ordena volver a la base, el hub suelta el lock SIN
- *   mandarle `control_released` a la app: la app lo suelta sola al recibir
- *   `return_home` (§2), y un `control_released` además la haría frenar o
- *   volver al objetivo justo antes del regreso. El registro (`CONTROL_RELEASED`
- *   «ordenó volver a la base»), las consolas (`control_changed`) y el que
- *   esperaba el control (`liberado`) se enteran igual;
- * - aterrizar con el control tomado lo deja tomado: el dron queda en MANUAL en
- *   el suelo (§2 `land`), como hasta ahora.
+ *   «Quitar control»— se lo quita antes (`forzado`).
+ * Acá solo se decide: qué pasa con el lock, y en qué orden se entera la app,
+ * lo resuelve cada orden con `soltarParaLlegar`.
  */
-function autorizarOrdenDeLlegada(req: AuthedRequest, orden: OrdenDeLlegada): PermisoDeLlegada {
+function autorizarOrdenDeLlegada(req: AuthedRequest): PermisoDeLlegada {
   if (!req.user!.canControl) return { ok: false, status: 403, error: 'No estás autorizado a controlar drones' };
   const { droneId } = req.params;
   if (!getDroneIdentity(droneId)) return { ok: false, status: 404, error: 'Dron inexistente' };
   const titular = getController(droneId);
-  if (titular === null) return { ok: true, teniaElControl: null };
-
-  const quien = req.user!.sub;
-  const reason = `${quien} ${MOTIVO_DE_LLEGADA[orden]}`;
-  if (titular !== quien) {
-    if (!esSupervisorOMas(req.user!.role) || req.body?.forzar !== true) {
-      return { ok: false, status: 409, error: `El control lo tiene ${titular}` };
-    }
-    releaseControl(droneId, quien, { resume: 'none', forced: true, reason });
-  } else if (orden === 'return_home') {
-    releaseControl(droneId, quien, { resume: 'none', reason, sinAvisarALaApp: true });
+  if (titular === null || titular === req.user!.sub) return { ok: true, teniaElControl: titular, forzado: false };
+  if (!esSupervisorOMas(req.user!.role) || req.body?.forzar !== true) {
+    return { ok: false, status: 409, error: `El control lo tiene ${titular}` };
   }
-  return { ok: true, teniaElControl: titular };
+  return { ok: true, teniaElControl: titular, forzado: true };
 }
 
-// Aterrizar donde está, desde cualquier estado de vuelo (VUELO §9): la app lo
-// acepta sin el control tomado; acá se decide quién puede.
+/**
+ * Suelta el lock con una orden de llegada, con `resume: 'none'` y SIN
+ * `control_released` a la app: lo que hace la app lo dice la orden que sale a
+ * continuación. El registro (`CONTROL_RELEASED` «X ordenó volver a la base»),
+ * las consolas (`control_changed`, con quién y si fue a la fuerza) y el que
+ * esperaba el control (`liberado`) se enteran igual, y antes que la orden.
+ */
+function soltarParaLlegar(req: AuthedRequest, orden: OrdenDeLlegada, forzado: boolean) {
+  const quien = req.user!.sub;
+  releaseControl(req.params.droneId, quien, {
+    resume: 'none',
+    forced: forzado,
+    reason: `${quien} ${MOTIVO_DE_LLEGADA[orden]}`,
+    sinAvisarALaApp: true,
+  });
+}
+
+/**
+ * Aterrizar donde está, desde cualquier estado de vuelo (VUELO §9): la app lo
+ * acepta sin el control tomado; acá se decide quién puede. Con el control de
+ * quien ordena, el lock SIGUE: el dron queda en MANUAL en el suelo (§2
+ * `land`). El que un supervisor le quita a otro se suelta antes de la orden
+ * para las consolas y el registro, pero a la app el `control_released` le
+ * llega DESPUÉS del `land`: soltar con el aterrizaje en curso no lo frena (§2),
+ * y al revés la app quedaba estacionaria —o volvía al objetivo— un instante
+ * antes de bajar. Cancela el relevo como `return_home` y las demás órdenes del
+ * operador (RELEVOS §3.9).
+ */
 apiRouter.post('/drones/:droneId/land', requireAuth('operator'), (req: AuthedRequest, res) => {
-  const permiso = autorizarOrdenDeLlegada(req, 'land');
+  const permiso = autorizarOrdenDeLlegada(req);
   if (!permiso.ok) return res.status(permiso.status).json({ error: permiso.error });
+  const { droneId } = req.params;
+  if (permiso.forzado) soltarParaLlegar(req, 'land', true);
+  relevos.ordenDelOperador(droneId);
   darOrdenDeVuelo(req, res, 'land', {});
+  if (permiso.forzado) sendToDrone(droneId, { type: 'control_released', by: req.user!.sub });
 });
 
 /**
  * Volver a la base desde la consola (VUELO §7.1): la app lo cumple como el
- * «Volver a base» del teléfono y corta todo lo de la capa 4. Una orden del
- * operador manda sobre un relevo (RELEVOS §3.9): se resuelve antes de
- * reenviarla, como en /resume y /route/stop. `teniaElControl` queda en el
+ * «Volver a base» del teléfono y corta todo lo de la capa 4. Con el control
+ * tomado —el de quien ordena, o el que un supervisor le quita a otro— el lock
+ * se suelta SIN `control_released`: la app suelta el control sola con
+ * `return_home` (§2), y un `control_released` antes la hacía volver al
+ * objetivo (una orden de órbita al de antes) justo antes del regreso. Una
+ * orden del operador manda sobre un relevo (RELEVOS §3.9): se resuelve antes
+ * de reenviarla, como en /resume y /route/stop. `teniaElControl` queda en el
  * registro porque no es lo mismo traer un dron que volaba solo que sacárselo
  * a quien lo estaba piloteando.
  */
 apiRouter.post('/drones/:droneId/return_home', requireAuth('operator'), (req: AuthedRequest, res) => {
-  const permiso = autorizarOrdenDeLlegada(req, 'return_home');
+  const permiso = autorizarOrdenDeLlegada(req);
   if (!permiso.ok) return res.status(permiso.status).json({ error: permiso.error });
+  if (permiso.teniaElControl !== null) soltarParaLlegar(req, 'return_home', permiso.forzado);
   relevos.ordenDelOperador(req.params.droneId);
   darOrdenDeVuelo(req, res, 'return_home', { teniaElControl: permiso.teniaElControl });
 });

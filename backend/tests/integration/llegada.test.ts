@@ -8,9 +8,11 @@ import {
 // §5): volver a la base y aterrizar donde está. No piden tener el control
 // manual —el que mira el tablero tiene que poder traer un dron que vuela
 // solo— pero lo respetan: con el control de otro son un 409, salvo que un
-// supervisor lo fuerce. Volver a la base con el control propio lo suelta sin
-// avisarle a la app (ella lo suelta sola con la orden); aterrizar lo deja
-// tomado. Despegar sigue pidiendo el lock como siempre.
+// supervisor lo fuerce. Volver a la base con el control tomado (propio o
+// forzado) lo suelta sin avisarle a la app: ella lo suelta sola con la orden.
+// Aterrizar con el control propio lo deja tomado; el forzado le llega a la app
+// después del `land`, que soltar no frena. Despegar sigue pidiendo el lock
+// como siempre.
 
 const A = DRON.alfa;
 const DRON_ALFA = { hash: A, displayName: 'Alfa', model: 'DJI Mini 3' };
@@ -113,9 +115,12 @@ describe('integración — volver a la base y aterrizar desde la consola', () =>
     // ni control_released ni resume_patrol: un control_released la haría frenar o volver al objetivo antes del regreso
     expect(alfa.got.map((m) => m.type)).toEqual(['return_home']);
 
-    // las consolas sí se enteran de que el lock se soltó, y antes de la orden
+    // las consolas sí se enteran de que el lock se soltó, quién y por qué, y antes de la orden
     const cambio = await operWs.waitFor((m) => m.type === 'control_changed' && m.controlledBy === null);
-    expect(cambio).toEqual({ type: 'control_changed', droneId: A, controlledBy: null, teniaElControl: 'operador' });
+    expect(cambio).toEqual({
+      type: 'control_changed', droneId: A, controlledBy: null, teniaElControl: 'operador',
+      por: 'operador', forzado: false, detalle: 'operador ordenó volver a la base',
+    });
     const soltado = await evento(operWs, 'CONTROL_RELEASED');
     expect(detalleDe(soltado)).toEqual({
       por: 'operador', teniaElControl: 'operador', forzado: false, motivo: 'operador ordenó volver a la base',
@@ -145,7 +150,7 @@ describe('integración — volver a la base y aterrizar desde la consola', () =>
     expect(await titular()).toBe('oper2');
   });
 
-  it('un supervisor con forzar se lo quita antes: la app recibe control_released y después la orden', async () => {
+  it('un supervisor con forzar se lo quita antes, y a la app le llega SOLO la orden', async () => {
     await conElControlDe(oper2, 'oper2');
 
     const r = await ordenar('return_home', sup, { forzar: true });
@@ -153,19 +158,24 @@ describe('integración — volver a la base y aterrizar desde la consola', () =>
     expect(r.body).toEqual({ ok: true, delivered: true });
     expect(await alfa.waitFor((m) => m.type === 'return_home')).toEqual({ type: 'return_home', by: 'supervisor' });
     await wait(80);
-    expect(alfa.got).toEqual([
-      { type: 'control_released', by: 'supervisor' },
-      { type: 'return_home', by: 'supervisor' },
-    ]);
+    // La app suelta el control sola con return_home. Con un control_released
+    // antes volvía al objetivo (una órbita) justo antes del regreso.
+    expect(alfa.got).toEqual([{ type: 'return_home', by: 'supervisor' }]);
     expect(await titular()).toBeNull();
 
+    // La consola del que lo tenía lee quién se lo quitó y por qué.
     const cambio = await operWs.waitFor((m) => m.type === 'control_changed' && m.controlledBy === null);
-    expect(cambio).toEqual({ type: 'control_changed', droneId: A, controlledBy: null, teniaElControl: 'oper2' });
+    expect(cambio).toEqual({
+      type: 'control_changed', droneId: A, controlledBy: null, teniaElControl: 'oper2',
+      por: 'supervisor', forzado: true, detalle: 'supervisor ordenó volver a la base',
+    });
     const soltado = await evento(operWs, 'CONTROL_RELEASED');
     expect(detalleDe(soltado)).toEqual({
       por: 'supervisor', teniaElControl: 'oper2', forzado: true, motivo: 'supervisor ordenó volver a la base',
     });
-    expect(detalleDe(await evento(operWs, 'RTH_ORDERED'))).toEqual({ por: 'supervisor', teniaElControl: 'oper2' });
+    const rth = await evento(operWs, 'RTH_ORDERED');
+    expect(detalleDe(rth)).toEqual({ por: 'supervisor', teniaElControl: 'oper2' });
+    expect(operWs.got.indexOf(cambio)).toBeLessThan(operWs.got.indexOf(rth));
   });
 
   it('un pedido de control que esperaba termina liberado cuando el titular ordena volver, y el dron no se le da solo', async () => {
@@ -224,17 +234,27 @@ describe('integración — volver a la base y aterrizar desde la consola', () =>
 
     const r = await ordenar('land', sup, { forzar: true });
     expect(r.status).toBe(200);
-    await alfa.waitFor((m) => m.type === 'land');
+    await alfa.waitFor((m) => m.type === 'control_released');
+    // Primero la orden y después el soltar: con el aterrizaje en curso, soltar
+    // no lo frena. Al revés, la app quedaba estacionaria un instante antes.
     expect(alfa.got).toEqual([
-      { type: 'control_released', by: 'supervisor' },
       { type: 'land', by: 'supervisor' },
+      { type: 'control_released', by: 'supervisor' },
     ]);
     expect(await titular()).toBeNull();
+    const cambio = await operWs.waitFor((m) => m.type === 'control_changed' && m.controlledBy === null);
+    expect(cambio).toEqual({
+      type: 'control_changed', droneId: A, controlledBy: null, teniaElControl: 'oper2',
+      por: 'supervisor', forzado: true, detalle: 'supervisor ordenó aterrizar',
+    });
     const soltado = await evento(operWs, 'CONTROL_RELEASED');
     expect(detalleDe(soltado)).toEqual({
       por: 'supervisor', teniaElControl: 'oper2', forzado: true, motivo: 'supervisor ordenó aterrizar',
     });
-    expect(JSON.parse((await evento(operWs, 'LANDING_ORDERED')).event.meta).detalle).toEqual({ por: 'supervisor' });
+    const aterrizaje = await evento(operWs, 'LANDING_ORDERED');
+    expect(JSON.parse(aterrizaje.event.meta).detalle).toEqual({ por: 'supervisor' });
+    // Para las consolas y el registro, el lock se soltó antes de la orden.
+    expect(operWs.got.indexOf(cambio)).toBeLessThan(operWs.got.indexOf(aterrizaje));
   });
 
   it('permisos: sin canControl 403, dron inexistente 404, operador de campo 403', async () => {

@@ -185,7 +185,13 @@ describe('integración — control manual exclusivo', () => {
     expect(await alfa.waitFor((m) => m.type === 'resume_patrol')).toEqual({
       type: 'resume_patrol', orderedBy: 'supervisor', alSoltar: true,
     });
-    await operWs.waitFor((m) => m.type === 'control_changed' && m.controlledBy === null);
+    // Las consolas leen quién lo soltó y que fue a la fuerza: el piloto ve
+    // «supervisor te quitó el control» y no que se soltó desde otra sesión.
+    // «Quitar control» no tiene un porqué en texto: no va `detalle`.
+    expect(await operWs.waitFor((m) => m.type === 'control_changed' && m.controlledBy === null)).toEqual({
+      type: 'control_changed', droneId: DRON.alfa, controlledBy: null, teniaElControl: 'operador',
+      por: 'supervisor', forzado: true,
+    });
   });
 
   it('el DELETE que dice qué titular suelta da 409 si el control ya es de otro; «Quitar control» fuerza', async () => {
@@ -476,6 +482,7 @@ describe('integración — control manual exclusivo', () => {
       const cambio = await operWs.waitFor((m) => m.type === 'control_changed' && m.controlledBy === null);
       expect(cambio).toEqual({
         type: 'control_changed', droneId: DRON.alfa, controlledBy: null, teniaElControl: 'oper2', motivo: 'inactividad',
+        por: 'Comando Central', forzado: true, detalle: 'oper2 estuvo 30 s sin dar señales desde la consola',
       });
       const ev = await operWs.waitFor((m) => m.type === 'event' && m.event.type === 'CONTROL_RELEASED');
       expect(JSON.parse(ev.event.meta).detalle).toEqual({

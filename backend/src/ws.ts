@@ -429,11 +429,14 @@ export interface ReleaseOptions {
   ordenDeReanudar?: boolean;
   /**
    * No mandarle `control_released` a la app. Es para el soltar que acompaña a
-   * una orden que la app ya atiende soltando el control sola: el `return_home`
-   * del hub (VUELO §7.1). Con el `control_released` además, la app frenaría en
-   * estacionario o volvería al objetivo justo antes de recibir la orden de
-   * volver. El registro (`CONTROL_RELEASED`), las consolas (`control_changed`)
-   * y el que esperaba el control (`liberado`) se enteran igual.
+   * una orden de llegada (VUELO §7.1): la app suelta el control sola con
+   * `return_home`, y con el `control_released` antes frenaría en estacionario
+   * o volvería al objetivo (una orden de órbita) justo antes del regreso; al
+   * `land` que un supervisor fuerza, el hub le manda el `control_released`
+   * DESPUÉS de la orden, porque soltar con el aterrizaje en curso no lo frena.
+   * El registro (`CONTROL_RELEASED`), las consolas (`control_changed`) y el
+   * que esperaba el control (`liberado`) se enteran igual, y antes que la
+   * orden.
    */
   sinAvisarALaApp?: boolean;
 }
@@ -454,10 +457,19 @@ export function releaseControl(droneId: string, byUser: string, opts: ReleaseOpt
 
   const detalle = opts.forced ? ` (forzado por ${byUser}, lo tenía ${holder})` : '';
   const motivo = opts.reason ? ` — ${opts.reason}` : '';
-  // Si lo soltó la app (`control_dropped`), la consola necesita el texto: no es
-  // lo mismo "la app se reinició" que "no se tomó el control: el dron vuelve
-  // por batería", y la vista de pilotaje que se abrió tiene que decir cuál.
-  const causaParaLaConsola = opts.motivo === 'app' && opts.reason ? { ...causa, detalle: opts.reason } : causa;
+  // Las consolas reciben quién lo soltó, si fue a la fuerza y por qué (el
+  // motivo del registro). Con `motivo: 'app'` el porqué es el texto de la app:
+  // no es lo mismo "la app se reinició" que "no se tomó el control: el dron
+  // vuelve por batería", y la vista de pilotaje que se abrió tiene que decir
+  // cuál. Con un soltar forzado por una persona, el piloto que lo perdió lee
+  // «X te quitó el control: ordenó volver a la base» y no que «se soltó desde
+  // otra sesión».
+  const causaParaLaConsola = {
+    ...causa,
+    por: byUser,
+    forzado: !!opts.forced,
+    ...(opts.reason ? { detalle: opts.reason } : {}),
+  };
   const ev = createLog(
     'drone',
     'CONTROL_RELEASED',
