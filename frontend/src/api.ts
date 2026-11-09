@@ -1,3 +1,4 @@
+import type { CambioDeAjustes } from './ajustesDelDron';
 import type { PedidoDelHub, ResultadoDelPedido } from './control';
 import type {
   BaseAsset,
@@ -175,6 +176,47 @@ export function motivoDelRechazoDeDecision(e: unknown): string {
   }
   const detalle = e instanceof Error ? e.message : String(e);
   return `No se pudo registrar la decisión: ${detalle}`;
+}
+
+// ---- Ajustes y órdenes de llegada del dron (VUELO §7, §9 y §10) ----
+
+/**
+ * Fija uno o más ajustes del dron (`PATCH /api/drones/:droneId/ajustes`): cada
+ * campo que viene se guarda, `null` vuelve al de fábrica, y lo que no viene no
+ * se toca. La consola manda de a un campo por pedido (cada control guarda el
+ * suyo); el hub registra un evento por campo que cambió y emite `drone_updated`.
+ */
+export function ajustarDron(droneId: string, cambios: CambioDeAjustes): Promise<unknown> {
+  return api(`/drones/${droneId}/ajustes`, { method: 'PATCH', body: JSON.stringify(cambios) });
+}
+
+/** Lo que contestan las órdenes de llegada: aceptada, y si le llegó a la app. */
+export interface RespuestaDeOrden {
+  ok: boolean;
+  delivered: boolean;
+}
+
+/**
+ * El cuerpo de una orden de llegada: sólo con `forzar`, que es la marca del
+ * supervisor que se la da a un dron que otro está volando (el hub le quita el
+ * control antes). Sin otro al mando no se manda cuerpo, como con despegar.
+ */
+function cuerpoDeOrden(opciones: { forzar?: boolean }): Pick<RequestInit, 'body'> {
+  return opciones.forzar ? { body: JSON.stringify({ forzar: true }) } : {};
+}
+
+/**
+ * Volver a la base desde la consola (`POST /api/drones/:droneId/return_home`):
+ * corta la ruta o el objetivo y el dron vuelve solo. Si otro tiene el control
+ * manual, el hub contesta `409` salvo con `forzar` (supervisor o más).
+ */
+export function ordenarVolverABase(droneId: string, opciones: { forzar?: boolean } = {}): Promise<RespuestaDeOrden> {
+  return api<RespuestaDeOrden>(`/drones/${droneId}/return_home`, { method: 'POST', ...cuerpoDeOrden(opciones) });
+}
+
+/** Aterrizar donde está (`POST /api/drones/:droneId/land`), con la misma regla del control que volver a la base. */
+export function ordenarAterrizaje(droneId: string, opciones: { forzar?: boolean } = {}): Promise<RespuestaDeOrden> {
+  return api<RespuestaDeOrden>(`/drones/${droneId}/land`, { method: 'POST', ...cuerpoDeOrden(opciones) });
 }
 
 // ---- Pedido de control (PROTOCOLS §5) ----

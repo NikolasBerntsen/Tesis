@@ -30,6 +30,9 @@ function textoEsquina(status: DroneStatus | null): { texto: string; clase: strin
   if (status?.state === 'MANUAL') return { texto: 'CONTROL MANUAL', clase: 'esquina-verde' };
   if (status?.state === 'ORBITING') return { texto: 'ORBITANDO', clase: 'esquina-oro' };
   if (status?.state === 'FOLLOWING') return { texto: 'SIGUIENDO', clase: 'esquina-oro' };
+  // Detenido donde estaba, mirando al objetivo (VUELO §2): también es trabajo
+  // sobre una alerta, aunque el dron no se mueva.
+  if (status?.state === 'VIGILANDO') return { texto: 'VIGILANDO', clase: 'esquina-oro' };
   // Va hacia el objetivo de otro dron: es trabajo sobre una alerta, como orbitar.
   if (status?.state === 'RELEVANDO') return { texto: 'RELEVANDO', clase: 'esquina-oro' };
   if (status?.state === 'ATERRIZAJE_EMERGENCIA') return { texto: 'EMERGENCIA', clase: 'esquina-roja' };

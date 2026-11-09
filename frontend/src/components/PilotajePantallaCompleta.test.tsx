@@ -1673,3 +1673,39 @@ describe('PilotajePantallaCompleta — ajustes del control', () => {
     expect(panel()).toBeInTheDocument();
   });
 });
+
+describe('PilotajePantallaCompleta — «Aterrizar» y las palancas (VUELO §8)', () => {
+  it('suelta las teclas y manda un cero antes de pedir la orden, aunque la W siga apretada', () => {
+    vi.useFakeTimers();
+    const { onMando, onOrden } = montar();
+    fireEvent.keyDown(window, { code: 'KeyW' });
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, pitch: 0.5 });
+
+    // El orden importa: primero el cero, después la orden.
+    const secuencia: string[] = [];
+    onMando.mockImplementation((ejes) => {
+      secuencia.push(`mando ${ejes.pitch}`);
+      return true;
+    });
+    onOrden.mockImplementation((orden: 'despegar' | 'aterrizar') => {
+      secuencia.push(orden);
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Aterrizar' }));
+    expect(secuencia[0]).toBe('mando 0');
+    expect(secuencia.indexOf('aterrizar')).toBeGreaterThan(secuencia.indexOf('mando 0'));
+    expect(onOrden).toHaveBeenCalledWith('aterrizar');
+
+    // La W nunca soltó su keyup y ya no sale nada distinto de cero: ni ahora,
+    // ni con la repetición automática del teclado.
+    onMando.mockClear();
+    act(() => vi.advanceTimersByTime(1000));
+    fireEvent.keyDown(window, { code: 'KeyW', repeat: true });
+    act(() => vi.advanceTimersByTime(300));
+    for (const [ejes] of onMando.mock.calls) expect(ejes).toEqual(EJES_EN_CERO);
+  });
+
+  it('el aviso de la orden en curso se lee en el HUD tal como lo manda el detalle', () => {
+    montar({ avisoDeOrden: 'Aterrizando: una palanca o el pad cortan el aterrizaje y te devuelven el mando.' });
+    expect(screen.getByTestId('pilotaje-orden-en-curso')).toHaveTextContent(/Aterrizando: una palanca o el pad/);
+  });
+});

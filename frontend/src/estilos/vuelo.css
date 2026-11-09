@@ -1,0 +1,142 @@
+/* ============================================================================
+   VUELO — los ajustes del dron (la órbita, la reacción ante una detección y el
+   silencio al retomar), el engranaje del silencio al lado de «Descartar» con
+   su globo, y la tarjeta «Vuelo» (volver a la base, aterrizar acá) de la vista
+   del dron. docs/VUELO.md §6, §7 y §10. Sin colores literales: todo sale de
+   los tokens, para los dos temas.
+   ========================================================================= */
+
+/* --- Ajustes del dron -----------------------------------------------------------
+   La tarjeta reutiliza las piezas de los ajustes del control (pilotaje.css:
+   .ajuste, .ajuste-rotulo, .ajuste-valor, .ajuste-pista): un deslizador se lee
+   igual acá, en el globo del engranaje de una alerta y en el de la vista de
+   pilotaje. */
+.ajustes-dron > .muted,
+.tarjeta-vuelo > .muted {
+  margin: 0 0 var(--e-3);
+  font-size: var(--txt-sm);
+}
+/* El deslizador se toca con el dedo en la tableta de campo. */
+.ajustes-dron input[type='range'],
+.silencio-globo input[type='range'] {
+  min-height: var(--alto-tactil);
+}
+.ajuste-pie {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--e-3);
+  margin-top: var(--e-2);
+}
+
+/* Las tres formas de seguir: una opción por renglón, con el rótulo y su línea
+   de ayuda. La elegida toma el velo y el filo de lo encendido, como una
+   pestaña: de día el filo es lo único que, fuera del lector de pantalla, dice
+   cuál está elegida (WCAG 1.4.11). */
+.opciones-de-reaccion {
+  display: grid;
+  gap: var(--e-2);
+  margin: var(--e-3) 0 0;
+  padding: 0;
+  border: 0;
+}
+.opciones-de-reaccion legend {
+  padding: 0;
+  margin-bottom: var(--e-1);
+}
+.opcion {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--e-3);
+  align-items: start;
+  min-height: var(--alto-tactil);
+  padding: var(--e-2) var(--e-3);
+  border: 1px solid var(--veta);
+  border-radius: var(--radio-chico);
+  color: var(--tinta);
+  cursor: pointer;
+}
+.opcion:has(input:checked) {
+  border-color: var(--filo-activo);
+  background-image: var(--cara-activa);
+}
+.opcion:has(input:focus-visible) {
+  outline: var(--filo) solid var(--anillo-foco);
+  outline-offset: 2px;
+}
+.opcion:has(input:disabled) { cursor: default; }
+.opcion input {
+  width: 18px;
+  height: 18px;
+  margin: 3px 0 0;
+  accent-color: var(--oro-oscuro);
+}
+.opcion-texto {
+  display: grid;
+  gap: 2px;
+}
+.opcion-rotulo {
+  font-size: var(--txt-sm);
+  color: var(--tinta);
+}
+
+/* --- El engranaje del silencio al lado de «Descartar» ---------------------------- */
+.decision {
+  display: grid;
+  gap: var(--e-3);
+}
+/* El engranaje no es una decisión: no se estira como Validar y Descartar ni
+   toma su cuerpo de letra, pero sí se toca con el dedo. */
+.alert-actions button.icono-boton.silencio-boton {
+  flex: 0 0 auto;
+  align-self: center;
+  width: var(--alto-tactil);
+  height: var(--alto-tactil);
+  min-height: 0;
+  font-size: inherit;
+}
+/* El globo: piedra firme con su filo y su sombra, como los globos del HUD,
+   pero en el flujo de la tarjeta (debajo de los botones) y no flotando:
+   adentro de la campana y de la grilla de alertas lo recortaría el scroll del
+   panel, y en un teléfono así nunca se sale de la pantalla. */
+.silencio-globo {
+  display: grid;
+  gap: var(--e-3);
+  padding: var(--e-3) var(--e-4) var(--e-4);
+  border: 1px solid var(--veta-fuerte);
+  border-radius: var(--radio);
+  background-color: var(--panel-firme);
+  background-image: var(--piedra-cara);
+  box-shadow: var(--sombra-flotante);
+}
+.silencio-globo-cabecera {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--e-3);
+  padding-bottom: var(--e-2);
+  border-bottom: 1px solid var(--veta);
+}
+.silencio-globo h3 {
+  display: flex;
+  align-items: center;
+  gap: var(--e-2);
+  margin: 0;
+  font-size: var(--txt-sm);
+  text-transform: uppercase;
+  letter-spacing: var(--versalita);
+  color: var(--tinta);
+}
+.silencio-globo h3 > svg {
+  flex: none;
+  color: var(--oro-texto);
+}
+
+/* --- La tarjeta «Vuelo» --------------------------------------------------------- */
+.vuelo-ordenes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--e-3);
+}
+.vuelo-ordenes > button { flex: 1 1 160px; }
+.tarjeta-vuelo .aviso { margin-top: var(--e-3); }

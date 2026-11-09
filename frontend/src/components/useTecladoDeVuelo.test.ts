@@ -205,6 +205,24 @@ describe('useTecladoDeVuelo', () => {
     expect(onMando).toHaveBeenCalledTimes(12);
   });
 
+  it('soltarTodo suelta lo sostenido y manda un cero en el acto, también sin nada comandado (VUELO §8)', () => {
+    const { result, onMando } = montar();
+    // Sin nada comandado igual sale el cero: es lo que pide «Aterrizar».
+    act(() => result.current.soltarTodo());
+    expect(onMando).toHaveBeenCalledTimes(1);
+    expect(onMando).toHaveBeenLastCalledWith(EJES_EN_CERO);
+
+    apretar('KeyW');
+    expect(onMando).toHaveBeenLastCalledWith({ ...EJES_EN_CERO, pitch: 0.5 });
+    act(() => result.current.soltarTodo());
+    expect(onMando).toHaveBeenLastCalledWith(EJES_EN_CERO);
+    // La W sigue apretada (su keyup no llegó) y no vuelve a salir nada distinto de cero.
+    onMando.mockClear();
+    act(() => vi.advanceTimersByTime(1000));
+    for (const [ejes] of onMando.mock.calls) expect(ejes).toEqual(EJES_EN_CERO);
+    expect(result.current.ejes).toEqual(EJES_EN_CERO);
+  });
+
   it('el cambio de una tecla sale en el tick siguiente, sin reiniciar el ritmo', () => {
     const { onMando } = montar();
     apretar('KeyW');

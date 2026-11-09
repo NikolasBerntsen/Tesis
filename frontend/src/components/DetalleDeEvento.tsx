@@ -1,5 +1,6 @@
 import L from 'leaflet';
 import { Fragment, useEffect, useMemo, useRef } from 'react';
+import { ROTULO_DE_REACCION } from '../ajustesDelDron';
 import { parsearMeta } from '../api';
 import { MOTIVO_DE_EMERGENCIA } from '../emergencias';
 import { coordenadasODato, duracion, fechaHoraLarga, hashCorto } from '../format';
@@ -61,6 +62,10 @@ const CAMPO: Record<string, string> = {
   baseId: 'Base (id)',
   alt: 'Altura',
   bateria: 'Batería',
+  // Los ajustes del dron (VUELO §10).
+  velocidadOrbitaMs: 'Velocidad de órbita',
+  reaccionADeteccion: 'Ante una detección',
+  silencioAlRetomarS: 'Silencio al retomar',
 };
 
 /**
@@ -71,14 +76,28 @@ const CAMPO: Record<string, string> = {
 const CLAVES_OCULTAS = new Set(['relevoHash']);
 
 /** La unidad de los números que la tienen, para no leer "38" a secas. */
-const UNIDAD: Record<string, string> = { alt: 'm', bateria: '%' };
+const UNIDAD: Record<string, string> = { alt: 'm', bateria: '%', velocidadOrbitaMs: 'm/s', silencioAlRetomarS: 's' };
+
+/** Los ajustes del dron: ahí `null` no es un dato que falta, es «lo de fábrica de la app». */
+const CLAVES_DE_AJUSTE = new Set(['velocidadOrbitaMs', 'reaccionADeteccion', 'silencioAlRetomarS']);
 
 /**
  * Valores que son enumeraciones del backend. Se traducen sólo en las claves que
  * de verdad guardan una enumeración: un `decidedBy` puede valer "admin" y ahí
  * "admin" es el nombre de una persona, no el rol.
  */
-const CLAVES_ENUMERADAS = new Set(['role', 'rol', 'estado', 'status', 'decision', 'motivo', 'motivoFin', 'motivoDeB', 'resultado']);
+const CLAVES_ENUMERADAS = new Set([
+  'role',
+  'rol',
+  'estado',
+  'status',
+  'decision',
+  'motivo',
+  'motivoFin',
+  'motivoDeB',
+  'resultado',
+  'reaccionADeteccion',
+]);
 const VALOR_ENUMERADO: Record<string, string> = {
   field_operator: 'Operador de campo',
   operator: 'Operador',
@@ -102,6 +121,8 @@ const VALOR_ENUMERADO: Record<string, string> = {
   ...MOTIVO_DEL_RELEVO,
   ...MOTIVO_DEL_DESVIO,
   ...MOTIVO_DEL_DRON_DE_RELEVO,
+  // Qué hace el dron con un objetivo confirmado, con los rótulos del contrato.
+  ...ROTULO_DE_REACCION,
 };
 
 /** `decidedAt`, `deletedAt` y compañía llegan en ISO: no son para leer así. */
@@ -112,6 +133,7 @@ function etiquetaCampo(clave: string): string {
 }
 
 function valorLegible(clave: string, valor: ValorMeta | undefined): string {
+  if (valor === null && CLAVES_DE_AJUSTE.has(clave)) return 'De fábrica';
   if (valor === undefined || valor === null || valor === '') return '—';
   if (typeof valor === 'boolean') return valor ? 'Sí' : 'No';
   if (typeof valor === 'number') return UNIDAD[clave] ? `${valor} ${UNIDAD[clave]}` : String(valor);

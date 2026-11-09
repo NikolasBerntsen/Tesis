@@ -7,7 +7,7 @@ import { IconoCerrar, IconoDron } from './Iconos';
 import Modal from './Modal';
 
 /** Los estados en los que un dron está en el aire, para una app vieja que no manda `flying`. */
-const EN_EL_AIRE = ['PATROLLING', 'ORBITING', 'FOLLOWING', 'RETURNING_HOME_SIGNAL', 'RETURNING_HOME_BATTERY', 'RETURNING_HOME', 'PAUSED', 'MANUAL', 'FORCED', 'RELEVANDO', 'ATERRIZAJE_EMERGENCIA'];
+const EN_EL_AIRE = ['PATROLLING', 'ORBITING', 'FOLLOWING', 'VIGILANDO', 'RETURNING_HOME_SIGNAL', 'RETURNING_HOME_BATTERY', 'RETURNING_HOME', 'PAUSED', 'MANUAL', 'FORCED', 'RELEVANDO', 'ATERRIZAJE_EMERGENCIA'];
 
 /**
  * Si el dron está volando ahora. A uno en el aire no se le cambia la base: es a

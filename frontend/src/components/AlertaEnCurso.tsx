@@ -229,21 +229,25 @@ function DecisionDeLaAlerta({
   onAbrir?: () => void;
 }>) {
   // El dron al que lleva el nombre es el que sigue al objetivo ahora: después
-  // de un relevo, el video que sirve para decidir es el suyo.
+  // de un relevo, el video que sirve para decidir es el suyo. Lo mismo para el
+  // engranaje del silencio y las consecuencias de decidir: son de ese dron. Sin
+  // la lista del tablero (en la vista del dron), la ficha sale de la consola.
   const duenio = duenioDeLaAlerta(alerta);
+  const { drones: dronesEnVivo } = useAlertasEnVivo();
+  const dron = (drones ?? dronesEnVivo).find((d) => d.droneId === duenio) ?? null;
   return (
     <div className="alerta-detalle">
       <div className="alert-head">
         <ChipDeTipo tipo={alerta.type} />
-        {onVerDron && <ChipDelDron dron={drones?.find((d) => d.droneId === duenio) ?? null} onVerDron={onVerDron} />}
+        {onVerDron && <ChipDelDron dron={dron} onVerDron={onVerDron} />}
       </div>
       <p className="alerta-consigna">
         {siguiendo
           ? 'El dron está sobre este objetivo: compará la captura con el video en vivo antes de decidir.'
           : 'Compará la captura con el video en vivo antes de decidir.'}
       </p>
-      <BotonesDeDecision ocupado={ocupado} onDecidir={onDecidir} />
-      <ConsecuenciasDeDecidir />
+      <BotonesDeDecision ocupado={ocupado} dron={dron} onDecidir={onDecidir} />
+      <ConsecuenciasDeDecidir dron={dron} />
       {error && (
         <p className="aviso malo" role="alert">
           {error}
@@ -288,7 +292,7 @@ export default function AlertaEnCurso({
   /** Las pendientes a recorrer, en cualquier orden: la más nueva va primero. */
   alertas: readonly Alert[];
   titulo?: string;
-  /** Ids de las alertas cuyo objetivo algún dron está orbitando o siguiendo. */
+  /** Ids de las alertas cuyo objetivo algún dron tiene encima: lo orbita, lo sigue o lo vigila. */
   seguidas?: readonly (number | null)[];
   /** Con `onVerDron`, cada alerta dice de qué dron es y lleva a su vista. */
   drones?: readonly Drone[];

@@ -420,6 +420,20 @@ sobreSuperficies('deslizador: filo de la pista', '--filo-campo', [], CONTROL, FI
 sobreSuperficies('deslizador: el cursor', '--filo-activo', [], CONTROL, FIRMES);
 pares.push({ donde: 'deslizador: lo recorrido sobre el hueco de la pista', texto: '--filo-activo', base: '--marmol-2', minimo: CONTROL });
 
+// --- Ajustes del dron y el globo del silencio (vuelo.css) ----------------------------
+// La opción elegida de la reacción lleva el velo de lo activo sobre la tarjeta
+// (un panel): su rótulo va en la tinta, su ayuda en la media y su filo es el
+// de lo encendido. El globo del engranaje es piedra firme apoyada en una
+// tarjeta: se mide con el panel debajo, sobre los dos extremos de la veta.
+sobreSuperficies('reacción elegida: rótulo', '--tinta', ['--cara-activa'], TEXTO, PANELES);
+sobreSuperficies('reacción elegida: ayuda', '--tinta-media', ['--cara-activa'], TEXTO, PANELES);
+sobreSuperficies('reacción elegida: filo', '--filo-activo', ['--cara-activa'], CONTROL, PANELES);
+const GLOBO_DEL_SILENCIO = ['--piedra-cara', '--panel-firme'];
+sobreSuperficies('globo del silencio: título, rótulo y valor', '--tinta', GLOBO_DEL_SILENCIO, TEXTO, PANELES);
+sobreSuperficies('globo del silencio: ayuda', '--tinta-media', GLOBO_DEL_SILENCIO, TEXTO, PANELES);
+sobreSuperficies('globo del silencio: engranaje del título', '--oro-texto', GLOBO_DEL_SILENCIO, CONTROL, PANELES);
+sobreSuperficies('globo del silencio: filo de la pista del deslizador', '--filo-campo', GLOBO_DEL_SILENCIO, CONTROL, PANELES);
+
 const casos = TEMAS.flatMap((tema) => pares.map((p) => ({ tema, ...p })));
 
 describe('la fórmula de WCAG que usa este test', () => {
@@ -481,6 +495,7 @@ describe('los pares medidos son los que pintan las hojas', () => {
   const pilotaje = leer('./pilotaje.css');
   const relevos = leer('./relevos.css');
   const control = leer('./control.css');
+  const vuelo = leer('./vuelo.css');
 
   it.each([
     ['fila elegida', primitivos, '.tabla tbody tr.seleccionada', 'background', 'var(--oro-velo)'],
@@ -637,6 +652,16 @@ describe('los pares medidos son los que pintan las hojas', () => {
     ['cursor del deslizador (Chromium)', primitivos, "input[type='range']::-webkit-slider-thumb", 'background', 'var(--filo-activo)'],
     ['cursor del deslizador (Firefox)', primitivos, "input[type='range']::-moz-range-thumb", 'background', 'var(--filo-activo)'],
     ['anillo de foco del deslizador', primitivos, "input[type='range']:focus-visible", 'outline', 'var(--filo) solid var(--anillo-foco)'],
+    // Los ajustes del dron y el globo del silencio (vuelo.css).
+    ['globo del silencio', vuelo, '.silencio-globo', 'background-color', 'var(--panel-firme)'],
+    ['cara del globo del silencio', vuelo, '.silencio-globo', 'background-image', 'var(--piedra-cara)'],
+    ['título del globo del silencio', vuelo, '.silencio-globo h3', 'color', 'var(--tinta)'],
+    ['engranaje del título del globo', vuelo, '.silencio-globo h3 > svg', 'color', 'var(--oro-texto)'],
+    ['opción de la reacción', vuelo, '.opcion', 'color', 'var(--tinta)'],
+    ['rótulo de la opción', vuelo, '.opcion-rotulo', 'color', 'var(--tinta)'],
+    ['velo de la reacción elegida', vuelo, '.opcion:has(input:checked)', 'background-image', 'var(--cara-activa)'],
+    ['filo de la reacción elegida', vuelo, '.opcion:has(input:checked)', 'border-color', 'var(--filo-activo)'],
+    ['anillo de foco de la reacción', vuelo, '.opcion:has(input:focus-visible)', 'outline', 'var(--filo) solid var(--anillo-foco)'],
   ])('%s', (_donde, hoja, selector, propiedad, esperado) => {
     expect(valorDe(hoja, selector, propiedad)).toBe(esperado);
   });

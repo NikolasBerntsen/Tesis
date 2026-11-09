@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useState } from 'react';
+import { useDronDeLaAlerta } from '../alertasEnVivo';
 import { time } from '../format';
 import type { Alert } from '../types';
 import { useDecisionDeAlerta, type DecidirAlerta, type Decision } from '../useDecisionDeAlerta';
@@ -44,6 +45,8 @@ function FichaDeAlerta({
   onAmpliar: () => void;
   onDecidir: (decision: Decision) => void;
 }>) {
+  // El dron de la alerta, para el engranaje del silencio: el que la sigue ahora.
+  const dron = useDronDeLaAlerta(alerta);
   return (
     <li className={seleccionada ? 'alerta-ficha seleccionada' : 'alerta-ficha'}>
       <div className="alerta-ficha-cabecera">
@@ -72,7 +75,7 @@ function FichaDeAlerta({
       ) : (
         <p className="vacio">La detección no dejó captura.</p>
       )}
-      <BotonesDeDecision ocupado={ocupado} tamanoIcono={18} onDecidir={onDecidir} />
+      <BotonesDeDecision ocupado={ocupado} tamanoIcono={18} dron={dron} onDecidir={onDecidir} />
       {error && (
         <p className="aviso malo" role="alert">
           {error}
@@ -109,7 +112,7 @@ export default function AlertasDelDron({
   nombre: string;
   /** Las pendientes del dron, en cualquier orden. */
   alertas: readonly Alert[];
-  /** Ids de las alertas cuyo objetivo el dron está orbitando o siguiendo. */
+  /** Ids de las alertas cuyo objetivo el dron tiene encima: lo orbita, lo sigue o lo vigila. */
   seguidas?: readonly (number | null)[];
   onDecidir: DecidirAlerta;
   onCerrar: () => void;

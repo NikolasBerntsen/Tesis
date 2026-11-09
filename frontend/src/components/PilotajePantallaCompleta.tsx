@@ -294,7 +294,7 @@ export default function PilotajePantallaCompleta({
   useAnotarCapaDePilotaje(raiz, droneId);
 
   const hayDialogo = suspendido || confirmandoSalida;
-  const { rapido, ultimoSalio } = useTecladoDeVuelo({
+  const { rapido, ultimoSalio, soltarTodo } = useTecladoDeVuelo({
     activo: controlTomado && !hayDialogo,
     inerte: impedimento !== null,
     onMando,
@@ -656,6 +656,21 @@ export default function PilotajePantallaCompleta({
     onCerrar();
   }
 
+  /**
+   * «Aterrizar» suelta primero todo lo que se venía sosteniendo —las teclas, el
+   * giro del mouse, los sticks— y manda un cero, y recién después pide la
+   * orden (VUELO §8): la app corta un aterrizaje con la primera palanca
+   * deliberada que le llegue pasado 1,5 s de la orden, y una W sostenida de
+   * antes no puede contar como deliberada ni frenar el aterrizaje que se está
+   * confirmando.
+   */
+  function ordenarAterrizaje() {
+    apagarGiroDelMouse();
+    setEjesDeSticks(EJES_EN_CERO);
+    soltarTodo();
+    onOrden('aterrizar');
+  }
+
   // De este dron quiere decir que la sigue este dron (ver duenioDeLaAlerta): es
   // la que el piloto tiene delante, en el video que está mirando.
   const nuevasAlertas = alertas.filter(
@@ -892,7 +907,7 @@ export default function PilotajePantallaCompleta({
               <button
                 type="button"
                 className="dismiss"
-                onClick={() => onOrden('aterrizar')}
+                onClick={ordenarAterrizaje}
                 disabled={!enLinea || !controlTomado}
               >
                 Aterrizar

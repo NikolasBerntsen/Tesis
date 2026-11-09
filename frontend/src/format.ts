@@ -11,9 +11,14 @@ export const STATE_LABELS: Record<string, string> = {
   PATROLLING: 'Patrullando',
   ORBITING: 'Orbitando objetivo',
   FOLLOWING: 'Siguiendo objetivo',
+  // VUELO §2: se detuvo donde estaba al detectar y vigila al objetivo con la
+  // nariz y la cámara, sin moverse (la reacción `detenerse`).
+  VIGILANDO: 'Vigilando objetivo (detenido)',
   RETURNING_HOME_SIGNAL: 'Volviendo a base (pérdida de señal)',
   RETURNING_HOME_BATTERY: 'Volviendo a base (batería baja)',
-  RETURNING_HOME: 'Volviendo a base (orden del operador de campo)',
+  // Por orden de una persona, del teléfono o de la consola (VUELO §7.1), o al
+  // terminar un relevo: ya no es sólo del operador de campo.
+  RETURNING_HOME: 'Volviendo a base (por orden)',
   LANDED: 'Aterrizado',
   PAUSED: 'Patrulla interrumpida',
   MANUAL: 'Control manual',
@@ -30,12 +35,13 @@ export function stateLabel(state: string): string {
 }
 
 /**
- * Los dos estados en los que el dron trabaja sobre un objetivo detectado:
- * orbitándolo si está quieto o siguiéndolo si se mueve. Para la consola son el
- * mismo momento —hay algo que decidir y un lugar al que mandar gente—, así que
- * se resaltan igual; lo único que cambia es el rótulo.
+ * Los estados en los que el dron trabaja sobre un objetivo detectado:
+ * orbitándolo, siguiéndolo si se mueve o vigilándolo detenido donde estaba
+ * (VUELO §2, `ESTADOS_DE_SEGUIMIENTO`). Para la consola son el mismo momento
+ * —hay algo que decidir y un lugar al que mandar gente—, así que se resaltan
+ * igual; lo único que cambia es el rótulo.
  */
-export const SOBRE_OBJETIVO: readonly string[] = ['ORBITING', 'FOLLOWING'];
+export const SOBRE_OBJETIVO: readonly string[] = ['ORBITING', 'FOLLOWING', 'VIGILANDO'];
 
 export function sobreObjetivo(state: string | null | undefined): boolean {
   return !!state && SOBRE_OBJETIVO.includes(state);
@@ -289,6 +295,14 @@ export const ETIQUETAS_DE_EVENTO: Record<string, string> = {
   CONTROL_REQUESTED: 'Pidió el control',
   CONTROL_TRANSFERRED: 'El control cambió de manos',
   CONTROL_REQUEST_ENDED: 'Pedido de control terminado',
+  // Las órdenes de vuelo y los ajustes del dron (PROTOCOLS §7, VUELO §11).
+  TAKEOFF_ORDERED: 'Despegue ordenado',
+  LANDING_ORDERED: 'Aterrizaje ordenado',
+  LANDING_CANCELLED: 'Aterrizaje cortado por las palancas',
+  RTH_ORDERED: 'Volver a la base ordenado',
+  ORBIT_SPEED_SET: 'Velocidad de órbita fijada',
+  DETECTION_REACTION_SET: 'Reacción ante una detección fijada',
+  RESUME_SILENCE_SET: 'Silencio al retomar fijado',
 };
 
 /** El rótulo de un tipo de evento, o `null` si la consola no le conoce uno. */
@@ -313,6 +327,10 @@ const TONO_DE_EVENTO: Record<string, 'bad' | 'warn'> = {
   RELAY_FAILED: 'bad',
   RELAY_UNAVAILABLE: 'warn',
   RTH_DIVERTED: 'warn',
+  // Una persona trajo el dron, o le cortó el aterrizaje con las palancas: la
+  // ronda sigue sin ese dron, y conviene mirar por qué.
+  RTH_ORDERED: 'warn',
+  LANDING_CANCELLED: 'warn',
 };
 
 /** El tono de un tipo de evento en la lista, o '' si va con la tinta de siempre. */

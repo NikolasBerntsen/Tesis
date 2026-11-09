@@ -6,7 +6,7 @@ import type { RastroObjetivo } from '../rastro';
 import { avisoDeOrdenesEnRelevo, avisoDeReanudarEnRelevo, duenioDeLaAlerta, participaDeUnRelevo } from '../relevos';
 import type { Alert, Drone, DroneStatus, EventRow, Me, PatrolRoute, Relevo } from '../types';
 import type { DecidirAlerta } from '../useDecisionDeAlerta';
-import AjusteDeOrbita from './AjusteDeOrbita';
+import AjustesDelDron from './AjustesDelDron';
 import AlertaEnCurso from './AlertaEnCurso';
 import AlertasDelDron from './AlertasDelDron';
 import { useAvisar } from './AvisosFlotantes';
@@ -33,6 +33,7 @@ import LiveVideo from './LiveVideo';
 import type { Ejes } from './MandoVirtual';
 import PanelObjetivo from './PanelObjetivo';
 import PilotajePantallaCompleta from './PilotajePantallaCompleta';
+import TarjetaDeVuelo from './TarjetaDeVuelo';
 
 // Estados en los que el patrullaje normal está interrumpido: habilitan
 // "Retomar ruta" y "Continuar desde acá" en los nodos.
@@ -174,7 +175,20 @@ const CONFIRMACION: Record<OrdenDeVuelo, { titulo: string; texto: string; aviso:
 const ORDEN_EN_CURSO: Record<OrdenDeVuelo, string> = {
   despegar:
     'Despegue ordenado: el mando se habilita apenas el dron informe que está en el aire. Si no despega, el motivo queda en el registro de eventos.',
-  aterrizar: 'Aterrizaje ordenado: el dron baja donde está. El control sigue tomado.',
+  aterrizar:
+    'Aterrizaje ordenado: el dron baja donde está. El control sigue tomado; una palanca o el pad cortan el ' +
+    'aterrizaje y te devuelven el mando.',
+};
+
+/**
+ * Lo mismo, dicho en el HUD de la vista de pilotaje, donde están las palancas:
+ * mientras el dron baja, la primera palanca deliberada corta el aterrizaje y
+ * deja el dron a mano del piloto (VUELO §8). Es lo que la vista avisa en lugar
+ * del texto de la tarjeta.
+ */
+const ORDEN_EN_CURSO_EN_EL_HUD: Record<OrdenDeVuelo, string> = {
+  despegar: ORDEN_EN_CURSO.despegar,
+  aterrizar: 'Aterrizando: una palanca o el pad cortan el aterrizaje y te devuelven el mando.',
 };
 
 const SIN_RELEVOS: readonly Relevo[] = [];
@@ -397,6 +411,8 @@ export default function DroneDetail({
   const soyControlador = !!me && controlador === me.username;
   const puedeControlar = !!me && me.canControl;
   const esSupervisor = me?.role === 'supervisor' || me?.role === 'admin';
+  /** Operador o más con `canControl`: quien puede dar las órdenes de llegada (VUELO §11, `return_home`). */
+  const puedeOrdenarLlegada = puedeControlar && me?.role !== 'field_operator';
 
   /** El objetivo que el dron orbita o sigue, con lo último que estimó la app. */
   const objetivo = status?.target ?? null;
@@ -840,9 +856,10 @@ export default function DroneDetail({
       <div className="grid-operacion">
         {objetivo && <PanelObjetivo objetivo={objetivo} />}
 
-        {/* La velocidad con la que orbita a un objetivo: un dato del dron que
-            se cambia desde acá y la app aplica (PROTOCOLS §2, `ajustes`). */}
-        <AjusteDeOrbita drone={drone} puedeAjustar={!!me && me.role !== 'field_operator'} />
+        {/* Los ajustes del dron (la órbita, la reacción ante una detección y
+            el silencio al retomar): datos del dron que se cambian desde acá y
+            la app aplica (VUELO §10; PROTOCOLS §2, `ajustes`). */}
+        <AjustesDelDron key={`ajustes-${drone.droneId}`} drone={drone} puedeAjustar={!!me && me.role !== 'field_operator'} />
 
         <div className="card">
           <h2>
@@ -901,6 +918,13 @@ export default function DroneDetail({
             </p>
           )}
         </div>
+
+        {/* Las órdenes de llegada (VUELO §7 y §9): volver a la base y aterrizar
+            acá, sin el control manual y por encima de la ruta y del objetivo.
+            Con `key` por dron: el aviso de una orden en curso es de ese dron. */}
+        {me && puedeOrdenarLlegada && (
+          <TarjetaDeVuelo key={`vuelo-${drone.droneId}`} me={me} drone={drone} status={status} controlador={controlador} />
+        )}
 
         {puedeControlar && (
           <div className="card con-esquina">
@@ -1149,7 +1173,7 @@ export default function DroneDetail({
           esperandoConfirmacion={esperandoConfirmacion}
           enElSuelo={enElSuelo}
           enElAire={enElAire}
-          avisoDeOrden={ordenEnCurso && ORDEN_EN_CURSO[ordenEnCurso]}
+          avisoDeOrden={ordenEnCurso && ORDEN_EN_CURSO_EN_EL_HUD[ordenEnCurso]}
           error={error}
           hayObjetivo={!!objetivo}
           enRelevo={enRelevo}
