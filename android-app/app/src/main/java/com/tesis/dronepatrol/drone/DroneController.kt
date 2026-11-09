@@ -62,6 +62,18 @@ interface DroneController {
          * tardía del lazo de la órbita no dejaba ni una pista.
          */
         const val NO_SE_PUDO_VOLVER = "no se pudo volver a la base"
+
+        /**
+         * Con qué empieza el [FlightEvent.Problema] de un regreso a base de la
+         * app que el DJI dejó porque alguien movió las palancas del control
+         * físico (`GoHomeExitCode` JOYSTICK_*): el que está al lado del dron lo
+         * está volando, que es la capa 2 de docs/VUELO.md §1. No es una falla
+         * del regreso como [NO_SE_PUDO_VOLVER]: PatrolManager no le da ninguna
+         * orden —un estacionario habilitaría el Virtual Stick y se lo sacaría
+         * de las manos— y lo deja en pausa con el mando en el control físico,
+         * avisando `RTH_INTERRUPTED`.
+         */
+        const val REGRESO_CORTADO_EN_EL_CONTROL = "el regreso se cortó con las palancas del control físico"
     }
     /**
      * Enlace, modelo, GPS, punto de retorno y si está en el aire. Es un
