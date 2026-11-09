@@ -22,13 +22,16 @@ class SupervisorDelRegresoTest {
     private var ahora = 1_000_000L
     private val supervisor = SupervisorDelRegreso { ahora }
 
+    /** De fábrica, a 20 m de altura y a 10 m de la base: bajar ahí es el GoHome que aterriza directo. */
     private fun lectura(
         arranco: Boolean? = false,
         enVuelo: Boolean = true,
         enlace: Boolean = true,
         bajando: Boolean? = false,
         salida: String? = null,
-    ) = Lectura(enVuelo, enlace, arranco, bajando, salida)
+        alt: Double = 20.0,
+        distancia: Double = 10.0,
+    ) = Lectura(enVuelo, enlace, arranco, bajando, salida, alt, distancia)
 
     private fun pasar(ms: Long) {
         ahora += ms
@@ -296,16 +299,108 @@ class SupervisorDelRegresoTest {
         assertEquals(Accion.SEGUIR, supervisor.alLeer(lectura(bajando = true)))
     }
 
-    /** Si deja de bajar, el plazo arranca ahí: a los 3 s justos, otra orden. */
+    /**
+     * Bajaba en la base y deja de bajar en el aire: es la persona del control
+     * físico que empujó el acelerador (el modo pasa de AUTO_LANDING a P-GPS).
+     * Antes se lo reordenaba a los 3 s, hasta tres veces, y el «no se pudo
+     * volver» terminaba en un estacionario con el Virtual Stick que le sacaba el
+     * dron de las manos. Ahora se lo suelta, sin una sola orden más.
+     */
     @Test
-    fun alDejarDeBajarElPlazoCuentaDesdeAhi() {
+    fun alDejarDeBajarEnElAireLoTomaronYNoSeReordena() {
         aceptado()
-        pasar(10_000)
-        assertEquals(Accion.SEGUIR, supervisor.alLeer(lectura(bajando = true)))
-        pasar(SupervisorDelRegreso.VERIFICACION_MS - 1)
-        assertEquals(Accion.SEGUIR, supervisor.alLeer(lectura(bajando = false)))
-        pasar(1)
-        assertEquals(Accion.ORDENAR, supervisor.alLeer(lectura(bajando = false)))
+        pasar(SupervisorDelRegreso.INTERVALO_MS)
+        assertEquals(Accion.SEGUIR, supervisor.alLeer(lectura(bajando = true, alt = 6.0)))
+        pasar(SupervisorDelRegreso.INTERVALO_MS)
+        assertEquals(Accion.SEGUIR, supervisor.alLeer(lectura(bajando = true, alt = 5.0)))
+        pasar(SupervisorDelRegreso.INTERVALO_MS)
+        assertEquals(Accion.LO_TOMARON, supervisor.alLeer(lectura(bajando = false, alt = 5.2)))
+        assertEquals(1, supervisor.ordenes)
+        assertEquals(
+            "dejó de aterrizar en la base a 5.2 m (subió 0.2 m desde lo más bajo): lo vuela una persona con las palancas del control",
+            supervisor.motivoDeLaToma(),
+        )
+    }
+
+    /** A medio metro (la protección de aterrizaje) dejar de bajar es el final: se espera el suelo y nunca otra orden. */
+    @Test
+    fun alDejarDeBajarAMedioMetroEsElFinalYNuncaSeReordena() {
+        aceptado()
+        assertEquals(Accion.SEGUIR, supervisor.alLeer(lectura(bajando = true, alt = 3.0)))
+        assertEquals(Accion.SEGUIR, supervisor.alLeer(lectura(bajando = true, alt = 0.5)))
+        repeat(60) {
+            pasar(SupervisorDelRegreso.INTERVALO_MS)
+            assertEquals(Accion.SEGUIR, supervisor.alLeer(lectura(bajando = false, alt = 0.5)))
+        }
+        assertEquals(1, supervisor.ordenes)
+        assertEquals(Accion.EN_EL_SUELO, supervisor.alLeer(lectura(bajando = false, alt = 0.0, enVuelo = false)))
+    }
+
+    /** Subirlo más de un metro y medio desde lo más bajo también es la persona, aunque no llegue a los 2 m. */
+    @Test
+    fun subirloMasDeUnMetroYMedioEsQueLoTomaron() {
+        aceptado()
+        assertEquals(Accion.SEGUIR, supervisor.alLeer(lectura(bajando = true, alt = 0.3)))
+        assertEquals("subir justo 1,5 m todavía no", Accion.SEGUIR, supervisor.alLeer(lectura(bajando = false, alt = 1.8)))
+        assertEquals(Accion.LO_TOMARON, supervisor.alLeer(lectura(bajando = false, alt = 1.81)))
+    }
+
+    /** El borde de la altura del final: en los 2 m justos todavía es el final; un centímetro más, lo tomaron. */
+    @Test
+    fun porArribaDeLaAlturaDelFinalLoTomaron() {
+        val final = SupervisorDelRegreso.ALTURA_DEL_FINAL_DEL_REGRESO_M
+        aceptado()
+        assertEquals(Accion.SEGUIR, supervisor.alLeer(lectura(bajando = true, alt = final - 0.1)))
+        assertEquals(Accion.SEGUIR, supervisor.alLeer(lectura(bajando = false, alt = final)))
+        assertEquals(Accion.LO_TOMARON, supervisor.alLeer(lectura(bajando = false, alt = final + 0.01)))
+    }
+
+    /** Sin altura no se sabe si lo subieron: se espera, y nunca otra orden. */
+    @Test
+    fun yaBajoEnLaBaseYSinAlturaSeEspera() {
+        aceptado()
+        assertEquals(Accion.SEGUIR, supervisor.alLeer(lectura(bajando = true, alt = Double.NaN)))
+        pasar(SupervisorDelRegreso.VERIFICACION_MS * 10)
+        assertEquals(Accion.SEGUIR, supervisor.alLeer(lectura(bajando = false, alt = Double.NaN)))
+    }
+
+    /** Ya bajando en la base, perder la posición (el GPS) no lo vuelve otro descenso; sin enlace, tampoco se decide nada. */
+    @Test
+    fun yaBajoEnLaBaseSinPosicionNiEnlaceSigueSiendoElDescenso() {
+        aceptado()
+        assertEquals(Accion.SEGUIR, supervisor.alLeer(lectura(bajando = true, alt = 8.0)))
+        assertEquals(Accion.SEGUIR, supervisor.alLeer(lectura(bajando = true, alt = 7.0, distancia = Double.NaN)))
+        assertEquals(Accion.SEGUIR, supervisor.alLeer(lectura(bajando = false, alt = 7.0, enlace = false)))
+        assertEquals(Accion.LO_TOMARON, supervisor.alLeer(lectura(bajando = false, alt = 7.0, distancia = Double.NaN)))
+    }
+
+    /**
+     * Lejos de la base bajar no es el GoHome que aterriza directo (es, por
+     * ejemplo, un aterrizaje que no se pudo cortar): rigen las reglas de siempre
+     * y, rechazada tres veces, no se pudo. Antes se lo miraba hasta el suelo y
+     * terminaba en un ArrivedHome callado lejos de la base.
+     */
+    @Test
+    fun bajandoLejosDeLaBaseRigenLasReglasDeSiempre() {
+        val lejos = SupervisorDelRegreso.CERCA_DE_LA_BASE_M + 0.001
+        supervisor.empezar()
+        assertEquals(Accion.ORDENAR, supervisor.alContestar(false, lectura(bajando = true, distancia = lejos), "aircraft is landing"))
+        assertEquals(Accion.ORDENAR, supervisor.alContestar(false, lectura(bajando = true, distancia = 500.0), "aircraft is landing"))
+        assertEquals(Accion.NO_SE_PUDO, supervisor.alContestar(false, lectura(bajando = true, distancia = Double.NaN), "aircraft is landing"))
+
+        val otro = SupervisorDelRegreso { ahora }
+        otro.empezar()
+        assertEquals(Accion.SEGUIR, otro.alContestar(true, lectura(bajando = true, distancia = 500.0)))
+        pasar(SupervisorDelRegreso.VERIFICACION_MS)
+        assertEquals("aceptada y bajando lejos, sin arrancar: otra orden", Accion.ORDENAR, otro.alLeer(lectura(bajando = true, distancia = 500.0)))
+    }
+
+    /** En el borde de la distancia, todavía es la base. */
+    @Test
+    fun bajandoEnElBordeDeLaBaseEsElDescenso() {
+        aceptado()
+        pasar(SupervisorDelRegreso.VERIFICACION_MS * 10)
+        assertEquals(Accion.SEGUIR, supervisor.alLeer(lectura(bajando = true, distancia = SupervisorDelRegreso.CERCA_DE_LA_BASE_M)))
     }
 
     /** Con las órdenes agotadas y el dron bajando, tampoco: se lo mira hasta el suelo. */
@@ -377,9 +472,51 @@ class SupervisorDelRegresoTest {
     @Test
     fun lasAccionesDeLaSecuencia() {
         assertEquals(
-            listOf(Accion.SEGUIR, Accion.ORDENAR, Accion.ARRANCO, Accion.EN_EL_SUELO, Accion.NO_SE_PUDO),
+            listOf(Accion.SEGUIR, Accion.ORDENAR, Accion.ARRANCO, Accion.EN_EL_SUELO, Accion.NO_SE_PUDO, Accion.LO_TOMARON),
             Accion.entries.toList(),
         )
+        assertEquals(
+            listOf(SupervisorDelRegreso.FinEnElAire.EN_EL_CONTROL, SupervisorDelRegreso.FinEnElAire.FALLA),
+            SupervisorDelRegreso.FinEnElAire.entries.toList(),
+        )
+    }
+
+    // ---- Cómo terminó en el aire un regreso que había arrancado ----
+
+    /** Las palancas son la persona del control físico, sea la salida nueva o la misma de antes. */
+    @Test
+    fun lasPalancasSonSiempreElControlFisico() {
+        val control = SupervisorDelRegreso.FinEnElAire.EN_EL_CONTROL
+        assertEquals(control, SupervisorDelRegreso.comoTermino("NO_ERROR", "JOYSTICK_PITCH_ADD"))
+        assertEquals(control, SupervisorDelRegreso.comoTermino(null, "OYSTICK_THROTTLE_ADD"))
+        assertEquals("la misma de antes, también", control, SupervisorDelRegreso.comoTermino("JOYSTICK_PITCH_ADD", "JOYSTICK_PITCH_ADD"))
+    }
+
+    /**
+     * Una salida que no dice nada, o la misma que al arrancar (la de un GoHome
+     * anterior, que el dron no actualizó), no prueba una falla: ante la duda el
+     * dron queda en manos de quien lo vuela. Antes eso terminaba en el
+     * estacionario con el Virtual Stick.
+     */
+    @Test
+    fun sinUnaSalidaNuevaQueLoExpliqueQuedaEnElControlFisico() {
+        val control = SupervisorDelRegreso.FinEnElAire.EN_EL_CONTROL
+        assertEquals(control, SupervisorDelRegreso.comoTermino("OABT_STUCK", null))
+        assertEquals(control, SupervisorDelRegreso.comoTermino(null, null))
+        assertEquals(control, SupervisorDelRegreso.comoTermino("OABT_STUCK", "NO_ERROR"))
+        assertEquals(control, SupervisorDelRegreso.comoTermino(null, "UNKNOWN"))
+        assertEquals("la misma que al arrancar", control, SupervisorDelRegreso.comoTermino("OABT_STUCK", "OABT_STUCK"))
+        assertEquals(control, SupervisorDelRegreso.comoTermino("GPS_NO_SIGNAL", "GPS_NO_SIGNAL"))
+    }
+
+    /** Solo una salida NUEVA, conocida y que no son las palancas es una falla del regreso. */
+    @Test
+    fun unaSalidaNuevaYConocidaEsUnaFalla() {
+        val falla = SupervisorDelRegreso.FinEnElAire.FALLA
+        assertEquals(falla, SupervisorDelRegreso.comoTermino("NO_ERROR", "OABT_STUCK"))
+        assertEquals(falla, SupervisorDelRegreso.comoTermino(null, "GPS_NO_SIGNAL"))
+        assertEquals("otra que la de antes", falla, SupervisorDelRegreso.comoTermino("OABT_STUCK", "VELOCITY_STUCK"))
+        assertEquals(falla, SupervisorDelRegreso.comoTermino("JOYSTICK_PITCH_ADD", "NOT_HOMING_IN_SHORT_DISTANCE"))
     }
 
     @Test
