@@ -149,7 +149,7 @@ class PatrolManagerDeteccionEnRutaTest {
         assertTrue(banco.comando.alertas.isEmpty())
     }
 
-    /** Después de un descarte, lo que se ve en los 10 s de silencio no corta la ruta retomada. */
+    /** Después de un descarte, lo que se ve durante el silencio al retomar (15 s de fábrica) no corta la ruta retomada. */
     @Test
     fun trasUnDescarteLasDeteccionesNoVuelvenACortarLaRutaEnseguida() = runBlocking {
         patrullando()

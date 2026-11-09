@@ -149,24 +149,41 @@ Antes verifica `EstadoDelDron.listoParaDespegar`: SDK registrado, enlace con la
 aeronave, punto de retorno fijado y **8 satélites** como mínimo. Cualquier otra
 orden con el dron en el suelo se rechaza y se registra como `DRONE_PROBLEM`.
 
-**Detección → órbita → decisión.** El detector contesta cada cuadro con las
-cajas (normalizadas) y, si vio algo, la captura anotada. La app:
+**Detección → reacción → decisión** (`docs/VUELO.md` §5 y §6). El detector
+contesta cada cuadro con las cajas (normalizadas) y, si vio algo, la captura
+anotada. La app:
 1. dibuja las cajas sobre el video que sube a la consola (y sobre su propio
    visor) mientras estén vigentes (1,5 s), en cualquier estado;
-2. solo **patrullando**, proyecta el centro de la caja más segura al terreno
-   con la altura, el rumbo y la inclinación del gimbal
-   (`drone/Georreferencia.kt`) y **orbita alrededor del objetivo** a 30 m con
-   la cámara apuntada al centro, para no perderlo de vista. La velocidad de la
+2. solo **patrullando, en pausa o en un desvío**, proyecta el centro de la caja
+   más segura al terreno con la altura, el rumbo y la inclinación del gimbal
+   (`drone/Georreferencia.kt`) y reacciona según el ajuste del dron
+   `reaccionADeteccion`: de fábrica (`seguir_y_orbitar`) **orbita alrededor
+   del objetivo** a 30 m con la cámara al centro (`ORBITING`), lo sigue a 25 m
+   si se mueve (`FOLLOWING`) y vuelve a orbitarlo si se detiene; `orbitar`
+   orbita el lugar de la detección con el centro fijo, sin seguirlo; `seguir`
+   se pone a 25 m y lo sigue, sin orbitar nunca; `detenerse` se queda donde
+   está, con la nariz y la cámara en el objetivo (`VIGILANDO`,
+   `DroneController.vigilar`). En las cuatro salen los avisos `TARGET_MOVING`,
+   `TARGET_STOPPED`, `TARGET_LOST` y `TARGET_REACQUIRED`. La velocidad de la
    órbita es de 4 m/s de fábrica y la fija el operador desde la vista del dron
    en la consola (`ajustes`, `docs/PROTOCOLS.md` §2), entre 1 y 8 m/s; el
-   Comando Central la guarda y se la vuelve a mandar en cada conexión. Una
-   sola detección, o dos de distinta clase o lejos una de otra, **no** le
-   cambian nada a la ruta: solo la confirmada (dos de la misma clase, en
-   2,5 s y a menos de 25 m) pasa a la órbita;
+   Comando Central guarda los tres ajustes y se los vuelve a mandar en cada
+   conexión, y un valor fuera de `docs/contrato/ajustes.json` descarta el
+   mensaje entero. Una sola detección, o dos de distinta clase o lejos una de
+   otra, **no** le cambian nada a la ruta: solo la confirmada (dos de la misma
+   clase, en 2,5 s y a menos de 25 m) arranca la reacción. Volviendo a base,
+   aterrizando o en control manual una detección no le da al dron ni una
+   orden: solo las cajas;
 3. manda la alerta con el tipo, la **captura anotada**, la posición del objetivo
    y la confianza; y
 4. espera la decisión del operador: *falso positivo* retoma la ruta donde la
-   dejó; *validada* mantiene la órbita hasta que la consola ordene reanudar.
+   dejó; *validada* mantiene la reacción hasta que la consola ordene reanudar.
+   Cada vez que el dron **deja un objetivo para volver a volar solo** (un
+   descarte, reanudar, otra ruta o un desvío a un nodo) empieza el **silencio
+   al retomar** (`silencioAlRetomarS`, 15 s de fábrica, de 0 a 30 de a 5):
+   mientras dura, las detecciones solo dibujan sus cajas, así el dron pasa de
+   largo la playa de estacionamiento en vez de parar en cada auto. Un regreso
+   o un aterrizaje no lo arrancan.
 
 **Mando virtual.** El operador de la consola toma el control y mueve una
 palanca; cada eje viaja en `[-1, 1]` en un `manual_stick` a ~10 Hz. Con el
@@ -176,6 +193,21 @@ pasa por `PatrolManager.pasarA()`, que frena cuando nadie más le habla al dron.
 
 **Desde el campo**, *Volver a base* y *Aterrizar acá* pisan cualquier orden,
 incluido el control manual de la consola: el que está al lado del dron manda.
+
+**Desde la consola**, `return_home` y `land` son órdenes de llegada
+(`docs/VUELO.md` §4, §7 y §9): mandan sobre la ruta, la órbita, el seguimiento
+y un regreso en curso (al aterrizar durante un regreso de la app se corta el
+GoHome antes, como al tomar el control), y ya no exigen el control tomado:
+quién puede lo decide el hub. Con `return_home` el hub ya soltó el lock del
+que ordenó, así que la app suelta el control sola, sin `control_dropped`. Lo
+que no se discute es un failsafe del DJI, la señal perdida (la orden no llega)
+y el descenso final de una emergencia. Si el GoHome no arranca
+(`NO_SE_PUDO_VOLVER`) la consola se entera siempre con un `DRONE_PROBLEM` y el
+dron queda estacionario en `PAUSED`, a la espera de otra orden. Durante un
+aterrizaje sostenido con el control tomado, la primera **palanca deliberada**
+—o un salto del pad— que llegue 1,5 s o más después de la orden lo corta,
+deja al dron estacionario a su mando y registra `LANDING_CANCELLED`; las
+palancas en cero y las de antes de la gracia no cuentan.
 
 **Tomar el control** se toma del todo: la persona manda. Volviendo a base
 (`RETURNING_HOME` o `RETURNING_HOME_BATTERY`, también si el regreso lo arrancó
@@ -220,7 +252,10 @@ alcanzado y cada cuánto llegó la posición del SDK, para el banco de campo.
 | `NavegacionTest` | Velocidades, frenado, llegada y control de altura |
 | `CuadroDeVideoTest`, `CuadroDeVideoJpegTest`, `LimitadorDeRitmoTest`, `EsperaCrecienteTest`, `MandoVirtualTest`, `GeoTest` | Las piezas puras del vuelo y del video |
 | `PatrolManager*Test` | La máquina de estados: mando, salidas de manual, pérdida de señal, avisos del dron y el reparto del video en sus dos flujos |
-| `CommandCenterClientTest` | El mapeo de los mensajes del WebSocket a órdenes |
+| `PatrolManagerReaccionTest`, `PatrolManagerSilencioTest`, `PatrolManagerDeteccionEnRegresoTest` | Las cuatro reacciones a una detección, el silencio al retomar con cada orden que lo arranca, y que volviendo a base una detección no ordena nada (`docs/VUELO.md` §5–§7) |
+| `PatrolManagerRegresoPorLaConsolaTest`, `PatrolManagerAterrizajeDeLaConsolaTest` | `return_home` y `land` desde la consola con y sin el control, el regreso que no arranca y la palanca que corta un aterrizaje (`docs/VUELO.md` §7–§9) |
+| `SimulatedDroneControllerVigilanciaTest` | La vigilancia del simulador: quieto, con la nariz y la cámara en el objetivo |
+| `CommandCenterClientTest`, `ContratoDeAjustesTest` | El mapeo de los mensajes del WebSocket a órdenes; los ajustes del dron contra `docs/contrato/ajustes.json` |
 
 ## Estructura
 

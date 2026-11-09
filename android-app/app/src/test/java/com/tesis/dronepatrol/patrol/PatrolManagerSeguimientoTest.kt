@@ -194,8 +194,9 @@ class PatrolManagerSeguimientoTest {
         mensaje("""{"type":"alert_decision","alertId":$ALERTA,"decision":"DISMISSED","decidedBy":"op"}""")
         withTimeout(5_000) { patrulla.state.first { it == PatrolState.PATROLLING } }
 
-        // Pasado el silencio posterior al descarte, el mismo lugar no alerta
-        reloj.adelantar(PatrolManager.SILENCIO_TRAS_DESCARTE_MS + 1_000)
+        // Pasado el silencio al retomar (el de fábrica, 15 s: docs/VUELO.md §6),
+        // el mismo lugar sigue sin alertar, porque es una zona descartada
+        reloj.adelantar(PatrolManager.SILENCIO_AL_RETOMAR_MS + 1_000)
         detectar()
         detectar()
         delay(300)

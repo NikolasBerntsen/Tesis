@@ -256,7 +256,15 @@ interface DroneController {
      * [volarHacia], [girarEnElLugar]) se rechazan con [FlightEvent.Problema].
      * Lo cortan [returnHome], [startRoute] y [cancelarAterrizaje] (que quien
      * llama da antes de la orden que sigue). Un [land] repetido vuelve a
-     * empezar la secuencia.
+     * empezar la secuencia. Mientras baja con el control tomado, la primera
+     * palanca deliberada de la persona lo corta (PatrolManager da
+     * [cancelarAterrizaje] y [hold], docs/VUELO.md §8); las palancas en cero
+     * nunca llegan acá.
+     *
+     * Con un regreso de la app en curso ([returnHome]), PatrolManager corta el
+     * regreso ([cancelarRegreso]) ANTES de dar esta orden, igual que al tomar
+     * el control: con el GoHome puesto el DJI no acepta otra (docs/VUELO.md
+     * §4). El controlador no tiene que cortarlo por su cuenta.
      *
      * Es también la forma de abortar un despegue (un relevo cancelado mientras B
      * todavía está en la plataforma, RELEVOS §2 y §3): si no dejó el suelo, no

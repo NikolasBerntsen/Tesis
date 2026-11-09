@@ -333,6 +333,47 @@ enum class ReaccionADeteccion(val enElProtocolo: String) {
     }
 }
 
+/**
+ * Los tres ajustes del dron tal como llegan en el mensaje `ajustes` del Comando
+ * Central (docs/PROTOCOLS.md §2, docs/VUELO.md §10), ya validados por
+ * `CommandCenterClient`: cada uno `null` es «el de fábrica de la app». Son del
+ * dron y no de un vuelo: el hub los guarda con el activo y los manda al
+ * conectarse y con cada cambio. Los rangos son los de
+ * `docs/contrato/ajustes.json`, que las pruebas de la app leen para que un
+ * rango que cambie en el hub o en la consola no quede distinto acá.
+ */
+data class AjustesDelDron(
+    /** Velocidad tangencial de la órbita, en m/s, ya dentro del rango del contrato; null, la de fábrica. */
+    val velocidadOrbitaMs: Double?,
+    /** Qué hace el dron con un objetivo confirmado; null, la de fábrica ([ReaccionADeteccion.DE_FABRICA]). */
+    val reaccionADeteccion: ReaccionADeteccion?,
+    /** Segundos del silencio al retomar, en el rango y el paso del contrato; null, el de fábrica. */
+    val silencioAlRetomarS: Int?,
+) {
+    companion object {
+        /** El silencio al retomar va de 0 a 30 s de a 5 (docs/VUELO.md §6 y §10). */
+        const val SILENCIO_MINIMO_S = 0
+        const val SILENCIO_MAXIMO_S = 30
+        const val PASO_DEL_SILENCIO_S = 5
+        const val SILENCIO_DE_FABRICA_S = 15
+
+        /** `true` si [segundos] es un silencio que acepta el contrato: entero en el rango y múltiplo del paso. */
+        fun esUnSilencioValido(segundos: Long): Boolean =
+            segundos in SILENCIO_MINIMO_S..SILENCIO_MAXIMO_S && segundos % PASO_DEL_SILENCIO_S == 0L
+
+        /**
+         * El silencio que se aplica: el pedido recortado al rango y al paso, o
+         * el de fábrica sin pedido. El cliente ya rechaza lo inválido; se
+         * vuelve a recortar acá porque es la app la que lo aplica y no puede
+         * depender de que cada hub lo haga.
+         */
+        fun silencioAlRetomarS(pedidoS: Int?): Int {
+            val s = pedidoS ?: return SILENCIO_DE_FABRICA_S
+            return (s.coerceIn(SILENCIO_MINIMO_S, SILENCIO_MAXIMO_S) / PASO_DEL_SILENCIO_S) * PASO_DEL_SILENCIO_S
+        }
+    }
+}
+
 sealed class FlightEvent {
     /** El dron pasó por el waypoint [index] de la ruta activa. */
     data class WaypointReached(val index: Int) : FlightEvent()
