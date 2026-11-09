@@ -1,5 +1,6 @@
 import type { Server } from 'node:http';
 import { WebSocketServer, WebSocket, type RawData } from 'ws';
+import type { ReaccionADeteccion } from './ajustes';
 import { ROLE_RANK, SESION_DE_OTRO_ROL, esDeOtroRol, verifyToken } from './auth';
 import { posicionValida, validarAutonomia, validarRelevoInformado } from './contrato';
 import { CoordinadorDelControl, PLAZOS_DEL_CONTROL, type PedidoDeControlView } from './control';
@@ -190,6 +191,10 @@ export interface DroneCard {
   base: DroneBase | null;
   /** La velocidad de órbita fijada desde la consola (m/s), o null si es la de fábrica (PROTOCOLS §6). */
   velocidadOrbitaMs: number | null;
+  /** Qué hace el dron con un objetivo confirmado, o null si es la de fábrica (VUELO §5, PROTOCOLS §6). */
+  reaccionADeteccion: ReaccionADeteccion | null;
+  /** Segundos de silencio al retomar tras dejar un objetivo, o null si es el de fábrica (VUELO §6). */
+  silencioAlRetomarS: number | null;
   online: boolean;
   lastStatus: Record<string, unknown> | null;
   controlledBy: string | null;
@@ -209,6 +214,8 @@ function cardDesdeActivo(d: DroneAssetView): DroneCard {
     deletedAt: d.deletedAt,
     base: d.base,
     velocidadOrbitaMs: d.velocidadOrbitaMs,
+    reaccionADeteccion: d.reaccionADeteccion,
+    silencioAlRetomarS: d.silencioAlRetomarS,
     online: isOnline(d.hash),
     lastStatus: getLastStatus(d.hash),
     controlledBy: getController(d.hash),
@@ -331,12 +338,22 @@ export function enviarBasesATodos(): void {
 }
 
 /**
- * El mensaje `ajustes` para un dron (PROTOCOLS §2): lo que la consola fijó del
- * dron y la app aplica. Hoy es solo la velocidad de órbita; `null` es "la de
- * fábrica". Sale al conectarse y cada vez que alguien la cambia.
+ * El mensaje `ajustes` para un dron (PROTOCOLS §2, VUELO §10): lo que la
+ * consola fijó del dron y la app aplica, los TRES ajustes siempre, cada uno
+ * `null` si es el de fábrica. Van todos juntos y no solo el que cambió porque
+ * la app reemplaza su juego entero con cada mensaje, y así el de la conexión y
+ * el de un cambio son el mismo mensaje. Sale al conectarse y cada vez que
+ * alguien cambia alguno.
  */
 export function mensajeDeAjustes(droneId: string, by = 'Comando Central'): MensajeHub {
-  return { type: 'ajustes', velocidadOrbitaMs: getDrone(droneId)?.velocidadOrbitaMs ?? null, by };
+  const d = getDrone(droneId);
+  return {
+    type: 'ajustes',
+    velocidadOrbitaMs: d?.velocidadOrbitaMs ?? null,
+    reaccionADeteccion: d?.reaccionADeteccion ?? null,
+    silencioAlRetomarS: d?.silencioAlRetomarS ?? null,
+    by,
+  };
 }
 
 export function enviarAjustes(droneId: string, by = 'Comando Central'): boolean {
@@ -410,6 +427,15 @@ export interface ReleaseOptions {
    * en curso (PROTOCOLS §2).
    */
   ordenDeReanudar?: boolean;
+  /**
+   * No mandarle `control_released` a la app. Es para el soltar que acompaña a
+   * una orden que la app ya atiende soltando el control sola: el `return_home`
+   * del hub (VUELO §7.1). Con el `control_released` además, la app frenaría en
+   * estacionario o volvería al objetivo justo antes de recibir la orden de
+   * volver. El registro (`CONTROL_RELEASED`), las consolas (`control_changed`)
+   * y el que esperaba el control (`liberado`) se enteran igual.
+   */
+  sinAvisarALaApp?: boolean;
 }
 
 /** Lo que se le dice a quien pidió el control si el lock se suelta mientras espera. */
@@ -424,7 +450,7 @@ export function releaseControl(droneId: string, byUser: string, opts: ReleaseOpt
   controlledBy.delete(droneId);
   control.alSoltar(droneId, porQueSeSolto(byUser, holder, opts));
   const causa = opts.motivo ? { motivo: opts.motivo } : {};
-  sendToDrone(droneId, { type: 'control_released', by: byUser, ...causa });
+  if (!opts.sinAvisarALaApp) sendToDrone(droneId, { type: 'control_released', by: byUser, ...causa });
 
   const detalle = opts.forced ? ` (forzado por ${byUser}, lo tenía ${holder})` : '';
   const motivo = opts.reason ? ` — ${opts.reason}` : '';
@@ -1260,8 +1286,8 @@ export function setupWebSocket(server: Server) {
       );
       reenviarDecisionesRecientes(droneId);
       // Las bases donde puede bajar (desvío, RELEVOS §4), los ajustes del dron
-      // (la velocidad de órbita, §2) y el primer status que llegue decide qué
-      // relevo se le reenvía (PROTOCOLS §1.b, "Reconexión").
+      // (§2, VUELO §10) y el primer status que llegue decide qué relevo se le
+      // reenvía (PROTOCOLS §1.b, "Reconexión").
       enviarBases(droneId);
       enviarAjustes(droneId);
       relevos.alConectar(droneId);

@@ -269,6 +269,14 @@ for (const [col, def] of [
   // `ajustes`): NULL es la de fábrica de la app. Es del dron y no de un
   // vuelo, por eso vive acá y se le vuelve a mandar al conectarse.
   ['velocidad_orbita_ms', 'REAL'],
+  // Los otros dos ajustes del dron (VUELO §10, ajustes.ts): qué hace con un
+  // objetivo confirmado (`seguir_y_orbitar`, `orbitar`, `seguir`,
+  // `detenerse`) y cuántos segundos no se detiene por una detección después
+  // de dejar uno. NULL es el de fábrica, como la velocidad: el hub no copia
+  // nunca el valor de fábrica de la app, así un cambio en la app no pide una
+  // migración acá.
+  ['reaccion_deteccion', 'TEXT'],
+  ['silencio_al_retomar_s', 'INTEGER'],
 ]) {
   if (!droneCols.includes(col)) db.exec(`ALTER TABLE drones ADD COLUMN ${col} ${def}`);
 }
