@@ -318,6 +318,8 @@ describe('integración — listado de drones', () => {
       baseId: expect.any(Number),
       base: { name: 'Base Norte', lat: -34.8565, lon: -56.2075, aterrizajeLat: null, aterrizajeLon: null },
       velocidadOrbitaMs: null,
+      reaccionADeteccion: null,
+      silencioAlRetomarS: null,
       online: false,
       lastStatus: null,
       controlledBy: null,

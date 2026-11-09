@@ -128,20 +128,19 @@ describe('integración — control manual exclusivo', () => {
     }
   });
 
-  it('despegar o aterrizar sin ser el titular da 409, aunque sea un supervisor', async () => {
-    for (const orden of ['takeoff', 'land']) {
-      // nadie tiene el control
-      const libre = await api(srv.base, `/api/drones/${DRON.alfa}/${orden}`, op, { method: 'POST' });
-      expect(libre.status, orden).toBe(409);
-      expect(libre.body.error).toBe('No tenés el control manual de este dron');
-    }
-    // el control lo tiene otro: ni el operador ni el supervisor despegan por encima del titular
+  it('despegar sin ser el titular da 409, aunque sea un supervisor; aterrizar con el control de otro, también', async () => {
+    // nadie tiene el control: despegar pide el lock (aterrizar ya no, VUELO §9: ver llegada.test.ts)
+    const libre = await api(srv.base, `/api/drones/${DRON.alfa}/takeoff`, op, { method: 'POST' });
+    expect(libre.status).toBe(409);
+    expect(libre.body.error).toBe('No tenés el control manual de este dron');
+    // el control lo tiene otro: ni el operador ni el supervisor despegan ni aterrizan por encima del titular
     await api(srv.base, `/api/drones/${DRON.alfa}/control`, oper2, { method: 'POST' });
     alfa.got.length = 0;
     for (const tok of [op, sup]) {
-      for (const orden of ['takeoff', 'land']) {
-        expect((await api(srv.base, `/api/drones/${DRON.alfa}/${orden}`, tok, { method: 'POST' })).status).toBe(409);
-      }
+      expect((await api(srv.base, `/api/drones/${DRON.alfa}/takeoff`, tok, { method: 'POST' })).status).toBe(409);
+      const aterrizar = await api(srv.base, `/api/drones/${DRON.alfa}/land`, tok, { method: 'POST' });
+      expect(aterrizar.status).toBe(409);
+      expect(aterrizar.body.error).toBe('El control lo tiene oper2');
     }
     await new Promise((r) => setTimeout(r, 120));
     expect(alfa.got.some((m) => m.type === 'takeoff' || m.type === 'land')).toBe(false);

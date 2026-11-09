@@ -364,7 +364,7 @@ Conexión: `ws://<backend>:4000/ws?token=<JWT>` (el rol `drone` sale del token).
 
 | Campo | Tipo | Notas |
 |---|---|---|
-| `state` | string | `IDLE`, `PATROLLING`, `ORBITING` (orbitando el objetivo detectado), **`FOLLOWING` (siguiendo al objetivo detectado porque se mueve)**, `RETURNING_HOME_SIGNAL`, `RETURNING_HOME_BATTERY`, `RETURNING_HOME` (regreso ordenado por el operador de campo desde la app), `LANDED`, `PAUSED` (patrulla interrumpida), `MANUAL` (control manual), `FORCED` (desvío forzado a un nodo), **`RELEVANDO` (despegando o volando hacia el objetivo de un relevo de seguimiento, RELEVOS §3), `ATERRIZAJE_EMERGENCIA` (protocolo de última ubicación, RELEVOS §5)**. Un desvío a otra base sigue en `RETURNING_HOME_BATTERY` |
+| `state` | string | `IDLE`, `PATROLLING`, `ORBITING` (orbitando el objetivo detectado), `FOLLOWING` (siguiendo al objetivo detectado porque se mueve), **`VIGILANDO` (se detuvo donde estaba al detectar y vigila al objetivo con la nariz y la cámara, sin moverse: la reacción `detenerse`, VUELO §5)**, `RETURNING_HOME_SIGNAL`, `RETURNING_HOME_BATTERY`, `RETURNING_HOME` (**regreso por orden de una persona —el operador de campo desde el teléfono, o la consola con `return_home`— o al terminar un relevo**), `LANDED`, `PAUSED` (patrulla interrumpida), `MANUAL` (control manual), `FORCED` (desvío forzado a un nodo), `RELEVANDO` (despegando o volando hacia el objetivo de un relevo de seguimiento, RELEVOS §3), `ATERRIZAJE_EMERGENCIA` (protocolo de última ubicación, RELEVOS §5). Un desvío a otra base sigue en `RETURNING_HOME_BATTERY`. **Qué manda sobre qué en cada estado —el DJI, la persona al mando, las órdenes de llegada, el vuelo autónomo y las detecciones— está en `docs/VUELO.md` §1 y §2** |
 | `battery` | number | Porcentaje 0..100 |
 | `lat`, `lon` | number \| **null** | Posición actual. **`null` sin fix GPS** (interior, arranque en frío): el SDK de DJI entrega 0,0 sin fix y eso no es una posición. La consola no dibuja el dron en el mapa ni le cree a 0,0 |
 | **`gpsFix`** | boolean | **`true` si `lat`/`lon` son una posición real.** El status sale igual sin GPS: estado, batería, altura y si vuela llegan siempre que haya enlace con la aeronave |
@@ -831,13 +831,14 @@ Los mensajes se dirigen **solo al dron correspondiente**, salvo que se indique.
 | `control_taken` | `by`, **`resync?`** | Entra en control manual (`MANUAL`): vuelo estacionario a la espera de movimientos. **Con un objetivo en seguimiento, la app lo sigue estimando con las detecciones mientras el operador vuela. Mientras dure `MANUAL` (en el aire o en el suelo), las detecciones se dibujan en el video pero no generan alertas (§4). Con un aterrizaje en curso no lo frena: el control queda tomado y el dron sigue bajando hasta el suelo. Volviendo a base (`RETURNING_HOME` o `RETURNING_HOME_BATTERY`: por una orden del campo, el fin de un relevo, la batería, o porque el propio DJI arrancó su regreso) la toma le corta el regreso al dron antes del estacionario, porque con el GoHome puesto el DJI no acepta el mando virtual; y mientras la persona lo tenga, la batería baja no le vuelve a sacar el dron (al soltarlo, la telemetría siguiente lo manda a casa de nuevo). Si el regreso era del propio DJI, ese es el único corte del vuelo (RELEVOS §4). Con la señal del dron perdida (`RETURNING_HOME_SIGNAL`) el control queda tomado y se aplica al volver la señal (`CONTROL_RESUMED`). La app NO lo toma solo cuando el propio DJI tiene el vuelo y no se le discute: el regreso pedido desde el botón del control físico, el aterrizaje por batería crítica, o su regreso por batería cuando el único corte ya se gastó. Ahí contesta `control_dropped` con el motivo (§1), el hub suelta el lock y lo avisa a las consolas, y registra un `DRONE_PROBLEM` «No se toma el control manual que pidió X: …». Antes entraba en `MANUAL` a medias: el dron seguía volviendo con las palancas mudas, o la telemetría siguiente lo devolvía al regreso. Con `resync: true` (lo manda el hub al reconectarse el dron) NO es una toma: si la app ya lo tenía tomado no hace nada; si no, no lo toma y contesta `control_dropped` (§1)** |
 | **`control_transferred`** | **`by, de`** | **El control pasó de `de` a `by` sin soltarse: `de` cedió el pedido de control o no lo contestó en 10 s. En `MANUAL`, en el aire y sin un aterrizaje en curso, la app queda estacionaria donde está (frena la palanca o el salto de 25 m que haya dejado el anterior) y sigue en `MANUAL`, a la espera de `by`; en cualquier otro estado (una ruta que el titular mandó sin soltar, la señal perdida, aterrizando) sigue con lo que estaba haciendo. Sin el control tomado, contesta `control_dropped`** |
 | **`takeoff`** | **`by`** | **Despegue automático en el lugar (~1,2 m, el del SDK) y queda suspendido a la espera del mando. Solo con el control manual tomado y el dron en el suelo. No exige GPS (la aeronave se sostiene con sus sensores de visión); sí exige enlace con la aeronave y batería: ni al 25 % o menos, ni por cambiar (aterrizó con la batería baja y todavía no se la cambió, aunque después se haya tomado el control o la lectura haya rebotado; la batería nueva se reconoce por una lectura de 50 % o más en el suelo). Si no despega, la app avisa el motivo con un `DRONE_PROBLEM`** |
-| **`land`** | **`by`** | **Aterriza donde está. Solo con el control manual tomado y el dron en el aire. Al tocar el suelo el control sigue tomado (`MANUAL` en el suelo). El aterrizaje se SOSTIENE hasta el suelo (también el que se ordena desde el teléfono): mientras baja, `manual_stick` —incluido el de los cuatro ejes en cero al soltar la palanca, que puede llegar después del `land`—, `manual_move`, el watchdog del mando, `control_taken`, `control_released` y la pérdida de señal no le dan ninguna orden al dron, el regreso por batería no lo pisa y una detección alerta sin seguimiento; `manual_gimbal` sí mueve la cámara. Lo corta otra orden de vuelo de una persona: `start_route`, `resume_patrol` sin `alSoltar`, `force_goto`, `stop_patrol`, o volver a base desde el teléfono. `LANDING` sale cuando el dron lo acepta (el hub ya registró `LANDING_ORDERED` al recibir la orden); si no se puede, `DRONE_PROBLEM` «No se pudo aterrizar: …», que sale siempre** |
+| **`land`** | **`by`** | **Aterriza donde está, desde cualquier estado de vuelo (VUELO §9): ya no exige el control manual tomado —quién puede darla lo decide el hub (§5)—. Con el control tomado por quien ordena, al tocar el suelo el control sigue tomado (`MANUAL` en el suelo). Con un relevo en curso, lo aborta (RELEVOS §3). El aterrizaje se SOSTIENE hasta el suelo (también el que se ordena desde el teléfono): mientras baja, `manual_stick` —incluido el de los cuatro ejes en cero al soltar la palanca, que puede llegar después del `land`—, `manual_move`, el watchdog del mando, `control_taken`, `control_released` y la pérdida de señal no le dan ninguna orden al dron, el regreso por batería no lo pisa y una detección alerta sin seguimiento; `manual_gimbal` sí mueve la cámara. Lo corta otra orden de vuelo de una persona: `start_route`, `resume_patrol` sin `alSoltar`, `force_goto`, `stop_patrol`, o volver a base desde el teléfono o desde la consola (`return_home`); y, con el control tomado, una palanca deliberada —cualquier eje fuera de la zona muerta, o un salto del pad— que llegue 1,5 s o más después de la orden: corta el aterrizaje, deja el dron estacionario al mando de la persona y registra `LANDING_CANCELLED` (VUELO §8). `LANDING` sale cuando el dron lo acepta (el hub ya registró `LANDING_ORDERED` al recibir la orden); si no se puede, `DRONE_PROBLEM` «No se pudo aterrizar: …», que sale siempre** |
+| **`return_home`** | **`by`** | **Vuelve a la base como con el «Volver a base» del teléfono (VUELO §7): corta todo lo de la capa 4 —ruta, desvío, pausa, órbita, seguimiento, vigilancia, relevo— y pasa a `RETURNING_HOME`, con `RTH_MANUAL` «… ordenado por `by` desde el Comando Central». Si la app tenía el control tomado lo suelta sola, sin `control_dropped`: el hub ya soltó el lock al mandar la orden (§5). Ya volviendo, en el suelo o en una emergencia (§1.b), solo queda en el log. Con un relevo, el hub ya lo canceló como cualquier orden del operador (RELEVOS §3.9) antes de mandarla. Volviendo, las detecciones solo dibujan sus cajas (§4), las palancas no hacen nada, y lo cortan `control_taken` (que corta el GoHome antes del estacionario), `land` y las órdenes de vuelo de una persona. Si el GoHome no arranca, la app lo reintenta y avisa siempre con `DRONE_PROBLEM` «No se pudo volver a la base: …», y el dron queda estacionario (`PAUSED`)** |
 | `manual_move` | `bearing, distanceM, by` | **Desplazamiento puntual** de esa distancia en ese rumbo (solo en `MANUAL`, en el aire y con GPS; **con el dron aterrizando se ignora**) |
 | `manual_stick` | `pitch, roll, yaw, throttle, by` | **Vuelo continuo con palancas** (solo en `MANUAL` y **en el aire**: en el suelo se descarta en silencio, la consola muestra "despegá primero"; **con el dron aterrizando también, ver `land`**): cada eje es un número en `[-1, 1]` y el dron lo sostiene hasta el mensaje siguiente. Ver §3.b |
 | **`manual_gimbal`** | **`pitch, by`** | **Inclina la cámara a `pitch` grados, en ángulo ABSOLUTO** (`0` horizonte, negativo hacia abajo; llega ya recortado a `[-90, 30]`). **Solo con el control manual tomado (`MANUAL`), en el suelo o en el aire**: inclinar la cámara no mueve al dron. En cualquier otro estado se descarta en silencio (patrullando, orbitando o siguiendo, la cámara la maneja la app). No cambia el estado ni toca el vuelo; la inclinación nueva se ve en `status.gimbalPitch`. **Al salir de `MANUAL` la app tira la inclinación que todavía no le pasó al gimbal: después de salir, al gimbal solo puede llegarle la que ya estaba cumpliendo, y la cámara que apunta el estado siguiente (la de patrulla al retomar la ruta, la de la órbita o el seguimiento al volver al objetivo) sale después de esa, nunca antes.** Ver §3.b |
 | `control_released` | `by`, **`motivo?`** | Sale del control manual. **Con un objetivo en seguimiento, el dron vuelve a él (`ORBITING` o `FOLLOWING`, evento `TRACKING_RESUMED`)**; sin objetivo, si no llega un `resume_patrol` a continuación queda `PAUSED`. **Desde ahí las detecciones vuelven a alertar como siempre: la próxima confirmada, sin ráfaga de lo que se vio durante el control. Con `motivo: "inactividad"` (el titular estuvo 30 s sin dar señales) el final cambia: el dron que esperaba quieto en `MANUAL` queda `PAUSED` en vuelo estacionario con el mando devuelto al control físico (sin Virtual Stick), en vez de sostenido por la app; con objetivo, relevo, aterrizaje o en el suelo, lo mismo que siempre. Desde ahí la app no le da órdenes de vuelo por su cuenta hasta que una persona dé una (ver "Control manual"). Con `resync: true` (lo manda el hub al reconectarse el dron, sin titular) termina igual que con `motivo: "inactividad"`, si la app todavía lo tenía tomado. `motivo: "app"` (la app avisó con `control_dropped`) no cambia nada: ya lo había soltado** |
 | `renamed` | `displayName` | El operador renombró al dron: la app actualiza el nombre que muestra |
-| **`ajustes`** | **`velocidadOrbitaMs, by`** | **Los ajustes del dron que fija el operador desde su vista y la app aplica. Hoy es solo la velocidad tangencial con la que orbita a un objetivo, en m/s, entre `1` y `8` (`Navegacion.VELOCIDAD_ORBITA_MINIMA_MS`/`_MAXIMA_MS`); `null` es la de fábrica de la app (`Navegacion.VELOCIDAD_ORBITA_MS`, 4 m/s). Llega al conectarse el dron (después de `bases`) y cada vez que alguien la cambia (`PATCH /api/drones/:droneId/ajustes`, §5). La app la recorta al rango, la guarda para las órbitas que vengan y, si está orbitando, se la pasa a la órbita en curso sin cortar el giro. Un `velocidadOrbitaMs` que no sea un número finito ni `null` descarta el mensaje entero (nada se convierte: un `0` que nadie escribió sería una órbita que no gira)** |
+| **`ajustes`** | **`velocidadOrbitaMs, reaccionADeteccion, silencioAlRetomarS, by`** | **Los tres ajustes del dron que fija el operador desde su vista y la app aplica (VUELO §10; rangos y valores de fábrica en `docs/contrato/ajustes.json`). Siempre los tres, cada uno `null` (o ausente) si es el de fábrica: `velocidadOrbitaMs`, la velocidad tangencial con la que orbita a un objetivo, en m/s, de `1` a `8` (de fábrica 4, `Navegacion.VELOCIDAD_ORBITA_MS`); `reaccionADeteccion`, qué hace con un objetivo confirmado: `seguir_y_orbitar` (de fábrica), `orbitar`, `seguir` o `detenerse` (§4, VUELO §5); `silencioAlRetomarS`, cuántos segundos no se detiene por una detección después de dejar un objetivo: `0`, `5`, … `30` (de fábrica 15; §4, VUELO §6). Llega al conectarse el dron (después de `bases`) y cada vez que alguien cambia alguno (`PATCH /api/drones/:droneId/ajustes`, §5). La app recorta cada uno a su rango y los guarda para lo que venga: la velocidad, si está orbitando, se la pasa a la órbita en curso sin cortar el giro; un cambio de reacción con un objetivo en curso se aplica en la evaluación siguiente. Un valor inválido en cualquiera de los tres descarta el mensaje entero (nada se convierte: un `0` que nadie escribió sería una órbita que no gira)** |
 | **`bases`, `relay_*`, `emergency_ack`, `emergency_photo_ack`** | **Ver §2.b** | **Relevos entre drones, desvío a otra base y protocolo de última ubicación** |
 
 ### `manual_move` y `manual_stick` no son lo mismo
@@ -1488,6 +1489,11 @@ cuadro viejo y nunca acumula retraso.
 
 ### Qué hace la app con una detección
 
+Las reglas de prioridad —qué manda sobre qué cuando el dron vuela solo, cuando
+lo vuela una persona y cuando hay que traerlo— están en `docs/VUELO.md` (§1 y
+§4), con el diagrama completo de una detección (§5) y del silencio al retomar
+(§6). Acá va el camino de una detección:
+
 1. **Guarda las cajas** y las dibuja sobre el video que sube al Comando Central
    durante 1,5 s (`PatrolManager.VIGENCIA_CAJAS_MS`), en cualquier estado: el
    operador ve marcado lo que el detector ve, también mientras orbita **y
@@ -1508,12 +1514,28 @@ cuadro viejo y nunca acumula retraso.
    tierra), volviendo a base **ni en control manual** (punto 4). Las
    detecciones que caen en una **zona
    descartada** (40 m alrededor de un falso positivo descartado en los últimos
-   5 minutos) no alertan, y en los 10 s siguientes a retomar la ruta por un
-   descarte tampoco.
+   5 minutos) no alertan, **y durante el silencio al retomar tampoco (VUELO
+   §6): los `silencioAlRetomarS` segundos —un ajuste del dron (§2 `ajustes`),
+   de 0 a 30 de a 5, 15 de fábrica— que siguen a dejar un objetivo para volver
+   a volar solo: un `DISMISSED`, un `resume_patrol`, un `start_route` o un
+   `force_goto` dados con un objetivo en curso. Mientras dura, una detección
+   solo dibuja sus cajas: no cuenta ni como candidata. Con `0` no hay silencio
+   (las zonas descartadas siguen valiendo). No empieza con un regreso ni con
+   un aterrizaje, donde no se alerta de todos modos. Antes era fijo en 10 s y
+   solo para el descarte, y en una playa de estacionamiento el dron no
+   llegaba a pasar de largo el segundo auto.**
 4. Cómo alerta depende de dónde está el dron:
    - **En el aire, a 8 m o más y con GPS, patrullando, en pausa o en un
-     desvío**: **orbita el objetivo** a 30 m con la cámara apuntada al centro
-     y arranca el seguimiento (`ORBIT_STARTED`).
+     desvío** (`ESTADOS_QUE_SIGUEN`): **reacciona según `reaccionADeteccion`**,
+     el ajuste del dron (§2 `ajustes`, VUELO §5). `seguir_y_orbitar` (de
+     fábrica, lo de siempre) **orbita el objetivo** a 30 m con la cámara
+     apuntada al centro y lo sigue si se mueve (`ORBITING`/`FOLLOWING`, punto
+     5); `orbitar` orbita el lugar de la detección con el centro fijo y nunca
+     lo sigue; `seguir` se pone a 25 m del objetivo, del lado en que está, y lo
+     sigue quieto o en movimiento sin orbitar (`FOLLOWING`); `detenerse` se
+     detiene donde estaba y lo vigila girando la nariz y bajando la cámara
+     hacia él, sin moverse (`VIGILANDO`). En todas arranca el seguimiento del
+     objetivo (`ORBIT_STARTED` al orbitar) y los eventos `TARGET_*` salen igual.
    - **En el suelo, a baja altura, sin GPS o con el objetivo sin posición**
      (o en el aire sin patrullar), **aterrizando o con el mando devuelto al
      control físico** (la órbita es el Virtual Stick, que le sacaría el dron a
@@ -1536,10 +1558,17 @@ cuadro viejo y nunca acumula retraso.
    alerta como siempre. Un objetivo que ya se seguía al tomar el control no
    es una alerta nueva: se lo sigue estimando (punto 5) y su alerta sigue
    esperando la decisión.
-5. **Seguimiento.** Mientras haya objetivo (órbita, seguimiento, o control
-   manual con un objetivo que ya se seguía al tomarlo), cada detección de la
-   misma clase que cae cerca de donde se lo espera se asocia a él y alimenta un filtro de velocidad
-   constante (`RastreadorDeObjetivo`): posición suavizada y velocidad.
+5. **Seguimiento.** Mientras haya objetivo (órbita, seguimiento, **vigilancia**,
+   o control manual con un objetivo que ya se seguía al tomarlo), cada
+   detección de la misma clase que cae cerca de donde se lo espera se asocia a
+   él y alimenta un filtro de velocidad constante (`RastreadorDeObjetivo`):
+   posición suavizada y velocidad. **Qué hace el dron con eso depende de la
+   reacción (tabla en VUELO §5); lo de abajo es `seguir_y_orbitar`, la de
+   fábrica. Con `orbitar` sigue orbitando el lugar de la detección; con
+   `seguir` lo sigue y se queda a 25 m cuando se detiene; con `detenerse` solo
+   gira la nariz y la cámara hacia la estimación, sin moverse. Los eventos
+   `TARGET_*` salen en todas: la consola los usa para contar la historia de
+   la alerta.**
    - Si **se mueve** (más de 1,2 m/s sostenido en 3 detecciones, o más de 15 m
      desde donde se lo vio quieto): deja la órbita y **lo sigue** a 25 m, del
      lado en que está, copiando su velocidad, con la nariz y el gimbal
@@ -1553,12 +1582,15 @@ cuadro viejo y nunca acumula retraso.
      retoma (`TARGET_REACQUIRED`).
 6. **Decisión del operador** (`alert_decision` de la alerta del objetivo):
    `DISMISSED` termina el seguimiento, marca la zona como descartada y retoma
-   la ruta **hacia el próximo waypoint**; `VALIDATED` sigue sobre el objetivo
-   hasta un `resume_patrol`. El operador puede tomar el control manual en
-   cualquier momento; al soltarlo el dron vuelve al objetivo.
+   la ruta **hacia el próximo waypoint**, **con el silencio al retomar (punto
+   3)**; `VALIDATED` sigue sobre el objetivo hasta un `resume_patrol`. El
+   operador puede tomar el control manual en cualquier momento; al soltarlo el
+   dron vuelve al objetivo **con la reacción vigente**.
 7. El seguimiento termina con un `resume_patrol`, un regreso a base (batería
-   baja, señal perdida, orden del campo) o un aterrizaje, y deja
-   `TRACKING_ENDED` con la última posición conocida.
+   baja, señal perdida, orden del campo **o de la consola, `return_home`**) o
+   un aterrizaje, y deja `TRACKING_ENDED` con la última posición conocida.
+   **Volviendo a base o aterrizando, una detección no hace nada más que
+   dibujar sus cajas: ni órbita, ni seguimiento, ni alerta (VUELO §1 y §4).**
 
 ## 5. REST del Comando Central
 
@@ -1665,9 +1697,10 @@ PUT en vez de aceptar lo que contestaría el GET.
 | **POST** | **`/api/drones/:droneId/control/request/answer`** | **solo el titular** | **`{respuesta: 'ceder'\|'mantener'}` → `{resultado, drone}`. `ceder` pasa el control sin soltarlo (`control_transferred`); fuera de plazo cuenta como no contestada (`vencido`, el control pasa igual). Si el que pidió perdió `canControl` en la espera, `cancelado` y el titular sigue. `400` con otra respuesta, `403` si no es el titular, `409` sin pedido pendiente, `404` dron inexistente** |
 | **DELETE** | **`/api/drones/:droneId/control/request`** | **solo el que pidió** | **Cancela el pedido antes de que le contesten → `{resultado: 'cancelado'}`. `403` si el pedido es de otro, `409` sin pedido, `404` dron inexistente** |
 | **POST** | **`/api/drones/:droneId/takeoff`** | **titular del control (con `canControl`)** | **Despegue en el lugar (§2 `takeoff`). 409 si no tenés el control. Registra `TAKEOFF_ORDERED`** |
-| **POST** | **`/api/drones/:droneId/land`** | **titular del control (con `canControl`)** | **Aterriza donde está (§2 `land`). 409 si no tenés el control. Registra `LANDING_ORDERED`** |
+| **POST** | **`/api/drones/:droneId/land`** | **operador+ con `canControl`** | **`{forzar?}`. Aterriza donde está (§2 `land`), desde cualquier estado de vuelo. Ya no exige ser el titular del control: la misma regla del lock que `return_home` (abajo), con una diferencia: si el control lo tiene quien ordena, el lock SIGUE (el dron queda en `MANUAL` en el suelo). `403` sin `canControl`, `404` dron inexistente, `409` «El control lo tiene X». Registra `LANDING_ORDERED`** |
+| **POST** | **`/api/drones/:droneId/return_home`** | **operador+ con `canControl`** | **`{forzar?}`. Vuelve a la base (§2 `return_home`; VUELO §7.1). Es una orden de llegada: no exige tener el control manual —el que mira el tablero tiene que poder traer un dron que vuela solo—, pero lo respeta. Si el control lo tiene OTRO: `409` «El control lo tiene X», salvo supervisor+ con `forzar: true`, que se lo quita antes como «Quitar control» (`resume: 'none'`, `forzado`: la app recibe `control_released` y después la orden). Si lo tiene quien ordena, el hub suelta el lock —`CONTROL_RELEASED` con el motivo «X ordenó volver a la base», `control_changed` a las consolas, y un pedido de control que esperaba termina `liberado`— SIN mandarle `control_released` a la app: ella lo suelta sola con la orden, y un `control_released` además la haría frenar o volver al objetivo justo antes del regreso. Cancela el relevo del dron como cualquier orden del operador (`ordenDelOperador`, RELEVOS §3.9), manda `return_home {by}` y registra `RTH_ORDERED` con `teniaElControl`. Devuelve `{ok, delivered}` como `takeoff`: a un dron desconectado la orden le queda registrada con `delivered: false`. `403` sin `canControl`, `404` dron inexistente** |
 | POST | `/api/drones/:droneId/manual_move` | titular del control | `{bearing, distanceM}`: desplazamiento puntual (la consola manda 25 m por click) |
-| **PATCH** | **`/api/drones/:droneId/ajustes`** | **operador+** | **`{velocidadOrbitaMs}`: la velocidad con la que el dron orbita a un objetivo, un número entre `1` y `8` (m/s, se redondea a un decimal) o `null` para volver a la de fábrica de la app. Es un dato del dron, no del vuelo: se guarda con el activo (`velocidadOrbitaMs` en la ficha, §6), se le manda al dron en el acto si está conectado y otra vez cada vez que se conecta (`ajustes`, §2). `400` con un texto, un booleano o fuera de rango (nada se convierte), `404` dron inexistente. Registra `ORBIT_SPEED_SET` y emite `drone_updated`** |
+| **PATCH** | **`/api/drones/:droneId/ajustes`** | **operador+** | **`{velocidadOrbitaMs?, reaccionADeteccion?, silencioAlRetomarS?}`: los ajustes del dron (VUELO §10), al menos uno; cada uno `null` vuelve al de fábrica de la app. `velocidadOrbitaMs`: número de `1` a `8` (m/s; se redondea a un decimal). `reaccionADeteccion`: exactamente `seguir_y_orbitar`, `orbitar`, `seguir` o `detenerse`. `silencioAlRetomarS`: entero de `0` a `30`, de a `5`. Nada se convierte: `400` con un texto, un booleano, un decimal donde va un entero, fuera de rango o fuera de la lista, y el cuerpo entero se rechaza sin aplicar nada aunque otra clave estuviera bien. Las claves que no son un ajuste se ignoran (es un PATCH), pero sin ninguna conocida es un `400` («Nada para ajustar»). Son datos del dron, no del vuelo: se guardan con el activo (en la ficha, §6), se le mandan ENTEROS al dron en el acto si está conectado y otra vez cada vez que se conecta (`ajustes`, §2). Registra `ORBIT_SPEED_SET`, `DETECTION_REACTION_SET` o `RESUME_SILENCE_SET` por cada ajuste que CAMBIÓ (fijar lo que ya estaba no deja evento), emite `drone_updated` y devuelve la ficha. `404` dron inexistente. Los rangos, los valores de fábrica y los cuerpos válidos e inválidos están en `docs/contrato/ajustes.json`, que leen las pruebas del backend, de la consola y de la app** |
 
 El **mando virtual con palancas no está en esta tabla y no va a estar**: viaja por
 el WebSocket de la consola (§3.b) porque son ~10 mensajes por segundo mientras el
@@ -1754,6 +1787,8 @@ del protocolo.
   "deletedAt": null,
   "base": { "name": "Base Norte", "lat": -34.8565, "lon": -56.2075 },
   "velocidadOrbitaMs": null,
+  "reaccionADeteccion": null,
+  "silencioAlRetomarS": null,
   "online": true,
   "controlledBy": null,
   "pedidoDeControl": null,
@@ -1769,9 +1804,12 @@ del protocolo.
 `{solicitante, titular, venceEn, restanteMs}` (como en `control_request`, §3), o
 `null`. Es lo que le muestra el pedido a una consola que recargó en el medio.
 
-**`velocidadOrbitaMs`**: la velocidad de órbita fijada desde la consola (§5,
-`PATCH /ajustes`), en m/s, o `null` si es la de fábrica de la app (4 m/s). Es
-lo que muestra el ajuste de la vista del dron.
+**`velocidadOrbitaMs`, `reaccionADeteccion` y `silencioAlRetomarS`**: los
+ajustes del dron fijados desde la consola (§5, `PATCH /ajustes`; VUELO §10),
+cada uno `null` si es el de fábrica de la app (4 m/s, `seguir_y_orbitar` y
+15 s). Son lo que muestra la tarjeta «Ajustes del dron» de la vista del dron;
+el silencio, además, el engranaje al lado de «Descartar» en la tarjeta de la
+alerta.
 
 **La base no se cambia en vuelo**: `PATCH /api/drones/:hash` con un `baseId`
 distinto del actual, con el último `status` del dron en `flying: true`, da
@@ -1803,10 +1841,13 @@ Piezas que se repiten: `Dron = {hash, displayName, model}` ·
 | drone | **`CONTROL_TRANSFERRED`** | **`{drone, detalle: {de, a, motivo: "cedido"\|"vencido"}}`; `source` es el que cedió, o `backend` si no contestó (en 10 s, o con 30 s sin señales y el pedido encima)** |
 | drone | **`CONTROL_REQUEST_ENDED`** | **`{drone, detalle: {solicitante, titular, resultado: "mantenido"\|"cancelado"\|"liberado", motivo}}`: un pedido que terminó sin traspaso; `source` es el titular (mantenido), el que pidió (canceló) o `backend`** |
 | drone | **`TAKEOFF_ORDERED` / `LANDING_ORDERED`** | **`{drone, detalle: {por}}`** |
+| drone | **`RTH_ORDERED`** | **`{drone, detalle: {por, teniaElControl}}`: volver a la base desde la consola (§5 `return_home`). `teniaElControl` es quien tenía el control manual al ordenarlo —el hub se lo soltó, o un supervisor se lo quitó con `forzar`—, o `null` si el dron volaba solo** |
 | drone | **`ORBIT_SPEED_SET`** | **`{drone, antes: {velocidadOrbitaMs}, despues: {velocidadOrbitaMs}, detalle: {por, velocidadOrbitaMs}}`; `null` es la de fábrica** |
+| drone | **`DETECTION_REACTION_SET`** | **`{drone, antes: {reaccionADeteccion}, despues: {reaccionADeteccion}, detalle: {por, reaccionADeteccion}}`; `null` es la de fábrica. El texto nombra la reacción con su rótulo («Órbita en el lugar», ver `docs/contrato/ajustes.json`)** |
+| drone | **`RESUME_SILENCE_SET`** | **`{drone, antes: {silencioAlRetomarS}, despues: {silencioAlRetomarS}, detalle: {por, silencioAlRetomarS}}`; `null` es el de fábrica** |
 | drone | `ALERT_CREATED` | `{alerta: {id, tipo, lat, lon, ts}, drone, detalle: {confianza, clases, dronLat, dronLon, dronAlt}}` (**`detalle` es nuevo**; cada campo puede faltar) |
 | drone | `ALERT_VALIDATED` / `ALERT_DISMISSED` | `{alerta: {id, tipo}, decision, por, antes: {estado}, despues: {estado, decidedBy, decidedAt}, drone}` |
-| drone | Eventos que reporta la app (`PATROL_STARTED`, `SIGNAL_LOST`, `RTH_LOW_BATTERY`, `TARGET_MOVING`, …) | `{drone}` **+ `alerta: {id, tipo, lat, lon, ts}` si el evento trae un `alertId` de una alerta de ese dron, + `ubicacion: {lat, lon, accuracyM: null}` si trae `lat`/`lon` válidos** |
+| drone | Eventos que reporta la app (`PATROL_STARTED`, `SIGNAL_LOST`, `RTH_LOW_BATTERY`, `RTH_MANUAL`, `TARGET_MOVING`, **`LANDING_CANCELLED`** —«X movió las palancas: el aterrizaje se corta y el dron queda a su mando», VUELO §8—, **`DRONE_PROBLEM`** —entre ellos «No se pudo volver a la base: …», que sale SIEMPRE que el GoHome no arranca, VUELO §7.2—, …) | `{drone}` **+ `alerta: {id, tipo, lat, lon, ts}` si el evento trae un `alertId` de una alerta de ese dron, + `ubicacion: {lat, lon, accuracyM: null}` si trae `lat`/`lon` válidos** |
 | drone | **`RELAY_REQUESTED` / `RELAY_ASSIGNED` / `RELAY_REJECTED` / `RELAY_STARTED` / `RELAY_HANDOVER` / `RELAY_COMPLETED` / `RELAY_UNAVAILABLE` / `RELAY_CANCELLED` / `RELAY_FAILED`** | **`{drone (A), alerta?: {id, tipo, lat, lon, ts} (seguimiento), detalle: {relevoId, motivo, estado, motivoFin, origen, relevo, relevoHash, rutaId, desdeNodo, motivoDeB}}`** |
 | drone | **`RTH_DIVERTED`** | **`{drone, ubicacion?: {lat, lon, accuracyM: null}, detalle: {motivo, baseId, base, relevoId}}`** |
 | drone | **`EMERGENCY_LANDING`** | **`{drone, emergencia: {id, motivo, lat, lon, ts}, ubicacion?, detalle: {alt, bateria}}`** |
