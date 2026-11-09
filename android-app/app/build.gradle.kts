@@ -85,6 +85,13 @@ android {
                     isIncludeNoLocationClasses = true
                     excludes = listOf("jdk.internal.*")
                 }
+                // La suite corre en varias JVM a la vez, cada una con su tanda de
+                // clases: en serie eran ~10 min en la PC de desarrollo, y casi todo
+                // ese tiempo es Robolectric levantando su framework clase por clase.
+                // La mitad de los núcleos, hasta 6: más no acorta (la clase más larga
+                // sola ya tarda más de un minuto) y cada JVM con Robolectric pide su
+                // gigabyte de memoria. En el runner de GitHub (4 núcleos) quedan 2.
+                it.maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 6)
             }
         }
     }

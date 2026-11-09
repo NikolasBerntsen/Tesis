@@ -30,7 +30,11 @@ push / merge a main
  Contenedor 'comando-central' en la red 'proxy'  ←— Caddy general de la VM
 ```
 
-Si alguna de las tres suites falla, el despliegue no corre. Se puede disparar a
+Si falla la suite del backend o la de la consola, el despliegue no corre. La de
+la app Android no se espera: la app no viaja a la VM (el rsync la excluye), y
+era la más larga del CI —esperarla dejaba la VM vieja casi diez minutos después
+de cada merge—. Igual corre en main, al costado, y queda en rojo si algo se
+rompió. Se puede disparar a
 mano desde **Actions → Deploy a la VM → Run workflow**; con el campo `ref` (un
 commit o tag) despliega una versión anterior: es el **rollback**.
 
