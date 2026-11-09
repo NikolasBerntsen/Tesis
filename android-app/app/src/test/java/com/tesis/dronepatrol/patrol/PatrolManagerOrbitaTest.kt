@@ -102,14 +102,28 @@ class PatrolManagerOrbitaTest {
         assertEquals(emptyList<String>(), dron.ordenes.drop(i))
     }
 
-    /** Un valor fuera de rango se recorta; `null` vuelve a la de fábrica. */
+    /**
+     * Un valor fuera del rango del contrato (`docs/contrato/ajustes.json`) no
+     * se recorta: el mensaje se descarta entero y la velocidad queda como
+     * estaba, igual que el hub rechaza el `PATCH` (antes la app recortaba a 8 o
+     * a 1, y un 40 que nadie podía haber escrito pasaba por un ajuste válido).
+     * El tope y el piso del contrato sí se aceptan, y `null` vuelve a la de
+     * fábrica.
+     */
     @Test
-    fun elAjusteSeRecortaAlRangoYNullVuelveALaDeFabrica() = runBlocking {
+    fun unValorFueraDelRangoSeDescartaYNullVuelveALaDeFabrica() = runBlocking {
         banco.arrancar()
-        consola("""{"type":"ajustes","velocidadOrbitaMs":40,"by":"op"}""")
+        consola("""{"type":"ajustes","velocidadOrbitaMs":${Navegacion.VELOCIDAD_ORBITA_MAXIMA_MS},"by":"op"}""")
         esperarA("el tope") { patrulla.velocidadDeOrbita == Navegacion.VELOCIDAD_ORBITA_MAXIMA_MS }
 
+        consola("""{"type":"ajustes","velocidadOrbitaMs":40,"by":"op"}""")
         consola("""{"type":"ajustes","velocidadOrbitaMs":0.1,"by":"op"}""")
+        esperarA("el descarte en el registro") {
+            patrulla.localLog.replayCache.count { it.contains("no cumplir el contrato: ajustes") } == 2
+        }
+        assertEquals("fuera de rango no se aplica ni se recorta", Navegacion.VELOCIDAD_ORBITA_MAXIMA_MS, patrulla.velocidadDeOrbita, 0.0)
+
+        consola("""{"type":"ajustes","velocidadOrbitaMs":${Navegacion.VELOCIDAD_ORBITA_MINIMA_MS},"by":"op"}""")
         esperarA("el piso") { patrulla.velocidadDeOrbita == Navegacion.VELOCIDAD_ORBITA_MINIMA_MS }
 
         consola("""{"type":"ajustes","velocidadOrbitaMs":null,"by":"op"}""")

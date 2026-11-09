@@ -330,12 +330,13 @@ class PatrolManagerOrdenesDeLaConsolaTest {
     }
 
     /**
-     * El control sigue tomado pero el dron vuelve solo por batería baja: ni
-     * "Despegar" ni "Aterrizar" de la consola le pisan el regreso, y el rechazo
-     * del despegue dice en qué estado está.
+     * El control sigue tomado pero el dron vuelve solo por batería baja: el
+     * "Despegar" de la consola no le pisa el regreso, y el rechazo dice en qué
+     * estado está. El "Aterrizar", en cambio, es una orden de llegada que manda
+     * sobre el regreso (docs/VUELO.md §4): corta el GoHome y baja donde está.
      */
     @Test
-    fun volviendoPorBateriaConElControlTomadoLaConsolaNoDespegaNiAterriza() = runBlocking {
+    fun volviendoPorBateriaConElControlTomadoLaConsolaNoDespegaPeroSiAterriza() = runBlocking {
         patrulla.start()
         telemetria()
         tomarElControl()
@@ -347,29 +348,42 @@ class PatrolManagerOrdenesDeLaConsolaTest {
         esperarA("el rechazo del despegue") {
             comandoCentral.eventos("DRONE_PROBLEM").any { it.getString("message").contains("estado RETURNING_HOME_BATTERY") }
         }
-        mensaje(ATERRIZAR)
-        esperarElRegistro("pidió aterrizar sin el control manual tomado")
-
         assertEquals("returnHome", dron.ultimaOrden)
-        assertFalse(dron.ordenes.contains("land"))
         assertFalse(dron.ordenes.contains("despegarEnElLugar"))
+
+        mensaje(ATERRIZAR)
+        esperarA("el aterrizaje") { dron.ordenes.contains("land") }
+        // Este espía no anota el corte del regreso (es el controlador viejo): la
+        // orden de aterrizar es lo que queda, y el estado es la pausa del aterrizaje.
+        assertEquals("land", dron.ultimaOrden)
+        assertEquals(PatrolState.PAUSED, patrulla.state.value)
     }
 
-    /** Aterrizar es del titular del control y de un dron que vuela: lo demás se ignora. */
+    /**
+     * Aterrizar desde la consola ya no exige el control tomado (docs/VUELO.md
+     * §9: quién puede lo decide el hub): un dron que vuela baja; uno que ya
+     * está en el suelo no tiene nada que aterrizar, con o sin el control.
+     */
     @Test
-    fun laConsolaNoAterrizaSinElControlNiUnDronQueYaEstaEnElSuelo() = runBlocking {
+    fun laConsolaAterrizaSinElControlPeroNoUnDronQueYaEstaEnElSuelo() = runBlocking {
         patrulla.start()
         telemetria()
         mensaje(ATERRIZAR)
-        esperarElRegistro("pidió aterrizar sin el control manual tomado")
+        esperarA("el aterrizaje sin el control") { dron.ordenes.contains("land") }
+        esperarA("el LANDING") { comandoCentral.eventos("LANDING").isNotEmpty() }
+        assertEquals(PatrolState.PAUSED, patrulla.state.value)
+        val aterrizajes = dron.ordenes.count { it == "land" }
 
-        tomarElControl()
         dron.estado.value = dron.estado.value.copy(enVuelo = false)
+        dron.flightEvents.emit(FlightEvent.Aterrizado)
+        esperarEstado(PatrolState.IDLE)
+        tomarElControl()
+        esperarEstado(PatrolState.MANUAL)
         mensaje(ATERRIZAR)
         esperarElRegistro("pidió aterrizar pero el dron ya está en el suelo")
 
-        assertFalse(dron.ordenes.contains("land"))
-        assertTrue(comandoCentral.eventos("LANDING").isEmpty())
+        assertEquals(aterrizajes, dron.ordenes.count { it == "land" })
+        assertEquals(1, comandoCentral.eventos("LANDING").size)
     }
 
     // ---- Control manual ----

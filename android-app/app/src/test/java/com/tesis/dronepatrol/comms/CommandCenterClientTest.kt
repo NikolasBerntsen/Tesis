@@ -1,5 +1,7 @@
 package com.tesis.dronepatrol.comms
 
+import com.tesis.dronepatrol.model.AjustesDelDron
+import com.tesis.dronepatrol.model.ReaccionADeteccion
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -197,6 +199,7 @@ class CommandCenterClientTest {
         """{"type":"control_transferred","by":"beto","de":"ana"}""" to "control_transferred",
         """{"type":"renamed","displayName":"Beta"}""" to "renamed",
         """{"type":"ajustes","velocidadOrbitaMs":3.5,"by":"ana"}""" to "ajustes",
+        """{"type":"return_home","by":"ana"}""" to "return_home",
     )
 
     /** Engancha un oyente en cada orden y devuelve la lista donde cada una anota su nombre. */
@@ -222,6 +225,7 @@ class CommandCenterClientTest {
         cliente.onControlTransferred = { _, _ -> oidas += "control_transferred" }
         cliente.onRenamed = { oidas += "renamed" }
         cliente.onAjustes = { oidas += "ajustes" }
+        cliente.onReturnHome = { oidas += "return_home" }
         return oidas
     }
 
@@ -367,23 +371,40 @@ class CommandCenterClientTest {
     }
 
     /**
-     * `ajustes` (§2): la velocidad de órbita llega como número; `null` o
-     * ausente es "la de fábrica"; un texto o un valor no finito descarta el
-     * mensaje entero (nada se convierte: un cero que nadie escribió sería una
-     * órbita que no gira).
+     * `ajustes` (§2, docs/VUELO.md §10): los tres ajustes llegan tipados; cada
+     * uno `null` o ausente es "el de fábrica"; un texto, un valor no finito o
+     * fuera del contrato descarta el mensaje entero (nada se convierte: un cero
+     * que nadie escribió sería una órbita que no gira), y queda en el registro
+     * de los mensajes inválidos. Un mensaje sin ninguno de los tres no trae nada
+     * que ajustar y también se descarta: el hub manda siempre las tres claves.
+     * Los ejemplos del contrato, uno por uno, están en ContratoDeAjustesTest.
      */
     @Test
-    fun losAjustesTraenLaVelocidadDeOrbitaONullParaLaDeFabrica() {
-        val recibidos = mutableListOf<Double?>()
+    fun losAjustesLleganTipadosONullParaLosDeFabrica() {
+        val recibidos = mutableListOf<AjustesDelDron>()
+        val invalidos = mutableListOf<String>()
         cliente.onAjustes = { recibidos += it }
+        cliente.onMensajeInvalido = { invalidos += it }
 
         cliente.manejarMensaje("""{"type":"ajustes","velocidadOrbitaMs":3.5,"by":"ana"}""")
-        cliente.manejarMensaje("""{"type":"ajustes","velocidadOrbitaMs":null,"by":"ana"}""")
+        cliente.manejarMensaje("""{"type":"ajustes","velocidadOrbitaMs":null,"reaccionADeteccion":"detenerse","silencioAlRetomarS":0,"by":"ana"}""")
+        cliente.manejarMensaje("""{"type":"ajustes","velocidadOrbitaMs":4,"reaccionADeteccion":null,"silencioAlRetomarS":null,"by":"ana"}""")
         cliente.manejarMensaje("""{"type":"ajustes","by":"ana"}""")
         cliente.manejarMensaje("""{"type":"ajustes","velocidadOrbitaMs":"3.5","by":"ana"}""")
         cliente.manejarMensaje("""{"type":"ajustes","velocidadOrbitaMs":true,"by":"ana"}""")
+        cliente.manejarMensaje("""{"type":"ajustes","velocidadOrbitaMs":3,"reaccionADeteccion":"SEGUIR","by":"ana"}""")
+        cliente.manejarMensaje("""{"type":"ajustes","silencioAlRetomarS":12,"by":"ana"}""")
 
-        assertEquals(listOf(3.5, null, null), recibidos)
+        assertEquals(
+            listOf(
+                AjustesDelDron(3.5, null, null),
+                AjustesDelDron(null, ReaccionADeteccion.DETENERSE, 0),
+                AjustesDelDron(4.0, null, null),
+            ),
+            recibidos,
+        )
+        assertEquals(5, invalidos.size)
+        assertTrue(invalidos.toString(), invalidos.all { it.startsWith("ajustes") })
     }
 
     /** Un `alertId` en null es lo mismo que ausente: la decisión no trae id. */

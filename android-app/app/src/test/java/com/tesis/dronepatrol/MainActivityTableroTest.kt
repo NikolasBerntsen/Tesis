@@ -296,7 +296,8 @@ class MainActivityTableroTest {
         val pantalla = banco.abrir()
         assertEquals(pantalla.getString(R.string.main_registro_vacio), pantalla.texto(R.id.txtLocalLog))
 
-        // Un aterrizaje pedido sin el control tomado solo deja una línea en el registro
+        // Un aterrizaje pedido con el dron en el suelo solo deja una línea en el registro
+        dron.estado.value = dron.estado.value.copy(enVuelo = false)
         for (n in 1..85) {
             banco.comando.manejarMensaje("""{"type":"land","by":"operador-$n"}""")
             correrLaPantalla()
@@ -304,7 +305,7 @@ class MainActivityTableroTest {
 
         val lineas = pantalla.texto(R.id.txtLocalLog).lines()
         assertEquals(80, lineas.size)
-        assertEquals("operador-85 pidió aterrizar sin el control manual tomado: se ignora", lineas.first())
-        assertEquals("las cinco más viejas se descartan", "operador-6 pidió aterrizar sin el control manual tomado: se ignora", lineas.last())
+        assertEquals("operador-85 pidió aterrizar pero el dron ya está en el suelo", lineas.first())
+        assertEquals("las cinco más viejas se descartan", "operador-6 pidió aterrizar pero el dron ya está en el suelo", lineas.last())
     }
 }

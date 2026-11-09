@@ -200,12 +200,28 @@ internal class DronEspia(
         if (conRelevos) anotar("cancelarAterrizaje") else super.cancelarAterrizaje()
     override fun seguirObjetivo(lat: Double, lon: Double, vNorteMs: Double, vEsteMs: Double) {
         ultimoSeguimiento = lat to lon
+        ultimaVelocidadSeguida = vNorteMs to vEsteMs
         anotar("seguirObjetivo")
     }
 
     /** Última estimación del objetivo que se le pidió seguir. */
     @Volatile
     var ultimoSeguimiento: Pair<Double, Double>? = null
+
+    /** La velocidad (norte, este) con la que se pidió seguir por última vez: cero con el objetivo quieto o perdido. */
+    @Volatile
+    var ultimaVelocidadSeguida: Pair<Double, Double>? = null
+
+    /** El último punto que se le pidió vigilar ([vigilar], la reacción `detenerse`). */
+    @Volatile
+    var ultimaVigilancia: Pair<Double, Double>? = null
+
+    /** Con [conRelevos]; sin él queda el `hold` por defecto, que es lo que hace un controlador que no sabe vigilar. */
+    override fun vigilar(lat: Double, lon: Double) {
+        if (!conRelevos) return super.vigilar(lat, lon)
+        ultimaVigilancia = lat to lon
+        anotar("vigilar")
+    }
 
     override fun despegarEnElLugar() = anotar("despegarEnElLugar")
     override fun vincularControl() = anotar("vincularControl")
