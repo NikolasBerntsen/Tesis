@@ -18,6 +18,7 @@ import com.tesis.dronepatrol.drone.OrdenVirtualStick
 import com.tesis.dronepatrol.drone.RecuerdoDelFailsafe
 import com.tesis.dronepatrol.drone.SeguidorDelRegreso
 import com.tesis.dronepatrol.drone.SupervisorDelAterrizaje
+import com.tesis.dronepatrol.drone.SupervisorDelRegreso
 import com.tesis.dronepatrol.drone.TomaDelDron
 import com.tesis.dronepatrol.drone.UltimoPedido
 import com.tesis.dronepatrol.drone.UmbralesDelDji
@@ -146,7 +147,13 @@ class DjiDroneController : DroneController {
     /** Lazo de comandos en curso. Se lee y se escribe SIEMPRE con [relevoDeLazo] tomado. */
     private var navigationJob: Job? = null
 
-    /** Qué lazo es [navigationJob]. Mismo lock. */
+    /**
+     * Qué lazo es [navigationJob]. Se escribe con el mismo lock; es volátil
+     * porque [asegurarVirtualStick] lo lee sin tomarlo, desde la vuelta de
+     * cualquier lazo, para no habilitar el Virtual Stick con un regreso a base
+     * de la app en curso.
+     */
+    @Volatile
     private var lazoActual = Lazo.NINGUNO
 
     /**
@@ -182,6 +189,22 @@ class DjiDroneController : DroneController {
          * espera el fin del lazo anterior, apaga el Virtual Stick y termina.
          */
         SUELTO,
+
+        /**
+         * La vigilancia de un objetivo desde donde está ([vigilar], la reacción
+         * `detenerse` de docs/VUELO.md §5): velocidad cero, la nariz y la cámara
+         * al objetivo, la altura sostenida.
+         */
+        VIGILIA,
+
+        /**
+         * La secuencia de un regreso a base de la app ([sostenerElRegreso],
+         * docs/VUELO.md §7.2): espera el fin del lazo anterior, apaga el Virtual
+         * Stick, manda `KeyStartGoHome` y comprueba que el regreso arranque.
+         * Mientras es el lazo vigente nadie habilita el Virtual Stick (ver
+         * [asegurarVirtualStick]).
+         */
+        REGRESO,
     }
 
     /**
@@ -314,6 +337,22 @@ class DjiDroneController : DroneController {
 
     @Volatile
     private var seguido: Seguido? = null
+
+    /** Objetivo que se vigila desde donde está: el lazo lo relee en cada vuelta (ver [vigilar]). */
+    private class Vigilado(val lat: Double, val lon: Double)
+
+    @Volatile
+    private var vigilado: Vigilado? = null
+
+    /**
+     * El `KeyStartGoHome` de la secuencia del regreso ya salió (o está
+     * saliendo): desde ahí cortar el lazo no alcanza para que el dron no
+     * vuelva, y [cancelarRegreso] tiene que parar el GoHome (ver
+     * [marcarElRegresoOrdenado]). Se escribe con [relevoDeLazo] tomado, junto
+     * con el lazo al que pertenece.
+     */
+    @Volatile
+    private var regresoOrdenado = false
 
     /** Altura sobre el punto de despegue (barómetro), en metros. */
     @Volatile
@@ -1179,6 +1218,55 @@ class DjiDroneController : DroneController {
     }
 
     /**
+     * Vigila al objetivo desde donde está: la reacción `detenerse` de
+     * docs/VUELO.md §5 (ver DroneController.vigilar). Un lazo propio
+     * ([Lazo.VIGILIA]) con velocidad cero en el plano, la nariz al objetivo
+     * (rumbo en modo ÁNGULO, marco del terreno, como en [girarEnElLugar]), la
+     * altura que tenía al detenerse —sin bajar de [ALTURA_MINIMA_SEGUIMIENTO_M],
+     * por lo mismo que la órbita— y el gimbal bajado lo justo para tenerlo en el
+     * centro del cuadro. Como la órbita y el seguimiento, el lazo relee el
+     * objetivo en cada vuelta: con cada estimación nueva solo se corre el punto
+     * al que mira, sin cortar el estacionario.
+     *
+     * Encima del objetivo (a menos de [DISTANCIA_MINIMA_PARA_EL_RUMBO_M]) el
+     * rumbo hacia él es ruido del GPS: la nariz se queda donde está y la cámara
+     * va al nadir, en vez de girar sobre sí mismo persiguiendo cada lectura.
+     */
+    override fun vigilar(lat: Double, lon: Double) {
+        if (rechazarEnElSuelo("vigilar al objetivo")) return
+        if (rechazarAterrizando("vigilar al objetivo")) return
+        if (rechazarSiElDronTieneElControl("vigilar al objetivo")) return
+        if (!Geo.esPosicionValida(lat, lon)) return
+        vigilado = Vigilado(lat, lon)
+        synchronized(relevoDeLazo) {
+            if (lazoActual == Lazo.VIGILIA && navigationJob?.isActive == true) return
+            relevarLazo(Lazo.VIGILIA) {
+                asegurarVirtualStick()
+                val altura = maxOf(lastAlt, ALTURA_MINIMA_SEGUIMIENTO_M)
+                val gimbal = GimbalQueAcompania()
+                // Hasta tener posición, o encima del objetivo, la nariz se queda donde está.
+                var rumbo = lastHeading
+                Log.i(TAG, "Vigilancia: estacionario a ${altura.toInt()} m con la nariz y la cámara al objetivo")
+                while (true) {
+                    delay(INTERVALO_MANDO_MS)
+                    val o = vigilado ?: continue
+                    val (aquiLat, aquiLon) = posicion() ?: run {
+                        enviarVelocidadCuerpo(MandoVirtual.NEUTRO)
+                        null
+                    } ?: continue
+                    val distancia = Geo.distanciaM(aquiLat, aquiLon, o.lat, o.lon)
+                    if (distancia >= DISTANCIA_MINIMA_PARA_EL_RUMBO_M) {
+                        rumbo = (Geo.rumboHacia(aquiLat, aquiLon, o.lat, o.lon) + 360.0) % 360.0
+                    }
+                    enviarVelocidadTerreno(0.0, 0.0, rumbo, Navegacion.vertical(lastAlt, altura))
+                    // El gimbal baja lo justo para tener al objetivo en el medio del cuadro.
+                    gimbal.apuntar(Georreferencia.inclinacionParaOrbitar(lastAlt, distancia))
+                }
+            }
+        }
+    }
+
+    /**
      * Inclina el gimbal hacia donde se le pide, pero solo si el cambio es de más
      * de [UMBRAL_GIMBAL_GRADOS] y como mucho una vez por segundo: cada orden al
      * gimbal es una acción del SDK con su ida y vuelta, y pedirla diez veces por
@@ -1255,35 +1343,60 @@ class DjiDroneController : DroneController {
         filaDelGimbal.descartarLaDeLaConsola()
     }
 
+    /**
+     * Vuelve a la base como una secuencia propia ([Lazo.REGRESO],
+     * [sostenerElRegreso]), igual que el aterrizaje desde el PR #30 y por lo
+     * mismo (docs/VUELO.md §7.2). Antes se cortaba el lazo, se apagaba el
+     * Virtual Stick sin esperar y se mandaba `KeyStartGoHome` sin mirar qué
+     * pasaba: en el campo una vuelta de la órbita que ya estaba adentro de
+     * `enviarVelocidad*` volvía a habilitar el Virtual Stick DESPUÉS del
+     * apagado, el GoHome quedaba pisado o rechazado, y la app decía que volvía
+     * mientras el dron seguía orbitando. Ahora el lazo anterior se espera, el
+     * apagado se espera, la secuencia comprueba que el regreso arranque y, si
+     * no, avisa SIEMPRE ([DroneController.NO_SE_PUDO_VOLVER]).
+     */
     override fun returnHome() {
         if (!enVuelo) {
             // Un despegue pendiente no sale: el dron ya está en su base.
             cancelarDespegueEnElSuelo(Aterrizaje.EN_BASE)
             return
         }
-        // Ya vuelve porque la app lo pidió: pedirlo otra vez no es otro regreso.
-        if (aterrizajeEsperado == Aterrizaje.EN_BASE && seguidorDelRegreso.volviendo) return
-        // Volver a la base es otra orden de vuelo: corta un aterrizaje en curso,
-        // y al DJI se le dice que deje de aterrizar ANTES de pedirle el regreso
-        // (sale por el SDK antes que el KeyStartGoHome de abajo).
-        if (synchronized(relevoDeLazo) { soltarElAterrizaje("se ordenó volver a la base") }) detenerElAterrizajeAutomatico()
-        // Sin lazo nuevo: el regreso a base lo maneja el propio dron. Se le
-        // devuelve antes la autoridad de vuelo, que es lo que el RTH necesita.
-        cortarLazo()
-        apagarVirtualStick()
-        aterrizajeEsperado = Aterrizaje.EN_BASE
-        seguidorDelRegreso.alOrdenar(SeguidorDelRegreso.Orden.REGRESO)
-        if (seguidorDelRegreso.volviendo) {
-            // El dron ya estaba volviendo por su cuenta: la app lo adopta en vez
-            // de pedir otro regreso (que el SDK rechazaría). Si ya está bajando,
-            // el descenso se avisa ahora: el oyente no vuelve a contar un estado
-            // que no cambió, y un relevo de patrulla lo necesita (RELEVOS §2.3).
-            estadoDelRegreso.value?.let(::alCambiarElRegreso)
+        // El propio DJI está aterrizando donde está por batería crítica: no hay
+        // regreso que ordenar, y es una respuesta definitiva.
+        if (tomaDelDron == MotivoDelDron.ATERRIZAJE_BATERIA_CRITICA) {
+            avisarSiempre("${DroneController.NO_SE_PUDO_VOLVER}: el propio dron está aterrizando por batería crítica")
             return
         }
-        scope.launch {
-            if (!accion(FlightControllerKey.KeyStartGoHome, "volver a la base")) aterrizajeEsperado = Aterrizaje.NINGUNO
+        val cortoUnAterrizaje = synchronized(relevoDeLazo) {
+            // Ya vuelve porque la app lo pidió, o la secuencia que lo pide está
+            // en curso: pedirlo otra vez no es otro regreso.
+            val secuenciaEnCurso = lazoActual == Lazo.REGRESO && navigationJob?.isActive == true
+            if (aterrizajeEsperado == Aterrizaje.EN_BASE && (seguidorDelRegreso.volviendo || secuenciaEnCurso)) {
+                Log.i(TAG, "Regreso pedido de nuevo: ${if (secuenciaEnCurso) "la secuencia ya está en curso" else "el dron ya vuelve"}, no se repite")
+                return
+            }
+            // Volver a la base es otra orden de vuelo: corta un aterrizaje en
+            // curso, y al DJI se le dice que deje de aterrizar ANTES de pedirle
+            // el regreso (sale por el SDK antes que el KeyStartGoHome de la
+            // secuencia, que todavía tiene que esperar el lazo y el apagado).
+            val corto = soltarElAterrizaje("se ordenó volver a la base")
+            val anterior = navigationJob
+            Log.i(
+                TAG,
+                "Regreso pedido: corta el lazo $lazoActual con el Virtual Stick " +
+                    (if (virtualStickListo.get()) "habilitado" else "deshabilitado") +
+                    (if (seguidorDelRegreso.volviendo) "; el dron ya vuelve por su cuenta (${estadoDelRegreso.value})" else ""),
+            )
+            relevarLazo(Lazo.REGRESO) { sostenerElRegreso(anterior) }
+            // Desde ya el regreso es de la app: lo que KeyGoHomeStatus diga de
+            // acá en más es de este regreso y no una toma del dron. Va después
+            // de relevar, que lo borra para los lazos que no son un aterrizaje;
+            // lo vuelve a borrar el fracaso de la secuencia.
+            aterrizajeEsperado = Aterrizaje.EN_BASE
+            seguidorDelRegreso.alOrdenar(SeguidorDelRegreso.Orden.REGRESO)
+            corto
         }
+        if (cortoUnAterrizaje) detenerElAterrizajeAutomatico()
     }
 
     override fun land() {
@@ -1909,7 +2022,27 @@ class DjiDroneController : DroneController {
      * orden puntual, y quien la dio no puede seguir con el desvío.
      */
     override fun cancelarRegreso() {
-        if (!enVuelo || !seguidorDelRegreso.volviendo) return
+        if (!enVuelo) return
+        // La secuencia del regreso de la app ([sostenerElRegreso]) se corta
+        // también, esté donde esté: si no, seguiría ordenando el GoHome detrás
+        // de la orden que viene (el estacionario de tomar el control).
+        val (secuenciaEnCurso, ordenEnviada) = synchronized(relevoDeLazo) {
+            val enCurso = lazoActual == Lazo.REGRESO && navigationJob?.isActive == true
+            val enviada = regresoOrdenado
+            if (enCurso) {
+                Log.i(TAG, "Corte del regreso: se corta la secuencia del regreso (KeyStartGoHome ${if (enviada) "ya salió" else "todavía no salió"})")
+                cortarLazo()
+            }
+            enCurso to enviada
+        }
+        if (!seguidorDelRegreso.volviendo) {
+            if (!secuenciaEnCurso) return
+            if (!ordenEnviada) {
+                // Se cortó antes de pedirle nada al dron: no hay GoHome que parar.
+                aterrizajeEsperado = Aterrizaje.NINGUNO
+                return
+            }
+        }
         val negativa = when {
             tomaDelDron == MotivoDelDron.ATERRIZAJE_BATERIA_CRITICA -> "el dron está aterrizando por batería crítica"
             tomaDelDron == MotivoDelDron.RTH_DEL_CONTROL -> LO_PIDIO_EL_CONTROL
@@ -1930,10 +2063,27 @@ class DjiDroneController : DroneController {
         tomaDelDron = null
         aterrizajeEsperado = Aterrizaje.NINGUNO
         scope.launch {
-            val aceptado = accionCon(FlightControllerKey.KeyStopGoHome, EmptyMsg(), alFallar = { motivo ->
-                avisarSiempre("${DroneController.NO_SE_CORTO_EL_REGRESO}: el dron no aceptó la orden ($motivo); sigue volviendo")
-            })
-            if (!aceptado) {
+            val desde = System.currentTimeMillis()
+            var motivo: String? = null
+            val aceptado = withTimeoutOrNull(ESPERA_CORTE_REGRESO_MS) {
+                accionCon(FlightControllerKey.KeyStopGoHome, EmptyMsg(), alFallar = { motivo = it })
+            }
+            Log.i(TAG, "Corte del regreso: KeyStopGoHome ${resultado(aceptado, motivo)} en ${System.currentTimeMillis() - desde} ms")
+            if (aceptado != true) {
+                // El GoHome de la app pudo no haber llegado a arrancar (la orden
+                // salió y el corte llegó enseguida): si el dron no está volviendo,
+                // no hay regreso que cortar y el corte está hecho.
+                val estado = leerDelDron(FlightControllerKey.KeyGoHomeStatus) ?: estadoDelRegreso.value
+                if (estado == GoHomeState.IDLE) {
+                    Log.i(TAG, "Corte del regreso: GoHomeState=IDLE, no había regreso en curso que cortar")
+                    if (estadoDelRegreso.value != GoHomeState.IDLE) alCambiarElRegreso(GoHomeState.IDLE)
+                    return@launch
+                }
+                avisarSiempre(
+                    "${DroneController.NO_SE_CORTO_EL_REGRESO}: " +
+                        (if (aceptado == false) "el dron no aceptó la orden ($motivo)" else "el dron no contestó la orden en ${ESPERA_CORTE_REGRESO_MS / 1000} s") +
+                        "; sigue volviendo",
+                )
                 devolverElVuelo(tomaAnterior, aterrizajeAnterior)
                 return@launch
             }
@@ -1946,6 +2096,8 @@ class DjiDroneController : DroneController {
                         "${ESPERA_CORTE_REGRESO_MS / 1000} s; sigue volviendo",
                 )
                 devolverElVuelo(tomaAnterior, aterrizajeAnterior)
+            } else {
+                Log.i(TAG, "Corte del regreso: GoHomeState=IDLE a los ${System.currentTimeMillis() - desde} ms")
             }
         }
     }
@@ -2503,6 +2655,162 @@ class DjiDroneController : DroneController {
         }
     }
 
+    // ---- El regreso a base de la app: se comprueba que arranque (docs/VUELO.md §7.2) ----
+
+    /**
+     * La secuencia del regreso, en este orden:
+     *  1. que el lazo anterior termine de verdad, como en el aterrizaje:
+     *     cancelarlo no lo frena en el acto, y una vuelta que ya estaba adentro
+     *     de `enviarVelocidad*` volvía a habilitar el Virtual Stick DESPUÉS de
+     *     apagarlo (lo que pasó en el campo con la órbita);
+     *  2. el Virtual Stick deshabilitado, esperando la respuesta del SDK: con
+     *     él tomado el DJI rechaza el GoHome, o lo deja apenas le llega una
+     *     velocidad (`GoHomeExitCode.JOYSTICK_*`);
+     *  3. si el dron ya está volviendo por su cuenta (su regreso por batería,
+     *     el botón del control), se lo adopta en vez de pedir otro regreso, que
+     *     el SDK rechazaría;
+     *  4. `KeyStartGoHome` con tope, y cada medio segundo la comprobación de que
+     *     el regreso arrancó —`KeyGoHomeStatus` fuera de IDLE o el modo de vuelo
+     *     GO_HOME— con las reglas de [SupervisorDelRegreso]: si en 3 s no
+     *     arrancó se vuelve a ordenar, hasta tres órdenes.
+     *
+     * Termina cuando arrancó (el resto lo sigue el oyente de `KeyGoHomeStatus`:
+     * el descenso en la base y, al tocar el suelo, [FlightEvent.ArrivedHome]),
+     * en el suelo, o soltando el regreso con un aviso que sale SIEMPRE
+     * ([DroneController.NO_SE_PUDO_VOLVER]). En ese caso el Virtual Stick queda
+     * apagado y el dron estacionario por su cuenta (P-GPS), a la espera de la
+     * orden que sigue: PatrolManager lo deja en pausa con hold(), que vuelve a
+     * habilitarlo. Todo queda en el logcat para el banco
+     * (`adb logcat -s DjiDroneController PatrolManager`).
+     */
+    private suspend fun sostenerElRegreso(anterior: Job?) {
+        val desde = System.currentTimeMillis()
+        esperarElFinDe(anterior, "Regreso")
+        apagarVirtualStickYEsperar("el regreso a base", siNoSePudo = "el dron puede no arrancar el regreso")
+        if (seguidorDelRegreso.volviendo) {
+            // Si ya está bajando, el descenso se avisa ahora: el oyente no vuelve
+            // a contar un estado que no cambió, y un relevo de patrulla lo
+            // necesita (RELEVOS §2.3).
+            Log.i(TAG, "Regreso: el dron ya volvía por su cuenta (GoHomeState=${estadoDelRegreso.value}), se lo adopta sin otra orden")
+            estadoDelRegreso.value?.let(::alCambiarElRegreso)
+            return
+        }
+        val supervisor = SupervisorDelRegreso()
+        var accion = supervisor.empezar()
+        while (accion == SupervisorDelRegreso.Accion.ORDENAR || accion == SupervisorDelRegreso.Accion.SEGUIR) {
+            accion = if (accion == SupervisorDelRegreso.Accion.ORDENAR) {
+                ordenarElRegreso(supervisor) ?: return
+            } else {
+                vigilarElRegreso(supervisor)
+            }
+        }
+        terminarElRegreso(accion, supervisor, desde)
+    }
+
+    /**
+     * `KeyStartGoHome` con tope; lo que contesta lo decide
+     * [SupervisorDelRegreso.alContestar]. Null si a esta secuencia ya la
+     * cortaron: la orden no sale y la secuencia termina en silencio.
+     */
+    private suspend fun ordenarElRegreso(supervisor: SupervisorDelRegreso): SupervisorDelRegreso.Accion? {
+        if (supervisor.ordenes > 0) delay(SupervisorDelRegreso.ENTRE_ORDENES_MS)
+        if (!marcarElRegresoOrdenado()) return null
+        Log.i(TAG, "Regreso: KeyStartGoHome, orden ${supervisor.ordenes + 1} de ${SupervisorDelRegreso.MAXIMO_DE_ORDENES}")
+        val desde = System.currentTimeMillis()
+        var motivo: String? = null
+        val aceptada = withTimeoutOrNull(SupervisorDelRegreso.ESPERA_DE_LA_ORDEN_MS) {
+            accionCon(FlightControllerKey.KeyStartGoHome, EmptyMsg(), alFallar = { motivo = it })
+        }
+        Log.i(TAG, "Regreso: KeyStartGoHome ${resultado(aceptada, motivo)} en ${System.currentTimeMillis() - desde} ms")
+        return supervisor.alContestar(aceptada, leerElRegreso(), motivo)
+    }
+
+    /**
+     * Marca que `KeyStartGoHome` sale, si esta secuencia sigue siendo la vigente
+     * (un solo paso con [relevoDeLazo], como [despegueOrdenado]): un corte que
+     * llegó antes la encuentra sin ordenar y no tiene GoHome que parar; uno que
+     * llega después sabe que sí (ver [cancelarRegreso]). false si a esta
+     * secuencia ya la cortaron: la orden no tiene que salir.
+     */
+    private suspend fun marcarElRegresoOrdenado(): Boolean {
+        val lazo = currentCoroutineContext()[Job]
+        return synchronized(relevoDeLazo) {
+            val vigente = lazo != null && lazo === navigationJob && lazo.isActive
+            if (vigente) regresoOrdenado = true
+            vigente
+        }
+    }
+
+    /** Una vuelta de la comprobación: el Virtual Stick que no puede quedar prendido, y si el regreso arrancó. */
+    private suspend fun vigilarElRegreso(supervisor: SupervisorDelRegreso): SupervisorDelRegreso.Accion {
+        delay(SupervisorDelRegreso.INTERVALO_MS)
+        // Una habilitación que llegó tarde (de antes de la orden) no puede
+        // quedar prendida: con ella el DJI no arranca el regreso, o lo deja.
+        if (virtualStickListo.get()) {
+            apagarVirtualStickYEsperar("el regreso a base (seguía habilitado)", siNoSePudo = "el dron puede no arrancar el regreso")
+        }
+        val accion = supervisor.alLeer(leerElRegreso())
+        if (accion != SupervisorDelRegreso.Accion.SEGUIR) Log.i(TAG, "Regreso: $accion")
+        return accion
+    }
+
+    /**
+     * Lo que se lee del dron en cada vuelta: el estado del regreso
+     * preguntándoselo ([leerDelDron]; si no contesta, el último que avisó), el
+     * modo de vuelo y por qué salió del último regreso (`KeyGoHomeExitReason`:
+     * `JOYSTICK_*` es una velocidad que lo pisó). Cada lectura queda en el
+     * logcat: es lo que el banco tiene que ver. Un estado que el oyente de
+     * `KeyGoHomeStatus` todavía no vio se le pasa, así el resto del controlador
+     * ([seguidorDelRegreso], [cancelarRegreso]) sabe lo mismo que la secuencia.
+     */
+    private suspend fun leerElRegreso(): SupervisorDelRegreso.Lectura {
+        val km = KeyManager.getInstance()
+        val estado = leerDelDron(FlightControllerKey.KeyGoHomeStatus) ?: estadoDelRegreso.value
+        val modo = runCatching { km.getValue(KeyTools.createKey(FlightControllerKey.KeyFlightMode)) }.getOrNull()
+        val salida = runCatching { km.getValue(KeyTools.createKey(FlightControllerKey.KeyGoHomeExitReason)) }.getOrNull()
+        Log.i(TAG, "Regreso: GoHomeState=$estado modo=$modo ($modoDeVuelo) salidaDelGoHome=$salida enVuelo=$enVuelo enlace=$enlaceVivo")
+        if (estado != null && estado != estadoDelRegreso.value) alCambiarElRegreso(estado)
+        return SupervisorDelRegreso.Lectura(
+            enVuelo = enVuelo,
+            conEnlace = enlaceVivo,
+            arranco = SupervisorDelRegreso.arranco(estado?.name, modo?.name),
+        )
+    }
+
+    /** La secuencia terminó: arrancó, en el suelo, o soltando el regreso con su aviso. */
+    private suspend fun terminarElRegreso(accion: SupervisorDelRegreso.Accion, supervisor: SupervisorDelRegreso, desde: Long) {
+        val ms = System.currentTimeMillis() - desde
+        when (accion) {
+            SupervisorDelRegreso.Accion.ARRANCO ->
+                Log.i(TAG, "Regreso: arrancó a los $ms ms con ${supervisor.ordenes} orden(es) (GoHomeState=${estadoDelRegreso.value})")
+            SupervisorDelRegreso.Accion.EN_EL_SUELO ->
+                Log.i(TAG, "Regreso: el dron está en el suelo a los $ms ms, no hay regreso que ordenar")
+            else -> {
+                val motivo = supervisor.motivoDelFallo()
+                Log.w(TAG, "Regreso: se suelta a los $ms ms ($accion): $motivo")
+                // Una respuesta definitiva a una orden de una persona: sale siempre.
+                if (soltarEsteRegreso()) avisarSiempre("${DroneController.NO_SE_PUDO_VOLVER}: $motivo")
+            }
+        }
+    }
+
+    /**
+     * Suelta el regreso de ESTA secuencia, si todavía es la vigente; false si
+     * otra orden ya la había reemplazado. El dron queda con el Virtual Stick
+     * apagado, estacionario por su cuenta, y la app sin ningún aterrizaje
+     * esperado: lo que KeyGoHomeStatus diga después ya no es de este regreso.
+     */
+    private suspend fun soltarEsteRegreso(): Boolean {
+        val yo = currentCoroutineContext()[Job]
+        synchronized(relevoDeLazo) {
+            if (yo !== navigationJob) return false
+            aterrizajeEsperado = Aterrizaje.NINGUNO
+            regresoOrdenado = false
+            lazoActual = Lazo.NINGUNO
+        }
+        return true
+    }
+
     /**
      * El primer cuadro para la detección (1280 px) CAPTURADO después de pedir la
      * foto, o null si no llega en [DroneController.ESPERA_FOTO_MS]. Se mira la
@@ -2832,6 +3140,7 @@ class DjiDroneController : DroneController {
             // marca después de relevar), y la altura pedida solo la conservan
             // los lazos que la releen.
             despegue = Despegue.NINGUNO
+            regresoOrdenado = false
             if (tipo !in LAZOS_CON_ALTURA_PEDIDA) alturaPedida = null
             navigationJob = scope.launch(block = cuerpo)
             true
@@ -2846,6 +3155,7 @@ class DjiDroneController : DroneController {
         synchronized(relevoDeLazo) {
             lazoActual = Lazo.NINGUNO
             despegue = Despegue.NINGUNO
+            regresoOrdenado = false
             alturaPedida = null
             aterrizando = false
             navigationJob?.cancel()
@@ -2919,6 +3229,12 @@ class DjiDroneController : DroneController {
         // aterrizar. Es lo que frena a la vuelta del lazo que ya estaba adentro
         // de enviarVelocidad* cuando se lo cortó. Solo el corrimiento lo usa.
         if (aterrizando && !corriendoseParaAterrizar) return
+        // Con un regreso a base de la app en curso (la secuencia, o el GoHome
+        // que arrancó), tampoco: con el Virtual Stick tomado el DJI no arranca
+        // el regreso, o lo deja (VUELO §7.2). Frena a la vuelta del lazo que
+        // ya estaba adentro de enviarVelocidad* cuando se lo cortó; cualquier
+        // otra orden de vuelo releva el lazo antes de llegar acá, y vuelve a poder.
+        if (lazoActual == Lazo.REGRESO) return
         if (!reintentoDelMandoVirtual.sePuedeIntentar(System.currentTimeMillis())) return
         if (!virtualStickListo.compareAndSet(false, true)) return
         val vs = VirtualStickManager.getInstance()
@@ -2943,8 +3259,9 @@ class DjiDroneController : DroneController {
                     // Si la app se cerró mientras el dron todavía lo aceptaba,
                     // esta habilitación llegó tarde y hay que deshacerla (ver
                     // mandarApagado()). Lo mismo si en el medio arrancó un
-                    // aterrizaje: le cancelaría el aterrizaje automático.
-                    if (desconectado || (aterrizando && !corriendoseParaAterrizar)) {
+                    // aterrizaje o un regreso a base: le cancelaría el
+                    // aterrizaje automático, o el GoHome.
+                    if (desconectado || (aterrizando && !corriendoseParaAterrizar) || lazoActual == Lazo.REGRESO) {
                         virtualStickListo.set(false)
                         mandarApagado("una habilitación que llegó tarde")
                     }
@@ -3105,8 +3422,11 @@ class DjiDroneController : DroneController {
          */
         const val INTERVALO_TELEMETRIA_MS = 200L
 
-        /** Órbita y seguimiento no bajan de esta altura (ver startOrbit). */
+        /** Órbita, seguimiento y vigilancia no bajan de esta altura (ver startOrbit). */
         const val ALTURA_MINIMA_SEGUIMIENTO_M = 15.0
+
+        /** Vigilando, más cerca que esto del objetivo el rumbo hacia él es ruido del GPS: la nariz se queda donde está. */
+        const val DISTANCIA_MINIMA_PARA_EL_RUMBO_M = 3.0
 
         /** Hasta cuánto se extrapola la estimación del objetivo que se sigue. */
         const val EXTRAPOLACION_MAXIMA_MS = 3_000L
