@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  ajustarDron,
   api,
   armarQuery,
   cerrarSesion,
@@ -13,6 +14,8 @@ import {
   marcarEmergenciaRecuperada,
   motivoDelRechazoDeDecision,
   motivoDelRechazoDeRecuperacion,
+  ordenarAterrizaje,
+  ordenarVolverABase,
   parsearMeta,
   traerDrones,
   traerEmergencia,
@@ -83,6 +86,58 @@ describe('api.ts', () => {
     it('getRole ignora un valor que no sea un rol de la consola', () => {
       localStorage.setItem('cc_role', 'drone');
       expect(getRole()).toBeNull();
+    });
+  });
+
+  describe('ajustes y órdenes de llegada del dron (VUELO §7, §9 y §10)', () => {
+    beforeEach(() => {
+      localStorage.setItem('cc_token', 'tok');
+    });
+
+    it('ajustarDron manda un PATCH con sólo lo que cambia, null incluido', async () => {
+      const fetchMock = vi.fn().mockResolvedValue(mockResponse({ ok: true }));
+      vi.stubGlobal('fetch', fetchMock);
+      await ajustarDron('d1', { silencioAlRetomarS: 20 });
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/drones/d1/ajustes',
+        expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ silencioAlRetomarS: 20 }) }),
+      );
+      await ajustarDron('d1', { reaccionADeteccion: null });
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        '/api/drones/d1/ajustes',
+        expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ reaccionADeteccion: null }) }),
+      );
+    });
+
+    it('volver a la base y aterrizar van sin cuerpo, y con {forzar: true} sólo cuando el supervisor se lo quita a otro', async () => {
+      const fetchMock = vi.fn().mockResolvedValue(mockResponse({ ok: true, delivered: true }));
+      vi.stubGlobal('fetch', fetchMock);
+      await expect(ordenarVolverABase('d1')).resolves.toEqual({ ok: true, delivered: true });
+      expect(fetchMock).toHaveBeenLastCalledWith('/api/drones/d1/return_home', expect.objectContaining({ method: 'POST' }));
+      expect(fetchMock.mock.calls.at(-1)![1].body).toBeUndefined();
+
+      await ordenarVolverABase('d1', { forzar: true });
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        '/api/drones/d1/return_home',
+        expect.objectContaining({ method: 'POST', body: JSON.stringify({ forzar: true }) }),
+      );
+
+      await ordenarAterrizaje('d1', { forzar: false });
+      expect(fetchMock).toHaveBeenLastCalledWith('/api/drones/d1/land', expect.objectContaining({ method: 'POST' }));
+      expect(fetchMock.mock.calls.at(-1)![1].body).toBeUndefined();
+      await ordenarAterrizaje('d1', { forzar: true });
+      expect(fetchMock.mock.calls.at(-1)![1].body).toBe(JSON.stringify({ forzar: true }));
+    });
+
+    it('el 409 del control que tiene otro llega con su código y su texto, para leerlo en la pregunta', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(mockResponse({ error: 'El control lo tiene oper9' }, { ok: false, status: 409 })),
+      );
+      const error = await ordenarVolverABase('d1').catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(ErrorDeApi);
+      expect((error as ErrorDeApi).status).toBe(409);
+      expect((error as ErrorDeApi).message).toBe('El control lo tiene oper9');
     });
   });
 

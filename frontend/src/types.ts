@@ -1,3 +1,4 @@
+import type { ReaccionADeteccion } from './ajustesDelDron';
 import type { PedidoDelHub } from './control';
 
 /** Coordenada con nombre. La usan la ficha del dron y los mapas. */
@@ -212,11 +213,15 @@ export interface Drone {
   deletedAt: string | null;
   base: Base | null;
   /**
-   * La velocidad con la que orbita a un objetivo, en m/s, fijada desde su
-   * vista (PROTOCOLS §5, `PATCH /drones/:droneId/ajustes`); `null` es la de
-   * fábrica de la app. Falta en la ficha de un hub viejo.
+   * Los ajustes del dron (VUELO §10; PROTOCOLS §5, `PATCH /drones/:droneId/ajustes`),
+   * fijados desde su vista: la velocidad con la que orbita a un objetivo (m/s),
+   * qué hace con un objetivo confirmado y cuánto no se detiene por otra
+   * detección después de dejar uno (segundos). `null` es lo de fábrica de la
+   * app. Faltan en la ficha de un hub viejo, y ahí la consola no afirma nada.
    */
   velocidadOrbitaMs?: number | null;
+  reaccionADeteccion?: ReaccionADeteccion | null;
+  silencioAlRetomarS?: number | null;
   online: boolean;
   lastStatus: DroneStatus | null;
   controlledBy: string | null;

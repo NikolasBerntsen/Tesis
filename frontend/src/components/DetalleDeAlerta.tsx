@@ -260,10 +260,10 @@ function AccionesDeLaAlerta({
       )}
       {puedeDecidir && (
         <>
-          <BotonesDeDecision ocupado={ocupado} onDecidir={onDecidir} />
+          <BotonesDeDecision ocupado={ocupado} dron={dron} onDecidir={onDecidir} />
           {/* Lo que hace cada botón con el dron, dicho antes de apretarlo,
               como en el carrusel. */}
-          <ConsecuenciasDeDecidir />
+          <ConsecuenciasDeDecidir dron={dron} />
         </>
       )}
       {error && (

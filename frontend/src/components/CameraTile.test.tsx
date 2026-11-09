@@ -93,6 +93,12 @@ describe('CameraTile', () => {
       expect(screen.queryByText('PATRULLANDO')).not.toBeInTheDocument();
     });
 
+    it('VIGILANDO en oro: detenido donde estaba, mirando al objetivo (VUELO §2)', () => {
+      renderTile({ status: makeStatus({ state: 'VIGILANDO' }) });
+      expect(screen.getByText('VIGILANDO')).toHaveClass('esquina-oro');
+      expect(screen.queryByText('PATRULLANDO')).not.toBeInTheDocument();
+    });
+
     it('EN TIERRA si el dron informa que está en el suelo, aunque el estado sea de vuelo', () => {
       renderTile({ status: makeStatus({ state: 'PAUSED', flying: false }) });
       expect(screen.getByText('EN TIERRA')).toBeInTheDocument();

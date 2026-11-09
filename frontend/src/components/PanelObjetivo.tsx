@@ -67,7 +67,7 @@ export function CoordenadasCopiables({
 }
 
 /**
- * El objetivo que el dron está orbitando o siguiendo, con todo lo que la app
+ * El objetivo que el dron está orbitando, siguiendo o vigilando, con todo lo que la app
  * estima de él (`status.target`). Vive aparte de la alerta porque dura más: la
  * alerta se decide una vez, y después de validarla el dron sigue sobre el
  * objetivo —y el equipo de tierra sigue necesitando dónde está— hasta que
@@ -121,8 +121,8 @@ export default function PanelObjetivo({ objetivo }: { objetivo: ObjetivoEnSeguim
       </dl>
       {objetivo.lost && (
         <p className="aviso" role="status">
-          Hace más de 10 s que la detección no lo ve: el dron orbita la última posición conocida, que es la que
-          hay que pasarle al equipo de tierra.
+          Hace más de 10 s que la detección no lo ve: el dron se queda sobre la última posición conocida (la
+          orbita, la sigue o la vigila, según su ajuste), que es la que hay que pasarle al equipo de tierra.
         </p>
       )}
     </div>

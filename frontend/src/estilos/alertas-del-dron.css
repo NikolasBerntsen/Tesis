@@ -1,8 +1,8 @@
 /* ============================================================================
    ALERTAS DEL DRON — el pop-up de las alertas pendientes de un dron (que abre
-   el botón de alertas de su vista), la imagen ampliada (VisorAmpliado), el
-   ajuste de la velocidad de órbita y la lista de drones para asignar a una
-   base. Sin colores literales: todo sale de los tokens, para los dos temas.
+   el botón de alertas de su vista), la imagen ampliada (VisorAmpliado) y la
+   lista de drones para asignar a una base. Los ajustes del dron viven en
+   vuelo.css. Sin colores literales: todo sale de los tokens, para los dos temas.
    ========================================================================= */
 
 /* --- El botón de alertas en la cabecera de la vista del dron ------------------
@@ -97,19 +97,6 @@
   max-height: 78vh;
   aspect-ratio: auto;
   object-fit: contain;
-}
-
-/* --- El ajuste de la velocidad de órbita -------------------------------------- */
-.ajuste-orbita-deslizador {
-  width: 100%;
-  min-height: var(--alto-tactil);
-  accent-color: var(--oro);
-}
-.ajuste-orbita-pie {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--e-3);
 }
 
 /* --- Los drones para asignar a una base --------------------------------------- */

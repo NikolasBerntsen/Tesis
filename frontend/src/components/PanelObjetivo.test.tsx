@@ -61,7 +61,7 @@ describe('PanelObjetivo', () => {
     expect(screen.getByTestId('situacion-objetivo')).toHaveClass('warn');
     expect(screen.getByText('Última posición', { selector: 'dt' })).toBeInTheDocument();
     expect(valor('Visto')).toHaveTextContent('hace 12 s');
-    expect(screen.getByRole('status')).toHaveTextContent(/orbita la última posición conocida/);
+    expect(screen.getByRole('status')).toHaveTextContent(/se queda sobre la última posición conocida/);
   });
 
   it('validada lo dice en verde', () => {
