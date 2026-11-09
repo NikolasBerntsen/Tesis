@@ -83,8 +83,8 @@ describe('stateLabel', () => {
     'PATROLLING',
     'ORBITING',
     'FOLLOWING',
-    // VUELO §2 y §11: el que suma el diseño de vuelo (la reacción `detenerse`).
-    // El hub lo agrega a PROTOCOLS §1 en su propia rama.
+    // VUELO §2 y §11: el que suma el diseño de vuelo (la reacción `detenerse`),
+    // ya en la lista de PROTOCOLS §1.
     'VIGILANDO',
     'RETURNING_HOME_SIGNAL',
     'RETURNING_HOME_BATTERY',
@@ -133,7 +133,7 @@ describe('etiquetaDeEvento', () => {
   it('rotula los eventos de relevos, desvíos y emergencias', () => {
     expect(etiquetaDeEvento('RELAY_HANDOVER')).toBe('Traspaso del objetivo');
     expect(etiquetaDeEvento('EMERGENCY_RECOVERED')).toBe('Dron recuperado');
-    expect(Object.keys(ETIQUETAS_DE_EVENTO)).toHaveLength(23);
+    expect(Object.keys(ETIQUETAS_DE_EVENTO)).toHaveLength(24);
   });
 
   it('rotula los del control manual entre personas', () => {
@@ -145,6 +145,7 @@ describe('etiquetaDeEvento', () => {
   it('rotula las órdenes de vuelo y los ajustes del dron (VUELO §11)', () => {
     expect(etiquetaDeEvento('RTH_ORDERED')).toBe('Volver a la base ordenado');
     expect(etiquetaDeEvento('LANDING_CANCELLED')).toBe('Aterrizaje cortado por las palancas');
+    expect(etiquetaDeEvento('RTH_INTERRUPTED')).toBe('Regreso cortado desde el control físico');
     expect(etiquetaDeEvento('DETECTION_REACTION_SET')).toBe('Reacción ante una detección fijada');
     expect(etiquetaDeEvento('RESUME_SILENCE_SET')).toBe('Silencio al retomar fijado');
     expect(etiquetaDeEvento('ORBIT_SPEED_SET')).toBe('Velocidad de órbita fijada');
@@ -204,6 +205,7 @@ describe('tonoDeEvento', () => {
     expect(tonoDeEvento('RTH_DIVERTED')).toBe('warn');
     expect(tonoDeEvento('RTH_ORDERED')).toBe('warn');
     expect(tonoDeEvento('LANDING_CANCELLED')).toBe('warn');
+    expect(tonoDeEvento('RTH_INTERRUPTED')).toBe('warn');
   });
 
   it('lo demás, con la tinta de siempre', () => {

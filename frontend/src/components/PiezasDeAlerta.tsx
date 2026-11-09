@@ -110,7 +110,9 @@ export function ChipDeTipo({
  * decisión viaja se apagan los dos, para que un segundo clic no decida dos
  * veces (o la alerta que vino a ocupar el lugar de la decidida). Con la ficha
  * del dron a mano, al lado de Descartar va el engranaje del silencio al
- * retomar (VUELO §6): cuánto va a callar el dron después de este descarte.
+ * retomar (VUELO §6): cuánto va a callar el dron después de este descarte; y
+ * Descartar espera que se guarde el silencio recién movido (ver
+ * SilencioAlRetomar), con el par apagado mientras tanto.
  */
 export function BotonesDeDecision({
   ocupado,
@@ -129,15 +131,25 @@ export function BotonesDeDecision({
   onDecidir: (decision: Decision) => void;
 }>) {
   return (
-    <ConSilencioAlRetomar dron={dron} tamanoIcono={tamanoIcono}>
-      <button type="button" className="validate" disabled={ocupado} onClick={() => onDecidir('VALIDATED')}>
-        <IconoCheck tamano={tamanoIcono} />
-        Validar
-      </button>
-      <button type="button" className="dismiss" disabled={ocupado} onClick={() => onDecidir('DISMISSED')}>
-        <IconoTacho tamano={tamanoIcono} />
-        Descartar
-      </button>
+    <ConSilencioAlRetomar dron={dron} tamanoIcono={tamanoIcono} onDecidir={onDecidir}>
+      {({ decidir, esperando }) => (
+        <>
+          <button type="button" className="validate" disabled={ocupado || esperando} onClick={() => decidir('VALIDATED')}>
+            <IconoCheck tamano={tamanoIcono} />
+            Validar
+          </button>
+          <button
+            type="button"
+            className="dismiss"
+            disabled={ocupado || esperando}
+            aria-busy={esperando || undefined}
+            onClick={() => decidir('DISMISSED')}
+          >
+            <IconoTacho tamano={tamanoIcono} />
+            Descartar
+          </button>
+        </>
+      )}
     </ConSilencioAlRetomar>
   );
 }

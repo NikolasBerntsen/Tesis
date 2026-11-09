@@ -163,24 +163,32 @@ anotada. La app:
    orbita el lugar de la detección con el centro fijo, sin seguirlo; `seguir`
    se pone a 25 m y lo sigue, sin orbitar nunca; `detenerse` se queda donde
    está, con la nariz y la cámara en el objetivo (`VIGILANDO`,
-   `DroneController.vigilar`). En las cuatro salen los avisos `TARGET_MOVING`,
+   `DroneController.vigilar`). En las cuatro el arranque deja `ORBIT_STARTED`,
+   con un texto que dice qué hace el dron, y salen los avisos `TARGET_MOVING`,
    `TARGET_STOPPED`, `TARGET_LOST` y `TARGET_REACQUIRED`. La velocidad de la
    órbita es de 4 m/s de fábrica y la fija el operador desde la vista del dron
    en la consola (`ajustes`, `docs/PROTOCOLS.md` §2), entre 1 y 8 m/s; el
    Comando Central guarda los tres ajustes y se los vuelve a mandar en cada
-   conexión, y un valor fuera de `docs/contrato/ajustes.json` descarta el
-   mensaje entero. Una sola detección, o dos de distinta clase o lejos una de
+   conexión. La app valida cada campo contra `docs/contrato/ajustes.json` sin
+   convertir ni recortar nada: un valor inválido, o un mensaje sin ninguna de
+   las tres claves, descarta el mensaje entero, y una clave ausente es la de
+   fábrica. Una sola detección, o dos de distinta clase o lejos una de
    otra, **no** le cambian nada a la ruta: solo la confirmada (dos de la misma
-   clase, en 2,5 s y a menos de 25 m) arranca la reacción. Volviendo a base,
-   aterrizando o en control manual una detección no le da al dron ni una
-   orden: solo las cajas;
+   clase, en 2,5 s y a menos de 25 m) arranca la reacción. Volviendo a base o
+   en control manual una detección solo dibuja sus cajas; aterrizando no le da
+   al dron ninguna orden, y sin el control tomado alerta sin seguimiento
+   (`DETECTION`, una por minuto), igual que en la pausa de un regreso que no
+   arrancó;
 3. manda la alerta con el tipo, la **captura anotada**, la posición del objetivo
    y la confianza; y
-4. espera la decisión del operador: *falso positivo* retoma la ruta donde la
-   dejó; *validada* mantiene la reacción hasta que la consola ordene reanudar.
-   Cada vez que el dron **deja un objetivo para volver a volar solo** (un
-   descarte, reanudar, otra ruta o un desvío a un nodo) empieza el **silencio
-   al retomar** (`silencioAlRetomarS`, 15 s de fábrica, de 0 a 30 de a 5):
+4. espera la decisión del operador: *falso positivo* retoma la ruta hacia el
+   próximo nodo (sin un patrullaje en curso que retomar, queda estacionario
+   en `PAUSED` y registra `PATROL_STOPPED`); *validada* mantiene la reacción
+   hasta que la consola ordene reanudar. Cada vez que el dron **deja un
+   objetivo para volver a volar solo** (un descarte, reanudar, otra ruta, un
+   desvío a un nodo o «Detener», que además deja la zona del objetivo como
+   descartada) empieza el **silencio al retomar** (`silencioAlRetomarS`, 15 s
+   de fábrica, de 0 a 30 de a 5; uno nuevo vale desde el próximo objetivo):
    mientras dura, las detecciones solo dibujan sus cajas, así el dron pasa de
    largo la playa de estacionamiento en vez de parar en cada auto. Un regreso
    o un aterrizaje no lo arrancan.
@@ -193,35 +201,54 @@ pasa por `PatrolManager.pasarA()`, que frena cuando nadie más le habla al dron.
 
 **Desde el campo**, *Volver a base* y *Aterrizar acá* pisan cualquier orden,
 incluido el control manual de la consola: el que está al lado del dron manda.
+Lo que no se cumple, ni desde el campo ni desde la consola: volver a base o
+aterrizar sin señal con la aeronave (el DJI ya vuelve solo), y cualquier
+orden de vuelo en el descenso final de una emergencia, que ya está bajando;
+ahí la app contesta con un `DRONE_PROBLEM` que sale siempre (`docs/VUELO.md`
+§14).
 
 **Desde la consola**, `return_home` y `land` son órdenes de llegada
 (`docs/VUELO.md` §4, §7 y §9): mandan sobre la ruta, la órbita, el seguimiento
 y un regreso en curso (al aterrizar durante un regreso de la app se corta el
 GoHome antes, como al tomar el control), y ya no exigen el control tomado:
-quién puede lo decide el hub. Con `return_home` el hub ya soltó el lock del
-que ordenó, así que la app suelta el control sola, sin `control_dropped`. Lo
-que no se discute es un failsafe del DJI, la señal perdida (la orden no llega)
-y el descenso final de una emergencia. Si el GoHome no arranca
-(`NO_SE_PUDO_VOLVER`) la consola se entera siempre con un `DRONE_PROBLEM` y el
-dron queda estacionario en `PAUSED`, a la espera de otra orden. Durante un
-aterrizaje sostenido con el control tomado, la primera **palanca deliberada**
-—o un salto del pad— que llegue 1,5 s o más después de la orden lo corta,
-deja al dron estacionario a su mando y registra `LANDING_CANCELLED`; las
-palancas en cero y las de antes de la gracia no cuentan.
+quién puede lo decide el hub. Con `return_home` el hub ya soltó el lock (el
+del que ordenó, o el que un supervisor le quitó a otro), así que la app
+suelta el control sola con cada `return_home` que recibe teniéndolo, vuele a
+casa o no, sin `control_dropped`. Ya volviendo, en el suelo o en las fotos de
+una emergencia, el `return_home` solo queda en el log; volviendo, lo cortan
+tomar el control, aterrizar, una ruta o un desvío, y reanudar o detener se
+ignoran. «Aterrizar acá» (`land`) se rechaza en tres casos —un failsafe del
+DJI que no se discute, la señal perdida y el descenso final de una
+emergencia—, siempre con un `DRONE_PROBLEM` «No se aterriza (…): …». Si el
+GoHome no arranca, el controlador lo vuelve a ordenar hasta 3 veces
+(`NO_SE_PUDO_VOLVER`): la consola se entera siempre con un `DRONE_PROBLEM`
+«No se pudo volver a la base: …» y el dron queda estacionario en `PAUSED` (con
+el control tomado, en `MANUAL`), sin perseguir detecciones hasta que una
+persona dé una orden; con la batería en el umbral, la telemetría siguiente lo
+vuelve a mandar a casa. Si alguien mueve las palancas del RC-N3 durante el
+regreso, el DJI deja el GoHome y la app no lo pelea: `PAUSED` con el mando en
+el control físico y `RTH_INTERRUPTED`. Durante un aterrizaje sostenido con el
+control tomado, la primera **palanca deliberada** —o un salto del pad— que
+llegue 1,5 s o más después de la orden lo corta, deja al dron estacionario a
+su mando y registra `LANDING_CANCELLED`; las palancas en cero y las de antes
+de la gracia no cuentan.
 
 **Tomar el control** se toma del todo: la persona manda. Volviendo a base
 (`RETURNING_HOME` o `RETURNING_HOME_BATTERY`, también si el regreso lo arrancó
 el propio DJI) la toma le corta el regreso al dron antes del estacionario,
 porque con el GoHome puesto el DJI no acepta el mando virtual; y mientras la
 persona lo tenga, la batería baja no le vuelve a sacar el dron (al soltarlo,
-sí). Las únicas tomas que la app **no** hace son las del DJI que no se le
-discuten: el regreso pedido desde el botón del control físico, el aterrizaje
+sí). La app **no** toma el control con un vuelo del DJI que no se le
+discute: el regreso pedido desde el botón del control físico, el aterrizaje
 por batería crítica, y su regreso por batería cuando el único corte del vuelo
-ya se gastó (RELEVOS §4). Ahí contesta `control_dropped` con el motivo, el hub
-suelta el lock y la consola lo dice (antes entraba en `MANUAL` a medias y el
-dron seguía con lo suyo, con las palancas mudas). Al soltar el control desde la
-consola el dron queda en vuelo estacionario, y la consola pregunta si retoma
-el patrullaje: no sale a la ruta solo.
+ya se gastó (RELEVOS §4); tampoco en el descenso final de una emergencia, ni
+cuando el DJI no acepta cortar el regreso (sigue volviendo). Ahí contesta
+`control_dropped` con el motivo, el hub suelta el lock y la consola lo dice
+(antes entraba en `MANUAL` a medias y el dron seguía con lo suyo, con las
+palancas mudas). Al soltar el control desde la consola, con un objetivo el
+dron vuelve a él con la reacción vigente (`ORBITING`, `FOLLOWING` o
+`VIGILANDO`, `TRACKING_RESUMED`); sin objetivo queda en vuelo estacionario, y
+la consola pregunta si retoma el patrullaje: no sale a la ruta solo.
 
 **Entre nodos** el dron no pega volantazos: la velocidad que se le manda sube
 y baja en rampa (2 m/s²), la nariz gira a 45°/s como mucho y la velocidad se

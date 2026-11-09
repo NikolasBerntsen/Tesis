@@ -22,7 +22,16 @@ const esperarGuardado = () => act(() => vi.advanceTimersByTimeAsync(ESPERA_PARA_
 function montar(dron: Drone | null = ALFA) {
   const onDecidir = vi.fn();
   const resultado = render(<BotonesDeDecision ocupado={false} dron={dron} onDecidir={onDecidir} />);
-  return { ...resultado, onDecidir };
+  /** La misma alerta con otro dueño: el traspaso de un relevo. */
+  const conDron = (otro: Drone) => resultado.rerender(<BotonesDeDecision ocupado={false} dron={otro} onDecidir={onDecidir} />);
+  return { ...resultado, onDecidir, conDron };
+}
+
+/** Un guardado del ajuste que no contesta hasta que la prueba lo diga. */
+function guardadoEnEspera() {
+  let contestar: () => void = () => {};
+  ajustarMock.mockImplementation(() => new Promise((r) => (contestar = () => r({} as never))));
+  return () => act(async () => contestar());
 }
 
 describe('BotonesDeDecision — el engranaje del silencio al retomar', () => {
@@ -127,6 +136,92 @@ describe('BotonesDeDecision — el engranaje del silencio al retomar', () => {
     fireEvent.change(deslizador(), { target: { value: '30' } });
     unmount();
     expect(ajustarMock).toHaveBeenCalledWith('d1', { silencioAlRetomarS: 30 });
+  });
+
+  it('la decisión es un grupo con nombre: el Escape del globo vive ahí, no en un control', () => {
+    montar();
+    const grupo = screen.getByRole('group', { name: 'Decisión sobre la alerta' });
+    expect(grupo).toContainElement(screen.getByRole('button', { name: 'Descartar' }));
+    expect(grupo).toContainElement(engranaje());
+  });
+
+  it('descartar enseguida de mover el silencio lo guarda en el acto y decide recién cuando el hub lo tiene', async () => {
+    const contestar = guardadoEnEspera();
+    const { onDecidir } = montar();
+    fireEvent.click(engranaje());
+    fireEvent.change(deslizador(), { target: { value: '25' } });
+    // Antes de los 600 ms de la mano quieta: el silencio sale ya, no después del descarte.
+    fireEvent.click(screen.getByRole('button', { name: 'Descartar' }));
+    expect(ajustarMock).toHaveBeenCalledTimes(1);
+    expect(ajustarMock).toHaveBeenCalledWith('d1', { silencioAlRetomarS: 25 });
+    expect(onDecidir).not.toHaveBeenCalled();
+    // Mientras espera, el par se apaga: un segundo clic no decide dos veces.
+    expect(screen.getByRole('button', { name: 'Descartar' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Validar' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Descartar' })).toHaveAttribute('aria-busy', 'true');
+
+    await contestar();
+    expect(onDecidir).toHaveBeenCalledTimes(1);
+    expect(onDecidir).toHaveBeenCalledWith('DISMISSED');
+    expect(screen.getByRole('button', { name: 'Descartar' })).toBeEnabled();
+    // Y el temporizador de la mano quieta ya no manda otro.
+    await esperarGuardado();
+    expect(ajustarMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('descartar con el guardado ya en viaje lo espera; con nada que esperar decide en el acto', async () => {
+    const contestar = guardadoEnEspera();
+    const { onDecidir } = montar();
+    fireEvent.click(screen.getByRole('button', { name: 'Descartar' }));
+    expect(onDecidir).toHaveBeenCalledWith('DISMISSED');
+    onDecidir.mockClear();
+
+    fireEvent.click(engranaje());
+    fireEvent.change(deslizador(), { target: { value: '5' } });
+    await esperarGuardado();
+    expect(ajustarMock).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Descartar' }));
+    expect(onDecidir).not.toHaveBeenCalled();
+    expect(ajustarMock).toHaveBeenCalledTimes(1);
+    await contestar();
+    expect(onDecidir).toHaveBeenCalledWith('DISMISSED');
+  });
+
+  it('validar no espera el silencio: no deja el objetivo, y el ajuste se guarda igual con la mano quieta', async () => {
+    const { onDecidir } = montar();
+    fireEvent.click(engranaje());
+    fireEvent.change(deslizador(), { target: { value: '20' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Validar' }));
+    expect(onDecidir).toHaveBeenCalledWith('VALIDATED');
+    expect(ajustarMock).not.toHaveBeenCalled();
+    await esperarGuardado();
+    expect(ajustarMock).toHaveBeenCalledWith('d1', { silencioAlRetomarS: 20 });
+  });
+
+  it('si el hub rechaza el silencio, el descarte sale igual y el motivo queda en el globo', async () => {
+    ajustarMock.mockRejectedValue(new Error('silencioAlRetomarS tiene que ir de a 5'));
+    const { onDecidir } = montar();
+    fireEvent.click(engranaje());
+    fireEvent.change(deslizador(), { target: { value: '15' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Descartar' }));
+    await waitFor(() => expect(onDecidir).toHaveBeenCalledWith('DISMISSED'));
+    expect(within(globo()).getByRole('alert')).toHaveTextContent('tiene que ir de a 5');
+  });
+
+  it('en un traspaso (la alerta pasa de Alfa a Bravo) lo que esperaba su turno se guarda para Alfa, una vez, y a Bravo no le llega', () => {
+    const bravo = makeDrone({ droneId: 'd2', displayName: 'Bravo', silencioAlRetomarS: 5 });
+    const { conDron, unmount } = montar();
+    fireEvent.click(engranaje());
+    fireEvent.change(deslizador(), { target: { value: '30' } });
+    conDron(bravo);
+    expect(ajustarMock).toHaveBeenCalledTimes(1);
+    expect(ajustarMock).toHaveBeenCalledWith('d1', { silencioAlRetomarS: 30 });
+    // El engranaje es de Bravo, con lo suyo, y el globo de Alfa se cerró.
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(engranaje()).toHaveAttribute('title', 'Silencio al retomar: 5 s');
+    unmount();
+    expect(ajustarMock).toHaveBeenCalledTimes(1);
+    expect(ajustarMock).not.toHaveBeenCalledWith('d2', expect.anything());
   });
 
   it('«Volver a lo de fábrica» manda null en el acto; un rechazo se lee adentro y el deslizador vuelve', async () => {

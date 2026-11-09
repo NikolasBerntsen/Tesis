@@ -853,6 +853,52 @@ describe('Console — el control manual entre personas', () => {
     );
   });
 
+  it('al piloto fuera de la vista de pilotaje se le dice quién le quitó el control y por qué; a los demás, nada', async () => {
+    dronesFix = [makeDrone({ droneId: 'd1', displayName: 'Alfa', online: true, controlledBy: 'oper1' })];
+    render(<Console onLogout={() => {}} />);
+    await screen.findByText('Alfa');
+    // Lo soltó otra persona, pero a otro: este operador no tenía nada.
+    fire({
+      type: 'control_changed', droneId: 'd1', controlledBy: null, teniaElControl: 'oper2',
+      por: 'super1', forzado: true, detalle: 'super1 ordenó aterrizar',
+    });
+    expect(screen.queryByTestId('aviso-del-control')).not.toBeInTheDocument();
+
+    fire({
+      type: 'control_changed', droneId: 'd1', controlledBy: null, teniaElControl: 'oper1',
+      por: 'super1', forzado: true, detalle: 'super1 ordenó volver a la base',
+    });
+    expect(screen.getByTestId('aviso-del-control')).toHaveTextContent('super1 te quitó el control de Alfa: ordenó volver a la base.');
+  });
+
+  it('con la vista de pilotaje abierta, el que pierde el control lo lee en la vista que se cierra, sin aviso flotante de más', async () => {
+    dronesFix = [
+      makeDrone({
+        droneId: 'd1',
+        displayName: 'Alfa',
+        online: true,
+        controlledBy: 'oper1',
+        lastStatus: makeStatus({ droneId: 'd1', state: 'MANUAL', controlledBy: 'oper1' }),
+      }),
+    ];
+    render(<Console onLogout={() => {}} />);
+    await abrirDetalleDelPrimerDron();
+    await userEvent.click(await screen.findByRole('button', { name: 'Volver a la vista de pilotaje' }));
+    await screen.findByRole('dialog', { name: 'Pilotaje de Alfa' });
+
+    fire({
+      type: 'control_changed', droneId: 'd1', controlledBy: null, teniaElControl: 'oper1',
+      por: 'super1', forzado: true, detalle: 'super1 ordenó volver a la base',
+    });
+    // El status siguiente ya no nombra a nadie: ahí la vista sabe que lo perdió.
+    fire({ type: 'status', ...makeStatus({ droneId: 'd1', state: 'RETURNING_HOME', controlledBy: null }) });
+    expect(await screen.findByTestId('aviso-pilotaje', {}, { timeout: 3000 })).toHaveTextContent(
+      'super1 te quitó el control: ordenó volver a la base. Se cerró la vista de pilotaje.',
+    );
+    expect(screen.queryByRole('dialog', { name: 'Pilotaje de Alfa' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('aviso-del-control')).not.toBeInTheDocument();
+  });
+
   it('como mucho cuatro avisos: el más viejo deja lugar', async () => {
     render(<Console onLogout={() => {}} />);
     await screen.findByText('Alfa');

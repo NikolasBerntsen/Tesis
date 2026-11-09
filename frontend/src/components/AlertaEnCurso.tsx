@@ -24,8 +24,17 @@ function focoEnNingunLado(): boolean {
   return document.activeElement === null || document.activeElement === document.body;
 }
 
+/**
+ * Lo que adentro de la diapositiva usa las flechas para sí: el deslizador del
+ * silencio en el globo del engranaje, y cualquier campo o selector que se
+ * sume. Ahí la flecha es del control: antes el carrusel se la comía, y mover
+ * el silencio con el teclado pasaba de alerta en vez de cambiar los segundos.
+ */
+const USAN_LAS_FLECHAS = 'input, select, textarea, [role="slider"]';
+
 /** Hacia dónde mueve el carrusel una tecla: sólo las flechas de costado, solas. */
 function pasoDeLaTecla(ev: KeyboardEvent<HTMLElement>): 'anterior' | 'siguiente' | null {
+  if (ev.target instanceof Element && ev.target.closest(USAN_LAS_FLECHAS)) return null;
   // Con modificadores son atajos del navegador (Alt+← es "atrás"): no se tocan.
   if (ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return null;
   if (ev.key === 'ArrowLeft') return 'anterior';
