@@ -455,7 +455,10 @@ interface DroneController {
      * donde está, listo para otra orden. Es el primer paso de un desvío a otra
      * base (RELEVOS §4).
      *
-     * Real: `KeyStopGoHome` y esperar `GoHomeState = IDLE`, con un tope de 3 s.
+     * Real: `KeyStopGoHome` y esperar a que el dron deje de volver —ni
+     * `GoHomeState` en regreso (o `LANDING` a menos de 30 m de la base) ni
+     * `KeyFlightMode = GO_HOME`—, con lecturas cada 500 ms y un tope de 3 s; si
+     * el GoHome vuelve a arrancar en esos 3 s, se reenvía el corte una vez.
      * Es UN intento por vuelo para un regreso del propio DJI: si lo vuelve a
      * arrancar, se lo deja seguir y se avisa con
      * [FlightEvent.ElDronTomoElControl] (no se pelea en lazo con él). El que
@@ -464,7 +467,7 @@ interface DroneController {
      * nunca, y tampoco un aterrizaje forzado por batería crítica.
      *
      * Si no se corta —se rechaza por lo de arriba, el dron no acepta la orden o
-     * no vuelve a IDLE a tiempo— avisa SIEMPRE un [FlightEvent.Problema] que
+     * no deja de volver a tiempo— avisa SIEMPRE un [FlightEvent.Problema] que
      * empieza con [NO_SE_CORTO_EL_REGRESO]: el dron sigue volviendo, y lo que
      * quien llama haya ordenado desde el corte se descarta (no se le pelea el
      * regreso). Simulado: sale de su modo de regreso. Sin un regreso en curso

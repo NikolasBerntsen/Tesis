@@ -2336,13 +2336,15 @@ class PatrolManager(
         // consola seguiría pilotando un dron que el hub ya da por suelto.
         soltarPorLaOrdenDeLaConsola(orden)
         if (!controller.estado.value.enVuelo) {
+            // El registro antes que el estado: quien ve el reposo ya encuentra
+            // el porqué escrito.
+            log("${orden.replaceFirstChar { it.uppercase() }}, pero el dron está en el suelo: no hay a dónde volver")
             // Suelto en el suelo, MANUAL ya no es de nadie: queda en reposo, como
             // al soltar el control ahí (con la batería baja, por cambiar).
             if (_state.value == PatrolState.MANUAL) {
                 if (bateriaParaDespegar() != null) bateriaPorCambiar = true
                 pasarA(enReposo())
             }
-            log("${orden.replaceFirstChar { it.uppercase() }}, pero el dron está en el suelo: no hay a dónde volver")
             return
         }
         if (enElDescensoDeEmergencia) {
