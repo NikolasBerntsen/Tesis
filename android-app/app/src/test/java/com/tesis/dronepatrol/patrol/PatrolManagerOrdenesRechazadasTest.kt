@@ -135,6 +135,12 @@ class PatrolManagerOrdenesRechazadasTest {
         consola("""{"type":"land","by":"op"}""")
         esperarA("el aterrizaje") { "land" in dron.ordenes }
         val i = dron.ordenes.size
+        // Es el descenso de la emergencia: ni pasada la gracia la palanca lo corta.
+        banco.reloj.adelantar(PatrolManager.GRACIA_DEL_ATERRIZAJE_MS + 1_000)
+        consola("""{"type":"manual_stick","pitch":1.0,"roll":0.0,"yaw":0.0,"throttle":0.0,"by":"op"}""")
+        delay(200)
+        assertEquals("ni corte ni palanca: ${desde(i)}", emptyList<String>(), desde(i))
+        assertTrue(banco.comando.eventos("LANDING_CANCELLED").isEmpty())
 
         consola("""{"type":"return_home","by":"op"}""")
         noSeCumple("op ordenó volver a la base desde el Comando Central", BAJANDO)

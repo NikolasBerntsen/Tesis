@@ -190,6 +190,20 @@ class PatrolManagerRegresoCortadoEnElControlTest {
         assertEquals(emptyList<String>(), desde(i))
     }
 
+    @Test
+    fun enElSueloElAvisoNoCambiaNada() = runBlocking {
+        banco.enElSuelo()
+        banco.arrancar()
+        banco.telemetria(alt = 0.0)
+
+        banco.evento(FlightEvent.Problema(CORTADO))
+        esperarA("el registro") { registro("pero no hay uno de la app en curso: no cambia nada") }
+
+        assertEquals(PatrolState.IDLE, patrulla.state.value)
+        assertTrue(avisos().isEmpty())
+        assertTrue(dron.ordenes.isEmpty())
+    }
+
     /** Con el dron simulado de verdad: su gancho corta el regreso de la app y la patrulla lo atiende. */
     @Test
     fun conElSimuladorElRegresoCortadoLlegaYLaPatrullaQuedaEnLaPausa() = runBlocking {
