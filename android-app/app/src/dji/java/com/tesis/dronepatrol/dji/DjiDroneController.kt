@@ -388,6 +388,31 @@ class DjiDroneController : DroneController {
     private var corteDelRegreso: Job? = null
 
     /**
+     * El mismo corte, si es el del GoHome DE LA APP (su `KeyStartGoHome` salió).
+     * Mientras sale, lo que el dron diga de un regreso es de ese GoHome y no una
+     * toma del DJI (ver [ordenActual]): uno que se hace visible tarde, después
+     * de decidido el corte, se avisaba como «el dron tomó el control» —y con la
+     * cuenta del regreso por batería en pantalla, como su regreso por batería,
+     * que bloqueaba a la app hasta aterrizar—.
+     */
+    @Volatile
+    private var corteDelRegresoDeLaApp: Job? = null
+
+    /** La salida del último GoHome al salir, arrancar o adoptarse este regreso (ver [anotarLaSalidaAlArrancar]). */
+    @Volatile
+    private var salidaAlArrancar: String? = null
+
+    /**
+     * Cuándo avisó algo del regreso el SDK por su cuenta (los oyentes de
+     * `KeyGoHomeStatus` y `KeyFlightMode`). Un aviso posterior al corte es
+     * fresco: si las preguntas no contestan, vale como prueba de que el dron
+     * dejó de volver (ver [elOyenteDiceQueNoVuelveDesde]); uno guardado de antes,
+     * no.
+     */
+    @Volatile
+    private var regresoAvisadoMs = 0L
+
+    /**
      * `KeyStartGoHome` y `KeyStopGoHome` no se cruzan en el camino al dron. La
      * secuencia lo toma desde que marca la orden ([marcarElRegresoOrdenado])
      * hasta que el dron la contesta —aunque a la secuencia la corten en el
@@ -924,7 +949,10 @@ class DjiDroneController : DroneController {
         escuchar(FlightControllerKey.KeyLowBatteryRTHInfo) { info -> alLeerElRthPorBateria(info) }
         // El regreso a base: su descenso (DescendiendoEnBase) y los regresos que
         // nadie pidió (ElDronTomoElControl).
-        escuchar(FlightControllerKey.KeyGoHomeStatus) { estado -> alCambiarElRegreso(estado) }
+        escuchar(FlightControllerKey.KeyGoHomeStatus) { estado ->
+            regresoAvisadoMs = System.currentTimeMillis()
+            alCambiarElRegreso(estado)
+        }
         // Los umbrales de batería del propio DJI (RELEVOS §0): el crítico va al
         // estado y los dos se revisan, porque mal puestos le ganan a la app.
         escuchar(FlightControllerKey.KeySeriousLowBatteryWarningThreshold) { pct ->
@@ -2125,6 +2153,13 @@ class DjiDroneController : DroneController {
                 Log.i(TAG, "Corte del regreso: la secuencia se cortó antes del KeyStartGoHome, no hay GoHome que parar")
                 aterrizajeEsperado = Aterrizaje.NINGUNO
             }
+            // Una toma del DJI que se puede cortar (su regreso por batería) sin
+            // un regreso en curso ya no tiene nada que sostener: dejarla
+            // rechazaba cada orden de la persona hasta aterrizar.
+            if (tomaDelDron == MotivoDelDron.RTH_BATERIA) {
+                Log.i(TAG, "Corte del regreso: el dron no vuelve; se suelta la toma ${tomaDelDron?.name} que bloqueaba las órdenes")
+                tomaDelDron = null
+            }
             return
         }
         val negativa = when {
@@ -2166,7 +2201,9 @@ class DjiDroneController : DroneController {
         // rechazo del segundo con el dron todavía en GO_HOME parecía un corte
         // fallido.
         val previo = corteDelRegreso?.takeIf { it.isActive }
-        corteDelRegreso = scope.launch {
+        // LAZY: arranca recién con el corte anotado, así lo que lea ya cuenta
+        // como el de la app (ver ordenActual).
+        val corte = scope.launch(start = CoroutineStart.LAZY) {
             if (previo != null) {
                 Log.i(TAG, "Corte del regreso: espera el corte anterior, que todavía está saliendo")
                 withTimeoutOrNull(ESPERA_DEL_CORTE_ENTERO_MS) { previo.join() }
@@ -2180,6 +2217,11 @@ class DjiDroneController : DroneController {
             avisarSiempre("${DroneController.NO_SE_CORTO_EL_REGRESO}: $sigue")
             devolverElVuelo(tomaAnterior, aterrizajeAnterior)
         }
+        corteDelRegreso = corte
+        // Solo el GoHome que pidió la app: si el del propio DJI vuelve a arrancar
+        // durante su corte, es una toma (su único corte ya se gastó).
+        if (ordenEnviada) corteDelRegresoDeLaApp = corte
+        corte.start()
     }
 
     /**
@@ -2204,13 +2246,17 @@ class DjiDroneController : DroneController {
      *    segundos y, si arranca, se lo vuelve a cortar ([vigilarQueNoArranque]).
      */
     private suspend fun cortarElGoHome(quien: String, ordenEnviada: Boolean): String? {
+        val desdeElCorte = System.currentTimeMillis()
         val (aceptado, motivo) = mandarElCorte(quien)
         if (aceptado == true) {
-            return if (esperarQueDejeDeVolver(quien)) null else "el dron no lo cortó en ${ESPERA_CORTE_REGRESO_MS / 1000} s; sigue volviendo"
+            return if (esperarQueDejeDeVolver(quien, desdeElCorte)) null else "el dron no lo cortó en ${ESPERA_CORTE_REGRESO_MS / 1000} s; sigue volviendo"
         }
         val vuelo = leerElVuelo()
         Log.i(TAG, "$quien: con el KeyStopGoHome ${resultado(aceptado, motivo)}, $vuelo")
-        val noVuelve = vuelo.volviendo == false && (vuelo.contesto || aceptado == false)
+        // Que no vuelve lo prueba una lectura que el dron contestó, el rechazo
+        // mismo con lo guardado, o lo que el oyente avisó DESPUÉS del corte.
+        val noVuelve = (vuelo.volviendo == false && (vuelo.contesto || aceptado == false)) ||
+            elOyenteDiceQueNoVuelveDesde(desdeElCorte)
         if (!noVuelve) {
             return (if (aceptado == false) "el dron no aceptó la orden ($motivo)" else "el dron no contestó la orden en ${ESPERA_CORTE_REGRESO_MS / 1000} s") +
                 "; sigue volviendo"
@@ -2242,8 +2288,12 @@ class DjiDroneController : DroneController {
      * Después de un `KeyStopGoHome` aceptado: que el dron deje de volver
      * ([VueloLeido.volviendo] en false, en una lectura que el dron contestó),
      * preguntándoselo cada medio segundo, con tope de [ESPERA_CORTE_REGRESO_MS].
+     * Si al tope las preguntas no contestan, vale lo que el oyente avisó después
+     * del corte ([desdeElCorte]): antes un corte que había salido bien se daba
+     * por fallido y [devolverElVuelo] le sacaba a la persona el control que
+     * acababa de tomar.
      */
-    private suspend fun esperarQueDejeDeVolver(quien: String): Boolean {
+    private suspend fun esperarQueDejeDeVolver(quien: String, desdeElCorte: Long): Boolean {
         val desde = System.currentTimeMillis()
         while (true) {
             val vuelo = leerElVuelo()
@@ -2253,12 +2303,27 @@ class DjiDroneController : DroneController {
                 return true
             }
             if (ms >= ESPERA_CORTE_REGRESO_MS) {
+                if (!vuelo.contesto && elOyenteDiceQueNoVuelveDesde(desdeElCorte)) {
+                    Log.i(
+                        TAG,
+                        "$quien: a los $ms ms el dron no contesta, pero avisó después del corte que no vuelve " +
+                            "(${estadoDelRegreso.value}, modo ${modoDelSdk.get()}): se da por cortado",
+                    )
+                    return true
+                }
                 Log.w(TAG, "$quien: a los $ms ms el dron sigue volviendo ($vuelo)")
                 return false
             }
             delay(SupervisorDelRegreso.INTERVALO_MS)
         }
     }
+
+    /**
+     * Lo que el SDK avisó por su cuenta DESPUÉS de [desdeMs] dice que el dron no
+     * vuelve ([dronVolviendo] en false). Un aviso de antes no vale: es lo
+     * guardado, y un IDLE viejo no prueba que un corte salió.
+     */
+    private fun elOyenteDiceQueNoVuelveDesde(desdeMs: Long): Boolean = regresoAvisadoMs >= desdeMs && !dronVolviendo()
 
     /**
      * El corte se rechazó con el dron sin volver, pero el `KeyStartGoHome` de la
@@ -2274,9 +2339,10 @@ class DjiDroneController : DroneController {
             val vuelo = leerElVuelo()
             if (vuelo.volviendo != true) continue
             Log.i(TAG, "$quien: el GoHome arrancó a los ${System.currentTimeMillis() - desde} ms del corte ($vuelo): KeyStopGoHome otra vez")
+            val desdeElOtroCorte = System.currentTimeMillis()
             val (aceptado, motivo) = mandarElCorte(quien)
             return when {
-                aceptado == true && esperarQueDejeDeVolver(quien) -> null
+                aceptado == true && esperarQueDejeDeVolver(quien, desdeElOtroCorte) -> null
                 aceptado == true -> "el dron no lo cortó en ${ESPERA_CORTE_REGRESO_MS / 1000} s; sigue volviendo"
                 aceptado == false -> "el dron no aceptó la orden ($motivo); sigue volviendo"
                 else -> "el dron no contestó la orden en ${ESPERA_CORTE_REGRESO_MS / 1000} s; sigue volviendo"
@@ -2298,9 +2364,15 @@ class DjiDroneController : DroneController {
      * ([regresoVigilado]).
      *
      * Una orden de volver que llegó después del corte no se corta: el dron
-     * vuelve igual, y su secuencia, que esperaba este corte, lo adopta.
+     * vuelve igual, y su secuencia, que esperaba este corte, lo adopta. Y si el
+     * dron NO se ve volviendo no se devuelve nada: lo que la persona ordenó
+     * desde el corte (el estacionario de tomar el control) sigue en pie.
      */
     private fun devolverElVuelo(toma: MotivoDelDron?, aterrizaje: Aterrizaje) {
+        if (!dronVolviendo()) {
+            Log.i(TAG, "Corte del regreso: el dron no se ve volviendo; lo ordenado desde el corte sigue y el regreso no se devuelve")
+            return
+        }
         val regresoPedido = synchronized(relevoDeLazo) {
             val pedido = lazoActual == Lazo.REGRESO && navigationJob?.isActive == true
             if (!pedido) cortarLazo()
@@ -2937,6 +3009,7 @@ class DjiDroneController : DroneController {
                 // propio, y con él la regla del único corte.
                 Log.i(TAG, "Regreso: el dron ya volvía por su cuenta ($vuelo), se lo adopta sin otra orden")
                 if (marcarElRegresoAdoptado()) {
+                    anotarLaSalidaAlArrancar("al adoptarlo")
                     estadoDelRegreso.value
                         ?.takeIf { it.name in SupervisorDelRegreso.ESTADOS_DE_REGRESO_EN_CURSO }
                         ?.let(::alCambiarElRegreso)
@@ -3001,7 +3074,7 @@ class DjiDroneController : DroneController {
      */
     private suspend fun marcarElRegresoOrdenado(): Boolean {
         val lazo = currentCoroutineContext()[Job]
-        return synchronized(relevoDeLazo) {
+        val vigente = synchronized(relevoDeLazo) {
             val vigente = lazo != null && lazo === navigationJob && lazo.isActive
             if (vigente) {
                 regresoOrdenado = true
@@ -3009,6 +3082,23 @@ class DjiDroneController : DroneController {
             }
             vigente
         }
+        if (vigente) anotarLaSalidaAlArrancar("antes del KeyStartGoHome")
+        return vigente
+    }
+
+    /**
+     * La salida del último GoHome (`KeyGoHomeExitReason`) que hay cuando este
+     * regreso sale ([marcarElRegresoOrdenado]), arranca o se adopta: al terminar
+     * en el aire solo cuenta una salida DISTINTA (ver
+     * [SupervisorDelRegreso.comoTermino]). La de antes es de un GoHome anterior,
+     * y tomarla por la de este le daba el dron al Virtual Stick.
+     */
+    private fun anotarLaSalidaAlArrancar(cuando: String) {
+        val salida = runCatching {
+            KeyManager.getInstance().getValue(KeyTools.createKey(FlightControllerKey.KeyGoHomeExitReason))
+        }.getOrNull()?.name
+        salidaAlArrancar = salida
+        Log.i(TAG, "Regreso: salida del GoHome $cuando: $salida")
     }
 
     /**
@@ -3059,6 +3149,8 @@ class DjiDroneController : DroneController {
             arranco = vuelo.volviendo,
             bajando = if (pide) true else vuelo.bajando,
             salida = vuelo.salida?.name,
+            alturaM = lastAlt,
+            distanciaALaBaseM = vuelo.distanciaALaBaseM,
         )
     }
 
@@ -3199,10 +3291,20 @@ class DjiDroneController : DroneController {
     private suspend fun terminarElRegreso(accion: SupervisorDelRegreso.Accion, supervisor: SupervisorDelRegreso, desde: Long) {
         val ms = System.currentTimeMillis() - desde
         when (accion) {
-            SupervisorDelRegreso.Accion.ARRANCO ->
+            SupervisorDelRegreso.Accion.ARRANCO -> {
+                anotarLaSalidaAlArrancar("arrancó")
                 Log.i(TAG, "Regreso: arrancó a los $ms ms con ${supervisor.ordenes} orden(es) (GoHomeState=${estadoDelRegreso.value})")
+            }
             SupervisorDelRegreso.Accion.EN_EL_SUELO ->
                 Log.i(TAG, "Regreso: el dron está en el suelo a los $ms ms, no hay regreso que ordenar")
+            SupervisorDelRegreso.Accion.LO_TOMARON -> {
+                // Bajaba en la base y dejó de bajar en el aire: la persona del
+                // control físico. Ninguna orden, ni el Virtual Stick: se suelta
+                // el regreso y PatrolManager lo deja en sus manos.
+                val motivo = supervisor.motivoDeLaToma()
+                Log.w(TAG, "Regreso: lo tomaron con las palancas a los $ms ms: $motivo")
+                if (soltarEsteRegreso()) avisarSiempre("${DroneController.REGRESO_CORTADO_EN_EL_CONTROL}: $motivo")
+            }
             else -> {
                 val motivo = supervisor.motivoDelFallo()
                 Log.w(TAG, "Regreso: se suelta a los $ms ms ($accion): $motivo")
@@ -3305,6 +3407,14 @@ class DjiDroneController : DroneController {
         val motivo = TomaDelDron.motivoProbable(vigiaDelRth.estado, enlaceRecienRecuperado)
         when (val aviso = seguidorDelRegreso.alCambiarFase(faseDelRegreso(estado), ordenActual(), motivo)) {
             null -> Unit
+            // El descenso de un GoHome de la app que se está cortando no es una
+            // llegada a la base: quien lo cortó ya está dando otra orden.
+            FlightEvent.DescendiendoEnBase ->
+                if (cortandoElRegresoDeLaApp()) {
+                    Log.i(TAG, "Regreso: el GoHome que se está cortando baja en la base; no se avisa como una llegada")
+                } else {
+                    flightEvents.tryEmit(aviso)
+                }
             is FlightEvent.ElDronTomoElControl -> {
                 if (TomaDelDron.bloqueaLaApp(aviso.motivo)) bloquearPorLaToma(aviso.motivo)
                 avisarToma(aviso)
@@ -3335,13 +3445,24 @@ class DjiDroneController : DroneController {
      * salga de IDLE, y puede terminar sin que llegue a cambiar), es el final de
      * un regreso que el oyente del estado no ve: ver [alDejarDeVolver]. UNKNOWN
      * no es una salida: es el enlace que se corta.
+     *
+     * Y si sale de un modo de aterrizaje a uno que no es ni aterrizaje ni el
+     * regreso, dejó de aterrizar: con el regreso de la app bajando (cerca de la
+     * base el GoHome aterriza directo, con el estado en IDLE; o su descenso
+     * final) es la persona del control físico que lo tomó con las palancas.
+     * Antes solo se miraba la salida de GO_HOME, y ese corte no lo veía nadie:
+     * la app seguía «volviendo» sin un aviso.
      */
     private fun alCambiarElModo(modo: FlightMode) {
+        regresoAvisadoMs = System.currentTimeMillis()
         val anterior = modoDelSdk.getAndSet(modo)
-        if (anterior == FlightMode.GO_HOME && modo != FlightMode.GO_HOME && modo != FlightMode.UNKNOWN &&
-            estadoDelRegreso.value?.name !in SupervisorDelRegreso.ESTADOS_DE_REGRESO_EN_CURSO
-        ) {
-            alDejarDeVolver("modo de vuelo $anterior → $modo con KeyGoHomeStatus=${estadoDelRegreso.value}")
+        if (anterior == null || modo == anterior || modo == FlightMode.UNKNOWN || modo == FlightMode.GO_HOME) return
+        val aterrizaje = SupervisorDelAterrizaje.MODOS_DE_ATERRIZAJE
+        when {
+            anterior == FlightMode.GO_HOME && estadoDelRegreso.value?.name !in SupervisorDelRegreso.ESTADOS_DE_REGRESO_EN_CURSO ->
+                alDejarDeVolver("modo de vuelo $anterior → $modo con KeyGoHomeStatus=${estadoDelRegreso.value}")
+            anterior.name in aterrizaje && modo.name !in aterrizaje ->
+                alDejarDeVolver("modo de vuelo $anterior → $modo: dejó de aterrizar", dejoDeAterrizar = true)
         }
     }
 
@@ -3357,14 +3478,21 @@ class DjiDroneController : DroneController {
      * [soltarEsteRegreso]; si la secuencia todavía ordenaba, se la corta: ya no
      * tiene que volver a pedirlo) y se avisa por qué ([avisarLaSalidaDelRegreso]).
      * El Virtual Stick no se toca: si son las palancas, el dron es de quien las
-     * mueve. Sin enlace no se avisa nada: lo que se ve es viejo.
+     * mueve. Sin enlace no se avisa nada: lo que se ve es viejo. Con
+     * [dejoDeAterrizar] lo dijo el modo de vuelo (ver [alCambiarElModo]): vale
+     * el modo y no `KeyIsInLandingMode`, que puede venir atrasado, y el aviso es
+     * siempre el del control físico.
      */
-    private fun alDejarDeVolver(porQue: String) {
+    private fun alDejarDeVolver(porQue: String, dejoDeAterrizar: Boolean = false) {
         if (!regresoVigilado || !enVuelo || !enlaceVivo) return
         val modo = modoDelSdk.get()
-        val enModo = runCatching {
-            KeyManager.getInstance().getValue(KeyTools.createKey(FlightControllerKey.KeyIsInLandingMode))
-        }.getOrNull()
+        val enModo = if (dejoDeAterrizar) {
+            null
+        } else {
+            runCatching {
+                KeyManager.getInstance().getValue(KeyTools.createKey(FlightControllerKey.KeyIsInLandingMode))
+            }.getOrNull()
+        }
         val alt = lastAlt
         val altura = String.format(Locale.ROOT, "%.1f", alt)
         if (!SupervisorDelRegreso.seInterrumpioEnElAire(modo?.name, enModo, alt)) {
@@ -3390,26 +3518,34 @@ class DjiDroneController : DroneController {
             "Regreso: $porQue en el aire, a $altura m con el modo $modo (Virtual Stick " +
                 "${if (conVirtualStick) "habilitado" else "deshabilitado"}): se suelta el regreso de la app",
         )
+        if (dejoDeAterrizar) {
+            avisarSiempre("${DroneController.REGRESO_CORTADO_EN_EL_CONTROL}: dejó de aterrizar en el aire a $altura m (modo $modo)")
+            return
+        }
         scope.launch { avisarLaSalidaDelRegreso() }
     }
 
     /**
      * Por qué terminó en el aire el regreso que [alDejarDeVolver] acaba de
      * soltar: `KeyGoHomeExitReason` preguntado al dron, y otra vez mientras no
-     * diga nada (puede llegar detrás del estado). Las palancas del control
-     * ([SupervisorDelRegreso.esSalidaPorLasPalancas]) son la persona al lado del
-     * dron volándolo, la capa 2 de docs/VUELO.md §1:
-     * [DroneController.REGRESO_CORTADO_EN_EL_CONTROL], y PatrolManager no le da
-     * ninguna orden. Cualquier otra es una falla del regreso:
+     * diga nada nuevo (puede llegar detrás del estado), comparado con la que
+     * había al arrancar ([salidaAlArrancar]) por [SupervisorDelRegreso.comoTermino].
+     * Solo una salida nueva, conocida y que no son las palancas es una falla:
      * [DroneController.NO_SE_PUDO_VOLVER], y PatrolManager lo deja estacionario
-     * a la espera de otra orden. Los dos salen siempre: son la respuesta a la
-     * orden de volver.
+     * a la espera de otra orden. Las palancas, una salida que no dice nada o la
+     * misma de antes son [DroneController.REGRESO_CORTADO_EN_EL_CONTROL]: casi
+     * siempre es la persona al lado del dron, la capa 2 de docs/VUELO.md §1, y
+     * PatrolManager no le da ninguna orden. Antes cualquier salida sin las
+     * palancas —también una vieja, o ninguna— terminaba en el estacionario con
+     * el Virtual Stick, que le sacaba el dron de las manos. Los dos avisos salen
+     * siempre: son la respuesta a la orden de volver.
      */
     private suspend fun avisarLaSalidaDelRegreso() {
         val desde = System.currentTimeMillis()
+        val alArrancar = salidaAlArrancar
         var salida = preguntarAlDron(FlightControllerKey.KeyGoHomeExitReason)
         var lecturas = 1
-        while (!SupervisorDelRegreso.salidaInformada(salida?.name) && lecturas < LECTURAS_DE_LA_SALIDA) {
+        while ((!SupervisorDelRegreso.salidaInformada(salida?.name) || salida?.name == alArrancar) && lecturas < LECTURAS_DE_LA_SALIDA) {
             delay(ENTRE_LECTURAS_DE_LA_SALIDA_MS)
             salida = preguntarAlDron(FlightControllerKey.KeyGoHomeExitReason) ?: salida
             lecturas++
@@ -3420,16 +3556,23 @@ class DjiDroneController : DroneController {
             }.getOrNull()
         }
         val codigo = salida?.name ?: "sin informar"
-        val porLasPalancas = SupervisorDelRegreso.esSalidaPorLasPalancas(salida?.name)
+        val fin = SupervisorDelRegreso.comoTermino(alArrancar, salida?.name)
         Log.i(
             TAG,
-            "Regreso: salida del GoHome $codigo ($lecturas lectura(s) en ${System.currentTimeMillis() - desde} ms): " +
-                if (porLasPalancas) "las palancas del control, el dron queda en manos de quien lo vuela" else "el regreso se interrumpió",
+            "Regreso: salida del GoHome $codigo (al arrancar: $alArrancar; $lecturas lectura(s) en " +
+                "${System.currentTimeMillis() - desde} ms): " +
+                if (fin == SupervisorDelRegreso.FinEnElAire.FALLA) "una falla del regreso" else "el dron queda en manos de quien lo vuela",
         )
-        if (porLasPalancas) {
-            avisarSiempre("${DroneController.REGRESO_CORTADO_EN_EL_CONTROL}: salida=$codigo")
-        } else {
-            avisarSiempre("${DroneController.NO_SE_PUDO_VOLVER}: el regreso se interrumpió en el aire (salida=$codigo)")
+        when {
+            fin == SupervisorDelRegreso.FinEnElAire.FALLA ->
+                avisarSiempre("${DroneController.NO_SE_PUDO_VOLVER}: el regreso se interrumpió en el aire (salida=$codigo)")
+            SupervisorDelRegreso.esSalidaPorLasPalancas(salida?.name) ->
+                avisarSiempre("${DroneController.REGRESO_CORTADO_EN_EL_CONTROL}: salida=$codigo")
+            else ->
+                avisarSiempre(
+                    "${DroneController.REGRESO_CORTADO_EN_EL_CONTROL}: salida=$codigo, " +
+                        "sin una salida nueva que lo explique (al arrancar: ${alArrancar ?: "sin informar"})",
+                )
         }
     }
 
@@ -3460,12 +3603,23 @@ class DjiDroneController : DroneController {
         flightEvents.tryEmit(aviso)
     }
 
-    /** Lo que la app tiene pedido, en los términos de [SeguidorDelRegreso]. */
-    private fun ordenActual(): SeguidorDelRegreso.Orden = when (aterrizajeEsperado) {
-        Aterrizaje.EN_BASE -> SeguidorDelRegreso.Orden.REGRESO
-        Aterrizaje.AQUI -> SeguidorDelRegreso.Orden.ATERRIZAJE
-        Aterrizaje.NINGUNO -> SeguidorDelRegreso.Orden.NINGUNA
+    /**
+     * Lo que la app tiene pedido, en los términos de [SeguidorDelRegreso].
+     * Mientras sale el corte del GoHome de la app ([corteDelRegresoDeLaApp]) el
+     * regreso que se vea es ESE, sea cual sea la orden que lo reemplazó (el
+     * estacionario de tomar el control, un aterrizaje): el corte ya borró el
+     * aterrizaje esperado, y un GoHome que se hacía visible tarde se tomaba por
+     * uno del propio DJI.
+     */
+    private fun ordenActual(): SeguidorDelRegreso.Orden = when {
+        cortandoElRegresoDeLaApp() -> SeguidorDelRegreso.Orden.REGRESO
+        aterrizajeEsperado == Aterrizaje.EN_BASE -> SeguidorDelRegreso.Orden.REGRESO
+        aterrizajeEsperado == Aterrizaje.AQUI -> SeguidorDelRegreso.Orden.ATERRIZAJE
+        else -> SeguidorDelRegreso.Orden.NINGUNA
     }
+
+    /** Está saliendo el corte del GoHome de la app (ver [corteDelRegresoDeLaApp]). */
+    private fun cortandoElRegresoDeLaApp(): Boolean = corteDelRegresoDeLaApp?.isActive == true
 
     /** Revisa los umbrales de batería del DJI (ver [UmbralesDelDji]); mal puestos, se avisa. */
     private fun revisarUmbrales() {
@@ -3739,7 +3893,11 @@ class DjiDroneController : DroneController {
                 scope.launch(start = inicio, block = cuerpo)
             } else {
                 scope.launch(start = inicio) {
-                    esperarElCorteDelRegreso("Lazo $tipo", ESPERA_CORTE_REGRESO_MS)
+                    // Un KeyStartGoHome que todavía no contestó tiene al corte
+                    // esperando detrás (ver ordenDelRegreso): se le da también
+                    // su plazo, o el Virtual Stick se habilitaba antes del corte.
+                    val tope = ESPERA_CORTE_REGRESO_MS + if (ordenDelRegreso.isLocked) SupervisorDelRegreso.ESPERA_DE_LA_ORDEN_MS else 0L
+                    esperarElCorteDelRegreso("Lazo $tipo", tope)
                     cuerpo()
                 }
             }
@@ -3762,12 +3920,16 @@ class DjiDroneController : DroneController {
         // interrumpido (ver alDejarDeVolver).
         regresoOrdenado = false
         regresoVigilado = false
-        corteDelRegreso = scope.launch {
+        val corte = scope.launch(start = CoroutineStart.LAZY) {
             val quien = "Corte del regreso (lazo $porQue)"
             cortarElGoHome(quien, ordenEnviada = true)?.let { sigue ->
                 Log.w(TAG, "$quien: $sigue; el lazo nuevo sigue igual y el Virtual Stick puede ser rechazado")
             }
         }
+        // Es el GoHome de la app: mientras sale, lo que se vea de un regreso es suyo (ver ordenActual).
+        corteDelRegreso = corte
+        corteDelRegresoDeLaApp = corte
+        corte.start()
     }
 
     /**
@@ -3982,13 +4144,17 @@ class DjiDroneController : DroneController {
         val como = resultado(apagado, motivo)
         Log.i(TAG, "Virtual Stick para $paraQue: deshabilitación $como en ${System.currentTimeMillis() - desde} ms")
         if (apagado != true) {
-            // No se sabe si quedó apagado: la marca vuelve a decir habilitado,
-            // así quien la mira lo vuelve a intentar (las vigilancias del regreso
-            // y del aterrizaje, cada medio segundo, y el regreso antes de cada
-            // orden). Con la marca en false nadie lo reintentaba, y el GoHome o
-            // el aterrizaje salían con el mando todavía tomado. Lo que el dron
-            // diga de verdad lo corrige su oyente.
-            virtualStickListo.set(true)
+            // No se sabe si quedó apagado: se le pregunta al dron. Si no contesta,
+            // la marca vuelve a decir habilitado, así quien la mira lo vuelve a
+            // intentar (las vigilancias del regreso y del aterrizaje, cada medio
+            // segundo, y el regreso antes de cada orden): con la marca en false
+            // nadie lo reintentaba, y el GoHome o el aterrizaje salían con el
+            // mando todavía tomado. Si dice que está apagado, en false: con la
+            // marca en true ningún lazo lo volvía a habilitar, y el estacionario
+            // y el mando mandaban palancas a un Virtual Stick apagado.
+            val habilitado = preguntarAlDron(FlightControllerKey.KeyVirtualStickEnabled)
+            virtualStickListo.set(habilitado ?: true)
+            Log.i(TAG, "Virtual Stick para $paraQue: el dron dice KeyVirtualStickEnabled=$habilitado; la marca queda en ${virtualStickListo.get()}")
             avisar("no se pudo devolver el mando al control para $paraQue ($como): $siNoSePudo")
         }
     }

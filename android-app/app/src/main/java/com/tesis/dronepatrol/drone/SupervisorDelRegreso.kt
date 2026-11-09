@@ -1,5 +1,8 @@
 package com.tesis.dronepatrol.drone
 
+import java.util.Locale
+import kotlin.math.min
+
 /**
  * Lo que decide, lectura por lectura, la secuencia de un regreso a base que
  * ordenó la app (DroneController.returnHome, docs/VUELO.md §7.2): mandar la
@@ -25,12 +28,21 @@ package com.tesis.dronepatrol.drone
  *  - arrancado, la secuencia termina: el resto del regreso lo sigue el oyente
  *    de `KeyGoHomeStatus` (el descenso en la base, el suelo, y si se interrumpe
  *    en el aire, [seInterrumpioEnElAire]);
- *  - BAJANDO (el modo de aterrizaje, o el dron pidiendo confirmar), el dron va
- *    al suelo: cerca de la base el GoHome aterriza directo
- *    (`NOT_HOMING_IN_SHORT_DISTANCE`, con el estado en IDLE y el modo en
- *    AUTO_LANDING). Se lo mira hasta el suelo y nunca se rinde: reordenar
- *    durante el descenso terminaba en un «no se pudo volver» a segundos de
- *    tocar tierra, y el estacionario que sigue le cortaba el aterrizaje;
+ *  - BAJANDO CERCA DE LA BASE (el modo de aterrizaje, o el dron pidiendo
+ *    confirmar, a [CERCA_DE_LA_BASE_M] o menos), el dron va al suelo: ahí el
+ *    GoHome aterriza directo (`NOT_HOMING_IN_SHORT_DISTANCE`, con el estado en
+ *    IDLE y el modo en AUTO_LANDING). Se lo mira hasta el suelo y nunca se
+ *    rinde: reordenar durante el descenso terminaba en un «no se pudo volver» a
+ *    segundos de tocar tierra, y el estacionario que sigue le cortaba el
+ *    aterrizaje. Lejos de la base bajar no es el regreso (un aterrizaje que no
+ *    se cortó): rigen las reglas de siempre;
+ *  - una vez que bajó en la base, NUNCA otra orden: si deja de bajar en el aire
+ *    —por arriba de [ALTURA_DEL_FINAL_DEL_REGRESO_M], o subiendo más de
+ *    [SupervisorDelAterrizaje.SUBIDA_QUE_CORTA_M] desde lo más bajo— es la
+ *    persona del control físico que lo tomó con las palancas
+ *    ([Accion.LO_TOMARON]); más abajo es el final del regreso, y se espera el
+ *    suelo. Antes se lo reordenaba a los 3 s y terminaba en un estacionario con
+ *    el Virtual Stick que le sacaba el dron de las manos (docs/VUELO.md §1);
  *  - sin enlace con la aeronave el reloj no corre y las órdenes no cuentan: no
  *    hay lectura nueva, la que salió no le llegó al dron (o su respuesta no dice
  *    nada) y el dron puede estar volviendo igual. Sin enlace nunca hay
@@ -59,6 +71,22 @@ class SupervisorDelRegreso(private val reloj: () -> Long = System::currentTimeMi
 
         /** Se agotaron las órdenes, con enlace: avisar [motivoDelFallo] y dejar al dron estacionario por su cuenta. */
         NO_SE_PUDO,
+
+        /**
+         * Bajaba en la base y dejó de bajar en el aire: lo tomó la persona del
+         * control físico. Soltar el regreso y avisar [motivoDeLaToma] como un
+         * regreso cortado en el control, sin ninguna orden (ni Virtual Stick).
+         */
+        LO_TOMARON,
+    }
+
+    /** Cómo terminó en el aire un regreso que ya había arrancado (ver [comoTermino]). */
+    enum class FinEnElAire {
+        /** Lo dejó la persona del control físico, o no se sabe por qué: el dron queda en sus manos. */
+        EN_EL_CONTROL,
+
+        /** Una salida nueva y conocida que no son las palancas (OABT_STUCK, GPS_NO_SIGNAL…): una falla del regreso. */
+        FALLA,
     }
 
     /** Lo que se lee del dron en cada vuelta de la secuencia. */
@@ -75,6 +103,10 @@ class SupervisorDelRegreso(private val reloj: () -> Long = System::currentTimeMi
         val bajando: Boolean? = null,
         /** Por qué salió del último GoHome (`KeyGoHomeExitReason`, su `name`); null si no lo informa. */
         val salida: String? = null,
+        /** Altura sobre el despegue; NaN si no se sabe. */
+        val alturaM: Double = Double.NaN,
+        /** A cuánto está del punto de retorno; NaN si no se sabe (entonces bajar no cuenta como el de la base). */
+        val distanciaALaBaseM: Double = Double.NaN,
     )
 
     /** Cuántas órdenes salieron, con enlace, desde [empezar]. */
@@ -89,12 +121,20 @@ class SupervisorDelRegreso(private val reloj: () -> Long = System::currentTimeMi
     private var ultimaSalida: String? = null
     private var plazoDesdeMs = 0L
 
+    /** Se lo vio bajar cerca de la base: desde ahí no sale otra orden (ver [porElDescenso]). */
+    private var bajoEnLaBase = false
+    private var alturaMinima = Double.NaN
+    private var alturaDeLaToma = Double.NaN
+    private var subidaDeLaToma = 0.0
+
     /** Arranca la cuenta de órdenes. */
     fun empezar(): Accion {
         ordenes = 0
         aceptado = false
         ultimoRechazo = null
         ultimaSalida = null
+        bajoEnLaBase = false
+        alturaMinima = Double.NaN
         return Accion.ORDENAR
     }
 
@@ -103,6 +143,7 @@ class SupervisorDelRegreso(private val reloj: () -> Long = System::currentTimeMi
      * [motivo]), null no contestó a tiempo. [lectura] es lo que se leyó después.
      */
     fun alContestar(aceptada: Boolean?, lectura: Lectura, motivo: String? = null): Accion {
+        val ahora = reloj()
         anotarLaSalida(lectura)
         // Sin enlace la orden no le llegó al dron, o su respuesta no dice nada:
         // no gasta ninguna de las tres.
@@ -111,9 +152,14 @@ class SupervisorDelRegreso(private val reloj: () -> Long = System::currentTimeMi
         // Rechazada o sin respuesta, pero el dron ya vuelve: es lo que se pidió.
         if (lectura.arranco == true) return Accion.ARRANCO
         if (aceptada == true && lectura.conEnlace) aceptado = true
-        // Aceptada, bajando o sin enlace: se mira, y el plazo cuenta desde acá.
-        if (aceptada == true || lectura.bajando == true || !lectura.conEnlace) {
-            plazoDesdeMs = reloj()
+        // Sin enlace se mira, y el plazo cuenta desde acá.
+        if (!lectura.conEnlace) {
+            plazoDesdeMs = ahora
+            return Accion.SEGUIR
+        }
+        porElDescenso(lectura, ahora)?.let { return it }
+        if (aceptada == true) {
+            plazoDesdeMs = ahora
             return Accion.SEGUIR
         }
         ultimoRechazo = motivo ?: ultimoRechazo
@@ -126,17 +172,49 @@ class SupervisorDelRegreso(private val reloj: () -> Long = System::currentTimeMi
         anotarLaSalida(lectura)
         if (!lectura.enVuelo) return Accion.EN_EL_SUELO
         if (lectura.arranco == true) return Accion.ARRANCO
-        if (!lectura.conEnlace || lectura.bajando == true) {
-            // Sin enlace no hay lectura nueva; bajando, el dron va al suelo. El
-            // plazo cuenta desde que vuelve el enlace, o desde que deja de bajar.
+        if (!lectura.conEnlace) {
+            // Sin enlace no hay lectura nueva: el plazo cuenta desde que vuelve.
             plazoDesdeMs = ahora
             return Accion.SEGUIR
         }
+        porElDescenso(lectura, ahora)?.let { return it }
         if (ahora - plazoDesdeMs < VERIFICACION_MS) return Accion.SEGUIR
         return siguienteOrden()
     }
 
+    /**
+     * Las reglas del descenso en la base, con enlace; null si no aplican (nunca
+     * se lo vio bajar cerca de la base). Bajando —ahí, o ya después de haber
+     * bajado ahí— se lo mira hasta el suelo. Si dejó de bajar, nunca otra orden:
+     * por arriba de [ALTURA_DEL_FINAL_DEL_REGRESO_M], o subiendo más de
+     * [SupervisorDelAterrizaje.SUBIDA_QUE_CORTA_M] desde lo más bajo, lo tomó la
+     * persona del control físico ([Accion.LO_TOMARON]); más abajo es el final
+     * (la protección de aterrizaje a medio metro), y se espera el suelo.
+     */
+    private fun porElDescenso(l: Lectura, ahora: Long): Accion? {
+        val bajando = l.bajando == true
+        if (!bajoEnLaBase && !(bajando && l.distanciaALaBaseM <= CERCA_DE_LA_BASE_M)) return null
+        bajoEnLaBase = true
+        if (l.alturaM.isFinite()) alturaMinima = if (alturaMinima.isNaN()) l.alturaM else min(alturaMinima, l.alturaM)
+        plazoDesdeMs = ahora
+        if (bajando) return Accion.SEGUIR
+        // Con la altura de esta lectura, la mínima ya es un número (la de arriba la anotó).
+        val subida = if (l.alturaM.isFinite()) l.alturaM - alturaMinima else 0.0
+        if (l.alturaM > ALTURA_DEL_FINAL_DEL_REGRESO_M || subida > SupervisorDelAterrizaje.SUBIDA_QUE_CORTA_M) {
+            alturaDeLaToma = l.alturaM
+            subidaDeLaToma = subida
+            return Accion.LO_TOMARON
+        }
+        return Accion.SEGUIR
+    }
+
     private fun siguienteOrden(): Accion = if (ordenes >= MAXIMO_DE_ORDENES) Accion.NO_SE_PUDO else Accion.ORDENAR
+
+    /** Por qué se soltó un regreso que bajaba en la base ([Accion.LO_TOMARON]), para el aviso (sin el prefijo). */
+    fun motivoDeLaToma(): String =
+        "dejó de aterrizar en la base a ${String.format(Locale.ROOT, "%.1f", alturaDeLaToma)} m " +
+            "(subió ${String.format(Locale.ROOT, "%.1f", subidaDeLaToma)} m desde lo más bajo): " +
+            "lo vuela una persona con las palancas del control"
 
     /** La última salida del GoHome que dice algo, para el motivo del fallo. */
     private fun anotarLaSalida(lectura: Lectura) {
@@ -239,6 +317,24 @@ class SupervisorDelRegreso(private val reloj: () -> Long = System::currentTimeMi
 
         /** La salida del GoHome dice algo: ni nada informado, ni `NO_ERROR`, ni `UNKNOWN`. */
         fun salidaInformada(salida: String?): Boolean = salida != null && salida != "NO_ERROR" && salida != "UNKNOWN"
+
+        /**
+         * Cómo terminó en el aire un regreso que ya había arrancado, con la
+         * salida del GoHome que había al arrancar ([salidaAlArrancar]) y la de
+         * ahora ([salidaAhora]). Solo una salida NUEVA, conocida y que no son
+         * las palancas es una falla del regreso ([FinEnElAire.FALLA]: la app lo
+         * deja estacionario, con el Virtual Stick). Las palancas, una salida que
+         * no dice nada, o la misma que al arrancar —la de un GoHome anterior que
+         * el dron no actualizó— son [FinEnElAire.EN_EL_CONTROL]: casi siempre es
+         * la persona del control físico, y un estacionario se lo sacaría de las
+         * manos (docs/VUELO.md §1). Ante la duda, el dron queda en sus manos.
+         */
+        fun comoTermino(salidaAlArrancar: String?, salidaAhora: String?): FinEnElAire = when {
+            esSalidaPorLasPalancas(salidaAhora) -> FinEnElAire.EN_EL_CONTROL
+            !salidaInformada(salidaAhora) -> FinEnElAire.EN_EL_CONTROL
+            salidaAhora == salidaAlArrancar -> FinEnElAire.EN_EL_CONTROL
+            else -> FinEnElAire.FALLA
+        }
 
         /**
          * El dron ya no está aterrizando: ni LANDING en el estado del regreso ni

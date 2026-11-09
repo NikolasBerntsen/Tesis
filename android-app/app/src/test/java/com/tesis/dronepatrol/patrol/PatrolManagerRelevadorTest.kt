@@ -983,7 +983,12 @@ class PatrolManagerRelevadorTest {
         tomarElControl()
         soltarElControl()
         esperarA("de vuelta al relevo") { patrulla.state.value == PatrolState.RELEVANDO }
-        assertEquals("sigue hacia la de seguimiento, no vuelve a la de A + 20", 2, dron.ordenes.count { it == "cambiarAltura(40)" })
+        // La orden de altura sale después del cambio de estado: se la espera en
+        // vez de contarla en el acto (con la suite en paralelo, a veces todavía
+        // no había salido). Si volviera a la de A + 20, la cuenta no llega a 2.
+        esperarA("sigue hacia la de seguimiento, no vuelve a la de A + 20") {
+            dron.ordenes.count { it == "cambiarAltura(40)" } == 2
+        }
         banco.telemetria(norteM = 545.0, bateria = 90.0, alt = 41.0)
         banco.pasar(300)
         esperarA("la órbita") { patrulla.state.value == PatrolState.ORBITING }

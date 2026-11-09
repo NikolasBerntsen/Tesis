@@ -315,6 +315,27 @@ class SeguidorDelRegresoTest {
         assertEquals(listOf(Corte.SE_PUEDE, Corte.YA_SE_CORTO, Corte.LO_PIDIO_EL_CONTROL), Corte.entries.toList())
     }
 
+    /**
+     * Mientras sale el corte del GoHome de la app, el controlador cuenta lo que
+     * vea de un regreso como de la app (Orden.REGRESO): un GoHome que se hace
+     * visible tarde, después de decidido el corte y con la cuenta del regreso
+     * por batería en pantalla, no es una toma —antes era «el dron tomó el
+     * control» por batería, que bloqueaba a la app hasta aterrizar— ni gasta el
+     * corte del regreso propio. Su descenso sale como el de la app, y el
+     * controlador no lo avisa mientras corta.
+     */
+    @Test
+    fun unGoHomeDeLaAppQueSeVeTardeNoEsUnaToma() {
+        assertNull(seguidor.alCambiarFase(Fase.VOLVIENDO, Orden.REGRESO, MotivoDelDron.RTH_BATERIA))
+        assertSame(FlightEvent.DescendiendoEnBase, seguidor.alCambiarFase(Fase.DESCENDIENDO, Orden.REGRESO, MotivoDelDron.RTH_BATERIA))
+        assertEquals(Corte.SE_PUEDE, seguidor.corte())
+        seguidor.alCambiarFase(Fase.INACTIVO, Orden.NINGUNA, MotivoDelDron.OTRO)
+
+        // Si después el DJI arranca el suyo de verdad, la toma sale y su único corte está entero.
+        assertEquals(toma(MotivoDelDron.RTH_BATERIA), seguidor.alCambiarFase(Fase.VOLVIENDO, Orden.NINGUNA, MotivoDelDron.RTH_BATERIA))
+        assertEquals(Corte.SE_PUEDE, seguidor.corte())
+    }
+
     // ---- Un enlace nuevo (connect) ----
 
     /**
