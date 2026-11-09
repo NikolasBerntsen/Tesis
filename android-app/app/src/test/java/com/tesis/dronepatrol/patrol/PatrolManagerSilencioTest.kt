@@ -240,4 +240,70 @@ class PatrolManagerSilencioTest {
         esperarA("la alerta aterrizando, sin silencio") { alertas == 2 }
         assertTrue(banco.comando.eventos("DETECTION").single().getString("message").contains("con el dron aterrizando"))
     }
+
+    // ---- Detenerse sobre un objetivo es dejarlo ----
+
+    /**
+     * «Detener» con un objetivo en curso deja al dron en la pausa, donde las
+     * detecciones vuelven a seguir: sin la zona descartada y el silencio, el
+     * mismo auto lo ponía a orbitar otra vez en un segundo.
+     */
+    @Test
+    fun detenerConUnObjetivoArrancaElSilencioYDejaSuZonaDescartada() = runBlocking {
+        orbitandoUnaPersona()
+        consola("""{"type":"stop_patrol","orderedBy":"op"}""")
+        esperarA("la pausa") { patrulla.state.value == PatrolState.PAUSED }
+        assertTrue(
+            patrulla.localLog.replayCache.any {
+                it.contains("op ordenó detenerse con un objetivo en curso: durante 15 s lo que vea el detector solo se marca en el video")
+            },
+        )
+
+        // El mismo auto, enseguida: ni candidata ni alerta.
+        detectar()
+        detectar()
+        delay(300)
+        assertEquals(1, alertas)
+        assertEquals(PatrolState.PAUSED, patrulla.state.value)
+
+        // Pasado el silencio, el mismo lugar sigue descartado.
+        banco.reloj.adelantar(PatrolManager.SILENCIO_AL_RETOMAR_MS + 1_000)
+        detectar()
+        detectar()
+        delay(300)
+        assertEquals(1, alertas)
+        assertEquals(PatrolState.PAUSED, patrulla.state.value)
+    }
+
+    // ---- El descarte sin un patrullaje que retomar ----
+
+    /**
+     * Descartar sin un patrullaje en curso (acá, el dron quedó en la pausa al
+     * soltar el control, sin ruta) no tiene a dónde volver: antes seguía
+     * orbitando el auto descartado, sin objetivo. Queda estacionario y la
+     * consola se entera.
+     */
+    @Test
+    fun descartadaSinUnPatrullajeEnCursoQuedaEstacionarioEnVezDeSeguirOrbitando() = runBlocking {
+        banco.arrancar()
+        banco.telemetria(norteM = 100.0)
+        consola("""{"type":"control_taken","by":"op"}""")
+        esperarA("el control manual") { patrulla.state.value == PatrolState.MANUAL }
+        consola("""{"type":"control_released","by":"op"}""")
+        esperarA("la pausa") { patrulla.state.value == PatrolState.PAUSED }
+        detectar()
+        detectar()
+        esperarA("la órbita") { patrulla.state.value == PatrolState.ORBITING }
+        val i = dron.ordenes.size
+
+        descartar()
+        esperarA("la pausa, estacionario") { patrulla.state.value == PatrolState.PAUSED && dron.ordenes.size > i }
+
+        assertEquals(listOf("hold"), dron.ordenes.drop(i))
+        assertEquals(
+            "La alerta se descartó y no hay un patrullaje en curso que retomar: el dron queda en vuelo estacionario",
+            banco.comando.eventos("PATROL_STOPPED").single().getString("message"),
+        )
+        assertEquals(null, patrulla.objetivo)
+    }
 }

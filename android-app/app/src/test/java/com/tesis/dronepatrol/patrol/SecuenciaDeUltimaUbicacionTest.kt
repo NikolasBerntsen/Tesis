@@ -253,4 +253,35 @@ class SecuenciaDeUltimaUbicacionTest {
         assertEquals(listOf("hold", "failsafeAterrizar(true)"), dron.ordenes)
         assertEquals(2, pedidas.size)
     }
+
+    /**
+     * Retomada después de que una persona la cortó (docs/VUELO.md §4), sigue
+     * con las fotos que faltaban: las que ya salieron no se repiten, ni con el
+     * vuelo ni solo con la cámara.
+     */
+    @Test
+    fun retomadaSalteaLasFotosQueYaSalieron() = runBlocking {
+        dron.confirmarCamaraYRumbo = true
+        enElAire()
+        val sacadas = setOf(0, 1, 3, SecuenciaDeUltimaUbicacion.PRIMER_SEQ_SOLO_CAMARA)
+        fun retomada() = SecuenciaDeUltimaUbicacion(
+            dron = dron,
+            telemetria = { dron.ultimaTelemetria },
+            sigue = { sigue },
+            alcanzaParaOtroPaso = { alcanza },
+            alFotografiar = { fotos += it },
+            reloj = { ahora },
+            pausa = { ahora += it },
+            yaSacada = { it in sacadas },
+        )
+
+        assertEquals(SecuenciaDeUltimaUbicacion.Final.ATERRIZO, retomada().conControl(puedeGirar = { true }))
+        assertEquals(listOf(2, 4, 5), fotos.map { it.seq })
+        assertTrue("ni la oblicua ni la cenital: ${dron.ordenes}", "apuntar(-70.0)" !in dron.ordenes && "apuntar(-90.0)" !in dron.ordenes)
+        assertEquals("land", dron.ultimaOrden)
+
+        fotos.clear()
+        assertEquals(SecuenciaDeUltimaUbicacion.Final.ATERRIZO, retomada().soloCamara())
+        assertEquals("solo la panorámica de la cámara", listOf(SecuenciaDeUltimaUbicacion.PRIMER_SEQ_SOLO_CAMARA + 1), fotos.map { it.seq })
+    }
 }

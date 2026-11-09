@@ -400,4 +400,29 @@ class PatrolManagerReaccionTest {
         assertFalse("B no orbita ni sigue: vigila", dron.ordenes.any { it == "startOrbit" || it == "seguirObjetivo" })
         assertEquals(12L, patrulla.objetivo?.alertId)
     }
+
+    // ---- Un cambio de reacción con el objetivo perdido de vista ----
+
+    /**
+     * Perdido de vista, la orden sale una sola vez; un cambio del ajuste en ese
+     * rato también se aplica: la orden del perdido vuelve a salir con la
+     * reacción nueva, una vez, y sin otro `TARGET_LOST` (sigue perdido).
+     */
+    @Test
+    fun cambiarLaReaccionConElObjetivoPerdidoVuelveADarLaOrdenDelPerdido() = runBlocking {
+        patrullando()
+        confirmada()
+        perderElObjetivo()
+        assertEquals(PatrolState.ORBITING, patrulla.state.value)
+        val i = dron.ordenes.size
+
+        conLaReaccion(ReaccionADeteccion.DETENERSE)
+        esperarA("la vigilancia") { patrulla.state.value == PatrolState.VIGILANDO }
+        // Un par de evaluaciones más: la orden no se repite.
+        delay(1_100)
+
+        assertEquals(listOf("vigilar"), desde(i))
+        assertEquals("sigue perdido: un solo aviso", 1, eventos("TARGET_LOST").size)
+        assertTrue(patrulla.localLog.replayCache.any { it.contains("Reacción nueva con el objetivo perdido de vista (detenerse)") })
+    }
 }

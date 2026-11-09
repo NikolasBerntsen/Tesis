@@ -407,6 +407,28 @@ class SimulatedDroneController(
         synchronized(cerrojo) { tomarElControl(motivo) }
     }
 
+    /**
+     * Gancho de prueba: alguien movió las palancas del control físico con un
+     * regreso de la app en curso ([returnHome]) y el dron lo dejó, como el real
+     * con `GoHomeExitCode` JOYSTICK_*: sale del regreso estacionario a la altura
+     * que tiene —el simulado no tiene palancas que lo muevan después— y avisa
+     * con el [FlightEvent.Problema] de
+     * [DroneController.REGRESO_CORTADO_EN_EL_CONTROL]. Sin un regreso de la app
+     * en curso no pasa nada: el propio del dron o el del botón del control no
+     * son de la app, y el real no los informa así.
+     */
+    fun simularRegresoCortadoEnElControl() {
+        synchronized(cerrojo) {
+            if (mode != Mode.RTH || !regresoDeLaApp) return
+            regresoDeLaApp = false
+            alturaObjetivo = altM
+            alturaPedida = null
+            rumboPedido = null
+            mode = Mode.HOLD
+            emitEvent(FlightEvent.Problema("${DroneController.REGRESO_CORTADO_EN_EL_CONTROL}: se movieron las palancas del control simulado"))
+        }
+    }
+
     /** Base real del dron que inició sesión (la simulación arranca y vuelve ahí). */
     fun setHome(lat: Double, lon: Double) {
         synchronized(cerrojo) {
